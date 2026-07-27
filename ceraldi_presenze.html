@@ -973,6 +973,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
       </div>
       <button class="btn-primary" style="width:100%;margin-bottom:6px" onclick="calcolaReportF24Mensile()">Calcola report del mese</button>
       <button class="btn-sm" style="width:100%;margin-bottom:10px" onclick="calcolaPrevisioneCosto()">🔮 Previsione costo — prima che arrivino le buste</button>
+      <button class="btn-sm" style="width:100%;margin-bottom:10px" onclick="calcolaTfrStoricoDaPresenze()">🏦 TFR lordo storico — dalle presenze in app</button>
       <div style="background:rgba(43,74,203,.06);border:1.5px solid rgba(43,74,203,.2);border-radius:10px;padding:10px;margin-bottom:14px">
         <div style="font-size:12px;font-weight:700;margin-bottom:6px">📄 Hai il Prospetto paghe o l'F24 di questo mese?</div>
         <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Caricalo per usare i numeri veri (Decontribuzione Sud, IRPEF, INPS azienda) invece di una stima.</div>
@@ -1332,12 +1333,17 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     <!-- ADMIN: TEAM -->
     <div class="page" id="pg-team">
       <button class="btn-primary" style="margin-bottom:10px" onclick="openSheetNuovoDip()">+ Aggiungi dipendente</button>
-      <div style="display:flex;gap:8px;margin-bottom:14px">
-        <input id="team-filter-nome" class="field-inp" type="text" placeholder="Cerca per nome..." style="flex:1;margin-bottom:0;padding:9px 11px;font-size:14px" oninput="filtraDipendenti()">
-        <select id="team-filter-stato" class="field-inp" style="flex:0 0 130px;margin-bottom:0;padding:9px 11px;font-size:14px" onchange="filtraDipendenti()">
+      <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+        <input id="team-filter-nome" class="field-inp" type="text" placeholder="Cerca per nome..." style="flex:1;min-width:140px;margin-bottom:0;padding:9px 11px;font-size:14px" oninput="filtraDipendenti()">
+        <select id="team-filter-stato" class="field-inp" style="flex:0 0 110px;margin-bottom:0;padding:9px 11px;font-size:14px" onchange="filtraDipendenti()">
           <option value="attivi">Attivi</option>
           <option value="eliminati">Eliminati</option>
           <option value="tutti">Tutti</option>
+        </select>
+        <select id="team-filter-ruolo" class="field-inp" style="flex:0 0 120px;margin-bottom:0;padding:9px 11px;font-size:14px" onchange="filtraDipendenti()">
+          <option value="">Tutti i ruoli</option>
+          <option value="admin">Solo admin</option>
+          <option value="dipendente">Solo dipendenti</option>
         </select>
       </div>
       <div class="sec-title">Dipendenti</div>
@@ -1570,8 +1576,15 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
         <div style="font-size:11px;color:var(--muted);margin-bottom:10px;line-height:1.5">Solo per dipendenti già in forza da prima di usare l'app: quanti giorni di ferie ha già preso in passato che NON risultano come richieste qui dentro. Questo numero viene <b>sottratto</b> dal residuo (il sistema calcola già in automatico tutte le ferie richieste e approvate nell'app, da quando l'hai iniziata a usare).</div>
         <input class="field-inp last" type="number" id="ana-ferie-godute-extra" placeholder="0" min="0" step="0.5" style="margin-bottom:0">
       </div>
-      <div class="field-lbl">Paga giornaliera netta (€)</div>
-      <input class="field-inp field-inp last" type="number" id="ana-paga" placeholder="es. 80" step="0.01" min="0">
+      <div class="field-lbl">Paga giornaliera netta attuale (€)</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px">
+        <input class="field-inp" type="number" id="ana-paga" placeholder="es. 80" step="0.01" min="0" readonly style="margin-bottom:0;background:var(--bg);flex:1">
+        <button class="btn-sm" style="flex-shrink:0;white-space:nowrap" onclick="apriStoricoPaga()">📈 Storico / aumento</button>
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin:-10px 0 14px;line-height:1.5">Per modificarla usa "Storico / aumento": ogni cambio resta registrato con la data, così hai lo storico completo degli aumenti percepiti dal dipendente (usato anche per il calcolo del TFR).</div>
+      <div class="field-lbl" style="margin-top:14px">Compenso netto mensile fisso (€)</div>
+      <input class="field-inp field-inp last" type="number" id="ana-netto-fisso" placeholder="es. 1500" step="0.01" min="0">
+      <div style="font-size:11px;color:var(--muted);margin:-6px 0 14px;line-height:1.5">Per chi non è pagato in base alle presenze registrate (es. Co.Co.Co/amministratori con compenso mensile fisso): usato come base per la previsione F24 al posto del calcolo presenze × paga giornaliera.</div>
       <div class="field-lbl" style="margin-top:16px">Permessi speciali</div>
       <div class="priv-check" id="ana-resp-turni-wrap" onclick="toggleRespTurni()" style="background:var(--bg);border-radius:10px;padding:12px;margin-bottom:8px">
         <div class="priv-chk-box"><span class="priv-chk-tick">&#x2713;</span></div>
@@ -1641,7 +1654,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
       <div class="field-lbl">Dipendente</div>
       <div id="acc-nome" style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:16px"></div>
       <div class="field-lbl">A cosa si riferisce</div>
-      <select class="field-inp" id="acc-causale">
+      <select class="field-inp" id="acc-causale" onchange="toggleAccontoFerie()">
         <option value="stipendio">💰 Acconto stipendio</option>
         <option value="acconto_tfr">🏦 Acconto TFR</option>
         <option value="acconto_13">🎄 Acconto 13ª mensilità</option>
@@ -1650,6 +1663,12 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
         <option value="straordinari">⏱ Straordinari</option>
         <option value="altro">📋 Altro</option>
       </select>
+      <div id="acc-ferie-wrap" style="display:none;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:14px">
+        <div id="acc-ferie-residuo" style="font-size:12px;color:var(--muted);margin-bottom:8px">Calcolo del residuo...</div>
+        <div class="field-lbl">Giorni di ferie da liquidare</div>
+        <input class="field-inp last" type="number" id="acc-ferie-giorni" placeholder="es. 3" min="0" step="0.5" oninput="calcolaImportoFerieAcconto()" style="margin-bottom:0">
+        <div id="acc-ferie-calcolo" style="font-size:11px;color:var(--muted);margin-top:8px"></div>
+      </div>
       <div class="field-lbl">Importo (€)</div>
       <input class="field-inp" type="number" id="acc-importo" placeholder="es. 200" step="0.01" min="0">
       <div class="field-lbl">Data</div>
@@ -1660,6 +1679,28 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     </div>
     <div class="sheet-foot">
       <button class="btn-primary" onclick="salvaAcconto()">Registra acconto</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── SHEET: storico paga giornaliera / registrazione aumenti ── -->
+<div class="overlay" id="sh-storicoPaga">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-hdr"><span class="sheet-title">Storico paga — <span id="sp-nome"></span></span><button class="sheet-cls" onclick="closeSheet('sh-storicoPaga')">✕</button></div>
+    <div class="sheet-body">
+      <div id="sp-lista" style="margin-bottom:16px"></div>
+      <div class="sec-title" style="margin-bottom:8px">Registra un aumento</div>
+      <div class="field-lbl">Nuova paga giornaliera netta (€)</div>
+      <input class="field-inp" type="number" id="sp-valore" placeholder="es. 85" step="0.01" min="0">
+      <div class="field-lbl">Decorrenza dal</div>
+      <input class="field-inp" type="date" id="sp-data">
+      <div class="field-lbl">Nota (opzionale)</div>
+      <input class="field-inp field-inp last" type="text" id="sp-note" placeholder="es. scatto di anzianità, rinnovo CCNL...">
+      <div class="msg" id="sp-msg"></div>
+    </div>
+    <div class="sheet-foot">
+      <button class="btn-primary" onclick="salvaAumentoPaga()">✓ Registra aumento</button>
     </div>
   </div>
 </div>
@@ -2358,15 +2399,15 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div class="overlay" id="sh-certOTP">
   <div class="sheet">
     <div class="sheet-handle"></div>
-    <div class="sheet-hdr"><span class="sheet-title">Certifica contatto</span><button class="sheet-cls" onclick="closeSheet('sh-certOTP')">&#x2715;</button></div>
+    <div class="sheet-hdr"><span class="sheet-title">Conferma contatto</span><button class="sheet-cls" onclick="closeSheet('sh-certOTP')">&#x2715;</button></div>
     <div class="sheet-body">
-      <p style="font-size:14px;margin-bottom:8px">Certificazione <b id="certOTP-tipo"></b>: <b id="certOTP-valore"></b></p>
+      <p style="font-size:14px;margin-bottom:8px">Conferma <b id="certOTP-tipo"></b>: <b id="certOTP-valore"></b></p>
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;text-align:center;margin-bottom:16px">
         <div style="font-size:12px;color:var(--muted);margin-bottom:4px">Codice OTP inviato al dipendente via Telegram</div>
         <div id="certOTP-codiceAdmin" style="font-size:28px;font-weight:800;letter-spacing:5px;color:var(--accent)">------</div>
         <div style="font-size:11px;color:var(--muted);margin-top:6px">Valido 15 minuti — il dipendente lo inserisce nella sua app</div>
       </div>
-      <p style="font-size:12px;color:var(--muted);line-height:1.5">Il dipendente riceverà il codice su Telegram e lo inserirà nella sezione <b>Profilo → Certifica contatto</b>. Oppure tu puoi comunicarglielo di persona.</p>
+      <p style="font-size:12px;color:var(--muted);line-height:1.5">Il dipendente riceverà il codice su Telegram e lo inserirà nella sezione <b>Profilo → Verifica contatti</b>. Oppure tu puoi comunicarglielo di persona.</p>
       <div id="certOTP-msg" class="msg"></div>
     </div>
     <div class="sheet-foot">
@@ -8523,12 +8564,31 @@ async function aggiornaStats() {
   const { data: tutti } = await sb.from('presenze_profili').select('nome,cognome').eq('ruolo','diped').eq('attivo',true);
   await mostraScostamentiTurniTimbrature();
   if (!presOggi || !presOggi.length) { wrap.innerHTML = ''; return; }
-  wrap.innerHTML = '<div class="sec-title" style="margin-bottom:8px">Presenti oggi</div>' +
-    presOggi.map(p => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+  // Collassabile: con molti presenti la lista spingeva lo scanner troppo in
+  // basso. Aperta di default solo se sono pochi (≤5), altrimenti richiusa
+  // — un tocco sull'intestazione la apre, stesso pattern degli altri
+  // accordion dell'app.
+  const apertaOggi = presOggi.length <= 5;
+  wrap.innerHTML = '<div class="card" style="margin-bottom:8px;padding:0;overflow:hidden">'
+    + '<div style="display:flex;align-items:center;gap:8px;padding:12px 16px;cursor:pointer" onclick="toggleAccordionPresentiOggi()">'
+    +   '<span class="sec-title" style="margin:0;flex:1">Presenti oggi</span>'
+    +   '<span style="font-size:11px;color:var(--muted)">'+presOggi.length+'</span>'
+    +   '<span id="acc-chev-presenti-oggi" style="font-size:12px;color:var(--muted);transition:transform .15s">'+(apertaOggi?'▾':'▸')+'</span>'
+    + '</div>'
+    + '<div id="acc-body-presenti-oggi" style="display:'+(apertaOggi?'block':'none')+';padding:0 16px 12px">'
+    +   presOggi.map(p => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
       <span style="width:8px;height:8px;border-radius:50%;background:var(--green);flex-shrink:0"></span>
       <span style="font-size:13px;font-weight:600">${esc(p.nome_dipendente)}</span>
       <span style="font-size:12px;color:var(--muted);margin-left:auto">${fmtTime(p.ts_entrata)}</span>
-    </div>`).join('');
+    </div>`).join('')
+    + '</div></div>';
+}
+
+function toggleAccordionPresentiOggi() {
+  const body = $('acc-body-presenti-oggi'), chev = $('acc-chev-presenti-oggi');
+  const aperta = body.style.display !== 'none';
+  body.style.display = aperta ? 'none' : 'block';
+  chev.textContent = aperta ? '▸' : '▾';
 }
 
 // ── SCOSTAMENTI TURNI ↔ TIMBRATURE ────────────────────────────────
@@ -8762,10 +8822,12 @@ let _dipendentiData = [];
 function filtraDipendenti() {
   const q     = ($('team-filter-nome')   ? $('team-filter-nome').value   : '').toLowerCase();
   const stato = ($('team-filter-stato')  ? $('team-filter-stato').value  : 'attivi');
+  const ruolo = ($('team-filter-ruolo')  ? $('team-filter-ruolo').value  : '');
   let filtered = _dipendentiData;
   if (stato === 'attivi')    filtered = filtered.filter(d => !d.eliminato);
   if (stato === 'eliminati') filtered = filtered.filter(d =>  d.eliminato);
   // stato === 'tutti': nessun filtro aggiuntivo
+  if (ruolo) filtered = filtered.filter(d => (d.ruolo||'dipendente') === ruolo);
   if (q) filtered = filtered.filter(d => (d.nome+' '+(d.cognome||'')+' '+d.email).toLowerCase().includes(q));
   renderDipendenti(filtered);
 }
@@ -8789,7 +8851,13 @@ function renderDipendenti(data) {
     })() : '';
     const tgHtml = d.telegram_chat_id
       ? '<span style="font-size:9px;font-weight:700;background:rgba(47,138,92,.1);color:var(--green);padding:2px 7px;border-radius:10px;white-space:nowrap">&#x1F4F2; Telegram</span>'
-      : '';
+      : '<span style="font-size:9px;font-weight:700;background:rgba(217,48,37,.1);color:var(--red);padding:2px 7px;border-radius:10px;white-space:nowrap">&#x1F4F2; Telegram non collegato</span>';
+    // Ruolo: prima non era visibile da nessuna parte in app — bisognava
+    // controllare direttamente su Supabase per sapere se un profilo era
+    // admin o dipendente.
+    const ruoloHtml = d.ruolo === 'admin'
+      ? '<span style="font-size:9px;font-weight:700;background:rgba(43,74,203,.12);color:var(--accent);padding:2px 7px;border-radius:10px;white-space:nowrap">&#x1F451; Admin</span>'
+      : '<span style="font-size:9px;font-weight:700;background:rgba(120,120,120,.12);color:var(--muted);padding:2px 7px;border-radius:10px;white-space:nowrap">Dipendente</span>';
     // Badge scadenza contratto
     const scadBadge = (function() {
       if (!d.scadenza_contratto || d.tipo_contratto === 'indeterminato') return '';
@@ -8831,7 +8899,7 @@ function renderDipendenti(data) {
       +'<div class="dip-avatar" style="'+avStyle+'">'+initials(d.nome)+'</div>'
       +'<div class="dip-info" style="flex:1;min-width:0">'
       +'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">'
-      +'<span class="dip-nome">'+esc(d.nome)+(d.cognome?' '+esc(d.cognome):'')+'</span>'+elimBadge+nonAttivoBadge+scadBadge+tgHtml
+      +'<span class="dip-nome">'+esc(d.nome)+(d.cognome?' '+esc(d.cognome):'')+'</span>'+ruoloHtml+elimBadge+nonAttivoBadge+scadBadge+tgHtml
       +'</div>'
       +mansioneHtml
       +'<div class="dip-email">'+esc(d.email||'')+'</div>'
@@ -9018,6 +9086,7 @@ async function openAnagrafica(id) {
   $('ana-tel').value        = d.telefono       || '';
   $('ana-assunzione').value = d.data_assunzione || '';
   $('ana-paga').value            = d.paga_giornaliera || '';
+  $('ana-netto-fisso').value     = d.netto_fisso_mensile || '';
   $('ana-tipo-contratto').value  = d.tipo_contratto   || '';
   $('ana-scadenza').value        = d.scadenza_contratto || '';
   $('ana-livello').value         = d.livello_ccnl     || '';
@@ -9046,34 +9115,34 @@ async function openAnagrafica(id) {
   const telBtn = $('ana-tel-certBtn');
   const telInfo = $('ana-tel-certInfo');
   if (telCert) {
-    telBtn.textContent = '✓ Certificato';
+    telBtn.textContent = '✓ Confermato';
     telBtn.style.background = 'rgba(46,160,67,.15)';
     telBtn.style.color = 'var(--green)';
     telBtn.style.border = '1px solid rgba(46,160,67,.3)';
-    telInfo.textContent = 'Numero certificato il ' + new Date(telCert).toLocaleDateString('it-IT') + ' dal dipendente';
+    telInfo.textContent = 'Numero confermato il ' + new Date(telCert).toLocaleDateString('it-IT') + ' dal dipendente';
   } else {
-    telBtn.textContent = '⚠ Certifica';
+    telBtn.textContent = '⚠ Da confermare';
     telBtn.style.background = 'rgba(200,135,58,.12)';
     telBtn.style.color = 'var(--yellow)';
     telBtn.style.border = '1px solid rgba(200,135,58,.3)';
-    telInfo.textContent = d.telefono ? 'Non ancora certificato' : 'Inserisci prima il numero';
+    telInfo.textContent = d.telefono ? 'Non ancora confermato' : 'Inserisci prima il numero';
   }
   // Stato certificazione email
   const emailCert = d.email_certificato_il;
   const emailBtn = $('ana-email-certBtn');
   const emailInfo = $('ana-email-certInfo');
   if (emailCert) {
-    emailBtn.textContent = '✓ Certificata';
+    emailBtn.textContent = '✓ Confermata';
     emailBtn.style.background = 'rgba(46,160,67,.15)';
     emailBtn.style.color = 'var(--green)';
     emailBtn.style.border = '1px solid rgba(46,160,67,.3)';
-    emailInfo.textContent = 'Email certificata il ' + new Date(emailCert).toLocaleDateString('it-IT') + ' dal dipendente';
+    emailInfo.textContent = 'Email confermata il ' + new Date(emailCert).toLocaleDateString('it-IT') + ' dal dipendente';
   } else {
-    emailBtn.textContent = '⚠ Certifica';
+    emailBtn.textContent = '⚠ Da confermare';
     emailBtn.style.background = 'rgba(200,135,58,.12)';
     emailBtn.style.color = 'var(--yellow)';
     emailBtn.style.border = '1px solid rgba(200,135,58,.3)';
-    emailInfo.textContent = d.email ? 'Non ancora certificata' : '';
+    emailInfo.textContent = d.email ? 'Non ancora confermata' : '';
   }
   hideMsg('ana-msg');
   openSheet('sh-anagrafica');
@@ -9465,6 +9534,7 @@ async function salvaAnagrafica() {
     telefono:           $('ana-tel').value.trim()  || null,
     data_assunzione:    $('ana-assunzione').value  || null,
     paga_giornaliera:   parseFloat($('ana-paga').value) || null,
+    netto_fisso_mensile: parseFloat($('ana-netto-fisso').value) || null,
     tipo_contratto:     $('ana-tipo-contratto').value || null,
     scadenza_contratto: $('ana-scadenza').value    || null,
     livello_ccnl:       $('ana-livello').value     || null,
@@ -9520,7 +9590,7 @@ async function certificaContatto(tipo) {
   const nomeDip = d.nome + (d.cognome ? ' ' + d.cognome : '');
   const tgMsg = (tipo === 'tel' ? '\u{1F4F1}' : '\u{1F4E7}') + ' <b>Ceraldi Presenze \u2014 Verifica contatto</b>\n\n'
     + 'Ciao <b>' + escTG(nomeDip) + '</b>!\n'
-    + 'L\u2019admin ha richiesto la certificazione del tuo <b>' + (tipo === 'tel' ? 'numero di telefono' : 'indirizzo email') + '</b>:\n'
+    + 'L\u2019admin ha chiesto di confermare il tuo <b>' + (tipo === 'tel' ? 'numero di telefono' : 'indirizzo email') + '</b>:\n'
     + '<b>' + escTG(valore) + '</b>\n\n'
     + 'Se \u00e8 corretto, inserisci questo codice nell\u2019app:\n'
     + '<b>' + otp + '</b>\n\n'
@@ -9556,7 +9626,7 @@ async function confermaCertOTP() {
   // Salva certificazione nel profilo
   const campoData = _certTipo === 'tel' ? 'tel_certificato_il' : 'email_certificato_il';
   await sb.from('presenze_profili').update({ [campoData]: new Date().toISOString() }).eq('id', _certDipId);
-  toast('✓ ' + (_certTipo === 'tel' ? 'Telefono' : 'Email') + ' certificato con successo');
+  toast('✓ ' + (_certTipo === 'tel' ? 'Telefono confermato' : 'Email confermata') + ' con successo');
   closeSheet('sh-certOTP');
   // Ricarica anagrafica per aggiornare badge
   openAnagrafica(_certDipId);
@@ -9671,6 +9741,143 @@ async function convalidaTimbr() {
 /* ── ACCONTI ────────────────────────────────────────── */
 let _accontoDipId = null;
 
+/* ── STORICO PAGA GIORNALIERA / AUMENTI ────────────────────────────
+   Prima la paga giornaliera era un campo che si sovrascriveva senza
+   lasciare traccia: ogni aumento cancellava il dato precedente. Ora ogni
+   cambio si registra in una tabella a parte (presenze_storico_paga) con
+   la data di decorrenza, così si ha lo storico completo di quanto
+   percepiva il dipendente in ogni periodo — usato anche per calcolare il
+   TFR storico dalle presenze reali (vedi più sotto). ── */
+let _spDipId = null;
+
+async function apriStoricoPaga() {
+  _spDipId = _anagraficaId; // stesso id della scheda anagrafica aperta
+  const { data: d } = await sb.from('presenze_profili').select('nome,cognome').eq('id', _spDipId).single();
+  $('sp-nome').textContent = d ? d.nome+(d.cognome?' '+d.cognome:'') : '';
+  $('sp-valore').value = ''; $('sp-note').value = '';
+  $('sp-data').value = todayISO();
+  hideMsg('sp-msg');
+  await caricaListaStoricoPaga();
+  openSheet('sh-storicoPaga');
+}
+
+async function caricaListaStoricoPaga() {
+  const { data: storico } = await sb.from('presenze_storico_paga')
+    .select('*').eq('dipendente_id', _spDipId).order('data_decorrenza', { ascending: false });
+  const lista = $('sp-lista');
+  if (!storico || !storico.length) {
+    lista.innerHTML = '<div style="font-size:12px;color:var(--muted)">Nessun aumento ancora registrato — il primo che inserisci diventa il punto di partenza dello storico.</div>';
+    return;
+  }
+  lista.innerHTML = storico.map((s,i) => {
+    const precedente = storico[i+1];
+    const delta = precedente ? s.paga_giornaliera - precedente.paga_giornaliera : null;
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">'
+      + '<div><div style="font-weight:700;font-size:14px">€ '+parseFloat(s.paga_giornaliera).toFixed(2)+'/giorno</div>'
+      + '<div style="font-size:11px;color:var(--muted)">dal '+new Date(s.data_decorrenza).toLocaleDateString('it-IT')+(s.note?' — '+esc(s.note):'')+'</div></div>'
+      + (delta!=null ? '<span style="font-size:12px;font-weight:700;color:'+(delta>=0?'var(--green)':'var(--red)')+'">'+(delta>=0?'+':'')+delta.toFixed(2)+' €</span>' : '')
+      + '</div>';
+  }).join('');
+}
+
+async function salvaAumentoPaga() {
+  const valore = parseFloat($('sp-valore').value);
+  const data = $('sp-data').value;
+  if (!valore || valore <= 0) { showMsg('sp-msg','Inserisci un valore valido','err'); return; }
+  if (!data) { showMsg('sp-msg','Inserisci la data di decorrenza','err'); return; }
+  const { error } = await sb.from('presenze_storico_paga').insert({
+    dipendente_id: _spDipId, paga_giornaliera: valore, data_decorrenza: data,
+    note: $('sp-note').value.trim() || null, registrato_da: ME.id
+  });
+  if (error) { showMsg('sp-msg','Errore: '+error.message,'err'); return; }
+  // La paga "attuale" in anagrafica resta sempre quella con la
+  // decorrenza più recente non nel futuro, per coerenza con l'anagrafica
+  // che tutto il resto dell'app legge.
+  const { data: tutti } = await sb.from('presenze_storico_paga')
+    .select('paga_giornaliera,data_decorrenza').eq('dipendente_id', _spDipId)
+    .lte('data_decorrenza', todayISO()).order('data_decorrenza', { ascending: false }).limit(1);
+  if (tutti && tutti.length) {
+    await sb.from('presenze_profili').update({ paga_giornaliera: tutti[0].paga_giornaliera }).eq('id', _spDipId);
+    $('ana-paga').value = tutti[0].paga_giornaliera;
+  }
+  $('sp-valore').value = ''; $('sp-note').value = '';
+  await caricaListaStoricoPaga();
+  toast('✓ Aumento registrato');
+}
+
+// Paga giornaliera applicabile a una certa data, secondo lo storico
+// (l'ultima decorrenza non successiva alla data richiesta).
+function _pagaApplicabile(storicoOrdinatoAsc, dataStr) {
+  let attuale = null;
+  for (const s of storicoOrdinatoAsc) {
+    if (s.data_decorrenza <= dataStr) attuale = s.paga_giornaliera; else break;
+  }
+  return attuale;
+}
+
+/* ── TFR LORDO STORICO STIMATO DALLE PRESENZE ──────────────────────
+   Non usa le buste paga: ricostruisce mese per mese, dall'assunzione a
+   oggi, quanto avrebbe percepito il dipendente in base alle PRESENZE
+   REGISTRATE IN APP × la paga giornaliera in vigore in quel periodo
+   (storico aumenti sopra), e da lì calcola la quota TFR di ogni mese
+   con la stessa formula di legge già usata altrove (retribuzione utile
+   / 13,5 meno lo 0,50% di contributo al Fondo di garanzia). ── */
+async function calcolaTfrStoricoDaPresenze() {
+  const box = $('sf24-risultato');
+  box.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+
+  const { data: profili } = await sb.from('presenze_profili')
+    .select('id,nome,cognome,data_assunzione,tipo_contratto,paga_giornaliera').eq('attivo',true);
+  const attendibili = (profili||[]).filter(d => d.tipo_contratto !== 'co.co.co' && d.data_assunzione);
+  if (!attendibili.length) { box.innerHTML = '<div class="empty"><div class="empty-txt">Nessun dipendente con data di assunzione impostata</div></div>'; return; }
+
+  const righe = [];
+  let totaleGenerale = 0;
+  for (const d of attendibili) {
+    const [{ data: storico }, { data: presenze }] = await Promise.all([
+      sb.from('presenze_storico_paga').select('paga_giornaliera,data_decorrenza').eq('dipendente_id', d.id).order('data_decorrenza',{ascending:true}),
+      sb.from('presenze').select('data').eq('dipendente_id', d.id).gte('data', d.data_assunzione)
+    ]);
+    // Se non c'è nessuno storico registrato, si usa la paga attuale per
+    // tutto il periodo (unica informazione disponibile).
+    const storicoEff = (storico && storico.length) ? storico : [{ paga_giornaliera: parseFloat(d.paga_giornaliera)||0, data_decorrenza: d.data_assunzione }];
+
+    // Raggruppa le presenze per mese
+    const perMese = {};
+    (presenze||[]).forEach(p => { const k = p.data.slice(0,7); perMese[k] = (perMese[k]||0) + 1; });
+
+    let tfrTotale = 0, retribuzioneTotale = 0, mesiConteggiati = 0;
+    for (const meseChiave of Object.keys(perMese).sort()) {
+      const giorni = perMese[meseChiave];
+      const fineMese = meseChiave + '-28'; // basta un giorno qualsiasi dentro il mese per il confronto <=
+      const paga = _pagaApplicabile(storicoEff, fineMese) ?? storicoEff[0].paga_giornaliera;
+      if (!paga) continue;
+      const retribuzioneMese = giorni * paga;
+      const tfrMese = retribuzioneMese/13.5 - retribuzioneMese*0.005;
+      tfrTotale += tfrMese; retribuzioneTotale += retribuzioneMese; mesiConteggiati++;
+    }
+    totaleGenerale += tfrTotale;
+    righe.push({ nome: d.nome+(d.cognome?' '+d.cognome:''), tfrTotale, retribuzioneTotale, mesiConteggiati,
+                 haStorico: !!(storico && storico.length) });
+  }
+
+  const riga = (l,v,ev) => '<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:'+(ev?'14px':'13px')+';font-weight:'+(ev?'700':'400')+'"><span>'+l+'</span><span>€ '+parseFloat(v).toFixed(2)+'</span></div>';
+  let html = '<div class="card" style="padding:14px;background:rgba(43,74,203,.06);border-color:rgba(43,74,203,.3)">'
+    + '<div style="font-size:11px;font-weight:800;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">🏦 TFR lordo storico — stimato dalle presenze in app</div>'
+    + '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">Ricostruito mese per mese dalle presenze registrate × la paga giornaliera in vigore in ogni periodo (non dalle buste paga). È una stima: verifica sempre col consulente prima di usarlo per una liquidazione reale.</div>'
+    + '<div style="border-top:2px solid var(--accent);margin:8px 0 6px"></div>'
+    + '<div style="display:flex;justify-content:space-between;font-size:16px;font-weight:800"><span>Totale TFR lordo stimato</span><span>€ '+totaleGenerale.toFixed(2)+'</span></div>'
+    + '</div>';
+  html += '<div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:16px 0 8px">Dettaglio per dipendente</div>';
+  html += righe.map(r => '<div class="card" style="padding:10px 12px;margin-bottom:6px">'
+    + '<div style="font-weight:700;font-size:13px;margin-bottom:4px">'+esc(r.nome)+'</div>'
+    + riga('Retribuzione ricostruita ('+r.mesiConteggiati+' mesi)', r.retribuzioneTotale)
+    + riga('TFR lordo stimato', r.tfrTotale, true)
+    + '<div style="font-size:10px;color:var(--muted);margin-top:4px">'+(r.haStorico ? 'calcolato con lo storico aumenti registrato' : '⚠️ nessuno storico paga registrato — usata la paga attuale per tutto il periodo')+'</div>'
+    + '</div>').join('');
+  box.innerHTML = html;
+}
+
 function openAcconto(dipId, nome, prefillImporto, prefillNota) {
   _accontoDipId = dipId;
   $('acc-nome').textContent = nome;
@@ -9678,8 +9885,47 @@ function openAcconto(dipId, nome, prefillImporto, prefillNota) {
   $('acc-data').value    = todayISO();
   $('acc-note').value    = prefillNota || '';
   if ($('acc-causale')) $('acc-causale').value = 'stipendio';
+  $('acc-ferie-giorni').value = '';
+  toggleAccontoFerie();
   hideMsg('acc-msg');
   openSheet('sh-acconto');
+}
+
+// Ferie non godute: mostra/nasconde il pannello di liquidazione e carica
+// il residuo attuale del dipendente selezionato.
+let _accFeriePagaGiornaliera = 0, _accFerieResiduo = 0;
+async function toggleAccontoFerie() {
+  const attivo = $('acc-causale').value === 'ferie_non_godute';
+  $('acc-ferie-wrap').style.display = attivo ? 'block' : 'none';
+  if (!attivo || !_accontoDipId) return;
+  $('acc-ferie-residuo').textContent = 'Calcolo del residuo...';
+  const { data: p } = await sb.from('presenze_profili')
+    .select('ferie_annuali,data_assunzione,ferie_godute_extra,paga_giornaliera').eq('id',_accontoDipId).single();
+  const { data: assenzeFerie } = await sb.from('presenze_assenze')
+    .select('data_inizio,data_fine').eq('dipendente_id',_accontoDipId).eq('stato','approvata').eq('tipo','ferie');
+  let godute = 0;
+  (assenzeFerie||[]).forEach(a => { godute += Math.round((new Date(a.data_fine)-new Date(a.data_inizio))/86400000)+1; });
+  const calc = calcolaFerieMaturate(p?.data_assunzione, p?.ferie_annuali||26, godute, p?.ferie_godute_extra);
+  _accFerieResiduo = calc.residue;
+  _accFeriePagaGiornaliera = parseFloat(p?.paga_giornaliera) || 0;
+  $('acc-ferie-residuo').innerHTML = '🌴 Residuo attuale: <b style="color:var(--green)">'+calc.residue.toFixed(1)+' giorni</b>'
+    + (_accFeriePagaGiornaliera ? ' · paga giornaliera € '+_accFeriePagaGiornaliera.toFixed(2) : ' · <span style="color:var(--red)">paga giornaliera non impostata in anagrafica</span>');
+  calcolaImportoFerieAcconto();
+}
+
+// Ogni giorno inserito scala automaticamente dal progressivo residuo e
+// genera l'importo corrispondente in base alla paga giornaliera.
+function calcolaImportoFerieAcconto() {
+  const giorni = parseFloat($('acc-ferie-giorni').value) || 0;
+  if (giorni > _accFerieResiduo) {
+    $('acc-ferie-calcolo').innerHTML = '<span style="color:var(--red)">⚠️ Superi il residuo di '+_accFerieResiduo.toFixed(1)+' giorni</span>';
+  } else if (giorni > 0) {
+    const importo = giorni * _accFeriePagaGiornaliera;
+    $('acc-ferie-calcolo').innerHTML = giorni.toFixed(1)+' gg × € '+_accFeriePagaGiornaliera.toFixed(2)+' = <b>€ '+importo.toFixed(2)+'</b> — residuo dopo la liquidazione: '+(_accFerieResiduo-giorni).toFixed(1)+' gg';
+    $('acc-importo').value = importo.toFixed(2);
+  } else {
+    $('acc-ferie-calcolo').textContent = '';
+  }
 }
 
 async function salvaAcconto() {
@@ -9688,16 +9934,32 @@ async function salvaAcconto() {
   if (!importo || importo <= 0) { showMsg('acc-msg','Inserisci un importo valido','err'); return; }
   if (!data) { showMsg('acc-msg','Inserisci la data','err'); return; }
   const accCausale = $('acc-causale') ? $('acc-causale').value : 'stipendio';
+  // Ferie non godute: i giorni liquidati scalano dal progressivo, così il
+  // residuo resta corretto anche senza aver preso un giorno di ferie vero
+  // e proprio — si somma a ferie_godute_extra, lo stesso campo che il
+  // residuo già sottrae.
+  let giorniFerieLiquidati = 0;
+  if (accCausale === 'ferie_non_godute') {
+    giorniFerieLiquidati = parseFloat($('acc-ferie-giorni').value) || 0;
+    if (giorniFerieLiquidati <= 0) { showMsg('acc-msg','Inserisci quanti giorni di ferie stai liquidando','err'); return; }
+    if (giorniFerieLiquidati > _accFerieResiduo) { showMsg('acc-msg','Superi il residuo ferie disponibile ('+_accFerieResiduo.toFixed(1)+' gg)','err'); return; }
+  }
   let insertErr = null;
   try {
     await DB.acconti.insert({
       dipendente_id: _accontoDipId,
       importo, data,
       causale:       accCausale,
-      note:          $('acc-note').value.trim() || null,
+      note:          ($('acc-note').value.trim() || (giorniFerieLiquidati ? giorniFerieLiquidati.toFixed(1)+' giorni di ferie non godute liquidati' : null)),
       registrato_da: ME.id,
       letto_dip:     false
     });
+    if (giorniFerieLiquidati > 0) {
+      const { data: profAttuale } = await sb.from('presenze_profili').select('ferie_godute_extra').eq('id',_accontoDipId).single();
+      await sb.from('presenze_profili').update({
+        ferie_godute_extra: (parseFloat(profAttuale?.ferie_godute_extra) || 0) + giorniFerieLiquidati
+      }).eq('id', _accontoDipId);
+    }
   } catch (e) { insertErr = e; }
   if (insertErr) { showMsg('acc-msg', insertErr.message, 'err'); return; }
   // Notifica Telegram dipendente con deep link alla conferma — VOLUTAMENTE
@@ -10481,20 +10743,33 @@ async function esportaStipendi() {
 
 /* ── EXPORT CSV ─────────────────────────────────────── */
 /* ── TELEGRAM ───────────────────────────────────────── */
+// FIX: prima mandava sempre e solo al chat_id fisso della costante
+// TG_CHAT (impostato quando l'app aveva un solo admin) — Vincenzo, pur
+// avendo collegato il proprio Telegram al primo accesso (obbligatorio
+// anche per gli admin, vedi il login), non riceveva MAI le notifiche
+// perché la funzione non lo interpellava affatto. Ora manda a TUTTI gli
+// admin attivi che hanno un telegram_chat_id collegato, con lo stesso
+// pattern già usato per il broadcast ai dipendenti.
 async function inviaNotificaTelegram(testo, deepLink) {
-  try {
-    const link = deepLink ? '\n\n<a href="' + APP_URL + deepLink + '">➡️ Apri nell\'app</a>' : '';
-    const res = await tgApi(TG_TOKEN, {
-        chat_id: TG_CHAT,
-        text: testo + link,
-        parse_mode: 'HTML',
-        disable_web_page_preview: false
-      });
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      console.error('[TG admin] invio rifiutato', res.status, body);
-    }
-  } catch(e) { console.error('[TG admin] errore rete', e); }
+  const { data: admins } = await sb.from('presenze_profili')
+    .select('telegram_chat_id').eq('ruolo','admin').eq('attivo',true)
+    .not('telegram_chat_id','is',null);
+  const link = deepLink ? '\n\n<a href="' + APP_URL + deepLink + '">➡️ Apri nell\'app</a>' : '';
+  const destinatari = (admins && admins.length) ? admins.map(a=>a.telegram_chat_id) : [TG_CHAT]; // ripiego se nessun admin risulta collegato
+  for (const chatId of destinatari) {
+    try {
+      const res = await tgApi(TG_TOKEN, {
+          chat_id: chatId,
+          text: testo + link,
+          parse_mode: 'HTML',
+          disable_web_page_preview: false
+        });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        console.error('[TG admin] invio rifiutato', chatId, res.status, body);
+      }
+    } catch(e) { console.error('[TG admin] errore rete', chatId, e); }
+  }
 }
 
 /* ── TELEGRAM DIPENDENTI ─────────────────────────────── */
@@ -10649,10 +10924,22 @@ async function salvaNumeroECertifica() {
 }
 
 /* ── Funzione notifica admin separata ──────────────────────────────── */
+// FIX: stesso bug di inviaNotificaTelegram — mandava sempre e solo al
+// chat_id fisso TG_CHAT. Questa è la funzione usata in molti più punti
+// (inviti nuovo dipendente/admin, scadenze contratto, compleanni,
+// richieste in attesa, ecc.), quindi il bug qui pesava di più: un admin
+// che aveva collegato il proprio Telegram restava comunque a chat vuota
+// per la maggior parte delle notifiche.
 async function inviaNotificaTelegramAdmin(testo) {
-  try {
-    await tgApi(TG_TOKEN, { chat_id: TG_CHAT, text: testo, parse_mode: 'HTML', disable_web_page_preview: true });
-  } catch(e) {}
+  const { data: admins } = await sb.from('presenze_profili')
+    .select('telegram_chat_id').eq('ruolo','admin').eq('attivo',true)
+    .not('telegram_chat_id','is',null);
+  const destinatari = (admins && admins.length) ? admins.map(a=>a.telegram_chat_id) : [TG_CHAT];
+  for (const chatId of destinatari) {
+    try {
+      await tgApi(TG_TOKEN, { chat_id: chatId, text: testo, parse_mode: 'HTML', disable_web_page_preview: true });
+    } catch(e) { console.error('[TG admin] errore rete', chatId, e); }
+  }
 }
 
 /* ── COLLEGAMENTO BOT DIPENDENTE ─────────────────────── */
@@ -13513,7 +13800,7 @@ async function calcolaPrevisioneCosto() {
   const primo = `${anno}-${String(mese).padStart(2,'0')}-01`;
   const ultimo = `${anno}-${String(mese).padStart(2,'0')}-${String(new Date(anno,mese,0).getDate()).padStart(2,'0')}`;
   const [{ data: profili }, { data: presenze }] = await Promise.all([
-    sb.from('presenze_profili').select('id,nome,cognome,paga_giornaliera,tipo_contratto').eq('attivo',true),
+    sb.from('presenze_profili').select('id,nome,cognome,paga_giornaliera,tipo_contratto,netto_fisso_mensile').eq('attivo',true),
     sb.from('presenze').select('dipendente_id,data').gte('data',primo).lte('data',ultimo)
   ]);
   if (!profili || !profili.length) { box.innerHTML = '<div class="empty"><div class="empty-txt">Nessun dipendente attivo</div></div>'; return; }
@@ -13544,10 +13831,19 @@ async function calcolaPrevisioneCosto() {
   const righe = [];
   let tNetto=0, tLordo=0, tAzienda=0, tInpsDip=0, tIrpef=0, tAddiz=0;
   for (const d of profili) {
-    const giorni = (presenze||[]).filter(p => p.dipendente_id === d.id).length;
-    const paga = parseFloat(d.paga_giornaliera) || 0;
-    if (!giorni || !paga) continue;
-    const netto = giorni * paga;
+    const isCoco0 = (d.tipo_contratto||'') === 'co.co.co';
+    let netto, giorni = 0, paga = 0;
+    if (isCoco0) {
+      // Compenso fisso mensile, non legato alle presenze registrate.
+      // Default 1500€ se non impostato in anagrafica (Ceraldi Valerio e
+      // Vincenzo, amministratori con compenso mensile fisso).
+      netto = parseFloat(d.netto_fisso_mensile) || 1500;
+    } else {
+      giorni = (presenze||[]).filter(p => p.dipendente_id === d.id).length;
+      paga = parseFloat(d.paga_giornaliera) || 0;
+      if (!giorni || !paga) continue;
+      netto = giorni * paga;
+    }
     const suoi = storicoDi[d.id] || [];
     const suoiAnalizzati = suoi.filter(s => s.inps_dip_reale != null);
 
@@ -13617,7 +13913,7 @@ async function calcolaPrevisioneCosto() {
   html += '<div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:16px 0 8px">Dettaglio per dipendente</div>';
   html += righe.map(r => '<div class="card" style="padding:10px 12px;margin-bottom:6px">'
     + '<div style="font-weight:700;font-size:13px;margin-bottom:4px">'+esc(r.nome)+'</div>'
-    + '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">'+r.giorni+' giorni × € '+r.paga.toFixed(2)+'</div>'
+    + '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">'+(r.giorni ? r.giorni+' giorni × € '+r.paga.toFixed(2) : 'compenso fisso mensile')+'</div>'
     + riga('Netto da pagare', r.netto, true)
     + riga('Lordo previsto (×'+r.rapporto.toFixed(3)+')', r.lordo)
     + riga('INPS dipendente', r.inpsDip)
@@ -14492,7 +14788,7 @@ async function caricaProfiloDip() {
         : '<div style="display:flex;align-items:center;gap:8px;background:rgba(43,74,203,.06);border:1px solid rgba(43,74,203,.15);border-radius:12px;padding:12px;margin-bottom:12px"><span style="font-size:20px">&#x1F4F2;</span><div style="flex:1"><div style="font-size:13px;font-weight:700">Collega Telegram</div><div style="font-size:12px;color:var(--muted)">Per ricevere notifiche dirette su pagamenti, documenti e avvisi</div></div><button class="btn-sm primary" onclick="collegaTelegramDipendente()">Collega</button></div>'
       }
     </div>
-    <!-- Certificazione contatti -->
+    <!-- Conferma contatti -->
     <div class="card" style="margin-bottom:14px">
       <div class="sec-title" style="margin-bottom:10px">Verifica contatti</div>
       <div class="profilo-field" style="align-items:flex-start">
@@ -14500,7 +14796,7 @@ async function caricaProfiloDip() {
         <span class="profilo-val" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;min-width:0">
           <span style="font-weight:600;word-break:break-all;text-align:right">${p.telefono || '—'}</span>
           ${p.tel_certificato_il
-            ? '<span style="font-size:10px;background:rgba(46,160,67,.12);color:var(--green);border:1px solid rgba(46,160,67,.25);border-radius:6px;padding:2px 7px;white-space:nowrap">\u2713 Cert. ' + new Date(p.tel_certificato_il).toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'2-digit'}) + '</span>'
+            ? '<span style="font-size:10px;background:rgba(46,160,67,.12);color:var(--green);border:1px solid rgba(46,160,67,.25);border-radius:6px;padding:2px 7px;white-space:nowrap">\u2713 Confermato ' + new Date(p.tel_certificato_il).toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'2-digit'}) + '</span>'
             : (p.telefono ? '<button class=\"btn-sm\" onclick=\"apriCertDip(\'tel\')\" style=\"font-size:11px;padding:3px 10px\">Verifica</button>' : '')
           }
         </span>
@@ -14510,7 +14806,7 @@ async function caricaProfiloDip() {
         <span class="profilo-val" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;min-width:0">
           <span style="font-weight:600;word-break:break-all;text-align:right">${p.email || '—'}</span>
           ${p.email_certificato_il
-            ? '<span style="font-size:10px;background:rgba(46,160,67,.12);color:var(--green);border:1px solid rgba(46,160,67,.25);border-radius:6px;padding:2px 7px;white-space:nowrap">\u2713 Cert. ' + new Date(p.email_certificato_il).toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'2-digit'}) + '</span>'
+            ? '<span style="font-size:10px;background:rgba(46,160,67,.12);color:var(--green);border:1px solid rgba(46,160,67,.25);border-radius:6px;padding:2px 7px;white-space:nowrap">\u2713 Confermato ' + new Date(p.email_certificato_il).toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'2-digit'}) + '</span>'
             : '<button class=\"btn-sm\" onclick=\"apriCertDip(\'email\')\" style=\"font-size:11px;padding:3px 10px\">Verifica</button>'
           }
         </span>
