@@ -1354,6 +1354,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     <!-- ADMIN: STIPENDI -->
     <div class="page" id="pg-stipendi">
       <button class="btn-secondary" style="width:100%;margin-bottom:10px" onclick="apriStimaF24()">🧮 Stima Lordo e F24/DM10</button>
+      <button class="btn-secondary" style="width:100%;margin-bottom:10px" onclick="apriRegistroCertificazioni()">🔒 Registro certificazioni</button>
       <div class="filter-bar" style="margin-bottom:10px">
         <select id="st-mese-sel" class="field-inp" style="flex:1;margin-bottom:0;padding:10px 11px;font-weight:700;font-size:15px" onchange="caricaStipendi()">
         </select>
@@ -3465,6 +3466,156 @@ function esc(s) {
     .replace(/'/g, '&#39;');
 }
 const escAttr = esc;
+
+/* ═══════════════════ CERTIFICAZIONE DELLE CONFERME ═══════════════════
+   NON è una firma digitale qualificata (quella richiede un provider
+   esterno certificato — vedi nota in fondo a questo blocco). È il
+   massimo che si può fare in modo autonomo, senza servizi terzi: per
+   ogni conferma importante (acconto, stipendio/liquidazione — e di
+   riflesso TFR e 13ª/14ª quando erogati con causale "acconto") si
+   registra una prova non ripudiabile:
+     - hash SHA-256 dei dati esatti confermati (importo, data, causale…)
+     - incatenato all'hash della certificazione precedente dello stesso
+       dipendente: se qualcuno alterasse un record passato, la catena si
+       romperebbe e sarebbe rilevabile — stesso principio di un registro
+       immutabile, senza bisogno di infrastrutture esterne
+     - timestamp, IP pubblico, dispositivo/browser usato al momento
+     - una ricevuta PDF scaricabile/condivisibile con tutti questi dati,
+       rigenerabile identica in ogni momento dal record salvato
+   Questo ha valore di "firma elettronica semplice" (art. 20 Codice
+   dell'Amministrazione Digitale): in un eventuale contenzioso il giudice
+   la valuta liberamente in base a qualità/affidabilità del processo —
+   NON è automaticamente equivalente a una firma autografa. Per quel
+   livello (firma digitale qualificata, art. 21 comma 2 CAD) serve un
+   provider esterno certificato (es. Namirial, InfoCert, Aruba — offrono
+   "firma con SPID"/"firma remota" via API), con un costo per firma e la
+   necessità che il dipendente abbia SPID o un certificato digitale. */
+
+async function _ipPubblico() {
+  try {
+    const r = await fetch('https://api.ipify.org?format=json');
+    const j = await r.json();
+    return (j && j.ip) || null;
+  } catch(e) { return null; }
+}
+
+async function _sha256(testo) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(testo));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
+// Registra la certificazione di un'azione del dipendente (conferma o
+// rifiuto) su un record importante. `contenuto` è un oggetto semplice coi
+// dati esatti confermati — verrà incluso nell'hash così com'è, quindi va
+// passato con gli stessi valori mostrati a schermo al dipendente.
+async function certificaAzione(tipo, riferimentoTabella, riferimentoId, azione, contenuto) {
+  try {
+    const dipId = ME.id;
+    const nomeDip = ME.nome + (ME.cognome ? ' '+ME.cognome : '');
+    const { data: prec } = await sb.from('presenze_certificazioni')
+      .select('hash').eq('dipendente_id', dipId)
+      .order('creato_il', {ascending:false}).limit(1).maybeSingle();
+    const hashPrecedente = prec ? prec.hash : null;
+    const creatoIl = new Date().toISOString();
+    const contenutoOrdinato = JSON.stringify(contenuto, Object.keys(contenuto).sort());
+    const daFirmare = JSON.stringify({
+      tipo, riferimento_tabella: riferimentoTabella, riferimento_id: riferimentoId,
+      dipendente_id: dipId, azione, contenuto: contenutoOrdinato,
+      hash_precedente: hashPrecedente, creato_il: creatoIl
+    });
+    const hash = await _sha256(daFirmare);
+    const ip = await _ipPubblico();
+    const { data: cert, error } = await sb.from('presenze_certificazioni').insert({
+      tipo, riferimento_tabella: riferimentoTabella, riferimento_id: riferimentoId,
+      dipendente_id: dipId, nome_dipendente: nomeDip, azione,
+      contenuto, hash, hash_precedente: hashPrecedente,
+      ip, user_agent: navigator.userAgent, creato_il: creatoIl
+    }).select().single();
+    if (error) { console.warn('[certificaAzione]', error); return null; }
+    return cert;
+  } catch(e) { console.warn('[certificaAzione]', e); return null; }
+}
+
+// Ricostruisce la ricevuta PDF di una certificazione — sempre identica,
+// rigenerata dal record salvato (non serve conservarla come file a parte).
+async function generaRicevutaCertificazione(cert) {
+  const pdfDoc = await PDFLib.PDFDocument.create();
+  const page = pdfDoc.addPage([595, 842]);
+  const font = await pdfDoc.embedFont(PDFLib.StandardFonts.Helvetica);
+  const fontBold = await pdfDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+  let y = 800;
+  const draw = (testo, opt={}) => {
+    page.drawText(String(testo), { x: opt.x||40, y, size: opt.size||10, font: opt.bold?fontBold:font, color: PDFLib.rgb(0,0,0) });
+    y -= (opt.size||10) + (opt.gap||8);
+  };
+  draw('CERALDI GROUP S.r.l. — Ricevuta di conferma certificata', {size:14, bold:true, gap:20});
+  draw('Tipo: ' + cert.tipo, {bold:true});
+  draw('Dipendente: ' + cert.nome_dipendente);
+  draw('Azione: ' + (cert.azione==='confermato' ? 'CONFERMATO dal dipendente' : 'RIFIUTATO/CONTESTATO dal dipendente'));
+  draw('Data e ora: ' + new Date(cert.creato_il).toLocaleString('it-IT'));
+  draw('Indirizzo IP: ' + (cert.ip||'non disponibile'));
+  draw('Dispositivo: ' + String(cert.user_agent||'').slice(0,95));
+  y -= 6;
+  draw('Contenuto confermato:', {bold:true});
+  Object.entries(cert.contenuto||{}).forEach(([k,v]) => draw('  '+k+': '+v, {size:9,gap:5}));
+  y -= 6;
+  draw('Impronta digitale (hash SHA-256):', {bold:true});
+  draw(cert.hash, {size:8});
+  draw('Hash della conferma precedente (catena):', {bold:true});
+  draw(cert.hash_precedente || '(prima conferma della serie per questo dipendente)', {size:8});
+  y -= 16;
+  draw('Questa ricevuta attesta che il dipendente ha confermato quanto sopra tramite', {size:9,gap:4});
+  draw('l\'app Ceraldi Presenze. L\'impronta digitale garantisce che il contenuto non sia', {size:9,gap:4});
+  draw('stato alterato dopo la conferma — qualunque modifica cambierebbe l\'hash.', {size:9,gap:4});
+  draw('Firma elettronica semplice ai sensi dell\'art. 20 del Codice dell\'Amministrazione', {size:8,gap:4});
+  draw('Digitale — liberamente valutabile in giudizio, non equivalente a firma autografa.', {size:8});
+  return new Blob([await pdfDoc.save()], {type:'application/pdf'});
+}
+
+// Scarica/condivide la ricevuta PDF di una certificazione
+async function scaricaRicevutaCertificazione(cert) {
+  try {
+    const blob = await generaRicevutaCertificazione(cert);
+    const nomeFile = 'certificazione_'+cert.tipo+'_'+cert.id.slice(0,8)+'.pdf';
+    const file = new File([blob], nomeFile, {type:'application/pdf'});
+    if (navigator.canShare && navigator.canShare({files:[file]})) {
+      await navigator.share({ files:[file], title: nomeFile });
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = nomeFile; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch(e) { toast('Errore nella generazione della ricevuta'); console.warn(e); }
+}
+
+// Verifica l'integrità della catena di certificazioni di un dipendente:
+// ricalcola ogni hash e controlla che l'anello con la certificazione
+// successiva combaci — se qualcuno avesse alterato un record a mano
+// direttamente sul database, questo controllo lo rileva.
+async function verificaCatenaCertificazioni(dipId) {
+  const { data: righe } = await sb.from('presenze_certificazioni')
+    .select('*').eq('dipendente_id', dipId).order('creato_il', {ascending:true});
+  if (!righe || !righe.length) return { ok:true, totale:0, dettagli:[] };
+  const dettagli = [];
+  let ok = true;
+  for (let i=0; i<righe.length; i++) {
+    const r = righe[i];
+    const attesoPrecedente = i===0 ? null : righe[i-1].hash;
+    const catenaOk = (r.hash_precedente||null) === attesoPrecedente;
+    const contenutoOrdinato = JSON.stringify(r.contenuto, Object.keys(r.contenuto).sort());
+    const daFirmare = JSON.stringify({
+      tipo: r.tipo, riferimento_tabella: r.riferimento_tabella, riferimento_id: r.riferimento_id,
+      dipendente_id: r.dipendente_id, azione: r.azione, contenuto: contenutoOrdinato,
+      hash_precedente: r.hash_precedente, creato_il: r.creato_il
+    });
+    const hashRicalcolato = await _sha256(daFirmare);
+    const hashOk = hashRicalcolato === r.hash;
+    if (!catenaOk || !hashOk) ok = false;
+    dettagli.push({ id:r.id, tipo:r.tipo, creato_il:r.creato_il, catenaOk, hashOk });
+  }
+  return { ok, totale: righe.length, dettagli };
+}
 
 /* Escaping per messaggi Telegram in parse_mode 'HTML'.
    Telegram supporta solo un sottoinsieme di tag HTML: se un nome o
@@ -13512,8 +13663,14 @@ async function confermaAcconto() {
   const nomeDip = ME.nome + (ME.cognome ? ' '+ME.cognome : '');
   const importoAcc = $('ca-importo') ? $('ca-importo').textContent : '';
   const dataAcc    = $('ca-data')    ? $('ca-data').textContent    : '';
+  // Certificazione: prova non ripudiabile della conferma (hash + catena +
+  // ricevuta PDF) — vedi blocco "CERTIFICAZIONE DELLE CONFERME" in cima al file
+  const cert = await certificaAzione('acconto', 'presenze_acconti', _confAccId, 'confermato', {
+    importo: importoAcc, data: dataAcc
+  });
   inviaNotificaTelegram('\u2713\u2713 <b>Ceraldi Presenze \u2014 Acconto confermato</b>\n'+escTG(nomeDip)+' ha confermato l\'acconto di <b>'+importoAcc+'</b> del '+dataAcc+'.');
   toast('\u2713 Acconto '+importoAcc+' confermato \u2014 grazie!');
+  if (cert) scaricaRicevutaCertificazione(cert);
   _accMostrato.delete(_confAccId);
   _confAccId = null;
   closeSheet('sh-confAcconto');
@@ -13564,8 +13721,14 @@ async function confermaLiquidazione() {
   const nomeDip = ME.nome + (ME.cognome ? ' '+ME.cognome : '');
   const periodoConf = $('cl-periodo') ? $('cl-periodo').textContent : '';
   const importoConf = $('cl-importo') ? $('cl-importo').textContent : '';
+  // Certificazione: prova non ripudiabile della conferma di stipendio/
+  // liquidazione (copre anche TFR e 13ª/14ª quando erogati con questa causale)
+  const cert = await certificaAzione('liquidazione', 'presenze_liquidazioni', _confLiqId, 'confermato', {
+    periodo: periodoConf, importo: importoConf
+  });
   inviaNotificaTelegram('\u2713\u2713 <b>Ceraldi Presenze \u2014 Stipendio confermato</b>\n'+escTG(nomeDip)+' ha confermato lo stipendio di <b>'+periodoConf+'</b> ('+importoConf+')');
   toast('\u2713 Stipendio '+periodoConf+' confermato \u2014 grazie!');
+  if (cert) scaricaRicevutaCertificazione(cert);
   _liqMostrato.delete(_confLiqId); // rimuovi dal set così non blocca prossima sessione
   _confLiqId = null;
   closeSheet('sh-confLiq');
@@ -14217,6 +14380,46 @@ async function caricaProspettoOF24(inputEl) {
     stato.style.color = 'var(--red)';
   }
   inputEl.value = '';
+}
+
+// Registro di TUTTE le certificazioni (acconti/stipendi confermati dai
+// dipendenti), con verifica automatica della catena per ciascuno e
+// possibilità di riscaricare ogni ricevuta in qualunque momento — anche
+// a distanza di anni, sempre identica perché rigenerata dal record.
+async function apriRegistroCertificazioni() {
+  $('statDett-titolo').textContent = 'Registro certificazioni';
+  $('statDett-body').innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  openSheet('sh-statDettaglio');
+  const { data: righe, error } = await sb.from('presenze_certificazioni')
+    .select('*').order('creato_il', {ascending:false}).limit(200);
+  if (error) { $('statDett-body').innerHTML = '<div class="empty"><div class="empty-txt">Tabella non ancora creata — lancia la migrazione SQL</div></div>'; return; }
+  if (!righe || !righe.length) { $('statDett-body').innerHTML = '<div class="empty"><div class="empty-txt">Nessuna certificazione ancora registrata</div></div>'; return; }
+  // Verifica la catena per ciascun dipendente coinvolto (una volta sola per dipendente)
+  const dipIds = [...new Set(righe.map(r=>r.dipendente_id))];
+  const catene = {};
+  for (const id of dipIds) { catene[id] = await verificaCatenaCertificazioni(id); }
+  window._registroCertificazioni = righe; // per il tasto "Scarica" (evita ricaricare dal server)
+  $('statDett-body').innerHTML = righe.map(r => {
+    const catenaOk = catene[r.dipendente_id] ? catene[r.dipendente_id].ok : null;
+    const badgeCatena = catenaOk===true ? '<span style="font-size:10px;font-weight:700;color:var(--green)">✓ catena integra</span>'
+      : catenaOk===false ? '<span style="font-size:10px;font-weight:700;color:var(--red)">⚠ CATENA ALTERATA</span>' : '';
+    return `<div class="card" style="margin-bottom:8px;padding:12px">
+      <div style="display:flex;justify-content:space-between;align-items:start">
+        <div>
+          <div style="font-weight:700;font-size:13px">${esc(r.nome_dipendente)} — ${esc(r.tipo)}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">${new Date(r.creato_il).toLocaleString('it-IT')} · ${r.azione} · IP ${esc(r.ip||'—')}</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:4px;word-break:break-all">hash: ${r.hash.slice(0,24)}…</div>
+          <div style="margin-top:4px">${badgeCatena}</div>
+        </div>
+        <button class="btn-sm primary" style="flex-shrink:0" onclick="scaricaRicevutaDaRegistro('${r.id}')">📄 Ricevuta</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function scaricaRicevutaDaRegistro(id) {
+  const r = (window._registroCertificazioni||[]).find(c => c.id === id);
+  if (r) scaricaRicevutaCertificazione(r);
 }
 
 async function apriStimaF24() {
