@@ -997,8 +997,8 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
       <span id="vdoc-zoom-lbl" style="color:#fff;font-size:11px;width:38px;text-align:center">100%</span>
       <button onclick="zoomDoc(0.25)" style="color:#fff;background:none;border:1px solid #444;border-radius:6px;font-size:18px;width:36px;height:32px">+</button>
     </div>
-    <div id="vdoc-scroll" style="flex:1;overflow:auto;-webkit-overflow-scrolling:touch">
-      <div id="vdoc-content" style="min-height:100%;display:flex;justify-content:center;padding:16px 8px"></div>
+    <div id="vdoc-scroll" style="flex:1;overflow:hidden;position:relative">
+      <div id="vdoc-content" style="min-height:100%;display:flex;justify-content:center;padding:16px 8px;transform-origin:0 0;will-change:transform"></div>
     </div>
   </div>
 </div>
@@ -2447,6 +2447,8 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     <div class="sheet-hdr"><span class="sheet-title">Timbratura manuale</span><button class="sheet-cls" onclick="closeSheet('sh-timbrManualeDip')">&#x2715;</button></div>
     <div class="sheet-body">
       <p style="font-size:13px;color:var(--muted);margin-bottom:14px;line-height:1.5">Registra la tua presenza manualmente. L'admin dovrà approvarla dall'app.</p>
+      <div class="field-lbl">Data</div>
+      <input class="field-inp" type="date" id="tmDip-data">
       <div class="field-lbl">Orario entrata</div>
       <input class="field-inp" type="time" id="tmDip-ora">
       <div class="field-lbl">Motivo (obbligatorio)</div>
@@ -9774,10 +9776,29 @@ async function confermaCertOTP() {
 // Il dipendente può registrare la propria timbratura manuale
 // L'admin genera un OTP e il dipendente lo inserisce nella sua app per convalidare
 
+// Blocco (non solo avviso): non si può registrare una presenza in una data
+// coperta da ferie o malattia già approvata/confermata — né il dipendente
+// né l'admin. Per poterla registrare va prima eliminata la ferie/malattia
+// (richiesta con conferma del dipendente, stesso meccanismo di sempre) —
+// stesso identico controllo già usato per lo scan QR, riusato qui per
+// timbratura manuale dipendente e timbratura manuale admin.
+async function assenzaCheBloccaData(dipId, data) {
+  const { data: righe } = await sb.from('presenze_assenze')
+    .select('tipo').eq('dipendente_id', dipId)
+    .in('tipo', ['ferie','malattia']).in('stato', ['approvata','confermata'])
+    .lte('data_inizio', data).gte('data_fine', data)
+    .limit(1).maybeSingle();
+  return righe || null;
+}
+
 async function openTimbraManualeDip() {
-  const gia = await DB.safe(() => DB.presenze.diOggiPerDip(ME.id, todayISO()), null);
-  if (gia) { toast('Hai già una timbratura per oggi'); return; }
-  // Apri sheet per richiedere motivazione
+  // FIX: prima bloccava del tutto se il dipendente aveva già una
+  // timbratura OGGI, anche se voleva registrarne una retroattiva per un
+  // giorno precedente — ora il controllo "già timbrato" si fa sulla DATA
+  // scelta, non più sempre su oggi, quindi una richiesta retroattiva resta
+  // sempre possibile anche se oggi risulta già presente.
+  $('tmDip-data').value = todayISO();
+  $('tmDip-data').max   = todayISO();
   $('tmDip-ora').value = oraNow().substring(0,5);
   $('tmDip-motivo').value = '';
   hideMsg('tmDip-msg');
@@ -9785,16 +9806,32 @@ async function openTimbraManualeDip() {
 }
 
 async function salvaTimbrManualeDip() {
+  const data = $('tmDip-data').value || todayISO();
   const ora = $('tmDip-ora').value;
   const motivo = $('tmDip-motivo').value.trim();
   if (!ora) { showMsg('tmDip-msg', 'Inserisci l\u2019orario', 'err'); return; }
-  const ts = buildTS(todayISO(), ora);
+  if (data > todayISO()) { showMsg('tmDip-msg', 'Non puoi registrare una data futura', 'err'); return; }
+  // Controllo "già timbrato" sulla DATA scelta (non più fisso su oggi)
+  const gia = await DB.safe(() => DB.presenze.diOggiPerDip(ME.id, data), null);
+  if (gia) { showMsg('tmDip-msg', 'Hai già una timbratura per questa data', 'err'); return; }
+  // Blocco: non si può registrare una presenza in un giorno coperto da
+  // ferie/malattia già approvata/confermata — né dal dipendente né
+  // dall'admin (stesso identico controllo usato per lo scan QR). Per
+  // registrarla, prima va tolta la ferie/malattia — con richiesta e
+  // conferma del dipendente, come per ogni altra eliminazione.
+  const assenzaBlocco = await assenzaCheBloccaData(ME.id, data);
+  if (assenzaBlocco) {
+    const lbl = assenzaBlocco.tipo === 'ferie' ? 'ferie' : 'malattia';
+    showMsg('tmDip-msg', 'Risulti in '+lbl+' in questa data — non puoi registrare una presenza finché non viene eliminata', 'err');
+    return;
+  }
+  const ts = buildTS(data, ora);
   let insertErr = null;
   try {
     await DB.presenze.insert({
       dipendente_id: ME.id,
       nome_dipendente: ME.nome + (ME.cognome ? ' '+ME.cognome : ''),
-      data: todayISO(),
+      data: data,
       ts_entrata: ts,
       registrato_da: ME.id,
       tipo_timbratura: 'manuale_dip',
@@ -9804,7 +9841,8 @@ async function salvaTimbrManualeDip() {
   } catch (e) { insertErr = e; }
   if (insertErr) { showMsg('tmDip-msg', insertErr.message, 'err'); return; }
   // Notifica admin per generare OTP
-  inviaNotificaTelegram('\u270b <b>Ceraldi Presenze \u2014 Timbratura manuale</b>\n'+escTG(ME.nome)+' ha registrato una timbratura manuale alle <b>'+ora+'</b>'+(motivo ? ' \u00b7 <i>'+escTG(motivo)+'</i>' : '')+'.\n\nGenera l\u2019OTP per approvarla.', '#richieste');
+  const dataLbl = data === todayISO() ? '' : ' del '+new Date(data+'T12:00:00').toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit'});
+  inviaNotificaTelegram('\u270b <b>Ceraldi Presenze \u2014 Timbratura manuale</b>\n'+escTG(ME.nome)+' ha registrato una timbratura manuale'+dataLbl+' alle <b>'+ora+'</b>'+(motivo ? ' \u00b7 <i>'+escTG(motivo)+'</i>' : '')+'.\n\nGenera l\u2019OTP per approvarla.', '#richieste');
   toast('\u2713 Timbratura registrata \u2014 in attesa di approvazione admin');
   closeSheet('sh-timbrManualeDip');
   caricaStoricoDip();
@@ -11578,25 +11616,28 @@ async function confermaAperturaDoc() {
 }
 
 // ── VISUALIZZATORE DOCUMENTI ──────────────────────────────────────
-// FIX: prima la pagina PDF veniva renderizzata a una scala fissa
-// (1.5) indipendente dalla larghezza reale dello schermo: sul
-// telefono il foglio risultava già più largo del display anche a
-// "100%", quindi si vedeva solo un pezzo ingrandito e per leggerlo
-// bisognava scorrere in ogni direzione. Ora la pagina viene sempre
-// adattata per intero alla larghezza dello schermo a zoom 100% (come
-// un PDF reader vero), il canvas è renderizzato a risoluzione più
-// alta della resa a schermo (in base al devicePixelRatio) così il
-// testo resta nitido anche ingrandendo, e lo zoom si può fare sia
-// con i pulsanti +/− sia con due dita (pinch-to-zoom) direttamente
-// sul documento, restando sempre in PDF (niente sgranatura).
-let _vdocZoom = 1;
+// APPROCCIO COMPLETAMENTE RISCRITTO (il precedente, basato su
+// ridisegnare il PDF ad ogni variazione di zoom, restava a scatti e con
+// l'origine sbagliata). Ora funziona come un vero lettore PDF/foto:
+// 1) la pagina/immagine viene renderizzata/caricata UNA SOLA VOLTA, già
+//    a una risoluzione abbastanza alta da restare nitida fino allo zoom
+//    massimo consentito;
+// 2) da lì in poi zoom e spostamento sono SEMPRE una sola trasformazione
+//    CSS (translate + scale) sullo stesso contenuto — mai un nuovo
+//    disegno — quindi fluidi a qualunque velocità di gesto;
+// 3) il pinch ingrandisce esattamente nel punto tra le due dita (che
+//    resta fermo sotto di esse, non "scappa" via) e un dito solo
+//    permette di scorrere ovunque quando si è ingranditi, con dei
+//    limiti che impediscono di perdere il documento fuori schermo.
+const VDOC_MIN_ZOOM = 1;
+const VDOC_MAX_ZOOM = 4;
 let _vdocPdfDoc = null;
 let _vdocUrl = '';
 let _vdocPath = ''; // percorso reale nello storage (non l'URL firmato, che scade) — serve per condividere
 let _vdocIsImg = false;
-let _vdocFitScale = 1; // scala pdf.js che corrisponde al 100% (adattato allo schermo)
-let _vdocPinch = null; // stato del gesto pinch in corso
+let _vdocFitScale = 1;   // scala pdf.js che corrisponde al 100% (adattato allo schermo)
 let _vdocSoloPagina = null; // se valorizzato, mostra solo questa pagina (1-indexed) invece di tutto il documento
+let _vdocScale = 1, _vdocTx = 0, _vdocTy = 0; // stato corrente di zoom/spostamento (indipendente dal rendering)
 
 // Apre nel visualizzatore professionale (fit-to-width + pinch) un pdf.js
 // già caricato in memoria, mostrando solo la pagina indicata. Usata dalla
@@ -11608,11 +11649,11 @@ async function apriPaginaPdfInMemoria(pdfDoc, numeroPagina, nome) {
   _vdocPath = ''; // anteprima in memoria, non ancora salvata: niente da condividere
   _vdocPdfDoc = pdfDoc;
   _vdocSoloPagina = numeroPagina;
-  _vdocZoom = 1;
+  _vdocScale = 1; _vdocTx = 0; _vdocTy = 0;
   $('vdoc-titolo').textContent = nome || '';
   $('vdoc-zoom-lbl').textContent = '100%';
   openSheet('sh-visualizzaDoc');
-  _attivaPinchVdoc();
+  _attivaGestureVdoc();
   $('vdoc-content').innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
   try {
     const pagina = await pdfDoc.getPage(numeroPagina);
@@ -11631,16 +11672,16 @@ async function apriDocumento(url, nome) {
   _vdocUrl = data.signedUrl;
   _vdocPath = url; // path reale, riusato dal tasto Condividi per un link più lungo
   _vdocIsImg = /\.(jpg|jpeg|png|gif|webp)$/i.test(nome||'');
-  _vdocZoom = 1;
+  _vdocScale = 1; _vdocTx = 0; _vdocTy = 0;
   _vdocPdfDoc = null;
   _vdocSoloPagina = null;
   $('vdoc-titolo').textContent = nome || '';
   $('vdoc-zoom-lbl').textContent = '100%';
   openSheet('sh-visualizzaDoc');
-  _attivaPinchVdoc();
+  _attivaGestureVdoc();
 
   if (_vdocIsImg) {
-    $('vdoc-content').innerHTML = '<img id="vdoc-img" src="'+_vdocUrl+'" style="max-width:none;width:100%;height:auto;display:block;transform-origin:top center">';
+    $('vdoc-content').innerHTML = '<img id="vdoc-img" src="'+_vdocUrl+'" style="width:100%;height:auto;display:block;pointer-events:none">';
     return;
   }
   $('vdoc-content').innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
@@ -11659,127 +11700,152 @@ async function apriDocumento(url, nome) {
   }
 }
 
+// Disegna la pagina UNA SOLA VOLTA, ad una risoluzione già abbastanza
+// alta da restare nitida fino a VDOC_MAX_ZOOM: da qui in poi lo zoom è
+// sempre una trasformazione CSS, il PDF non viene mai più ridisegnato.
 async function renderPaginePdfDoc() {
   if (!_vdocPdfDoc) return;
   const cont = $('vdoc-content');
   cont.innerHTML = '';
   cont.style.flexDirection = 'column';
   cont.style.alignItems = 'center';
-  const dpr = Math.min(window.devicePixelRatio || 1, 2.5); // risoluzione extra per restare nitido da zoomato
-  const scalaResa = _vdocFitScale * _vdocZoom * dpr;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+  const scalaResa = _vdocFitScale * VDOC_MAX_ZOOM * dpr;
   const pagine = _vdocSoloPagina ? [_vdocSoloPagina] : Array.from({length: _vdocPdfDoc.numPages}, (_,k) => k+1);
   for (const i of pagine) {
     const page = await _vdocPdfDoc.getPage(i);
     const viewport = page.getViewport({ scale: scalaResa });
     const canvas = document.createElement('canvas');
     canvas.width = viewport.width; canvas.height = viewport.height;
-    // La dimensione VISIVA resta legata a fitScale*zoom (senza dpr):
-    // il canvas ha più pixel di quanti mostrati, da qui la nitidezza.
-    canvas.style.width = (_vdocFitScale * _vdocZoom * (viewport.width/scalaResa)) + 'px';
-    canvas.style.height = (_vdocFitScale * _vdocZoom * (viewport.height/scalaResa)) + 'px';
+    // Dimensione VISIVA = fit al 100%; la risoluzione reale del canvas è
+    // molto più alta (vedi scalaResa sopra), da qui la nitidezza anche
+    // ingrandendo via CSS fino a VDOC_MAX_ZOOM.
+    canvas.style.width = (_vdocFitScale * (viewport.width/scalaResa)) + 'px';
+    canvas.style.height = (_vdocFitScale * (viewport.height/scalaResa)) + 'px';
     canvas.style.display = 'block';
     canvas.style.marginBottom = '12px';
     canvas.style.background = '#fff';
+    canvas.style.pointerEvents = 'none';
     const ctx = canvas.getContext('2d');
     await page.render({ canvasContext: ctx, viewport }).promise;
     cont.appendChild(canvas);
   }
 }
 
-function zoomDoc(delta) {
-  const vecchioZoom = _vdocZoom;
-  _vdocZoom = Math.min(4, Math.max(0.5, _vdocZoom + delta));
-  $('vdoc-zoom-lbl').textContent = Math.round(_vdocZoom*100)+'%';
-  const scroll = $('vdoc-scroll');
-  const scrollTopPrima = scroll ? scroll.scrollTop : 0;
-  const rapportoZoom = vecchioZoom ? (_vdocZoom / vecchioZoom) : 1;
-  if (_vdocIsImg) {
-    const img = $('vdoc-img');
-    if (img) img.style.width = (_vdocZoom*100)+'%';
-    if (scroll) scroll.scrollTop = scrollTopPrima * rapportoZoom;
-  } else {
-    renderPaginePdfDoc().then(() => { if (scroll) scroll.scrollTop = scrollTopPrima * rapportoZoom; });
-  }
+// Impedisce di trascinare/zoomare il documento fuori dalla vista lasciando
+// solo sfondo vuoto — lo stesso limite che ha qualunque visualizzatore
+// normale (foto, PDF): il contenuto resta sempre almeno parzialmente
+// visibile e centrato quando è più piccolo del riquadro.
+function _clampPanVdoc() {
+  const cont = $('vdoc-content'), scroll = $('vdoc-scroll');
+  if (!cont || !scroll) return;
+  const contW = cont.offsetWidth * _vdocScale;
+  const contH = cont.offsetHeight * _vdocScale;
+  const viewW = scroll.clientWidth, viewH = scroll.clientHeight;
+  _vdocTx = contW <= viewW ? (viewW - contW) / 2 : Math.min(0, Math.max(viewW - contW, _vdocTx));
+  _vdocTy = contH <= viewH ? (viewH - contH) / 2 : Math.min(0, Math.max(viewH - contH, _vdocTy));
 }
 
-// Zoom con due dita direttamente sul documento (immagine o PDF).
-// Durante il gesto si scala via CSS (fluido, nessun re-render ad
-// ogni frame); al rilascio delle dita si ridisegna il PDF alla
-// risoluzione corretta per restare nitido invece di sgranare.
-function _attivaPinchVdoc() {
-  const scroll = $('vdoc-scroll');
-  if (!scroll || scroll._pinchAttivo) return;
-  scroll._pinchAttivo = true;
-  const pointers = new Map();
+function _applyTransformVdoc() {
+  const cont = $('vdoc-content');
+  if (cont) cont.style.transform = 'translate(' + _vdocTx + 'px, ' + _vdocTy + 'px) scale(' + _vdocScale + ')';
+}
 
+// Zoom dai pulsanti +/-: stessa identica trasformazione del pinch, sempre
+// verso il centro del riquadro visibile, MAI un nuovo disegno del PDF.
+function zoomDoc(delta) {
+  const scroll = $('vdoc-scroll');
+  const rect = scroll ? scroll.getBoundingClientRect() : { left:0, top:0, width:360, height:600 };
+  const centerX = rect.width / 2, centerY = rect.height / 2;
+  const vecchiaScala = _vdocScale;
+  _vdocScale = Math.min(VDOC_MAX_ZOOM, Math.max(VDOC_MIN_ZOOM, _vdocScale + delta));
+  const contentX = (centerX - _vdocTx) / vecchiaScala;
+  const contentY = (centerY - _vdocTy) / vecchiaScala;
+  _vdocTx = centerX - contentX * _vdocScale;
+  _vdocTy = centerY - contentY * _vdocScale;
+  _clampPanVdoc();
+  $('vdoc-zoom-lbl').textContent = Math.round(_vdocScale*100)+'%';
+  _applyTransformVdoc();
+}
+
+// Gesti sul documento: un dito sposta (pan), due dita ingrandiscono
+// esattamente nel punto tra di esse E permettono di spostarsi mentre si
+// ingrandisce (esattamente come Foto/Anteprima) — mai un nuovo disegno,
+// solo la stessa trasformazione CSS applicata in tempo reale.
+function _attivaGestureVdoc() {
+  const scroll = $('vdoc-scroll');
+  if (!scroll) return;
+  if (scroll._gestureAttiva) return;
+  scroll._gestureAttiva = true;
+  scroll.style.touchAction = 'none'; // gestiamo noi ogni gesto: niente scroll/zoom nativi in conflitto
+  scroll.style.overflow = 'hidden';  // il pan è la nostra trasformazione, non lo scroll nativo
+
+  const pointers = new Map();
+  let pinch = null; // { dist, scale, contentX, contentY } — punto di contenuto fermo sotto le due dita
+  let pan = null;   // { x, y, tx, ty } — trascinamento con un dito
+
+  function puntoMedio() {
+    const pts = [...pointers.values()];
+    return { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+  }
   function distanza() {
     const pts = [...pointers.values()];
     return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
   }
 
   scroll.addEventListener('pointerdown', (e) => {
+    try { scroll.setPointerCapture(e.pointerId); } catch(err) {}
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pointers.size === 2) {
-      _vdocPinch = { distIniziale: distanza(), zoomIniziale: _vdocZoom };
-      scroll.style.touchAction = 'none';
-      // FIX: prima non veniva mai impostato un transform-origin, quindi la
-      // scala CSS avveniva dal centro dell'INTERO documento (spesso molto
-      // più alto dello schermo) invece che dal punto sotto le dita — il
-      // risultato era che allargando le dita il punto che si stava
-      // guardando "scappava" fuori dallo schermo (sembrava sparire una
-      // porzione) invece di restare fermo e ingrandirsi sul posto, come
-      // fa un vero PDF/JPEG reader. Ora l'origine è calcolata una volta
-      // all'inizio del gesto, nel punto medio tra le due dita, in
-      // coordinate relative al contenuto (non allo schermo).
-      const cont = $('vdoc-content');
-      if (cont) {
-        const pts = [...pointers.values()];
-        const midClientX = (pts[0].x + pts[1].x) / 2;
-        const midClientY = (pts[0].y + pts[1].y) / 2;
-        const contRect = cont.getBoundingClientRect();
-        const originX = midClientX - contRect.left;
-        const originY = midClientY - contRect.top;
-        cont.style.transformOrigin = originX + 'px ' + originY + 'px';
-      }
+    const rect = scroll.getBoundingClientRect();
+    if (pointers.size === 1) {
+      pan = { x: e.clientX, y: e.clientY, tx: _vdocTx, ty: _vdocTy };
+    } else if (pointers.size === 2) {
+      pan = null;
+      const mid = puntoMedio();
+      pinch = {
+        dist: distanza(),
+        scale: _vdocScale,
+        // Punto del CONTENUTO (coordinate non scalate) che sta sotto il
+        // centro delle due dita adesso — deve restare lì per tutto il gesto
+        contentX: (mid.x - rect.left - _vdocTx) / _vdocScale,
+        contentY: (mid.y - rect.top - _vdocTy) / _vdocScale,
+      };
     }
   });
 
   scroll.addEventListener('pointermove', (e) => {
     if (!pointers.has(e.pointerId)) return;
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pointers.size === 2 && _vdocPinch) {
-      const rapporto = distanza() / (_vdocPinch.distIniziale || 1);
-      const nuovoZoom = Math.min(4, Math.max(0.5, _vdocPinch.zoomIniziale * rapporto));
-      _vdocZoom = nuovoZoom;
-      $('vdoc-zoom-lbl').textContent = Math.round(_vdocZoom*100)+'%';
-      const cont = $('vdoc-content');
-      if (cont) cont.style.transform = 'scale(' + (nuovoZoom / _vdocPinch.zoomIniziale) + ')';
+    const rect = scroll.getBoundingClientRect();
+    if (pointers.size === 2 && pinch) {
+      const rapporto = distanza() / (pinch.dist || 1);
+      _vdocScale = Math.min(VDOC_MAX_ZOOM, Math.max(VDOC_MIN_ZOOM, pinch.scale * rapporto));
+      const mid = puntoMedio();
+      // Ricalcola lo spostamento perché lo stesso punto di contenuto
+      // resti fermo sotto il centro delle dita — questo è ciò che rende
+      // il pinch fluido e "ancorato" invece di far scappare il documento
+      _vdocTx = (mid.x - rect.left) - pinch.contentX * _vdocScale;
+      _vdocTy = (mid.y - rect.top) - pinch.contentY * _vdocScale;
+      $('vdoc-zoom-lbl').textContent = Math.round(_vdocScale*100)+'%';
+      _applyTransformVdoc();
+    } else if (pointers.size === 1 && pan) {
+      _vdocTx = pan.tx + (e.clientX - pan.x);
+      _vdocTy = pan.ty + (e.clientY - pan.y);
+      _applyTransformVdoc();
     }
   });
 
   function fineGesto(e) {
     pointers.delete(e.pointerId);
-    if (pointers.size < 2 && _vdocPinch) {
-      const vecchioZoom = _vdocPinch.zoomIniziale || 1;
-      const nuovoZoom = _vdocZoom;
-      _vdocPinch = null;
-      scroll.style.touchAction = '';
-      const cont = $('vdoc-content');
-      if (cont) { cont.style.transform = ''; cont.style.transformOrigin = ''; }
-      // Mantiene la posizione di lettura dopo il ridisegno a piena
-      // risoluzione: senza questo, cambiando l'altezza totale del
-      // contenuto la pagina "saltava" in cima invece di restare dove si
-      // stava guardando — un altro pezzo della sensazione "a scatti".
-      const scrollTopPrima = scroll.scrollTop;
-      const rapportoZoom = nuovoZoom / vecchioZoom;
-      // Ridisegna a risoluzione piena col nuovo zoom (niente sgranatura)
-      if (_vdocIsImg) {
-        const img = $('vdoc-img');
-        if (img) img.style.width = (_vdocZoom*100)+'%';
-        scroll.scrollTop = scrollTopPrima * rapportoZoom;
-      } else {
-        renderPaginePdfDoc().then(() => { scroll.scrollTop = scrollTopPrima * rapportoZoom; });
-      }
+    if (pointers.size < 2) pinch = null;
+    if (pointers.size === 1) {
+      // resta un dito sullo schermo: il pan riparte da qui, senza scatti
+      const rimasto = [...pointers.values()][0];
+      pan = { x: rimasto.x, y: rimasto.y, tx: _vdocTx, ty: _vdocTy };
+    } else if (pointers.size === 0) {
+      pan = null;
+      _clampPanVdoc();
+      _applyTransformVdoc();
     }
   }
   scroll.addEventListener('pointerup', fineGesto);
@@ -11790,7 +11856,6 @@ function _attivaPinchVdoc() {
 function chiudiVisualizzatoreDoc() {
   closeSheet('sh-visualizzaDoc');
   _vdocPdfDoc = null;
-  _vdocPinch = null;
   _vdocSoloPagina = null;
 }
 
@@ -12737,6 +12802,16 @@ async function salvaTimbrManuale() {
     gia = giaData;
   } catch (e) { showMsg('tm-msg', e.message, 'err'); riabilita(); return; }
   if (gia && gia.length) { showMsg('tm-msg','Dipendente già timbrato in questa data','err'); riabilita(); return; }
+  // Stesso blocco già usato per scan QR e timbratura manuale dipendente:
+  // non si può registrare una presenza in un giorno coperto da ferie o
+  // malattia già approvata/confermata — nemmeno l'admin. Va prima
+  // eliminata la ferie/malattia (richiesta con conferma del dipendente).
+  const assenzaBlocco = await assenzaCheBloccaData(dipId, data);
+  if (assenzaBlocco) {
+    const lbl = assenzaBlocco.tipo === 'ferie' ? 'ferie' : 'malattia';
+    showMsg('tm-msg', 'Il dipendente risulta in '+lbl+' in questa data — elimina prima la '+lbl+' (richiede conferma sua) per poter registrare la presenza', 'err');
+    riabilita(); return;
+  }
   const prof = await DB.safe(() => DB.profili.byId(dipId, 'nome,cognome'), null);
   const nomeDip = prof ? prof.nome+(prof.cognome?' '+prof.cognome:'') : '';
   const ts = buildTS(data, ora);
