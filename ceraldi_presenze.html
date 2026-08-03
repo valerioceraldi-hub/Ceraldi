@@ -2182,15 +2182,18 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     <div class="sheet-body">
       <div class="field-lbl">Dipendente</div>
       <div id="corr-nome" style="font-size:15px;font-weight:700;margin-bottom:12px"></div>
-      <div class="field-lbl">Data</div>
-      <input class="field-inp" type="date" id="corr-data">
-      <div class="field-lbl">Orario entrata</div>
-      <input class="field-inp" type="time" id="corr-ora">
-      <div class="field-lbl">Motivo correzione (obbligatorio)</div>
-      <input class="field-inp field-inp last" type="text" id="corr-motivo" placeholder="es. QR letto due volte, errore di persona">
+      <div id="corr-pendente-box" style="display:none;background:rgba(200,135,58,.08);border:1px solid rgba(200,135,58,.25);border-radius:12px;padding:12px;margin-bottom:12px;font-size:13px;color:var(--yellow)"></div>
+      <div id="corr-campi-wrap">
+        <div class="field-lbl">Data</div>
+        <input class="field-inp" type="date" id="corr-data">
+        <div class="field-lbl">Orario entrata</div>
+        <input class="field-inp" type="time" id="corr-ora">
+        <div class="field-lbl">Motivo correzione (obbligatorio)</div>
+        <input class="field-inp field-inp last" type="text" id="corr-motivo" placeholder="es. QR letto due volte, errore di persona">
+      </div>
       <div class="msg" id="corr-msg"></div>
     </div>
-    <div class="sheet-foot" style="display:flex;gap:8px">
+    <div class="sheet-foot" id="corr-foot" style="display:flex;gap:8px">
       <button class="btn-danger" id="btn-del-timbr" style="flex:0 0 auto;padding:13px 18px" onclick="eliminaTimbratura()">&#x1F5D1;</button>
       <button class="btn-primary" style="flex:1" onclick="salvaCorrezioneTimbr()">Salva correzione</button>
     </div>
@@ -2549,6 +2552,27 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     <div class="sheet-foot" style="display:flex;gap:8px">
       <button class="btn-secondary" style="flex:1;color:var(--red)" onclick="contestaTimbrManualeDip(_ctPresenzaId, true)">Non è corretta</button>
       <button class="btn-green-solid" style="flex:1" onclick="confermaTimbrManualeDip(_ctPresenzaId, true)">&#x2713; Confermo</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── SHEET: richiesta admin (modifica/elimina) su una timbratura del dipendente ── -->
+<div class="overlay" id="sh-confRichiestaPres">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-hdr"><span class="sheet-title" id="crp-titolo">Richiesta admin</span><button class="sheet-cls" onclick="closeSheet('sh-confRichiestaPres')">&#x2715;</button></div>
+    <div class="sheet-body">
+      <div style="text-align:center;padding:10px 0 16px">
+        <div style="font-size:48px;margin-bottom:10px" id="crp-icona">✍️</div>
+        <div style="font-size:14px;color:var(--muted);margin-bottom:4px" id="crp-sotto"></div>
+        <div style="font-size:22px;font-weight:800;letter-spacing:-1px" id="crp-data"></div>
+      </div>
+      <div style="background:rgba(43,74,203,.04);border:1px solid rgba(43,74,203,.18);border-radius:12px;padding:14px" id="crp-dettaglio"></div>
+      <div class="msg" id="crp-msg"></div>
+    </div>
+    <div class="sheet-foot" style="display:flex;gap:8px">
+      <button class="btn-secondary" style="flex:1;color:var(--red)" onclick="rispondiRichiestaPresenza(false)">Non confermo</button>
+      <button class="btn-green-solid" style="flex:1" onclick="rispondiRichiestaPresenza(true)">&#x2713; Confermo</button>
     </div>
   </div>
 </div>
@@ -3777,7 +3801,7 @@ const DB = (() => {
             .eq('stato', 'in attesa')
             .order('creato_il', { ascending: false }), 'assenze.pendenti'),
     periodo: (dal, al, stati) => {
-      let q = sb.from('presenze_assenze').select('dipendente_id,tipo,data_inizio,data_fine,stato')
+      let q = sb.from('presenze_assenze').select('id,dipendente_id,tipo,data_inizio,data_fine,stato,richiesta_elimina')
                 .lte('data_inizio', al).gte('data_fine', dal);
       if (stati && stati.length) q = q.in('stato', stati);
       return run(q, 'assenze.periodo');
@@ -4877,7 +4901,11 @@ function toggleCampiAssenza() {
   if ($('na-campo-protocollo')) $('na-campo-protocollo').style.display = (tipo === 'malattia') ? 'block' : 'none';
 }
 
-function statoBadge(stato, tipo) {
+function statoBadge(stato, tipo, richiestaElimina) {
+  // Una richiesta di eliminazione in attesa prevale su qualunque altro stato
+  if (richiestaElimina) {
+    return `<span style="font-size:10px;font-weight:700;padding:3px 9px;border-radius:20px;background:rgba(217,48,37,.1);color:var(--red)">🗑 Elimina — in attesa</span>`;
+  }
   const cfg = {
     'in attesa':      { bg:'rgba(200,135,58,.1)',  color:'var(--yellow)', lbl:'In attesa' },
     'approvata':      { bg:'rgba(47,138,92,.1)',   color:'var(--green)',  lbl:'Approvata' },
@@ -4910,7 +4938,7 @@ function renderAssenzaCard(a, isAdmin) {
         ${isAdmin ? '<div style="font-size:12px;color:var(--accent);font-weight:600">'+esc(a.nome_dipendente)+'</div>' : ''}
         ${a.note ? '<div style="font-size:12px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(a.note)+'</div>' : ''}
       </div>
-      ${statoBadge(a.stato, a.tipo)}
+      ${statoBadge(a.stato, a.tipo, a.richiesta_elimina)}
     </div>
   </div>`;
 }
@@ -4952,7 +4980,7 @@ async function openDettaglioAssenza(id, isAdmin) {
         <div style="font-size:18px;font-weight:800;text-transform:capitalize">${isAcconto ? 'Richiesta acconto' : esc(a.tipo)}</div>
         <div style="font-size:13px;color:var(--muted)">${esc(a.nome_dipendente)}</div>
       </div>
-      ${statoBadge(a.stato, a.tipo)}
+      ${statoBadge(a.stato, a.tipo, a.richiesta_elimina)}
     </div>
     ${isAcconto ? `
     <div style="background:var(--bg);border-radius:12px;padding:14px;margin-bottom:14px;text-align:center">
@@ -5002,6 +5030,27 @@ async function openDettaglioAssenza(id, isAdmin) {
       <button class="btn-secondary" style="flex:1" onclick="closeSheet('sh-dettaglioAssenza')">Chiudi</button>
       <button class="btn-primary" style="flex:1" onclick="openModificaAssenza('${a.id}')">✎ Modifica</button>
     </div>`;
+  } else if (!isAdmin && a.richiesta_elimina) {
+    // l'admin ha chiesto di eliminare questa ferie/malattia già confermata:
+    // resta valida finché il dipendente non risponde (un passo avanti, uno indietro)
+    $('sh-det-foot').innerHTML = `
+      <div style="background:rgba(217,48,37,.06);border:1px solid rgba(217,48,37,.2);border-radius:12px;padding:12px;margin-bottom:10px;font-size:13px">
+        L'admin ha chiesto di <b>eliminare</b> questa ${esc(a.tipo)}. Confermi?
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn-danger" style="flex:1;padding:12px" onclick="rispondiEliminaAssenza('${a.id}',false)">✕ Non confermo</button>
+        <button class="btn-green-solid" style="flex:1;padding:12px" onclick="rispondiEliminaAssenza('${a.id}',true)">✓ Confermo</button>
+      </div>`;
+  } else if (isAdmin && a.richiesta_elimina) {
+    // admin: richiesta già inviata, in attesa del dipendente — reversibile con "Annulla"
+    $('sh-det-foot').innerHTML = `
+      <div style="background:rgba(200,135,58,.08);border:1px solid rgba(200,135,58,.25);border-radius:12px;padding:12px;margin-bottom:10px;font-size:13px;color:var(--yellow)">
+        ⏳ In attesa che il dipendente confermi l'eliminazione.
+      </div>
+      <button class="btn-secondary" style="width:100%" onclick="annullaRichiestaEliminaAssenza('${a.id}')">↩️ Annulla richiesta</button>`;
+  } else if (isAdmin && (a.stato === 'approvata' || a.stato === 'confermata')) {
+    // admin: assenza già attiva — l'eliminazione richiede conferma del dipendente
+    $('sh-det-foot').innerHTML = `<button class="btn-danger" style="width:100%;padding:12px" onclick="richiediEliminaAssenza('${a.id}')">🗑 Richiedi eliminazione</button>`;
   } else {
     $('sh-det-foot').innerHTML = '<button class="btn-secondary" onclick="closeSheet(\"sh-dettaglioAssenza\")">Chiudi</button>';
   }
@@ -5139,6 +5188,66 @@ async function rispondiAssenzaAdmin(stato, id) {
     ? '\u2705 <b>Ceraldi Presenze \u2014 '+tipoAssTG+' confermata</b>\n'+nomeDip+' ha confermato la richiesta'+(dataAssTG?' del '+dataAssTG:'')+'.'
     : '\u274C <b>Ceraldi Presenze \u2014 '+tipoAssTG+' rifiutata</b>\n'+nomeDip+' ha rifiutato la richiesta'+(dataAssTG?' del '+dataAssTG:'')+'. Motivo: '+(assenzaInfo.note||'non specificato');
   // notifica rimossa (risposta ferie non critica)
+  await caricaAssenzeDip();
+  await aggiornaNavBadge();
+  mostraProssimaAzioneInSospesa();
+}
+
+/* ── ELIMINAZIONE FERIE/MALATTIA GIÀ CONFERMATE ──────────────────
+   Stessa logica delle ferie assegnate dall'admin (admin_inviata → il
+   dipendente conferma): l'eliminazione non è mai immediata, resta "in
+   attesa" finché il dipendente non risponde, ed è reversibile con
+   "Annulla richiesta" finché non risponde. ── */
+async function richiediEliminaAssenza(id) {
+  const a = await DB.safe(() => DB.assenze.byId(id), null);
+  if (!a) return;
+  const ok = await DB.safe(() => DB.assenze.update(id, {
+    richiesta_elimina: true,
+    richiesta_elimina_da: ME.id,
+    richiesta_elimina_il: new Date().toISOString()
+  }), 'Errore durante il salvataggio');
+  if (!ok) return;
+  const tipoLbl = {ferie:'ferie',malattia:'malattia',altro:'richiesta'}[a.tipo] || a.tipo;
+  const periodo = a.data_inizio ? ' dal '+new Date(a.data_inizio).toLocaleDateString('it-IT')+' al '+new Date(a.data_fine).toLocaleDateString('it-IT') : '';
+  await inviaNotificaDipendente(a.dipendente_id,
+    '🗑 <b>Ceraldi Presenze — Richiesta eliminazione</b>\n\nL\u2019admin ha chiesto di eliminare la tua '+tipoLbl+periodo+'.\n\nApri l\u2019app per confermare o rifiutare.',
+    '#richieste');
+  toast('\u2713 Richiesta di eliminazione inviata — in attesa di conferma');
+  closeSheet('sh-dettaglioAssenza');
+  await caricaAssenzeAdmin();
+  await caricaPresenzeTeam();
+}
+
+async function annullaRichiestaEliminaAssenza(id) {
+  const ok = await DB.safe(() => DB.assenze.update(id, {
+    richiesta_elimina: false, richiesta_elimina_da: null, richiesta_elimina_il: null
+  }), 'Errore durante il salvataggio');
+  if (!ok) return;
+  toast('Richiesta annullata — nulla è stato eliminato');
+  closeSheet('sh-dettaglioAssenza');
+  await caricaAssenzeAdmin();
+  await caricaPresenzeTeam();
+}
+
+async function rispondiEliminaAssenza(id, conferma) {
+  const a = await DB.safe(() => DB.assenze.byId(id), null);
+  if (!a) return;
+  const nomeDip = ME.nome + (ME.cognome ? ' '+ME.cognome : '');
+  const tipoLbl = {ferie:'ferie',malattia:'malattia',altro:'richiesta'}[a.tipo] || a.tipo;
+  if (conferma) {
+    const ok = await DB.safe(() => DB.assenze.remove(id), 'Errore durante il salvataggio');
+    if (!ok) return;
+    toast('✓ Eliminazione confermata');
+    inviaNotificaTelegram('✅ <b>Ceraldi Presenze</b>\n'+escTG(nomeDip)+' ha confermato l\u2019eliminazione della '+tipoLbl+'.');
+  } else {
+    const ok = await DB.safe(() => DB.assenze.update(id, {
+      richiesta_elimina: false, richiesta_elimina_da: null, richiesta_elimina_il: null
+    }), 'Errore durante il salvataggio');
+    if (!ok) return;
+    toast('Eliminazione rifiutata — la richiesta resta valida');
+    inviaNotificaTelegram('❌ <b>Ceraldi Presenze</b>\n'+escTG(nomeDip)+' NON ha confermato l\u2019eliminazione della '+tipoLbl+'.');
+  }
+  closeSheet('sh-dettaglioAssenza');
   await caricaAssenzeDip();
   await aggiornaNavBadge();
   mostraProssimaAzioneInSospesa();
@@ -8321,6 +8430,11 @@ function apriPromemoria() {
               <button class="btn-sm" style="background:var(--green);color:#fff" onclick="confermaTimbraturaComeAdmin('${p.id}')">✓ Conferma tu</button>
               <button class="btn-sm" style="color:var(--red)" onclick="eliminaVoceInSospeso('timbratura','${p.id}',this)">🗑 Elimina</button>
             </div>` : ''}
+          ${p.tipo==='timbratura' && p.id && p.titolo==='Timbratura da approvare' ? `
+            <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
+              <button class="btn-sm" style="background:var(--green);color:#fff" onclick="approvaTimbrDipDaPromemoria('${p.id}',true)">✓ Approva</button>
+              <button class="btn-sm" style="color:var(--red)" onclick="approvaTimbrDipDaPromemoria('${p.id}',false)">✕ Rifiuta</button>
+            </div>` : ''}
         </div>
       </div>`).join('');
   }
@@ -8735,7 +8849,8 @@ function renderPresenze(data, wrapId, showDate) {
     // rompere la stringa dentro l'onclick; "\'" senza backslash raddoppiato
     // era un escaping "vuoto" che non protegge nulla dagli apostrofi nei nomi.
     const nomeEsc = r.nome_dipendente.replace(/'/g, "\\'");
-    const btnCorr   = '<button class="btn-sm" style="color:var(--red)" title="Correggi/Elimina" onclick="openCorreggi(\''+r.id+'\',\''+nomeEsc+'\',\''+r.ts_entrata+'\',\''+r.data+'\')">&#x2715;</button>';
+    const btnCorr   = '<button class="btn-sm" style="color:var(--red)" title="Correggi/Elimina" onclick="openCorreggi(\''+r.id+'\',\''+nomeEsc+'\',\''+r.ts_entrata+'\',\''+r.data+'\',\''+(r.richiesta_tipo||'')+'\')">&#x2715;</button>';
+    const badgeRichiesta = r.richiesta_tipo ? '<span class="badge-conferma" style="margin-left:4px;background:rgba(200,135,58,.12);color:var(--yellow)">'+(r.richiesta_tipo==='elimina'?'🗑 Elimina in attesa':'✍️ Modifica in attesa')+'</span>' : '';
     const btnOTP = (function(){
       if (isManualeDip && daCon) return '<button class="btn-sm" style="background:var(--green);color:#fff;border-color:var(--green)" onclick="approvaTimbrDip(\''+r.id+'\',true)">✓ Approva</button>&nbsp;<button class="btn-sm" style="color:var(--red)" onclick="approvaTimbrDip(\''+r.id+'\',false)">✕</button>'
       // FIX: prima c'era "Verifica OTP" (l'admin doveva digitare un codice
@@ -8748,7 +8863,7 @@ function renderPresenze(data, wrapId, showDate) {
     html += '<div class="presenza-card" style="'+(daCon?'border-color:rgba(200,135,58,.3)':'')+'">'
       + '<div class="pc-top"><div>'
       + dataRow
-      + '<div class="pc-nome">'+esc(r.nome_dipendente)+badgeMan+badgeCon+'</div>'
+      + '<div class="pc-nome">'+esc(r.nome_dipendente)+badgeMan+badgeCon+badgeRichiesta+'</div>'
       + '<div class="pc-orari">Entrata: '+fmtTime(r.ts_entrata)+motivoRow+'</div>'
       + '</div><div class="pc-actions">'+btnOTP+btnCorr+'</div></div></div>';
   });
@@ -9684,6 +9799,18 @@ async function verificaTurnoPerTimbratura(dipId, data, nomeDip) {
   if (!turno || !turno.length) {
     alert('⚠️ Attenzione: '+(nomeDip||'questo dipendente')+' non aveva nessun turno assegnato per il '+fmtDataBreve(data)+'.');
   }
+}
+
+// Wrapper usato dal Centro Attività (card "Timbratura da approvare"): a
+// differenza della lista "oggi", questa card resta visibile anche per
+// timbrature di giorni precedenti — prima non c'era NESSUN modo di
+// approvarle/rifiutarle una volta passato il giorno (bug segnalato,
+// caso concreto: Angela Lesina), perché approvaTimbrDip era raggiungibile
+// solo dai bottoni della lista "Presenze di oggi".
+async function approvaTimbrDipDaPromemoria(presenzaId, approva) {
+  await approvaTimbrDip(presenzaId, approva);
+  await aggiornaPromemoria();
+  apriPromemoria();
 }
 
 async function approvaTimbrDip(presenzaId, approva) {
@@ -11113,7 +11240,11 @@ async function aggiornaNavBadge() {
       .select('id',{count:'exact',head:true})
       .eq('collega_id', ME.id)
       .eq('stato','attesa_collega');
-    setNavBadge('pg-assenze-dip', (c1a||0)+(c1b||0)+(c1ct||0));
+    const { count: c1d } = await sb.from('presenze_assenze')
+      .select('id',{count:'exact',head:true})
+      .eq('dipendente_id', ME.id)
+      .eq('richiesta_elimina', true);
+    setNavBadge('pg-assenze-dip', (c1a||0)+(c1b||0)+(c1ct||0)+(c1d||0));
 
     // Badge Docs: documenti non ancora letti — mancava del tutto,
     // per questo caricare un contratto (o qualunque documento) non
@@ -11141,7 +11272,11 @@ async function aggiornaNavBadge() {
       .eq('dipendente_id', ME.id)
       .eq('tipo_timbratura', 'manuale')
       .eq('confermata_dip', false);
-    setNavBadge('pg-qr', c3||0);
+    const { count: c3b } = await sb.from('presenze')
+      .select('id',{count:'exact',head:true})
+      .eq('dipendente_id', ME.id)
+      .not('richiesta_tipo','is',null);
+    setNavBadge('pg-qr', (c3||0)+(c3b||0));
   }
 }
 
@@ -12545,7 +12680,7 @@ async function verificaOTP() {
 let _corrId = null;
 let _corrDatiPrima = null;
 
-function openCorreggi(id, nome, tsEntrata, data) {
+function openCorreggi(id, nome, tsEntrata, data, richiestaTipo) {
   _corrId = id;
   _corrDatiPrima = { ts_entrata: tsEntrata, data };
   $('corr-nome').textContent = nome;
@@ -12556,26 +12691,57 @@ function openCorreggi(id, nome, tsEntrata, data) {
   const btnDel = $('btn-del-timbr');
   if (btnDel) { delete btnDel.dataset.arm; btnDel.innerHTML = '&#x1F5D1;'; }
   hideMsg('corr-msg');
+  const pendBox = $('corr-pendente-box');
+  // Se c'è già una richiesta in attesa di conferma dipendente su questa
+  // timbratura, non si può correggere di nuovo sopra: si vede solo lo
+  // stato e si può annullare la richiesta (reversibile, un passo indietro)
+  if (richiestaTipo) {
+    $('corr-campi-wrap').style.display = 'none';
+    pendBox.style.display = 'block';
+    pendBox.textContent = '⏳ C\u2019è già una richiesta di ' + (richiestaTipo==='elimina'?'eliminazione':'modifica') + ' inviata al dipendente, in attesa di conferma.';
+    $('corr-foot').innerHTML = '<button class="btn-secondary" style="width:100%" onclick="annullaRichiestaTimbratura()">↩️ Annulla richiesta</button>';
+  } else {
+    $('corr-campi-wrap').style.display = '';
+    pendBox.style.display = 'none';
+    $('corr-foot').innerHTML = '<button class="btn-danger" id="btn-del-timbr" style="flex:0 0 auto;padding:13px 18px" onclick="eliminaTimbratura()">&#x1F5D1;</button>'
+      + '<button class="btn-primary" style="flex:1" onclick="salvaCorrezioneTimbr()">Salva correzione</button>';
+  }
   openSheet('sh-correggi');
 }
 
+// Un passo avanti, uno indietro: la correzione non si applica subito.
+// Si crea una richiesta che il dipendente deve confermare — esattamente
+// come già avviene per le ferie assegnate dall'admin — e finché non
+// risponde, tutto resta reversibile con "Annulla richiesta".
 async function salvaCorrezioneTimbr() {
   const ora    = $('corr-ora').value;
   const data   = $('corr-data').value;
   const motivo = $('corr-motivo').value.trim();
   if (!motivo) { showMsg('corr-msg','Il motivo è obbligatorio','err'); return; }
   if (!ora || !data) { showMsg('corr-msg','Inserisci data e orario','err'); return; }
-  await DB.safe(() => DB.correzioni.logga({
-    presenza_id: _corrId, dipendente_id: _corrDatiPrima.dipendente_id||null,
-    azione: 'modifica', motivo, dati_prima: _corrDatiPrima, eseguita_da: ME.id
-  }), null);
   const ts = buildTS(data, ora);
-  const ok = await DB.safe(() => DB.presenze.update(_corrId, { ts_entrata: ts, data }), 'Errore durante il salvataggio');
+  const pres = await DB.safe(() => DB.presenze.byId(_corrId, 'dipendente_id,nome_dipendente'), null);
+  const ok = await DB.safe(() => DB.presenze.update(_corrId, {
+    richiesta_tipo: 'modifica',
+    richiesta_nuovi_dati: { ts_entrata: ts, data },
+    richiesta_motivo: motivo,
+    richiesta_creata_da: ME.id,
+    richiesta_creata_il: new Date().toISOString()
+  }), 'Errore durante il salvataggio');
   if (!ok) return;
-  // notifiche correzione timbratura rimosse
-  toast('Timbratura corretta');
+  await DB.safe(() => DB.correzioni.logga({
+    presenza_id: _corrId, dipendente_id: pres?pres.dipendente_id:null,
+    azione: 'modifica_richiesta', motivo, dati_prima: _corrDatiPrima, eseguita_da: ME.id
+  }), null);
+  if (pres && pres.dipendente_id) {
+    const dataLbl = new Date(data).toLocaleDateString('it-IT',{day:'2-digit',month:'long'});
+    await inviaNotificaDipendente(pres.dipendente_id,
+      '✍️ <b>Ceraldi Presenze — Modifica timbratura</b>\n\nL\u2019admin propone di correggere la tua timbratura del <b>'+dataLbl+'</b> alle <b>'+ora+'</b> · <i>'+escTG(motivo)+'</i>.\n\nApri l\u2019app per confermare o rifiutare.',
+      '#timbra');
+  }
+  toast('\u2713 Richiesta inviata — in attesa che ' + (pres?pres.nome_dipendente:'il dipendente') + ' confermi');
   closeSheet('sh-correggi');
-  await caricaOggi(); await caricaStorico();
+  await caricaOggi(); await caricaStorico(); await caricaPresenzeTeam();
 }
 
 async function eliminaTimbratura() {
@@ -12587,21 +12753,46 @@ async function eliminaTimbratura() {
   if (btn && !btn.dataset.arm) {
     btn.dataset.arm = '1';
     btn.textContent = 'Confermi?';
-    showMsg('corr-msg','Tocca di nuovo il pulsante rosso per eliminare definitivamente','err');
+    showMsg('corr-msg','Tocca di nuovo il pulsante rosso per inviare la richiesta di eliminazione','err');
     setTimeout(() => { if (btn.dataset.arm) { delete btn.dataset.arm; btn.innerHTML = '&#x1F5D1;'; } }, 5000);
     return;
   }
   if (btn) { delete btn.dataset.arm; btn.innerHTML = '&#x1F5D1;'; }
-  await DB.safe(() => DB.correzioni.logga({
-    presenza_id: _corrId, dipendente_id: null,
-    azione: 'eliminazione', motivo, dati_prima: _corrDatiPrima, eseguita_da: ME.id
-  }), null);
-  const ok = await DB.safe(() => DB.presenze.remove(_corrId), 'Errore durante il salvataggio');
+  const pres = await DB.safe(() => DB.presenze.byId(_corrId, 'dipendente_id,nome_dipendente'), null);
+  const ok = await DB.safe(() => DB.presenze.update(_corrId, {
+    richiesta_tipo: 'elimina',
+    richiesta_nuovi_dati: null,
+    richiesta_motivo: motivo,
+    richiesta_creata_da: ME.id,
+    richiesta_creata_il: new Date().toISOString()
+  }), 'Errore durante il salvataggio');
   if (!ok) return;
-  // notifiche eliminazione timbratura rimosse
-  toast('Timbratura eliminata');
+  await DB.safe(() => DB.correzioni.logga({
+    presenza_id: _corrId, dipendente_id: pres?pres.dipendente_id:null,
+    azione: 'eliminazione_richiesta', motivo, dati_prima: _corrDatiPrima, eseguita_da: ME.id
+  }), null);
+  if (pres && pres.dipendente_id) {
+    const dataLbl = new Date(_corrDatiPrima.data).toLocaleDateString('it-IT',{day:'2-digit',month:'long'});
+    await inviaNotificaDipendente(pres.dipendente_id,
+      '🗑 <b>Ceraldi Presenze — Eliminazione timbratura</b>\n\nL\u2019admin propone di eliminare la tua timbratura del <b>'+dataLbl+'</b> · <i>'+escTG(motivo)+'</i>.\n\nApri l\u2019app per confermare o rifiutare.',
+      '#timbra');
+  }
+  toast('\u2713 Richiesta di eliminazione inviata — in attesa di conferma');
   closeSheet('sh-correggi');
-  await caricaOggi(); await caricaStorico(); await aggiornaStats();
+  await caricaOggi(); await caricaStorico(); await caricaPresenzeTeam(); await aggiornaStats();
+}
+
+// Admin annulla una richiesta di modifica/eliminazione ancora pendente:
+// nulla era stato applicato, quindi annullare non richiede alcun ripristino
+async function annullaRichiestaTimbratura() {
+  const ok = await DB.safe(() => DB.presenze.update(_corrId, {
+    richiesta_tipo: null, richiesta_nuovi_dati: null, richiesta_motivo: null,
+    richiesta_creata_da: null, richiesta_creata_il: null
+  }), 'Errore durante il salvataggio');
+  if (!ok) return;
+  toast('Richiesta annullata — nulla è cambiato');
+  closeSheet('sh-correggi');
+  await caricaOggi(); await caricaStorico(); await caricaPresenzeTeam();
 }
 
 /* ── LIQUIDAZIONI ───────────────────────────────────── */
@@ -13077,7 +13268,7 @@ async function confermaLiquidazione() {
 // dagli stessi dati.
 let _sospesiDip = null;
 async function getSospesiDip() {
-  const [{ data: acc }, { data: liq }, { data: doc }, { data: ass }, { data: tim }] = await Promise.all([
+  const [{ data: acc }, { data: liq }, { data: doc }, { data: ass }, { data: tim }, { data: richTim }, { data: richAss }] = await Promise.all([
     sb.from('presenze_acconti').select('id,importo,data').eq('dipendente_id',ME.id).eq('letto_dip',false),
     sb.from('presenze_liquidazioni').select('id,anno,mese,importo_netto').eq('dipendente_id',ME.id).eq('confermata_dip',false),
     // Documenti: TUTTE le categorie (busta paga, CU, contratto, altro) —
@@ -13088,8 +13279,12 @@ async function getSospesiDip() {
     sb.from('presenze_documenti').select('id,categoria,mese,anno').eq('dipendente_id',ME.id).is('letto_il',null),
     sb.from('presenze_assenze').select('id').eq('dipendente_id',ME.id).eq('stato','admin_inviata'),
     sb.from('presenze').select('id,data,tipo_timbratura').eq('dipendente_id',ME.id).in('tipo_timbratura',['manuale','manuale_dip']).eq('confermata_dip',false),
+    // Richieste admin di modifica/eliminazione su una timbratura già registrata
+    sb.from('presenze').select('id,data,richiesta_tipo').eq('dipendente_id',ME.id).not('richiesta_tipo','is',null),
+    // Richieste admin di eliminazione di una ferie/malattia già confermata
+    sb.from('presenze_assenze').select('id,tipo,data_inizio,data_fine').eq('dipendente_id',ME.id).eq('richiesta_elimina',true),
   ]);
-  _sospesiDip = { acconti: acc||[], liquidazioni: liq||[], documenti: doc||[], assenze: ass||[], timbrature: tim||[] };
+  _sospesiDip = { acconti: acc||[], liquidazioni: liq||[], documenti: doc||[], assenze: ass||[], timbrature: tim||[], richiesteTimbrature: richTim||[], richiesteAssenze: richAss||[] };
   return _sospesiDip;
 }
 
@@ -13109,6 +13304,20 @@ async function mostraProssimaAzioneInSospesa() {
   if (s.documenti.length)    { await clickDocumento(s.documenti[0].id, false); return; }
   if (s.assenze.length)      { caricaAssenzaAdminDaConfermare(); return; }
 
+  // Richieste admin di modifica/eliminazione su una timbratura già registrata:
+  // devono comparire prima delle timbrature manuali da confermare, perché
+  // riguardano fatti già accaduti che l'admin sta correggendo/eliminando
+  if (s.richiesteTimbrature && s.richiesteTimbrature.length) {
+    const r = s.richiesteTimbrature.sort((a,b)=> new Date(b.data)-new Date(a.data))[0];
+    await apriRichiestaPresenza(r.id);
+    return;
+  }
+  // Richieste admin di eliminazione di una ferie/malattia già confermata
+  if (s.richiesteAssenze && s.richiesteAssenze.length) {
+    await openDettaglioAssenza(s.richiesteAssenze[0].id, false);
+    return;
+  }
+
   // Timbrature: SOLO quelle 'manuale' (il dipendente deve confermare/
   // contestare); quelle 'manuale_dip' aspettano invece l'admin, non lui.
   const timDaConfermare = s.timbrature.filter(t => t.tipo_timbratura === 'manuale');
@@ -13123,6 +13332,67 @@ async function mostraProssimaAzioneInSospesa() {
 }
 let _ctPresenzaId = null;
 
+// Il dipendente rivede una richiesta admin di modifica/eliminazione su una
+// sua timbratura già registrata, e conferma o rifiuta — finché non risponde
+// resta tutto come prima (reversibile: l'admin può anche annullarla lui).
+let _rpPresenzaId = null;
+async function apriRichiestaPresenza(id) {
+  const p = await DB.safe(() => DB.presenze.byId(id), null);
+  if (!p || !p.richiesta_tipo) return;
+  _rpPresenzaId = id;
+  const dataLbl = new Date(p.data).toLocaleDateString('it-IT',{weekday:'long',day:'2-digit',month:'long'});
+  const isElimina = p.richiesta_tipo === 'elimina';
+  $('crp-icona').textContent = isElimina ? '🗑' : '✍️';
+  $('crp-titolo').textContent = isElimina ? 'Richiesta eliminazione timbratura' : 'Richiesta modifica timbratura';
+  $('crp-sotto').textContent = isElimina ? 'L\u2019admin propone di eliminare la timbratura del' : 'L\u2019admin propone di correggere la timbratura del';
+  $('crp-data').textContent = dataLbl;
+  let dettaglio = '';
+  if (!isElimina && p.richiesta_nuovi_dati && p.richiesta_nuovi_dati.ts_entrata) {
+    const nuovoOra = new Date(p.richiesta_nuovi_dati.ts_entrata).toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});
+    dettaglio += '<div style="font-size:13px;margin-bottom:6px"><b>Nuovo orario:</b> '+nuovoOra+'</div>';
+  }
+  dettaglio += p.richiesta_motivo
+    ? '<p style="font-size:12px;color:var(--text);line-height:1.6;margin:0"><b>Motivo:</b> '+esc(p.richiesta_motivo)+'</p>'
+    : '<p style="font-size:12px;color:var(--muted);margin:0">Nessun motivo indicato.</p>';
+  $('crp-dettaglio').innerHTML = dettaglio;
+  hideMsg('crp-msg');
+  openSheet('sh-confRichiestaPres');
+}
+
+async function rispondiRichiestaPresenza(conferma) {
+  if (!_rpPresenzaId) return;
+  const p = await DB.safe(() => DB.presenze.byId(_rpPresenzaId), null);
+  if (!p) return;
+  const nomeDip = ME.nome + (ME.cognome ? ' '+ME.cognome : '');
+  const dataLbl = new Date(p.data).toLocaleDateString('it-IT',{day:'2-digit',month:'long'});
+  if (conferma && p.richiesta_tipo === 'modifica' && p.richiesta_nuovi_dati) {
+    const ok = await DB.safe(() => DB.presenze.update(_rpPresenzaId, {
+      ts_entrata: p.richiesta_nuovi_dati.ts_entrata, data: p.richiesta_nuovi_dati.data,
+      richiesta_tipo: null, richiesta_nuovi_dati: null, richiesta_motivo: null,
+      richiesta_creata_da: null, richiesta_creata_il: null
+    }), 'Errore durante il salvataggio');
+    if (!ok) return;
+    toast('✓ Modifica confermata');
+    inviaNotificaTelegram('✅ <b>Ceraldi Presenze</b>\n'+escTG(nomeDip)+' ha confermato la modifica della timbratura del '+dataLbl+'.');
+  } else if (conferma && p.richiesta_tipo === 'elimina') {
+    const ok = await DB.safe(() => DB.presenze.remove(_rpPresenzaId), 'Errore durante il salvataggio');
+    if (!ok) return;
+    toast('✓ Eliminazione confermata');
+    inviaNotificaTelegram('✅ <b>Ceraldi Presenze</b>\n'+escTG(nomeDip)+' ha confermato l\u2019eliminazione della timbratura del '+dataLbl+'.');
+  } else {
+    const ok = await DB.safe(() => DB.presenze.update(_rpPresenzaId, {
+      richiesta_tipo: null, richiesta_nuovi_dati: null, richiesta_motivo: null,
+      richiesta_creata_da: null, richiesta_creata_il: null
+    }), 'Errore durante il salvataggio');
+    if (!ok) return;
+    toast('Richiesta rifiutata — nulla è cambiato');
+    inviaNotificaTelegram('❌ <b>Ceraldi Presenze</b>\n'+escTG(nomeDip)+' NON ha confermato la richiesta sulla timbratura del '+dataLbl+'.');
+  }
+  _rpPresenzaId = null;
+  closeSheet('sh-confRichiestaPres');
+  mostraProssimaAzioneInSospesa();
+}
+
 async function caricaSospesiDip() {
   const wrap = $('sospesi-dip');
   if (!wrap || !ME || ME.ruolo !== 'dipendente') return;
@@ -13134,6 +13404,8 @@ async function caricaSospesiDip() {
     if (s.liquidazioni.length) voci.push({ icona:'💰', testo:(s.liquidazioni.length===1?'1 pagamento da confermare':s.liquidazioni.length+' pagamenti da confermare'), azione:'forzaConfermeStipendi()' });
     if (s.documenti.length) voci.push({ icona:'📄', testo:(s.documenti.length===1?'1 documento da leggere':s.documenti.length+' documenti da leggere'), azione:"apriDocumentiDaLeggere()" });
     if (s.assenze.length) voci.push({ icona:'🌴', testo:(s.assenze.length===1?'1 richiesta da confermare':s.assenze.length+' richieste da confermare'), azione:"switchPage('pg-assenze-dip')" });
+    if (s.richiesteTimbrature && s.richiesteTimbrature.length) voci.push({ icona:'✍️', testo:(s.richiesteTimbrature.length===1?'1 richiesta admin su una timbratura':s.richiesteTimbrature.length+' richieste admin su timbrature'), azione:'mostraProssimaAzioneInSospesa()' });
+    if (s.richiesteAssenze && s.richiesteAssenze.length) voci.push({ icona:'🗑', testo:(s.richiesteAssenze.length===1?'1 richiesta di eliminazione':s.richiesteAssenze.length+' richieste di eliminazione'), azione:'mostraProssimaAzioneInSospesa()' });
     const timDaConfermareDip = s.timbrature.filter(t => t.tipo_timbratura === 'manuale');
     const timInAttesaAdmin   = s.timbrature.filter(t => t.tipo_timbratura === 'manuale_dip');
     if (timDaConfermareDip.length) voci.push({ icona:'✍️', testo:(timDaConfermareDip.length===1?'1 timbratura da confermare':timDaConfermareDip.length+' timbrature da confermare'), azione:"caricaStoricoDip(true)" });
@@ -15178,7 +15450,10 @@ async function caricaPresenzeTeam() {
   (presenze||[]).forEach(p => {
     if (!stato[p.dipendente_id]) return;
     const gg = parseInt(p.data.split('-')[2]);
-    stato[p.dipendente_id][gg] = 'P';
+    stato[p.dipendente_id][gg] = {
+      cod:'P', presenzaId:p.id, tsEntrata:p.ts_entrata, data:p.data,
+      richiestaTipo: p.richiesta_tipo || null
+    };
   });
 
   const codTipo = { ferie:'F', malattia:'M', altro:'A' };
@@ -15190,7 +15465,8 @@ async function caricaPresenzeTeam() {
     for (let cursore = inizio; cursore <= fine; cursore.setDate(cursore.getDate()+1)) {
       const gg = cursore.getDate();
       // Una timbratura reale prevale sempre su un'assenza registrata per lo stesso giorno
-      if (stato[a.dipendente_id][gg] !== 'P') stato[a.dipendente_id][gg] = cod;
+      const esistente = stato[a.dipendente_id][gg];
+      if (!esistente || esistente.cod !== 'P') stato[a.dipendente_id][gg] = { cod, assenzaId: a.id };
     }
   });
 
@@ -15219,7 +15495,7 @@ function renderCartellonePresenze(dipendenti, stato, giorniInMese, anno, mese) {
   const rows = dipendenti.map(d => {
     let cells = '';
     for (let g=1; g<=giorniInMese; g++) {
-      const c = stato[d.id][g];
+      const c = stato[d.id][g] ? stato[d.id][g].cod : null;
       cells += `<td style="text-align:center;font-size:13px;padding:5px 2px">${c ? icone[c] : '<span style="color:var(--border)">·</span>'}</td>`;
     }
     const cognomeIniz = d.cognome ? ' '+esc(d.cognome).charAt(0)+'.' : '';
@@ -15241,7 +15517,7 @@ function renderSchedaDipendentePT(dip, statoGiorni, giorniInMese, anno, mese) {
 
   let nP=0, nF=0, nM=0, nA=0, nVuoti=0;
   for (let g=1; g<=giorniInMese; g++) {
-    const c = statoGiorni[g];
+    const c = statoGiorni[g] ? statoGiorni[g].cod : null;
     if (c==='P') nP++; else if (c==='F') nF++; else if (c==='M') nM++; else if (c==='A') nA++; else nVuoti++;
   }
   const riepilogo = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:14px">
@@ -15258,11 +15534,21 @@ function renderSchedaDipendentePT(dip, statoGiorni, giorniInMese, anno, mese) {
   const icone = { P:'🟩', F:'🌴', M:'🤒', A:'📋' };
   const coloreBg = { P:'rgba(47,138,92,.10)', F:'rgba(43,74,203,.10)', M:'rgba(217,48,37,.10)', A:'rgba(200,135,58,.10)' };
 
+  const nomeAttr = nomeCompleto.replace(/'/g, "\\'");
   let celle = '';
   for (let i=0; i<offset; i++) celle += '<div></div>';
   for (let g=1; g<=giorniInMese; g++) {
-    const c = statoGiorni[g];
-    celle += `<div style="aspect-ratio:1;border-radius:8px;background:${c?coloreBg[c]:'var(--bg)'};display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:11px">
+    const cell = statoGiorni[g];
+    const c = cell ? cell.cod : null;
+    // Tap sul giorno: presenza → Correggi/Elimina (con conferma dip.);
+    // ferie/malattia → dettaglio, da cui l'admin può chiedere l'eliminazione
+    let onClickAttr = '';
+    if (cell && c === 'P' && cell.presenzaId) {
+      onClickAttr = ` onclick="openCorreggi('${cell.presenzaId}','${nomeAttr}','${cell.tsEntrata}','${cell.data}','${cell.richiestaTipo||''}')"`;
+    } else if (cell && cell.assenzaId) {
+      onClickAttr = ` onclick="openDettaglioAssenza('${cell.assenzaId}',true)"`;
+    }
+    celle += `<div style="aspect-ratio:1;border-radius:8px;background:${c?coloreBg[c]:'var(--bg)'};display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:11px;${cell?'cursor:pointer':''}"${onClickAttr}>
       <div style="font-weight:700">${g}</div>
       <div style="font-size:13px">${c ? icone[c] : ''}</div>
     </div>`;
@@ -15273,7 +15559,8 @@ function renderSchedaDipendentePT(dip, statoGiorni, giorniInMese, anno, mese) {
     + `<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:8px;font-size:10px;color:var(--muted);text-align:center">
         <div>L</div><div>M</div><div>M</div><div>G</div><div>V</div><div>S</div><div>D</div>
       </div>
-      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">${celle}</div>`;
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">${celle}</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:10px">Tocca un giorno con dati per modificarlo o eliminarlo (richiede sempre conferma del dipendente).</div>`;
 }
 
 </script>
