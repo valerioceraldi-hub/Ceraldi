@@ -9025,9 +9025,42 @@ async function apriDettaglioStat(tipo) {
   }
 
   if (tipo === 'attesa') {
-    const { data: ass } = await sb.from('presenze_assenze').select('*').eq('stato','in attesa').order('creato_il',{ascending:false});
-    if (!ass || !ass.length) { $('statDett-body').innerHTML = '<div class="empty"><div class="empty-txt">Nessuna richiesta in attesa</div></div>'; return; }
-    $('statDett-body').innerHTML = ass.map(a => renderAssenzaCard(a, true)).join('');
+    // FIX: prima qui si vedeva SOLO la vecchia query ristretta (ferie/
+    // malattia 'in attesa'), che spesso è vuota — mentre il numero sulla
+    // card viene ora dal conteggio completo (contaTutteLeRichiesteInAttesa).
+    // Risultato: il numero diceva "4" ma aprendo non si vedeva niente.
+    // Ora la lista mostra esattamente le stesse voci che fanno il totale.
+    const pr = (await calcolaPromemoria()).filter(p => p.urgenza==='alta' || p.urgenza==='media');
+    const { data: dipMapData } = await sb.from('presenze_profili').select('id,nome,cognome');
+    const nomeMap = {};
+    (dipMapData||[]).forEach(d => { nomeMap[d.id] = d.nome + (d.cognome ? ' '+d.cognome : ''); });
+    const [
+      { data: acconti },
+      { data: liquid },
+      { data: documenti },
+      { data: cambiTurno },
+    ] = await Promise.all([
+      sb.from('presenze_acconti').select('dipendente_id,importo,data').eq('letto_dip',false),
+      sb.from('presenze_liquidazioni').select('dipendente_id,mese,anno,importo_netto').eq('confermata_dip',false),
+      sb.from('presenze_documenti').select('dipendente_id,categoria,mese,anno').is('letto_il',null),
+      sb.from('presenze_cambi_turno').select('nome_richiedente,nome_collega,fascia_oraria').eq('stato','attesa_admin'),
+    ]);
+    const voci = pr.map(p => ({ icona:p.icona, titolo:p.titolo, testo:p.testo }));
+    (acconti||[]).forEach(a => voci.push({ icona:'💶', titolo:'Acconto non ancora letto dal dipendente',
+      testo:(nomeMap[a.dipendente_id]||'Dipendente')+' — €'+parseFloat(a.importo).toFixed(2)+' del '+new Date(a.data).toLocaleDateString('it-IT') }));
+    (liquid||[]).forEach(l => voci.push({ icona:'💰', titolo:'Stipendio non confermato dal dipendente',
+      testo:(nomeMap[l.dipendente_id]||'Dipendente')+' — '+String(l.mese).padStart(2,'0')+'/'+l.anno+' — €'+parseFloat(l.importo_netto||0).toFixed(2) }));
+    (documenti||[]).forEach(d => voci.push({ icona:'📄', titolo:'Documento non letto dal dipendente',
+      testo:(nomeMap[d.dipendente_id]||'Dipendente')+' — '+(d.categoria||'documento')+(d.mese?' — '+String(d.mese).padStart(2,'0')+'/'+d.anno:'') }));
+    (cambiTurno||[]).forEach(c => voci.push({ icona:'🔄', titolo:'Cambio turno da approvare',
+      testo:(c.nome_richiedente||'—')+' ↔ '+(c.nome_collega||'—')+(c.fascia_oraria?' — '+c.fascia_oraria:'') }));
+    if (!voci.length) { $('statDett-body').innerHTML = '<div class="empty"><div class="empty-txt">Nessuna richiesta in attesa</div></div>'; return; }
+    $('statDett-body').innerHTML = voci.map(v =>
+      '<div class="card" style="margin-bottom:8px;padding:12px">'
+      + '<div style="font-weight:700;font-size:13px">'+(v.icona||'')+' '+esc(v.titolo||'')+'</div>'
+      + '<div style="font-size:12px;color:var(--muted);margin-top:2px">'+esc(v.testo||'')+'</div>'
+      + '</div>'
+    ).join('');
     return;
   }
 
