@@ -3531,9 +3531,17 @@ async function certificaAzione(tipo, riferimentoTabella, riferimentoId, azione, 
       contenuto, hash, hash_precedente: hashPrecedente,
       ip, user_agent: navigator.userAgent, creato_il: creatoIl
     }).select().single();
-    if (error) { console.warn('[certificaAzione]', error); return null; }
+    if (error) {
+      console.warn('[certificaAzione]', error);
+      toast('⚠ Certificazione non registrata: '+error.message);
+      return null;
+    }
     return cert;
-  } catch(e) { console.warn('[certificaAzione]', e); return null; }
+  } catch(e) {
+    console.warn('[certificaAzione]', e);
+    toast('⚠ Certificazione non registrata: '+(e && e.message ? e.message : 'errore sconosciuto'));
+    return null;
+  }
 }
 
 // Ricostruisce la ricevuta PDF di una certificazione — sempre identica,
@@ -5382,6 +5390,8 @@ async function richiediEliminaAssenza(id) {
   closeSheet('sh-dettaglioAssenza');
   await caricaAssenzeAdmin();
   await caricaPresenzeTeam();
+  await aggiornaStats();
+  await aggiornaPromemoria();
 }
 
 async function annullaRichiestaEliminaAssenza(id) {
@@ -5393,6 +5403,8 @@ async function annullaRichiestaEliminaAssenza(id) {
   closeSheet('sh-dettaglioAssenza');
   await caricaAssenzeAdmin();
   await caricaPresenzeTeam();
+  await aggiornaStats();
+  await aggiornaPromemoria();
 }
 
 async function rispondiEliminaAssenza(id, conferma) {
@@ -8562,10 +8574,10 @@ async function calcolaPromemoria() {
     // Prima non comparivano affatto nel Centro Attività — l'admin le
     // perdeva di vista se non tornava apposta sulla scheda del giorno.
     const { data: richTimbr } = await sb.from('presenze')
-      .select('id,nome_dipendente,data,richiesta_tipo').not('richiesta_tipo','is',null)
+      .select('id,dipendente_id,nome_dipendente,data,richiesta_tipo').not('richiesta_tipo','is',null)
       .order('data',{ascending:false});
     (richTimbr||[]).forEach(r => {
-      promemoria.push({ tipo:'timbratura', urgenza:'media', icona:'✍️',
+      promemoria.push({ tipo:'timbratura', urgenza:'media', icona:'✍️', id:r.id, dipId:r.dipendente_id,
         titolo: r.richiesta_tipo==='elimina' ? 'Eliminazione timbratura — in attesa del dipendente' : 'Modifica timbratura — in attesa del dipendente',
         testo:(r.nome_dipendente||'Dipendente')+' — '+new Date(r.data).toLocaleDateString('it-IT'),
         azione:'In attesa che il dipendente confermi (annullabile dalla scheda presenze)' });
@@ -8574,10 +8586,10 @@ async function calcolaPromemoria() {
     // 8. Richieste admin di eliminazione di una ferie/malattia già
     // confermata: stessa logica, "in giro" in attesa del dipendente.
     const { data: richAss } = await sb.from('presenze_assenze')
-      .select('id,nome_dipendente,tipo,data_inizio').eq('richiesta_elimina', true);
+      .select('id,dipendente_id,nome_dipendente,tipo,data_inizio').eq('richiesta_elimina', true);
     (richAss||[]).forEach(a => {
       const lbl = a.tipo === 'ferie' ? 'ferie' : a.tipo === 'malattia' ? 'malattia' : (a.tipo||'assenza');
-      promemoria.push({ tipo:'assenza', urgenza:'media', icona:'🗑',
+      promemoria.push({ tipo:'assenza', urgenza:'media', icona:'🗑', id:a.id, dipId:a.dipendente_id,
         titolo:'Eliminazione '+lbl+' — in attesa del dipendente',
         testo:(a.nome_dipendente||'Dipendente')+(a.data_inizio?' — dal '+new Date(a.data_inizio).toLocaleDateString('it-IT'):''),
         azione:'In attesa che il dipendente confermi (annullabile dal dettaglio)' });
@@ -8631,6 +8643,14 @@ function apriPromemoria() {
             <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
               <button class="btn-sm" style="background:var(--green);color:#fff" onclick="approvaTimbrDipDaPromemoria('${p.id}',true)">✓ Approva</button>
               <button class="btn-sm" style="color:var(--red)" onclick="approvaTimbrDipDaPromemoria('${p.id}',false)">✕ Rifiuta</button>
+            </div>` : ''}
+          ${p.id && p.dipId && (p.titolo==='Modifica timbratura — in attesa del dipendente' || p.titolo==='Eliminazione timbratura — in attesa del dipendente') ? `
+            <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
+              <button class="btn-sm primary" onclick="reinviaRichiestaConferma('richiesta_timbr','${p.id}','${p.dipId}')">🔔 Sollecita</button>
+            </div>` : ''}
+          ${p.id && p.dipId && p.titolo && p.titolo.startsWith('Eliminazione') && p.titolo.endsWith('— in attesa del dipendente') && p.tipo==='assenza' ? `
+            <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
+              <button class="btn-sm primary" onclick="reinviaRichiestaConferma('richiesta_assenza','${p.id}','${p.dipId}')">🔔 Sollecita</button>
             </div>` : ''}
         </div>
       </div>`).join('');
@@ -8806,9 +8826,19 @@ async function reinviaRichiestaConferma(tipo, id, dipId) {
       const { data: p } = await sb.from('presenze').select('data,ts_entrata').eq('id',id).single();
       const dataLbl = new Date(p.data).toLocaleDateString('it-IT',{day:'2-digit',month:'long'});
       msg = '🔔 <b>Promemoria — Timbratura da confermare</b>\n\nHai una timbratura manuale del <b>'+dataLbl+'</b> ancora da confermare (o segnalare come errata).\n\nApri Ceraldi Presenze per rispondere.';
+    } else if (tipo === 'richiesta_timbr') {
+      const { data: p } = await sb.from('presenze').select('data,richiesta_tipo').eq('id',id).single();
+      const dataLbl = new Date(p.data).toLocaleDateString('it-IT',{day:'2-digit',month:'long'});
+      const azioneLbl = p.richiesta_tipo === 'elimina' ? 'eliminare' : 'correggere';
+      msg = '🔔 <b>Promemoria — Richiesta admin su una timbratura</b>\n\nL\u2019admin ha chiesto di '+azioneLbl+' la tua timbratura del <b>'+dataLbl+'</b>, ancora in attesa di una tua risposta.\n\nApri Ceraldi Presenze per confermare o rifiutare.';
+    } else if (tipo === 'richiesta_assenza') {
+      const { data: a } = await sb.from('presenze_assenze').select('tipo,data_inizio,data_fine').eq('id',id).single();
+      const lbl = a.tipo === 'ferie' ? 'ferie' : a.tipo === 'malattia' ? 'malattia' : (a.tipo||'assenza');
+      const periodo = a.data_inizio ? ' dal '+new Date(a.data_inizio).toLocaleDateString('it-IT')+' al '+new Date(a.data_fine).toLocaleDateString('it-IT') : '';
+      msg = '🔔 <b>Promemoria — Richiesta eliminazione</b>\n\nL\u2019admin ha chiesto di eliminare la tua '+lbl+periodo+', ancora in attesa di una tua risposta.\n\nApri Ceraldi Presenze per confermare o rifiutare.';
     }
     // Deep link: il dipendente atterra direttamente sulla cosa sollecitata
-    const deep = tipo === 'documento' ? '#documenti' : tipo === 'timbratura' ? '#timbra' : '#stipendi';
+    const deep = tipo === 'documento' ? '#documenti' : (tipo === 'timbratura' || tipo === 'richiesta_timbr') ? '#timbra' : tipo === 'richiesta_assenza' ? '#richieste' : '#stipendi';
     await inviaNotificaDipendente(dipId, msg, deep);
     toast('✓ Sollecito inviato a '+(dip.nome||''));
   } catch(e) { console.warn('reinvia:', e); toast('Errore invio sollecito'); }
@@ -10521,11 +10551,18 @@ async function caricaStipendi() {
   // Ora si recuperano TUTTI gli acconti fino a fine mese selezionato, e si
   // segna quali mesi risultano già liquidati (quindi già "chiusi"), per
   // riportare in avanti solo quelli davvero ancora in sospeso.
-  const [{ data: dipendenti }, { data: presenze }, { data: accontiTutti }, { data: restituzioniMese }, { data: ferieAnno }, { data: liquidazTutte }] = await Promise.all([
+  const [{ data: dipendenti }, { data: presenze }, { data: accontiTutti }, { data: restituzioniTutte }, { data: ferieAnno }, { data: liquidazTutte }] = await Promise.all([
     sb.from('presenze_profili').select('*').eq('ruolo','dipendente').eq('attivo',true).order('nome'),
     sb.from('presenze').select('*').gte('data',dal).lte('data',al),
     sb.from('presenze_acconti').select('id,dipendente_id,importo,data,note,letto_dip,causale,saldato').lte('data',al),
-    DB.safe(() => sb.from('presenze_restituzioni').select('id,dipendente_id,importo,data,note').gte('data',dal).lte('data',al), null),
+    // FIX (acconto "sdoppiato" tra mesi): un acconto non liquidato viene
+    // riportato avanti nei mesi successivi (vedi acconti sotto), ma la
+    // relativa restituzione veniva presa SOLO se caduta nel mese in corso
+    // — quindi un acconto restituito a luglio ricompariva intero (senza la
+    // restituzione che lo azzerava) nel calcolo di agosto, raddoppiando il
+    // debito. Ora si recuperano TUTTE le restituzioni fino a fine mese,
+    // con lo stesso identico criterio di riporto usato per gli acconti.
+    DB.safe(() => sb.from('presenze_restituzioni').select('id,dipendente_id,importo,data,note').lte('data',al), null),
     sb.from('presenze_assenze').select('dipendente_id,data_inizio,data_fine,tipo')
       .eq('tipo','ferie').eq('stato','approvata')
       .gte('data_inizio', y+'-01-01').lte('data_fine', y+'-12-31'),
@@ -10543,6 +10580,16 @@ async function caricaStipendi() {
     const d = new Date(a.data+'T00:00:00');
     const key = a.dipendente_id+'-'+(d.getMonth()+1)+'-'+d.getFullYear();
     return !meseLiquidatoSet.has(key); // non riportare se quel mese risulta già liquidato
+  });
+  // Stessa regola di riporto degli acconti: una restituzione di un mese
+  // già liquidato non va ripresa (era già stata conteggiata in quella
+  // liquidazione), altrimenti va sempre riportata avanti — proprio come
+  // l'acconto che compensa, altrimenti i due si disallineano.
+  const restituzioniMese = (restituzioniTutte||[]).filter(r => {
+    if (r.data >= dal) return true;
+    const d = new Date(r.data+'T00:00:00');
+    const key = r.dipendente_id+'-'+(d.getMonth()+1)+'-'+d.getFullYear();
+    return !meseLiquidatoSet.has(key);
   });
 
   // Calcola ferie godute + raccoglie periodi per ogni dipendente
@@ -10569,8 +10616,12 @@ async function caricaStipendi() {
   const festSetAnno = new Set(Object.keys(festivitaItaliane(parseInt(y))));
   // Festività del mese in corso (per trovare quelle NON lavorate, da
   // pagare comunque 1 giornata per CCNL — prima calcolato solo nell'export
-  // Excel, mai in questa schermata)
-  const festMese = [...festSetAnno].filter(dt => dt >= dal && dt <= al);
+  // Excel, mai in questa schermata).
+  // FIX: una festività futura (es. Ferragosto il 15/8, visto il 3/8) non
+  // è ancora "successa" — non si può pagare comunque un giorno che non è
+  // ancora arrivato. Il mese in corso va sempre limitato ad oggi.
+  const alFestivo = al < todayISO() ? al : todayISO();
+  const festMese = [...festSetAnno].filter(dt => dt >= dal && dt <= alFestivo);
 
   _stipendiData = dipendenti.map(d => {
     // FIX: prima le presenze manuali non ancora confermate dal dipendente
@@ -10872,7 +10923,10 @@ function esportaPresenzeExcel() {
   if (selDip) selDip.value = '';
 
   const fest = festivitaItaliane(anno);
-  const festMese = Object.keys(fest).filter(dt => dt >= dal && dt <= al).sort();
+  // Stessa cautela della schermata Stipendi: non contare una festività
+  // che non è ancora passata, nel caso si esporti un mese ancora in corso
+  const alFestivoExp = al < todayISO() ? al : todayISO();
+  const festMese = Object.keys(fest).filter(dt => dt >= dal && dt <= alFestivoExp).sort();
   const list = $('fest-export-list');
   if (!festMese.length) {
     list.innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px;font-size:13px">Nessuna festività nazionale in questo mese.<br>Il file verrà generato normalmente.</div>';
@@ -10966,8 +11020,10 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro) {
   const wb = XLSX.utils.book_new();
 
   /* ═══════ FOGLIO 1: RIEPILOGO BUSTA PAGA (per il consulente) ═══════ */
-  // Festività del mese (servono per capire le festività NON lavorate)
-  const festMese = Object.keys(fest).filter(dt => dt >= dal && dt <= al);
+  // Festività del mese (servono per capire le festività NON lavorate) —
+  // mai una non ancora passata, nel caso si esporti un mese in corso
+  const alFestivoXls = al < todayISO() ? al : todayISO();
+  const festMese = Object.keys(fest).filter(dt => dt >= dal && dt <= alFestivoXls);
   const F1 = [];
   F1.push(['CERALDI GROUP S.r.l. — RIEPILOGO BUSTA PAGA']);
   F1.push(['Periodo: '+meseLbl.toUpperCase()+'  •  Documento per il Consulente del Lavoro  •  Generato il '+new Date().toLocaleDateString('it-IT')]);
@@ -13210,6 +13266,7 @@ async function salvaCorrezioneTimbr() {
   toast('\u2713 Richiesta inviata — in attesa che ' + (pres?pres.nome_dipendente:'il dipendente') + ' confermi');
   closeSheet('sh-correggi');
   await caricaOggi(); await caricaStorico(); await caricaPresenzeTeam();
+  await aggiornaStats(); await aggiornaPromemoria();
 }
 
 async function eliminaTimbratura() {
@@ -13248,6 +13305,7 @@ async function eliminaTimbratura() {
   toast('\u2713 Richiesta di eliminazione inviata — in attesa di conferma');
   closeSheet('sh-correggi');
   await caricaOggi(); await caricaStorico(); await caricaPresenzeTeam(); await aggiornaStats();
+  await aggiornaPromemoria();
 }
 
 // Admin annulla una richiesta di modifica/eliminazione ancora pendente:
@@ -13261,6 +13319,7 @@ async function annullaRichiestaTimbratura() {
   toast('Richiesta annullata — nulla è cambiato');
   closeSheet('sh-correggi');
   await caricaOggi(); await caricaStorico(); await caricaPresenzeTeam();
+  await aggiornaStats(); await aggiornaPromemoria();
 }
 
 /* ── LIQUIDAZIONI ───────────────────────────────────── */
