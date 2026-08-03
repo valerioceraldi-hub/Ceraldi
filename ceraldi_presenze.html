@@ -3756,6 +3756,17 @@ const DB = (() => {
     remove: (id)            => run(sb.from(tabella).delete().eq('id', id), tabella + '.remove'),
   });
 
+  // Come byId, ma non lancia mai errore se la riga non esiste più (es. già
+  // eliminata da un'azione precedente/concorrente): torna semplicemente
+  // null invece del "Cannot coerce the result to a single object" di
+  // .single(), usato dai flussi di conferma che possono trovare una
+  // richiesta ormai già risolta.
+  async function byIdOrNull(tabella, id, sel = '*') {
+    const { data, error } = await sb.from(tabella).select(sel).eq('id', id).maybeSingle();
+    if (error) { console.error('[byIdOrNull]', tabella, error); return null; }
+    return data;
+  }
+
   const profili = {
     ...T('presenze_profili'),
     attivi: () =>
@@ -3936,7 +3947,7 @@ const DB = (() => {
   };
 
   return {
-    safe, run,
+    safe, run, byIdOrNull,
     profili, presenze, assenze, allegati, cambiTurno, otp, turni,
     documenti, acconti, liquidazioni, avvisi, inviti, correzioni, contrattoTemplate,
   };
@@ -4948,8 +4959,8 @@ let _assenzaDettaglio = null;
 
 async function openDettaglioAssenza(id, isAdmin) {
   _detAssenzaId = id;
-  const a = await DB.safe(() => DB.assenze.byId(id), 'Impossibile caricare la richiesta');
-  if (!a) return;
+  const a = await DB.byIdOrNull('presenze_assenze', id);
+  if (!a) { toast('Questa richiesta non esiste più'); return; }
   _assenzaDettaglio = a;
   const allegati = await DB.safe(() => DB.allegati.diAssenza(id), 'Impossibile caricare gli allegati');
   const dal = new Date(a.data_inizio).toLocaleDateString('it-IT',{weekday:'long',day:'2-digit',month:'long',year:'numeric'});
@@ -5199,8 +5210,8 @@ async function rispondiAssenzaAdmin(stato, id) {
    attesa" finché il dipendente non risponde, ed è reversibile con
    "Annulla richiesta" finché non risponde. ── */
 async function richiediEliminaAssenza(id) {
-  const a = await DB.safe(() => DB.assenze.byId(id), null);
-  if (!a) return;
+  const a = await DB.byIdOrNull('presenze_assenze', id);
+  if (!a) { toast('Questa richiesta non esiste più'); closeSheet('sh-dettaglioAssenza'); return; }
   const ok = await DB.safe(() => DB.assenze.update(id, {
     richiesta_elimina: true,
     richiesta_elimina_da: ME.id,
@@ -5230,13 +5241,23 @@ async function annullaRichiestaEliminaAssenza(id) {
 }
 
 async function rispondiEliminaAssenza(id, conferma) {
-  const a = await DB.safe(() => DB.assenze.byId(id), null);
-  if (!a) return;
+  const a = await DB.byIdOrNull('presenze_assenze', id);
+  if (!a || !a.richiesta_elimina) {
+    toast(a ? 'Questa richiesta è già stata gestita' : 'Questa richiesta non esiste più — probabilmente già eliminata');
+    closeSheet('sh-dettaglioAssenza');
+    await caricaAssenzeDip();
+    mostraProssimaAzioneInSospesa();
+    return;
+  }
   const nomeDip = ME.nome + (ME.cognome ? ' '+ME.cognome : '');
   const tipoLbl = {ferie:'ferie',malattia:'malattia',altro:'richiesta'}[a.tipo] || a.tipo;
   if (conferma) {
-    const ok = await DB.safe(() => DB.assenze.remove(id), 'Errore durante il salvataggio');
-    if (!ok) return;
+    const { data: righeElim, error: errElim } = await sb.from('presenze_assenze').delete().eq('id', id).select();
+    if (errElim) { toast('Errore: '+errElim.message); return; }
+    if (!righeElim || !righeElim.length) {
+      toast('Permesso mancante: chiedi all\u2019admin di aggiungere la policy di eliminazione su Supabase');
+      return;
+    }
     toast('✓ Eliminazione confermata');
     inviaNotificaTelegram('✅ <b>Ceraldi Presenze</b>\n'+escTG(nomeDip)+' ha confermato l\u2019eliminazione della '+tipoLbl+'.');
   } else {
@@ -13337,8 +13358,8 @@ let _ctPresenzaId = null;
 // resta tutto come prima (reversibile: l'admin può anche annullarla lui).
 let _rpPresenzaId = null;
 async function apriRichiestaPresenza(id) {
-  const p = await DB.safe(() => DB.presenze.byId(id), null);
-  if (!p || !p.richiesta_tipo) return;
+  const p = await DB.byIdOrNull('presenze', id);
+  if (!p || !p.richiesta_tipo) return; // già gestita altrove o non più esistente
   _rpPresenzaId = id;
   const dataLbl = new Date(p.data).toLocaleDateString('it-IT',{weekday:'long',day:'2-digit',month:'long'});
   const isElimina = p.richiesta_tipo === 'elimina';
@@ -13361,8 +13382,17 @@ async function apriRichiestaPresenza(id) {
 
 async function rispondiRichiestaPresenza(conferma) {
   if (!_rpPresenzaId) return;
-  const p = await DB.safe(() => DB.presenze.byId(_rpPresenzaId), null);
-  if (!p) return;
+  const p = await DB.byIdOrNull('presenze', _rpPresenzaId);
+  if (!p || !p.richiesta_tipo) {
+    // La richiesta non c'è più (già risolta in un tentativo precedente,
+    // o cancellata nel frattempo dall'admin): nessun errore da mostrare,
+    // si chiude e si passa oltre come se fosse già stata gestita
+    toast(p ? 'Questa richiesta è già stata gestita' : 'Questa timbratura non esiste più — probabilmente già eliminata');
+    _rpPresenzaId = null;
+    closeSheet('sh-confRichiestaPres');
+    mostraProssimaAzioneInSospesa();
+    return;
+  }
   const nomeDip = ME.nome + (ME.cognome ? ' '+ME.cognome : '');
   const dataLbl = new Date(p.data).toLocaleDateString('it-IT',{day:'2-digit',month:'long'});
   if (conferma && p.richiesta_tipo === 'modifica' && p.richiesta_nuovi_dati) {
@@ -13375,8 +13405,15 @@ async function rispondiRichiestaPresenza(conferma) {
     toast('✓ Modifica confermata');
     inviaNotificaTelegram('✅ <b>Ceraldi Presenze</b>\n'+escTG(nomeDip)+' ha confermato la modifica della timbratura del '+dataLbl+'.');
   } else if (conferma && p.richiesta_tipo === 'elimina') {
-    const ok = await DB.safe(() => DB.presenze.remove(_rpPresenzaId), 'Errore durante il salvataggio');
-    if (!ok) return;
+    // .select() dopo la delete: se Supabase blocca la cancellazione per
+    // permessi (RLS) non dà errore, restituisce solo zero righe — senza
+    // questo controllo il tasto "sembra" funzionare ma non elimina nulla
+    const { data: righeElim, error: errElim } = await sb.from('presenze').delete().eq('id', _rpPresenzaId).select();
+    if (errElim) { showMsg('crp-msg', errElim.message, 'err'); return; }
+    if (!righeElim || !righeElim.length) {
+      showMsg('crp-msg','Permesso mancante: chiedi all\u2019admin di aggiungere la policy di eliminazione su Supabase (vedi messaggio inviato)','err');
+      return;
+    }
     toast('✓ Eliminazione confermata');
     inviaNotificaTelegram('✅ <b>Ceraldi Presenze</b>\n'+escTG(nomeDip)+' ha confermato l\u2019eliminazione della timbratura del '+dataLbl+'.');
   } else {
