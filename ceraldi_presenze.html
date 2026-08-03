@@ -8374,10 +8374,15 @@ async function calcolaPromemoria() {
     }
 
     // 6. Timbrature manuali in attesa di conferma
+    // FIX: c'era un limit(20) qui — con più di 20 timbrature manuali
+    // pendenti in tutta la storia, le più vecchie sparivano dal Centro
+    // Attività senza nessun modo di raggiungerle (bug segnalato: "le
+    // notifiche non arrivano dopo un certo numero"). Ora nessun limite:
+    // ogni timbratura in attesa resta visibile finché non viene gestita.
     const { data: presMan } = await sb.from('presenze')
       .select('id,dipendente_id,nome_dipendente,data,tipo_timbratura')
       .in('tipo_timbratura',['manuale','manuale_dip']).eq('confermata_dip', false)
-      .order('data',{ascending:false}).limit(20);
+      .order('data',{ascending:false});
     // Verifica quali dipendenti coinvolti non sono più in squadra: per loro
     // la conferma non arriverà MAI (non possono più aprire l'app), quindi
     // il promemoria resterebbe bloccato per sempre se non lo segnaliamo
@@ -8400,6 +8405,32 @@ async function calcolaPromemoria() {
               : dipInattivo ? 'Il dipendente non è più in squadra — non potrà mai confermare'
               : 'In attesa che il dipendente confermi' });
     });
+
+    // 7. Richieste admin di modifica/eliminazione su una timbratura già
+    // registrata: "in giro", in attesa che il dipendente le confermi.
+    // Prima non comparivano affatto nel Centro Attività — l'admin le
+    // perdeva di vista se non tornava apposta sulla scheda del giorno.
+    const { data: richTimbr } = await sb.from('presenze')
+      .select('id,nome_dipendente,data,richiesta_tipo').not('richiesta_tipo','is',null)
+      .order('data',{ascending:false});
+    (richTimbr||[]).forEach(r => {
+      promemoria.push({ tipo:'timbratura', urgenza:'media', icona:'✍️',
+        titolo: r.richiesta_tipo==='elimina' ? 'Eliminazione timbratura — in attesa del dipendente' : 'Modifica timbratura — in attesa del dipendente',
+        testo:(r.nome_dipendente||'Dipendente')+' — '+new Date(r.data).toLocaleDateString('it-IT'),
+        azione:'In attesa che il dipendente confermi (annullabile dalla scheda presenze)' });
+    });
+
+    // 8. Richieste admin di eliminazione di una ferie/malattia già
+    // confermata: stessa logica, "in giro" in attesa del dipendente.
+    const { data: richAss } = await sb.from('presenze_assenze')
+      .select('id,nome_dipendente,tipo,data_inizio').eq('richiesta_elimina', true);
+    (richAss||[]).forEach(a => {
+      const lbl = a.tipo === 'ferie' ? 'ferie' : a.tipo === 'malattia' ? 'malattia' : (a.tipo||'assenza');
+      promemoria.push({ tipo:'assenza', urgenza:'media', icona:'🗑',
+        titolo:'Eliminazione '+lbl+' — in attesa del dipendente',
+        testo:(a.nome_dipendente||'Dipendente')+(a.data_inizio?' — dal '+new Date(a.data_inizio).toLocaleDateString('it-IT'):''),
+        azione:'In attesa che il dipendente confermi (annullabile dal dettaglio)' });
+    });
   } catch(e){ console.warn('calcolaPromemoria:', e); }
 
   // Ordina per urgenza
@@ -8413,22 +8444,12 @@ async function aggiornaPromemoria() {
   const btn = $('btn-promemoria');
   if (!btn) return;
   btn.style.display = 'inline-block';
-  const pr = await calcolaPromemoria();
+  await calcolaPromemoria(); // popola _promemoria per la lista del Centro Attività
   const badge = $('promemoria-badge');
-  const urgenti = pr.filter(p=>p.urgenza==='alta'||p.urgenza==='media').length;
-  // Conta anche le conferme in sospeso (acconti/stipendi/buste paga) + cambi turno
-  let sospesi = 0;
-  try {
-    const d90 = new Date(Date.now()-90*86400000).toISOString().split('T')[0];
-    const [{ count: c1 }, { count: c2 }, { count: c3 }, { count: c4 }] = await Promise.all([
-      sb.from('presenze_acconti').select('id',{count:'exact',head:true}).eq('letto_dip',false).gte('data',d90),
-      sb.from('presenze_liquidazioni').select('id',{count:'exact',head:true}).eq('confermata_dip',false),
-      sb.from('presenze_documenti').select('id',{count:'exact',head:true}).in('categoria',['busta_paga','cu']).is('letto_il',null).gte('creato_il',d90+'T00:00:00'),
-      sb.from('presenze_cambi_turno').select('id',{count:'exact',head:true}).eq('stato','attesa_admin'),
-    ]);
-    sospesi = (c1||0)+(c2||0)+(c3||0)+(c4||0);
-  } catch(e) {}
-  const tot = urgenti + sospesi;
+  // Stesso identico conteggio della card "In attesa" in prima pagina —
+  // prima qui c'era un calcolo diverso (e anch'esso incompleto), che
+  // poteva mostrare un numero diverso da quello in home.
+  const tot = await contaTutteLeRichiesteInAttesa();
   if (badge) {
     if (tot > 0) { badge.textContent = tot; badge.style.display = 'block'; }
     else badge.style.display = 'none';
@@ -8664,6 +8685,40 @@ async function inviaRiepilogoPromemoriaTelegram() {
   } catch(e){ console.warn('riepilogo promemoria tg:', e); }
 }
 
+// Conta TUTTO ciò che è "in attesa": sia cose in arrivo che l'admin deve
+// processare (ferie/malattia da approvare, timbrature da confermare,
+// cambi turno) sia cose "in giro" — mandate dall'admin e in attesa di
+// conferma, rifiuto o lettura da parte del dipendente (acconti, stipendi,
+// documenti, richieste di modifica/eliminazione timbratura o ferie/
+// malattia). Usato sia dalla card "In attesa" in prima pagina sia dal
+// numero sul campanello del Centro Attività: PRIMA erano due conteggi
+// diversi e incompleti (la card contava solo le ferie/malattia in
+// attesa, quindi risultava quasi sempre zero) — ora è lo stesso identico
+// numero ovunque.
+async function contaTutteLeRichiesteInAttesa() {
+  const pr = await calcolaPromemoria(); // contratti, prova, compleanni, ferie/malattia in attesa, certificati mancanti, timbrature, richieste modifica/elimina
+  const daPromemoria = pr.filter(p => p.urgenza==='alta' || p.urgenza==='media').length;
+  try {
+    const [
+      { count: cAcconti },
+      { count: cLiquid },
+      { count: cDocumenti },
+      { count: cCambiTurno },
+    ] = await Promise.all([
+      sb.from('presenze_acconti').select('id',{count:'exact',head:true}).eq('letto_dip',false),
+      sb.from('presenze_liquidazioni').select('id',{count:'exact',head:true}).eq('confermata_dip',false),
+      // Tutte le categorie di documento, non solo busta paga/CU — un
+      // contratto o un "altro" non letto è comunque qualcosa in attesa
+      sb.from('presenze_documenti').select('id',{count:'exact',head:true}).is('letto_il',null),
+      sb.from('presenze_cambi_turno').select('id',{count:'exact',head:true}).eq('stato','attesa_admin'),
+    ]);
+    return daPromemoria + (cAcconti||0) + (cLiquid||0) + (cDocumenti||0) + (cCambiTurno||0);
+  } catch(e) {
+    console.warn('contaTutteLeRichiesteInAttesa:', e);
+    return daPromemoria;
+  }
+}
+
 async function aggiornaStats() {
   const y = new Date().getFullYear();
   const m = String(new Date().getMonth()+1).padStart(2,'0');
@@ -8673,20 +8728,20 @@ async function aggiornaStats() {
   const [
     { count: c1 },
     { count: c2 },
-    { count: c3 },
+    cAttesa,
     { data: presMese },
     { data: dipendenti }
   ] = await Promise.all([
     sb.from('presenze').select('id',{count:'exact',head:true}).eq('data', todayISO()).or('tipo_timbratura.neq.manuale_dip,confermata_dip.eq.true'),
     sb.from('presenze').select('id',{count:'exact',head:true}).gte('data',dal).lte('data',al).or('tipo_timbratura.neq.manuale_dip,confermata_dip.eq.true'),
-    sb.from('presenze_assenze').select('id',{count:'exact',head:true}).eq('stato','in attesa'),
+    contaTutteLeRichiesteInAttesa(),
     sb.from('presenze').select('dipendente_id').gte('data',dal).lte('data',al).or('tipo_timbratura.neq.manuale_dip,confermata_dip.eq.true'),
     sb.from('presenze_profili').select('id,paga_giornaliera').eq('ruolo','dipendente').eq('attivo',true)
   ]);
 
   $('st-oggi').textContent = c1 ?? 0;
   $('st-mese').textContent = c2 ?? 0;
-  if ($('st-attesa')) $('st-attesa').textContent = c3 ?? 0;
+  if ($('st-attesa')) $('st-attesa').textContent = cAttesa ?? 0;
 
   // Costo mese
   if ($('st-costo') && presMese && dipendenti) {
