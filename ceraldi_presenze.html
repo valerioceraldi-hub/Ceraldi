@@ -6398,7 +6398,7 @@ async function inviaTurniPerApprovazione() {
     .eq('settimana_inizio', lunedi).eq('stato','bozza');
   if (error) { toast('Errore: '+error.message); return; }
   const msg = '📅 <b>Turni da approvare</b>\n\n'
-    + (ME.nome||'Il responsabile turni') + ' ha preparato i turni per la settimana del ' + fmtSettimanaLbl(lunedi) + '.\n'
+    + escTG(ME.nome ? (ME.nome+(ME.cognome?' '+ME.cognome:'')) : 'Il responsabile turni') + ' ha preparato i turni per la settimana del ' + fmtSettimanaLbl(lunedi) + '.\n'
     + '\n<a href="'+APP_URL+'#assenze">📲 Apri Ceraldi Presenze per confermare</a>';
   await inviaNotificaTelegram(msg);
   toast('✓ Inviato ad admin per approvazione');
@@ -8318,6 +8318,19 @@ async function processQR(raw) {
   if (!p.id || !p.n || !p.exp) { showMsg('scan-msg','QR non valido','err'); return; }
   if (p.exp < now) { showMsg('scan-msg','QR scaduto — chiedi al dipendente di generarne uno nuovo','warn'); return; }
 
+  // FIX (trovato in audit sui dati reali): il nome dentro il QR viene
+  // "congelato" al momento in cui il dipendente lo genera (ME.nome +
+  // ME.cognome di quella sessione) — se in quel momento il cognome
+  // risultava vuoto (sessione precedente a un aggiornamento del profilo,
+  // o un refresh mancato), la presenza veniva salvata col solo nome,
+  // creando una persona "fantasma" separata in ogni conteggio raggruppato
+  // per testo (capitato identico lo stesso giorno per più dipendenti:
+  // Alessandro, Angela, Antonella, Antonio). Ora il nome si rilegge SEMPRE
+  // fresco dal profilo tramite l'id (che è affidabile, non cambia mai),
+  // invece di fidarsi del testo eventualmente non aggiornato nel QR.
+  const { data: profScan } = await sb.from('presenze_profili').select('nome,cognome').eq('id', p.id).maybeSingle();
+  const nomeAffidabile = profScan ? profScan.nome+(profScan.cognome?' '+profScan.cognome:'') : p.n;
+
   // Blocco (non solo avviso): se il dipendente risulta oggi in ferie o
   // malattia approvata, la timbratura viene rifiutata — anche se il QR
   // era già stato generato prima dell'inizio dell'assenza.
@@ -8328,7 +8341,7 @@ async function processQR(raw) {
     .lte('data_inizio', oggiData).gte('data_fine', oggiData)
     .limit(1).maybeSingle();
   if (assenzaScan) {
-    showMsg('scan-msg', p.n+' risulta in '+(assenzaScan.tipo==='ferie'?'ferie':'malattia')+' oggi — timbratura non registrata','err');
+    showMsg('scan-msg', nomeAffidabile+' risulta in '+(assenzaScan.tipo==='ferie'?'ferie':'malattia')+' oggi — timbratura non registrata','err');
     return;
   }
 
@@ -8336,11 +8349,11 @@ async function processQR(raw) {
   // l'entrata. Se il dipendente ha già timbrato oggi, la scansione è respinta.
   const oggi = await DB.safe(() => DB.presenze.diOggiPerDip(p.id, todayISO()), null);
   if (oggi) {
-    showMsg('scan-msg', p.n+' ha già registrato la presenza oggi ('+fmtTime(oggi.ts_entrata)+')','warn');
+    showMsg('scan-msg', nomeAffidabile+' ha già registrato la presenza oggi ('+fmtTime(oggi.ts_entrata)+')','warn');
     return;
   }
-  pendingScan = { dipendente_id: p.id, nome: p.n, ts: new Date().toISOString() };
-  $('sr-nome').textContent = p.n;
+  pendingScan = { dipendente_id: p.id, nome: nomeAffidabile, ts: new Date().toISOString() };
+  $('sr-nome').textContent = nomeAffidabile;
   $('sr-ora').textContent  = 'Entrata: ' + oraNow();
   const btnConf = document.querySelector('#scan-result .btn-green-solid');
   if (btnConf) { btnConf.textContent = '✓ Conferma entrata'; btnConf.disabled = false; }
@@ -9066,9 +9079,17 @@ async function apriDettaglioStat(tipo, meseSel) {
   }
 
   if (tipo === 'mese') {
-    const { data: pres } = await sb.from('presenze').select('nome_dipendente').gte('data',dal).lte('data',al).or('tipo_timbratura.neq.manuale_dip,confermata_dip.eq.true');
+    // FIX (stessa causa trovata nell'audit): raggruppare per nome_dipendente
+    // testuale sdoppia una persona in due righe se anche una sola
+    // timbratura fu salvata con un nome diverso (es. "Angela" invece di
+    // "Angela Lesina" — capitato per una sessione con cognome mancante al
+    // momento dello scan). Raggruppare per dipendente_id è sempre corretto.
+    const { data: pres } = await sb.from('presenze').select('dipendente_id').gte('data',dal).lte('data',al).or('tipo_timbratura.neq.manuale_dip,confermata_dip.eq.true');
+    const { data: dipNomi } = await sb.from('presenze_profili').select('id,nome,cognome');
+    const nomeMapMese = {};
+    (dipNomi||[]).forEach(d => { nomeMapMese[d.id] = d.nome+(d.cognome?' '+d.cognome:''); });
     const conteggio = {};
-    (pres||[]).forEach(p => { const n = p.nome_dipendente||'—'; conteggio[n] = (conteggio[n]||0)+1; });
+    (pres||[]).forEach(p => { const n = nomeMapMese[p.dipendente_id]||'—'; conteggio[n] = (conteggio[n]||0)+1; });
     const righe = Object.entries(conteggio).sort((a,b) => b[1]-a[1]);
     if (!righe.length) { $('statDett-body').innerHTML = '<div class="empty"><div class="empty-txt">Nessuna timbratura questo mese</div></div>'; return; }
     $('statDett-body').innerHTML = righe.map(([nome,n]) =>
@@ -9121,31 +9142,62 @@ async function apriDettaglioStat(tipo, meseSel) {
   }
 
   if (tipo === 'costo') {
-    const { data: pres } = await sb.from('presenze').select('dipendente_id,nome_dipendente').gte('data',dal).lte('data',al).or('tipo_timbratura.neq.manuale_dip,confermata_dip.eq.true');
-    const { data: dip } = await sb.from('presenze_profili').select('id,paga_giornaliera').eq('ruolo','dipendente').eq('attivo',true);
-    const pagaMap = {};
-    (dip||[]).forEach(d => { pagaMap[d.id] = parseFloat(d.paga_giornaliera)||0; });
-    const costoMap = {};
+    // FIX GRAVE (segnalato): questo riquadro usava un calcolo SEPARATO e
+    // più semplice di quello della pagina Stipendi — contava le RIGHE di
+    // presenza invece delle date distinte, e non applicava affatto le
+    // festività lavorate/non lavorate. Risultato: per lo stesso mese e lo
+    // stesso dipendente, "Costo mese" e la card Stipendi mostravano due
+    // numeri diversi, senza che nessuno dei due fosse spiegato. Ora usa
+    // ESATTAMENTE la stessa logica della pagina Stipendi (unica fonte di
+    // verità per i lordi): date distinte, festività lavorata = doppia
+    // paga, festività non lavorata = comunque pagata, mai una festività
+    // futura rispetto ad oggi.
+    const { data: pres } = await sb.from('presenze').select('dipendente_id,data').gte('data',dal).lte('data',al).or('tipo_timbratura.neq.manuale_dip,confermata_dip.eq.true');
+    const { data: dip } = await sb.from('presenze_profili').select('id,nome,cognome,paga_giornaliera').eq('ruolo','dipendente').eq('attivo',true);
+    const pagaMap = {}, nomeMap = {};
+    (dip||[]).forEach(d => { pagaMap[d.id] = parseFloat(d.paga_giornaliera)||0; nomeMap[d.id] = d.nome+(d.cognome?' '+d.cognome:''); });
+
+    const festSetAnnoCosto = new Set(Object.keys(festivitaItaliane(y)));
+    const oggiStrCosto = oggiData.getFullYear()+'-'+String(oggiData.getMonth()+1).padStart(2,'0')+'-'+String(oggiData.getDate()).padStart(2,'0');
+    const alFestivoCosto = al < oggiStrCosto ? al : oggiStrCosto;
+    const festMeseCosto = [...festSetAnnoCosto].filter(dt => dt >= dal && dt <= alFestivoCosto);
+
+    const datePerDip = {};
     (pres||[]).forEach(p => {
-      const n = p.nome_dipendente||'—';
-      costoMap[n] = (costoMap[n]||0) + (pagaMap[p.dipendente_id]||0);
+      if (!datePerDip[p.dipendente_id]) datePerDip[p.dipendente_id] = new Set();
+      datePerDip[p.dipendente_id].add(p.data);
     });
-    const righe = Object.entries(costoMap).filter(([,c]) => c>0).sort((a,b) => b[1]-a[1]);
+    const costoMap = {};
+    Object.keys(datePerDip).forEach(dipId => {
+      const dateSet = datePerDip[dipId];
+      const paga = pagaMap[dipId] || 0;
+      const giorniFestivoLav = [...dateSet].filter(dt => festSetAnnoCosto.has(dt)).length;
+      const giorniOrdinari = dateSet.size - giorniFestivoLav;
+      const giorniFestivoNonLav = festMeseCosto.filter(dt => !dateSet.has(dt)).length;
+      const totale = giorniOrdinari*paga + giorniFestivoLav*paga*2 + giorniFestivoNonLav*paga;
+      if (totale > 0) costoMap[nomeMap[dipId]||'—'] = totale;
+    });
+
+    const righe = Object.entries(costoMap).sort((a,b) => b[1]-a[1]);
     const totale = righe.reduce((s,[,c]) => s+c, 0);
     // Navigazione mese precedente/successivo: prima si vedeva solo il mese
     // in corso, senza modo di controllare i costi dei mesi passati.
+    // FIX: l'intestazione col nome del mese ora resta sempre visibile in
+    // alto anche scorrendo la lista (prima spariva scorrendo, ed era
+    // facile perdere di vista DI QUALE mese si stessero guardando i
+    // numeri — un'altra causa della confusione segnalata).
     const meseLbl = new Date(y, mSel-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
     const dPrec = new Date(y, mSel-2, 1), dSucc = new Date(y, mSel, 1);
     const mesePrec = dPrec.getFullYear()+'-'+String(dPrec.getMonth()+1).padStart(2,'0');
     const meseSucc = dSucc.getFullYear()+'-'+String(dSucc.getMonth()+1).padStart(2,'0');
     const oggiStr = oggiData.getFullYear()+'-'+String(oggiData.getMonth()+1).padStart(2,'0');
     const bloccaSucc = meseSucc > oggiStr; // non si va nel futuro
-    let html = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
+    let html = '<div style="position:sticky;top:0;background:var(--card,#fff);z-index:5;display:flex;align-items:center;justify-content:space-between;padding:6px 0 12px;margin-bottom:4px;border-bottom:1px solid var(--border)">'
       + '<button class="btn-sm" onclick="apriDettaglioStat(\'costo\',\''+mesePrec+'\')">◂</button>'
       + '<span style="font-weight:700;text-transform:capitalize;font-size:15px">'+meseLbl+'</span>'
       + (bloccaSucc ? '<button class="btn-sm" disabled style="opacity:.3">▸</button>' : '<button class="btn-sm" onclick="apriDettaglioStat(\'costo\',\''+meseSucc+'\')">▸</button>')
       + '</div>';
-    html += '<div class="card" style="margin-bottom:14px;text-align:center;background:rgba(43,74,203,.06)"><div style="font-size:12px;color:var(--muted)">Totale mese</div><div style="font-size:24px;font-weight:800;color:var(--accent)">€ '+totale.toFixed(2)+'</div></div>';
+    html += '<div class="card" style="margin-bottom:14px;text-align:center;background:rgba(43,74,203,.06)"><div style="font-size:12px;color:var(--muted)">Totale mese (lordo — stessa logica di Stipendi)</div><div style="font-size:24px;font-weight:800;color:var(--accent)">€ '+totale.toFixed(2)+'</div></div>';
     if (!righe.length) { html += '<div class="empty"><div class="empty-txt">Nessun costo registrato</div></div>'; }
     else {
       html += righe.map(([nome,c]) =>
@@ -10101,7 +10153,7 @@ async function salvaTimbrManualeDip() {
   if (insertErr) { showMsg('tmDip-msg', insertErr.message, 'err'); return; }
   // Notifica admin per generare OTP
   const dataLbl = data === todayISO() ? '' : ' del '+new Date(data+'T12:00:00').toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit'});
-  inviaNotificaTelegram('\u270b <b>Ceraldi Presenze \u2014 Timbratura manuale</b>\n'+escTG(ME.nome)+' ha registrato una timbratura manuale'+dataLbl+' alle <b>'+ora+'</b>'+(motivo ? ' \u00b7 <i>'+escTG(motivo)+'</i>' : '')+'.\n\nGenera l\u2019OTP per approvarla.', '#richieste');
+  inviaNotificaTelegram('\u270b <b>Ceraldi Presenze \u2014 Timbratura manuale</b>\n'+escTG(ME.nome+(ME.cognome?' '+ME.cognome:''))+' ha registrato una timbratura manuale'+dataLbl+' alle <b>'+ora+'</b>'+(motivo ? ' \u00b7 <i>'+escTG(motivo)+'</i>' : '')+'.\n\nGenera l\u2019OTP per approvarla.', '#richieste');
   toast('\u2713 Timbratura registrata \u2014 in attesa di approvazione admin');
   closeSheet('sh-timbrManualeDip');
   caricaStoricoDip();
@@ -10289,9 +10341,12 @@ async function calcolaTfrStoricoDaPresenze() {
     // tutto il periodo (unica informazione disponibile).
     const storicoEff = (storico && storico.length) ? storico : [{ paga_giornaliera: parseFloat(d.paga_giornaliera)||0, data_decorrenza: d.data_assunzione }];
 
-    // Raggruppa le presenze per mese
+    // Raggruppa le presenze per mese, contando date distinte (non righe:
+    // stesso motivo del fix in "Costo mese" e nell'export presenze)
+    const perMeseSet = {};
+    (presenze||[]).forEach(p => { const k = p.data.slice(0,7); (perMeseSet[k] = perMeseSet[k] || new Set()).add(p.data); });
     const perMese = {};
-    (presenze||[]).forEach(p => { const k = p.data.slice(0,7); perMese[k] = (perMese[k]||0) + 1; });
+    Object.keys(perMeseSet).forEach(k => { perMese[k] = perMeseSet[k].size; });
 
     let tfrTotale = 0, retribuzioneTotale = 0, mesiConteggiati = 0;
     for (const meseChiave of Object.keys(perMese).sort()) {
@@ -13085,7 +13140,7 @@ async function esportaXLS() {
   const dipId = $('s-dip') ? $('s-dip').value : '';
   if (!dal || !al) { toast('Seleziona un periodo'); return; }
 
-  let q = sb.from('presenze').select('*,presenze_profili!dipendente_id(paga_giornaliera,data_assunzione,codice_fiscale)')
+  let q = sb.from('presenze').select('*,presenze_profili!dipendente_id(nome,cognome,paga_giornaliera,data_assunzione,codice_fiscale)')
     .gte('data',dal).lte('data',al)
     .order('nome_dipendente',{ascending:true})
     .order('data',{ascending:true});
@@ -13096,13 +13151,21 @@ async function esportaXLS() {
   const dalLbl = new Date(dal).toLocaleDateString('it-IT',{day:'2-digit',month:'long',year:'numeric'});
   const alLbl  = new Date(al).toLocaleDateString('it-IT',{day:'2-digit',month:'long',year:'numeric'});
 
-  // Raggruppa per dipendente per il foglio di riepilogo
+  // Raggruppa per DIPENDENTE_ID, non per il testo del nome (fix trovato
+  // nell'audit: una timbratura salvata col solo nome — es. "Angela"
+  // invece di "Angela Lesina", capitato per una sessione con cognome
+  // mancante al momento dello scan QR — creava una riga fantasma separata
+  // invece di finire nel conteggio della persona giusta).
   const perDip = {};
   data.forEach(r => {
-    if (!perDip[r.nome_dipendente]) perDip[r.nome_dipendente] = { righe: [], paga: r.presenze_profili?.paga_giornaliera || 0 };
-    perDip[r.nome_dipendente].righe.push(r);
+    if (!perDip[r.dipendente_id]) {
+      const prof = r.presenze_profili;
+      const nomeCompleto = prof ? prof.nome+(prof.cognome?' '+prof.cognome:'') : (r.nome_dipendente||'—');
+      perDip[r.dipendente_id] = { nome: nomeCompleto, righe: [], paga: prof?.paga_giornaliera || 0 };
+    }
+    perDip[r.dipendente_id].righe.push(r);
   });
-  const dipNomi = Object.keys(perDip).sort();
+  const dipIds = Object.keys(perDip).sort((a,b) => perDip[a].nome.localeCompare(perDip[b].nome));
 
   // ── Foglio 1: Riepilogo per dipendente ──
   const F1 = [];
@@ -13111,9 +13174,12 @@ async function esportaXLS() {
   F1.push([]);
   F1.push(['Dipendente','Giorni presenti','Paga giornaliera (€)','Totale da pagare (€)']);
   let totaleGenerale = 0;
-  dipNomi.forEach(nome => {
-    const { righe, paga } = perDip[nome];
-    const giorni = righe.length;
+  dipIds.forEach(dipId => {
+    const { nome, righe, paga } = perDip[dipId];
+    // FIX (stesso bug trovato in "Costo mese"): contava le RIGHE di
+    // presenza, non le date distinte — un doppio scan/tocco sulla stessa
+    // data gonfiava "Giorni presenti" e quindi il totale da pagare.
+    const giorni = new Set(righe.map(r => r.data)).size;
     const totale = giorni * (parseFloat(paga)||0);
     totaleGenerale += totale;
     F1.push([nome, giorni, paga?parseFloat(paga).toFixed(2):'—', paga?totale.toFixed(2):'—']);
@@ -13129,7 +13195,7 @@ async function esportaXLS() {
     F2.push([
       r.data,
       new Date(r.data).toLocaleDateString('it-IT',{weekday:'long'}),
-      r.nome_dipendente,
+      (perDip[r.dipendente_id] && perDip[r.dipendente_id].nome) || r.nome_dipendente,
       fmtTime(r.ts_entrata),
       r.note || '',
     ]);
