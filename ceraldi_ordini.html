@@ -1610,6 +1610,93 @@ function _normFornitore(fornitoreFattura){
 // sicuro: non serve una fonte prezzi separata.
 async function loadPrezziFromSupabase(){return {ok:true};}
 
+// ── MATCH INTELLIGENTE VIA IA ──
+// Il confronto testuale locale (matchProduct) si basa su similarità di
+// stringa: funziona bene per errori di battitura o piccole variazioni, ma
+// fallisce quando lo stesso prodotto è scritto in modo davvero diverso
+// (ordine delle parole, abbreviazioni, formato scritto diversamente). Questa
+// funzione chiede all'IA di fare il confronto come lo farebbe un magazziniere
+// umano esperto, prima di arrendersi e segnare "prodotto nuovo".
+async function matchProductsAI(candidati){
+  var apiKey=localStorage.getItem('ceraldi_apikey')||'';
+  if(!apiKey||!candidati.length)return {};
+  var catalogLines=S.products.map(function(p){return p.id+'\t'+p.name;}).join('\n');
+  var byForn={};
+  candidati.forEach(function(c){(byForn[c.fornNorm||'—']=byForn[c.fornNorm||'—']||[]).push(c);});
+  var risultati={};
+
+  for(var forn in byForn){
+    var gruppo=byForn[forn];
+    var righeTesto=gruppo.map(function(c,i){
+      return i+': "'+(c.row.descrizione||'').replace(/\s+/g,' ').trim()+'"'+(c.row.cod_articolo?' [codice fornitore: '+c.row.cod_articolo+']':'');
+    }).join('\n');
+    var prompt='Sei un magazziniere esperto di un bar/ristorante. Devi riconoscere se articoli scritti in una fattura corrispondono a prodotti già presenti nel catalogo, anche se scritti in modo diverso: ordine delle parole cambiato, abbreviazioni, marca scritta parzialmente, formato/unità scritti diversamente ma stesso valore (es. "75CL" e "CL75" sono uguali).\n\n'
+      +'ATTENZIONE: una taglia/formato/quantità DIVERSA è un prodotto diverso (es. 75CL e 100CL NON sono lo stesso prodotto), anche se il nome sembra identico.\n\n'
+      +'CATALOGO (ID poi nome):\n'+catalogLines+'\n\n'
+      +'Fornitore di queste righe: '+forn+'\n'
+      +'RIGHE FATTURA DA RICONOSCERE:\n'+righeTesto+'\n\n'
+      +'Rispondi SOLO con un array JSON valido, un oggetto per ogni riga numerata sopra, zero testo/backtick extra:\n'
+      +'[{"riga":0,"id_catalogo":123,"confidenza":"alta"},{"riga":1,"id_catalogo":null,"confidenza":"nessuna"}]\n'
+      +'confidenza: "alta" (sicuro), "media" (probabile ma non certo al 100%), "nessuna" (nessun prodotto corrisponde, è un articolo nuovo).';
+
+    try{
+      var resp=await fetch('https://api.anthropic.com/v1/messages',{
+        method:'POST',
+        headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+        body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:4000,messages:[{role:'user',content:prompt}]})
+      });
+      if(!resp.ok){console.warn('[MatchAI] HTTP',resp.status,forn);continue;}
+      var data=await resp.json();
+      var testo=(data.content&&data.content[0]&&data.content[0].text)||'';
+      testo=testo.replace(/```json|```/g,'').trim();
+      var parsed=JSON.parse(testo);
+      parsed.forEach(function(mm){
+        var c=gruppo[mm.riga];
+        if(c)risultati[c.row.id]=mm;
+      });
+    }catch(e){console.warn('[MatchAI] errore fornitore "'+forn+'":',e.message);}
+  }
+  return risultati;
+}
+
+// Dato un prodotto già individuato (dal match locale o dall'IA), calcola lo
+// scostamento prezzo e applica la stessa logica esistente (auto-applica se
+// variazione piccola, altrimenti segnala in "Prezzi Difformi"). Estratta qui
+// per essere riusata da entrambi i percorsi di match senza duplicare codice.
+async function _finalizzaMatchPrezzo(row,fornNorm,product,score,prezzo,counters){
+  var prezzoAtt=null;
+  if(product.prices){
+    prezzoAtt=product.prices[fornNorm];
+    if(prezzoAtt===undefined){
+      Object.keys(product.prices).forEach(function(k){
+        if(k.toLowerCase()===fornNorm.toLowerCase())prezzoAtt=product.prices[k];
+      });
+    }
+  }
+  var variaz=null;
+  if(prezzoAtt!==null&&prezzoAtt!==undefined&&prezzoAtt>0){
+    variaz=Math.round(((prezzo-prezzoAtt)/prezzoAtt)*10000)/100;
+  }
+  var stato2=(prezzoAtt===null||prezzoAtt===undefined||prezzoAtt===0)?'new_price':(Math.abs(variaz||0)<=5?'matched_auto':'review');
+  var payload={stato:stato2,product_id:product.id,match_score:score,prezzo_attuale:prezzoAtt||null,variazione_pct:variaz};
+  if(stato2==='matched_auto'){
+    if(!product.prices)product.prices={};
+    product.prices[fornNorm]=prezzo;
+    var bv=Infinity,bn='';
+    Object.keys(product.prices).forEach(function(s){if(product.prices[s]<bv){bv=product.prices[s];bn=s;}});
+    product.best=bn;
+    for(var bi=0;bi<BP.length;bi++){if(BP[bi].id===product.id){BP[bi]=product;break;}}
+    saveCatalogToSupabase([product]);
+    counters.autoApplied++;
+  } else {
+    try{
+      await addPrezzoDifforme(fornNorm,product.name,product.id,prezzoAtt||null,prezzo,'fattura');
+    }catch(pdErr){console.warn('[Prezzi] addPrezzoDifforme #'+row.id+':',pdErr.message);}
+    counters.toReview++;
+  }
+  return payload;
+}
+
 async function processPendingPrezzi(){
   // 1. Carica righe pending
   var fetchResp;
@@ -1628,82 +1715,100 @@ async function processPendingPrezzi(){
     try{await loadCatalogFromSupabase();}catch(e){console.warn('[Prezzi] catalogo non caricato');}
   }
 
-  var autoApplied=0,toReview=0,noMatch=0;
+  var counters={autoApplied:0,toReview:0,noMatch:0};
+  var payloads={};
+  var daVerificareIA=[];
 
-  // 3. Processa ogni riga individualmente con PATCH immediata
+  // 3. Prima passata: match locale (veloce, senza chiamate di rete extra)
   for(var ri=0;ri<rows.length;ri++){
     var row=rows[ri];
-    var payload={stato:'no_match',match_score:0};
-
     try{
       var fornNorm=_normFornitore(row.fornitore);
       console.log('[Prezzi] #'+row.id+' "'+row.fornitore+'" -> "'+fornNorm+'" | "'+(row.descrizione||'').slice(0,20)+'"');
 
-      if(!fornNorm){
-        payload={stato:'no_match',match_score:0};
-        noMatch++;
-      } else {
-        var m=matchProduct(row.descrizione,row.cod_articolo,fornNorm);
-        var prezzo=parseFloat(row.prezzo_ivato||0)>0?parseFloat(row.prezzo_ivato):parseFloat(row.prezzo_unit||0);
+      // Rispetta il toggle per-fornitore "Abbina a Ceraldi Ordini": se
+      // disattivato esplicitamente, non tocchiamo la riga (resta 'pending'
+      // finché il fornitore non viene riattivato, invece di essere comunque
+      // processata e segnalata come se il toggle non esistesse).
+      var fornMatch=fornNorm?S.suppliers.find(function(s){return s.name===fornNorm;}):null;
+      if(fornMatch && fornMatch.abbinaCeraldi===false){
+        continue;
+      }
 
-        if(!prezzo||isNaN(prezzo)){
-          payload={stato:'no_match',match_score:m?m.score:0};
-          noMatch++;
-        } else if(!m||!m.product||m.score<15){
-          var descOk=(row.descrizione||'').trim().length>4;
-          payload={stato:descOk?'new_product':'no_match',match_score:m?m.score:0};
-          if(descOk)toReview++;else noMatch++;
-        } else if(m.score<35){
-          payload={stato:'new_product',match_score:m.score};
-          toReview++;
+      if(!fornNorm){
+        payloads[row.id]={stato:'no_match',match_score:0};
+        counters.noMatch++;
+        continue;
+      }
+      var prezzo=parseFloat(row.prezzo_ivato||0)>0?parseFloat(row.prezzo_ivato):parseFloat(row.prezzo_unit||0);
+      if(!prezzo||isNaN(prezzo)){
+        payloads[row.id]={stato:'no_match',match_score:0};
+        counters.noMatch++;
+        continue;
+      }
+
+      var m=matchProduct(row.descrizione,row.cod_articolo,fornNorm);
+
+      if(m && m.product && m.score>=35){
+        payloads[row.id]=await _finalizzaMatchPrezzo(row,fornNorm,m.product,m.score,prezzo,counters);
+      } else {
+        // Match locale debole o assente — non ci arrendiamo subito: proviamo
+        // con l'IA prima di segnare "prodotto nuovo" (prima era immediato,
+        // e perdeva prodotti scritti diversamente dal solito ma identici).
+        var descOk=(row.descrizione||'').trim().length>4;
+        if(descOk){
+          daVerificareIA.push({row:row,fornNorm:fornNorm,prezzo:prezzo,scoreLocale:m?m.score:0});
         } else {
-          var prezzoAtt=null;
-          if(m.product.prices){
-            prezzoAtt=m.product.prices[fornNorm];
-            if(prezzoAtt===undefined){
-              Object.keys(m.product.prices).forEach(function(k){
-                if(k.toLowerCase()===fornNorm.toLowerCase())prezzoAtt=m.product.prices[k];
-              });
-            }
-          }
-          var variaz=null;
-          if(prezzoAtt!==null&&prezzoAtt!==undefined&&prezzoAtt>0){
-            variaz=Math.round(((prezzo-prezzoAtt)/prezzoAtt)*10000)/100;
-          }
-          var stato2=(prezzoAtt===null||prezzoAtt===undefined||prezzoAtt===0)?'new_price':(Math.abs(variaz||0)<=5?'matched_auto':'review');
-          payload={stato:stato2,product_id:m.product.id,match_score:m.score,prezzo_attuale:prezzoAtt||null,variazione_pct:variaz};
-          if(stato2==='matched_auto'){
-            if(!m.product.prices)m.product.prices={};
-            m.product.prices[fornNorm]=prezzo;
-            var bv=Infinity,bn='';
-            Object.keys(m.product.prices).forEach(function(s){if(m.product.prices[s]<bv){bv=m.product.prices[s];bn=s;}});
-            m.product.best=bn;
-            for(var bi=0;bi<BP.length;bi++){if(BP[bi].id===m.product.id){BP[bi]=m.product;break;}}
-            saveCatalogToSupabase([m.product]);
-            autoApplied++;
-          } else {
-            toReview++;
-          }
+          payloads[row.id]={stato:'no_match',match_score:m?m.score:0};
+          counters.noMatch++;
         }
       }
     }catch(rowErr){
       console.warn('[Prezzi] errore riga #'+row.id+':',rowErr.message);
-      payload={stato:'no_match',match_score:0};
-      noMatch++;
+      payloads[row.id]={stato:'no_match',match_score:0};
+      counters.noMatch++;
     }
-
-    // PATCH immediata per questa riga
-    try{
-      var pr=await fetch(SUPABASE_URL+'/rest/v1/prezzi_da_fatture?id=eq.'+row.id,{
-        method:'PATCH',
-        headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN,'Content-Type':'application/json','Prefer':'return=minimal'},
-        body:JSON.stringify(payload)
-      });
-      if(!pr.ok){var et=await pr.text();console.warn('[Prezzi] PATCH #'+row.id+' HTTP='+pr.status+' '+et.slice(0,80));}
-    }catch(pe){console.warn('[Prezzi] PATCH #'+row.id+':',pe.message);}
   }
 
-  // 4. Notifica fornitori auto-aggiunti
+  // 4. Seconda passata: match intelligente via IA per le righe rimaste senza
+  // un riconoscimento affidabile — raggruppate per fornitore per dare più
+  // contesto e ridurre il numero di chiamate.
+  if(daVerificareIA.length){
+    console.log('[Prezzi] '+daVerificareIA.length+' righe da verificare con IA');
+    var risultatiIA={};
+    try{risultatiIA=await matchProductsAI(daVerificareIA);}
+    catch(iaErr){console.warn('[Prezzi] matchProductsAI:',iaErr.message);}
+
+    for(var vi=0;vi<daVerificareIA.length;vi++){
+      var cand=daVerificareIA[vi];
+      var esitoIA=risultatiIA[cand.row.id];
+      var idIA=esitoIA&&esitoIA.id_catalogo;
+      var prodIA=idIA?S.products.find(function(p){return p.id===idIA;}):null;
+
+      if(prodIA && esitoIA.confidenza!=='nessuna'){
+        var scoreIA=esitoIA.confidenza==='alta'?70:50;
+        payloads[cand.row.id]=await _finalizzaMatchPrezzo(cand.row,cand.fornNorm,prodIA,scoreIA,cand.prezzo,counters);
+        payloads[cand.row.id].note='match IA ('+esitoIA.confidenza+')';
+      } else {
+        payloads[cand.row.id]={stato:'new_product',match_score:cand.scoreLocale};
+        counters.toReview++;
+      }
+    }
+  }
+
+  // 5. PATCH di tutte le righe decise
+  for(var pid in payloads){
+    try{
+      var pr=await fetch(SUPABASE_URL+'/rest/v1/prezzi_da_fatture?id=eq.'+pid,{
+        method:'PATCH',
+        headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN,'Content-Type':'application/json','Prefer':'return=minimal'},
+        body:JSON.stringify(payloads[pid])
+      });
+      if(!pr.ok){var et=await pr.text();console.warn('[Prezzi] PATCH #'+pid+' HTTP='+pr.status+' '+et.slice(0,80));}
+    }catch(pe){console.warn('[Prezzi] PATCH #'+pid+':',pe.message);}
+  }
+
+  // 6. Notifica fornitori auto-aggiunti
   var autoAdded=S.suppliers.filter(function(s){return s._autoAdded;});
   if(autoAdded.length){
     autoAdded.forEach(function(s){delete s._autoAdded;});
@@ -1711,9 +1816,9 @@ async function processPendingPrezzi(){
     toast('Fornitori aggiunti: '+autoAdded.map(function(s){return s.name;}).join(', '),4000);
   }
 
-  console.log('[Prezzi] fine: auto='+autoApplied+' review='+toReview+' noMatch='+noMatch);
-  if(autoApplied>0){buildCats();renderCatalog();}
-  return {processed:rows.length,autoApplied:autoApplied,toReview:toReview,noMatch:noMatch};
+  console.log('[Prezzi] fine: auto='+counters.autoApplied+' review='+counters.toReview+' noMatch='+counters.noMatch);
+  if(counters.autoApplied>0){buildCats();renderCatalog();}
+  return {processed:rows.length,autoApplied:counters.autoApplied,toReview:counters.toReview,noMatch:counters.noMatch};
 }
 
 
@@ -1739,6 +1844,39 @@ async function resetNoMatchAPending(){
     console.log('[Prezzi] reset '+rows.length+' righe no_match → pending');
     return rows.length;
   }catch(e){console.warn('[Prezzi] resetNoMatch:',e);return 0;}
+}
+
+// Rimette in coda tutti i "prodotto nuovo"/"nessun match" già accumulati (dal
+// periodo prima che esistesse il match IA) e li rielabora subito con la
+// logica nuova — senza questo, restano bloccati per sempre nel loro stato
+// vecchio, dato che processPendingPrezzi tocca solo le righe 'pending'.
+async function reprocessaNonRiconosciutiConIA(){
+  var apiKey=localStorage.getItem('ceraldi_apikey')||'';
+  if(!apiKey){
+    toast('Serve prima impostare la chiave API IA nelle impostazioni',4000);
+    return;
+  }
+  toast('Rielaborazione in corso…',3000);
+  var n=0;
+  try{
+    var r=await fetch(SUPABASE_URL+'/rest/v1/prezzi_da_fatture?stato=in.(new_product,no_match)',{
+      headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}
+    });
+    if(r.ok){
+      var rows=await r.json();
+      n=rows.length;
+      for(var i=0;i<rows.length;i++){
+        await fetch(SUPABASE_URL+'/rest/v1/prezzi_da_fatture?id=eq.'+rows[i].id,{
+          method:'PATCH',
+          headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN,'Content-Type':'application/json','Prefer':'return=minimal'},
+          body:JSON.stringify({stato:'pending',note:null})
+        });
+      }
+    }
+  }catch(e){console.warn('[Prezzi] reprocessaNonRiconosciutiConIA reset:',e);}
+  if(!n){toast('Nessun prodotto da rielaborare');return;}
+  var esito=await processPendingPrezzi();
+  toast('Rielaborati '+n+': '+(esito.autoApplied||0)+' auto, '+(esito.toReview||0)+' da rivedere, '+(esito.noMatch||0)+' ancora sconosciuti',6000);
 }
 
 // Dichiarazione esplicita: prima mancava del tutto, quindi al primo avvio
@@ -3500,6 +3638,11 @@ function renderSettings(){
   syncBtnEl.textContent='🔄 Risincronizza tutto da Supabase';
   syncBtnEl.onclick=forceSyncWithSupabase;
   syncCard.appendChild(syncBtnEl);
+  var iaMatchBtn=document.createElement('button');
+  iaMatchBtn.style.cssText='width:100%;padding:12px;border-radius:10px;border:1.5px solid var(--accent);background:transparent;color:var(--accent);font-size:13px;font-weight:700;cursor:pointer;margin-top:8px';
+  iaMatchBtn.textContent='🤖 Ririprova match IA sui prodotti non riconosciuti';
+  iaMatchBtn.onclick=reprocessaNonRiconosciutiConIA;
+  syncCard.appendChild(iaMatchBtn);
   var verLbl=document.createElement('div');
   verLbl.style.cssText='font-size:10px;color:var(--muted);text-align:center;margin-top:8px';
   verLbl.textContent='Versione file: '+BUILD_VERSION;
@@ -8691,7 +8834,7 @@ function gdLoadScript(cb){
 /* ── FINE GOOGLE DRIVE ───────────────────────────────────────── */
 
 // ── AVVIO: carica Supabase poi inizializza tutto ─────────────
-var BUILD_VERSION='32 (fornitore da pillola carrello ora permanente, non più temporaneo per singolo ordine)';
+var BUILD_VERSION='33 (bridge prezzi da Fatture ora visibile in Prezzi Difformi; match prodotto intelligente via IA come fallback quando il confronto testuale locale fallisce; rispettato il toggle abbina Ceraldi per fornitore)';
 console.log('[Ceraldi Ordini] versione caricata: '+BUILD_VERSION+' — '+new Date().toISOString());
 // ── AUTO-CHECK VERSIONE ─────────────────────────────────────────────
 // CAUSA REALE del "un prodotto c'è su un browser e non su un altro":
