@@ -29,6 +29,11 @@ html{height:100%;height:100dvh}
 body{font-family:-apple-system,system-ui,'SF Pro Text','Segoe UI',sans-serif;background:var(--bg);color:var(--text);height:100%;height:100dvh;max-height:100dvh;display:flex;flex-direction:column;overflow:hidden;-webkit-font-smoothing:antialiased}
 body.dark{--bg:#0A0E1A;--surface:#111827;--card:#161D2F;--border:#1E2D45;--text:#E8EFF8;--muted:#6B7FA3;--accent:#4F72F5;--accent2:#3D61E8;--accent-light:#111D3A;--green:#34C47A;--red:#F36060;--yellow:#E0994A;--shadow-sm:0 1px 3px rgba(0,0,0,.3);--shadow-md:0 4px 16px rgba(0,0,0,.4)}
 input,textarea,select,button{font-family:inherit;-webkit-appearance:none;appearance:none;font-size:16px}
+/* Il reset sopra (appearance:none) rende invisibili anche le checkbox —
+   restano tecnicamente cliccabili ma senza nessun riquadro/segno di
+   spunta visibile, sembrando "rotte" (bug segnalato sulla selezione
+   massiva ferie). Le checkbox restano sempre visibili, qualunque sia. */
+input[type="checkbox"]{-webkit-appearance:checkbox;appearance:auto;accent-color:var(--accent);width:20px;height:20px}
 input[type="email"],input[type="password"],input[type="text"],input[type="time"],input[type="date"]{font-size:16px!important;-webkit-text-size-adjust:100%}
 
 /* ── LAYOUT ─────────────────────────────────────────── */
@@ -9576,85 +9581,32 @@ async function openAnagrafica(id) {
 // dipendente e si vedeva sempre; ora sta qui, in Stipendi, e non mostra
 // NULLA se il saldo è a posto — compare solo quando il dipendente ha
 // ricevuto più di quanto maturato quest'anno (acconti+liquidazioni-restituzioni).
-async function caricaAvvisoRestituzione(dipId, nomeCompleto) {
+// FIX STRUTTURALE: la versione precedente ricalcolava un saldo "da inizio
+// anno" per conto suo, sommando tutti gli acconti e tutte le liquidazioni
+// dell'anno. Per un mese GIÀ liquidato, però, l'acconto di quel mese è già
+// dentro la differenza (lordo del mese − netto liquidato di quel mese) —
+// sommarlo di nuovo qui lo sottraeva DUE VOLTE, facendo risultare "in
+// debito" un dipendente che in realtà aveva già ricevuto tutto il dovuto
+// per i mesi passati (bug segnalato: "ha maturato molto più di 200€,
+// perché dice che deve restituire?").
+// La soluzione più semplice e corretta: non calcolare nulla di nuovo qui.
+// Il netto del mese mostrato in Stipendi (r.netto) SEGUE GIÀ il riporto
+// corretto di acconti/restituzioni tra un mese e l'altro (fix precedente),
+// quindi se quel netto è negativo è quello — e solo quello — il vero
+// saldo da restituire. Niente più "azzeramento annuale": si riparte da
+// zero automaticamente ogni volta che liquidi un mese, perché da quel
+// momento acconti/restituzioni di quel mese smettono di essere riportati
+// avanti — esattamente come chiesto ("non da inizio anno, ma dal mese").
+function caricaAvvisoRestituzione(dipId, nomeCompleto, dati) {
   const wrap = $('stip-rest-'+dipId);
   if (!wrap) return;
-  try {
-    const anno = new Date().getFullYear();
-    const annoInizio = anno+'-01-01';
-    const oggi = todayISO();
-    // FIX: la formula precedente (totLiq - totAcc + totRest) contava gli
-    // acconti e le restituzioni DUE VOLTE per i mesi già liquidati — una
-    // volta dentro l'importo_netto della liquidazione (che li aveva già
-    // conteggiati) e una seconda volta qui, sommandoli di nuovo su tutto
-    // l'anno. Risultato: un dipendente con anche un solo mese già
-    // liquidato normalmente risultava "in rosso" senza motivo reale.
-    // Il conto giusto: quanto ha maturato in totale quest'anno, meno tutto
-    // il denaro già uscito in qualunque forma (acconti E liquidazioni
-    // pagate), più quanto ha restituito.
-    //
-    // NOVITÀ: invece di trascinarsi dietro TUTTO l'anno per sempre, se il
-    // conto è già stato "azzerato" una volta che il saldo tornava in pari
-    // (vedi bottone sotto), si riparte da quella data invece che dal 1°
-    // gennaio — niente più storia vecchia già chiusa mescolata nel conto.
-    const { data: profDip0 } = await sb.from('presenze_profili').select('paga_giornaliera,saldo_reset_data').eq('id',dipId).single();
-    const paga = parseFloat(profDip0 && profDip0.paga_giornaliera || 0);
-    const resetData = profDip0 && profDip0.saldo_reset_data;
-    const dataInizio = (resetData && resetData > annoInizio) ? resetData : annoInizio;
-
-    const [{ data: presAnno }, { data: acconti }, { data: liquidazTutte }, { data: restituz }] = await Promise.all([
-      sb.from('presenze').select('id').eq('dipendente_id',dipId).gte('data',dataInizio).lte('data',oggi),
-      sb.from('presenze_acconti').select('importo').eq('dipendente_id',dipId).gte('data',dataInizio),
-      sb.from('presenze_liquidazioni').select('id,mese,anno,importo_netto').eq('dipendente_id',dipId).eq('anno',anno),
-      DB.safe(() => sb.from('presenze_restituzioni').select('importo').eq('dipendente_id',dipId).gte('data',dataInizio), null),
-    ]);
-    // Filtro lato client (non tutte le colonne di data sono garantite lato
-    // DB): tiene solo le liquidazioni del mese pari o successivo al reset.
-    const dataInizioObj = new Date(dataInizio+'T00:00:00');
-    const liquidaz = (liquidazTutte||[]).filter(l => new Date(l.anno, (l.mese||1)-1, 1) >= new Date(dataInizioObj.getFullYear(), dataInizioObj.getMonth(), 1));
-    const giorniAnno = (presAnno||[]).length;
-    const lordoAnno = giorniAnno * paga;
-    const totAcc  = (acconti||[]).reduce((s,a)=>s+parseFloat(a.importo),0);
-    const totLiq  = (liquidaz||[]).reduce((s,l)=>s+parseFloat(l.importo_netto||0),0);
-    const totRest = (restituz||[]).reduce((s,r)=>s+parseFloat(r.importo),0);
-    const saldo = lordoAnno - totAcc - totLiq + totRest;
-    const nomeEsc = nomeCompleto.replace(/'/g,"\\'");
-
-    if (saldo >= 0) {
-      // Conto in pareggio (o a credito): azzera da solo il punto di
-      // partenza, senza bisogno di un tasto — i mesi precedenti restano
-      // nello storico (nulla viene cancellato), semplicemente da oggi
-      // smettono di pesare sui conti futuri. Scrive al massimo una volta
-      // al giorno (non serve rifarlo se è già impostato su oggi).
-      if (resetData !== oggi) {
-        await sb.from('presenze_profili').update({ saldo_reset_data: oggi }).eq('id', dipId);
-      }
-      wrap.innerHTML = '';
-      return;
-    }
-    // Dettaglio del calcolo SEMPRE visibile (non solo in caso di dubbi) —
-    // così se il numero sembra sbagliato si vede subito da dove viene,
-    // invece di dover indovinare cosa c'è dietro un totale opaco.
-    const liqRighe = (liquidaz||[]).map(l => {
-      const meseLbl = new Date(anno, (l.mese||1)-1, 1).toLocaleDateString('it-IT',{month:'long'});
-      return '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);padding:2px 0"><span>Liquidato '+meseLbl+'</span><span>€ '+parseFloat(l.importo_netto||0).toFixed(2)+'</span></div>';
-    }).join('');
-    const dettaglio = '<div style="background:var(--bg);border-radius:8px;padding:10px;margin:8px 0;font-size:11px">'
-      + '<div style="display:flex;justify-content:space-between;padding:2px 0"><span>Lordo maturato da '+(resetData?new Date(resetData).toLocaleDateString('it-IT'):anno)+' ('+giorniAnno+'gg × €'+paga.toFixed(2)+')</span><span>€ '+lordoAnno.toFixed(2)+'</span></div>'
-      + '<div style="display:flex;justify-content:space-between;padding:2px 0"><span>Acconti erogati</span><span>- € '+totAcc.toFixed(2)+'</span></div>'
-      + liqRighe
-      + (totRest>0 ? '<div style="display:flex;justify-content:space-between;padding:2px 0"><span>Restituzioni ricevute</span><span>+ € '+totRest.toFixed(2)+'</span></div>' : '')
-      + '</div>';
-    wrap.innerHTML = '<div style="background:rgba(217,48,37,.08);border:1px solid rgba(217,48,37,.25);border-radius:10px;padding:10px 12px;margin-bottom:10px">'
-      + '<div style="font-size:12px;color:var(--red);font-weight:700;margin-bottom:2px">⚠ Deve restituire € '+Math.abs(saldo).toFixed(2)+'</div>'
-      + '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">Ha ricevuto più di quanto maturato'+(resetData?' dall\'ultimo azzeramento':' quest\'anno')+'.</div>'
-      + '<div style="font-size:11px;color:var(--accent);cursor:pointer;margin-bottom:4px" onclick="const d=this.nextElementSibling;d.style.display=d.style.display===\'none\'?\'block\':\'none\';this.textContent=d.style.display===\'none\'?\'▾ Vedi come è calcolato\':\'▴ Nascondi il conto\'">▾ Vedi come è calcolato</div>'
-      + '<div style="display:none">'+dettaglio+'</div>'
-      + '<button class="btn-sm" style="width:100%;background:var(--red);color:#fff;border:none;margin-top:6px" onclick="openRestituzione(\''+dipId+'\',\''+nomeEsc+'\')">↩ Registra restituzione ricevuta</button>'
-      + '</div>';
-  } catch(e) {
-    console.warn('caricaAvvisoRestituzione:', e);
-  }
+  if (!dati || dati.netto == null || dati.netto >= 0) { wrap.innerHTML = ''; return; }
+  const nomeEsc = (nomeCompleto||'').replace(/'/g,"\\'");
+  wrap.innerHTML = '<div style="background:rgba(217,48,37,.08);border:1px solid rgba(217,48,37,.25);border-radius:10px;padding:10px 12px;margin-bottom:10px">'
+    + '<div style="font-size:12px;color:var(--red);font-weight:700;margin-bottom:2px">⚠ Deve restituire € '+Math.abs(dati.netto).toFixed(2)+'</div>'
+    + '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">Il netto da pagare risulta negativo: gli acconti dati (compresi quelli dei mesi precedenti non ancora liquidati) superano quanto ha maturato finora.</div>'
+    + '<button class="btn-sm" style="width:100%;background:var(--red);color:#fff;border:none" onclick="openRestituzione(\''+dipId+'\',\''+nomeEsc+'\')">↩ Registra restituzione ricevuta</button>'
+    + '</div>';
 }
 
 
@@ -10460,7 +10412,7 @@ async function salvaAcconto() {
 
 /* ── STIPENDI ───────────────────────────────────────── */
 let _stipendiData = []; // dati mese corrente, per filtrare senza richiamare Supabase
-let _accontiIdsPerDip = {}; // dipId -> [id, id, ...] tutti gli acconti (mese corrente + riportati) inclusi nel totale corrente
+let _accontiIdsPerDip = {}; // dipId -> [id, id, ...] acconti SOLO del mese corrente (non più riportati, vedi arretrato)
 function popolaMesiSel() {
   const sel = $('st-mese-sel');
   const now = new Date();
@@ -10573,7 +10525,7 @@ async function caricaStipendi() {
   // Ora si recuperano TUTTI gli acconti fino a fine mese selezionato, e si
   // segna quali mesi risultano già liquidati (quindi già "chiusi"), per
   // riportare in avanti solo quelli davvero ancora in sospeso.
-  const [{ data: dipendenti }, { data: presenze }, { data: accontiTutti }, { data: restituzioniTutte }, { data: ferieAnno }, { data: liquidazTutte }] = await Promise.all([
+  const [{ data: dipendenti }, { data: presenze }, { data: accontiTutti }, { data: restituzioniTutte }, { data: ferieAnno }, { data: liquidazTutte }, { data: presenzePrecedenti }] = await Promise.all([
     sb.from('presenze_profili').select('*').eq('ruolo','dipendente').eq('attivo',true).order('nome'),
     sb.from('presenze').select('*').gte('data',dal).lte('data',al),
     sb.from('presenze_acconti').select('id,dipendente_id,importo,data,note,letto_dip,causale,saldato').lte('data',al),
@@ -10590,29 +10542,24 @@ async function caricaStipendi() {
       .gte('data_inizio', y+'-01-01').lte('data_fine', y+'-12-31'),
     sb.from('presenze_liquidazioni').select('dipendente_id,mese,anno')
       .or(`anno.lt.${parseInt(y)},and(anno.eq.${parseInt(y)},mese.lte.${parseInt(m)})`),
+    // Presenze dei 12 mesi precedenti (esclusi dal mese in corso): servono
+    // per ricostruire — mese per mese — quanto spetta ancora al dipendente
+    // sui mesi passati mai liquidati, da mostrare come arretrato separato
+    // invece di confonderlo dentro il "Da pagare" del mese in corso.
+    sb.from('presenze').select('dipendente_id,data')
+      .lt('data', dal).gte('data', new Date(parseInt(y), parseInt(m)-13, 1).toISOString().split('T')[0]),
   ]);
-  // Insieme "dipendente-mese-anno già liquidati" — un acconto che ricade lì
-  // dentro è già stato conteggiato in quella liquidazione, non va riportato.
-  // Serve soprattutto per le liquidazioni fatte PRIMA di questo fix, che
-  // non avevano ancora la colonna "saldato" sugli acconti.
+  // Insieme "dipendente-mese-anno già liquidati" — serve per l'arretrato:
+  // un mese passato che compare qui è già stato saldato, non va incluso.
   const meseLiquidatoSet = new Set((liquidazTutte||[]).map(l => l.dipendente_id+'-'+l.mese+'-'+l.anno));
-  const acconti = (accontiTutti||[]).filter(a => {
-    if (a.data >= dal) return true; // sempre gli acconti del mese in corso
-    if (a.saldato) return false; // già coperto da una liquidazione (flag esplicito)
-    const d = new Date(a.data+'T00:00:00');
-    const key = a.dipendente_id+'-'+(d.getMonth()+1)+'-'+d.getFullYear();
-    return !meseLiquidatoSet.has(key); // non riportare se quel mese risulta già liquidato
-  });
-  // Stessa regola di riporto degli acconti: una restituzione di un mese
-  // già liquidato non va ripresa (era già stata conteggiata in quella
-  // liquidazione), altrimenti va sempre riportata avanti — proprio come
-  // l'acconto che compensa, altrimenti i due si disallineano.
-  const restituzioniMese = (restituzioniTutte||[]).filter(r => {
-    if (r.data >= dal) return true;
-    const d = new Date(r.data+'T00:00:00');
-    const key = r.dipendente_id+'-'+(d.getMonth()+1)+'-'+d.getFullYear();
-    return !meseLiquidatoSet.has(key);
-  });
+  // FIX (richiesta): il "Da pagare" del mese in corso ora mostra SOLO
+  // quel mese — acconti/restituzioni di mesi precedenti non ci finiscono
+  // più dentro confondendo il numero. Quello che ancora spetta dai mesi
+  // vecchi non liquidati si vede a parte, sotto, come arretrato (vedi
+  // calcolaArretratoMesi più sotto) — così "Da pagare" resta leggibile e
+  // l'arretrato non sparisce, semplicemente non si mescola.
+  const acconti = (accontiTutti||[]).filter(a => a.data >= dal && a.data <= al);
+  const restituzioniMese = (restituzioniTutte||[]).filter(r => r.data >= dal && r.data <= al);
 
   // Calcola ferie godute + raccoglie periodi per ogni dipendente
   const ferieGodute = {};
@@ -10636,6 +10583,10 @@ async function caricaStipendi() {
   // Excel per il consulente) — servono per riconoscere le date lavorate
   // che vanno pagate DOPPIE, e mostrarle separate dallo stipendio ordinario
   const festSetAnno = new Set(Object.keys(festivitaItaliane(parseInt(y))));
+  // Serve anche l'anno precedente: l'arretrato può risalire a dicembre
+  // dell'anno scorso se si sta guardando gennaio/febbraio
+  const festSetAnnoPrec = new Set(Object.keys(festivitaItaliane(parseInt(y)-1)));
+  const festSetDueAnni = new Set([...festSetAnno, ...festSetAnnoPrec]);
   // Festività del mese in corso (per trovare quelle NON lavorate, da
   // pagare comunque 1 giornata per CCNL — prima calcolato solo nell'export
   // Excel, mai in questa schermata).
@@ -10644,6 +10595,59 @@ async function caricaStipendi() {
   // ancora arrivato. Il mese in corso va sempre limitato ad oggi.
   const alFestivo = al < todayISO() ? al : todayISO();
   const festMese = [...festSetAnno].filter(dt => dt >= dal && dt <= alFestivo);
+
+  // Calcola il lordo di un insieme di date-presenza in un periodo, con le
+  // stesse regole di festività lavorata (doppia)/non lavorata (comunque
+  // pagata) già usate per il mese in corso — riusata anche per ricostruire
+  // ogni mese arretrato.
+  function calcolaLordoPeriodo(datePresSet, dalPeriodo, alPeriodo, paga, festSet) {
+    const giorni = datePresSet.size;
+    const giorniFestivoLav = [...datePresSet].filter(dt => festSet.has(dt)).length;
+    const giorniOrdinari = giorni - giorniFestivoLav;
+    const festPeriodo = [...festSet].filter(dt => dt >= dalPeriodo && dt <= alPeriodo);
+    const giorniFestivoNonLav = festPeriodo.filter(dt => !datePresSet.has(dt)).length;
+    const totale = giorniOrdinari*paga + giorniFestivoLav*paga*2 + giorniFestivoNonLav*paga;
+    return { giorni, giorniOrdinari, giorniFestivoLav, giorniFestivoNonLav, totale };
+  }
+
+  // Ricostruisce, mese per mese, quanto spetta ancora al dipendente sui
+  // mesi PRECEDENTI a quello in corso e mai liquidati — fino a 12 mesi
+  // indietro o alla data di assunzione, quello che arriva prima. Ogni mese
+  // usa SOLO i propri acconti/restituzioni (non quelli di altri mesi):
+  // è la stessa isolatezza appena applicata al mese corrente, ripetuta
+  // mese per mese, così liquidare un vecchio mese lo chiude per sempre
+  // senza lasciare residui sparsi altrove.
+  function calcolaArretratoMesi(dipId, paga, dataAssunzione) {
+    const dettaglio = [];
+    let cy = parseInt(y), cm = parseInt(m) - 1; // mese precedente a quello selezionato
+    if (cm === 0) { cm = 12; cy -= 1; }
+    const limiteAssunzione = dataAssunzione ? new Date(dataAssunzione+'T00:00:00') : null;
+    for (let i = 0; i < 12; i++) {
+      if (limiteAssunzione && new Date(cy, cm-1, 1) < new Date(limiteAssunzione.getFullYear(), limiteAssunzione.getMonth(), 1)) break;
+      const key = dipId+'-'+cm+'-'+cy;
+      if (!meseLiquidatoSet.has(key)) {
+        const ultimoGgMese = new Date(cy, cm, 0).getDate();
+        const dalMese = cy+'-'+String(cm).padStart(2,'0')+'-01';
+        const alMese  = cy+'-'+String(cm).padStart(2,'0')+'-'+String(ultimoGgMese).padStart(2,'0');
+        const presMese = (presenzePrecedenti||[]).filter(p => p.dipendente_id===dipId && p.data>=dalMese && p.data<=alMese);
+        const dateMese = new Set(presMese.map(p => p.data));
+        const accMese  = (accontiTutti||[]).filter(a => a.dipendente_id===dipId && a.data>=dalMese && a.data<=alMese)
+          .reduce((s,a)=>s+parseFloat(a.importo),0);
+        const restMese = (restituzioniTutte||[]).filter(r => r.dipendente_id===dipId && r.data>=dalMese && r.data<=alMese)
+          .reduce((s,r)=>s+parseFloat(r.importo),0);
+        if (dateMese.size > 0 || accMese > 0 || restMese > 0) {
+          const lordo = calcolaLordoPeriodo(dateMese, dalMese, alMese, paga, festSetDueAnni);
+          const nettoMese = lordo.totale - accMese + restMese;
+          if (Math.abs(nettoMese) > 0.005) {
+            const meseLbl = new Date(cy, cm-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
+            dettaglio.push({ meseLbl, netto: nettoMese, giorni: lordo.giorni, acconti: accMese, restituzioni: restMese });
+          }
+        }
+      }
+      cm -= 1; if (cm === 0) { cm = 12; cy -= 1; }
+    }
+    return dettaglio;
+  }
 
   _stipendiData = dipendenti.map(d => {
     // FIX: prima le presenze manuali non ancora confermate dal dipendente
@@ -10686,6 +10690,11 @@ async function caricaStipendi() {
     const totRestMese = (rests||[]).reduce((s,r) => s + parseFloat(r.importo), 0);
     const netto  = totale - totAcc + totRestMese;
     _accontiIdsPerDip[d.id] = accs.map(a => a.id);
+
+    // Arretrato: quanto spetta ancora dai mesi precedenti non liquidati,
+    // tenuto SEPARATO dal "Da pagare" di questo mese (vedi funzione sopra)
+    const arretratoDettaglio = calcolaArretratoMesi(d.id, paga, d.data_assunzione);
+    const arretratoTotale = arretratoDettaglio.reduce((s,a) => s + a.netto, 0);
 
     // Stato per il filtro e per il badge nella riga compatta
     const stato = !liquidatiMap[d.id] ? 'da_liquidare' : (liquidatiMap[d.id].confermata_dip ? 'confermato' : 'in_attesa');
@@ -10746,6 +10755,7 @@ async function caricaStipendi() {
           <div style="font-weight:800;font-size:14px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(d.nome)}${d.cognome?' '+esc(d.cognome):''}</div>
           <div style="margin-top:2px">${statoPill}</div>
           <div style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px">${giorni}gg${giorniFestivoNonLav>0?' + '+giorniFestivoNonLav+' festività':''} · €${paga.toFixed(0)}/gg${presManualiNonValid > 0 ? ' · <span style="color:var(--yellow)">'+presManualiNonValid+' da validare</span>' : ''}</div>
+          ${Math.abs(arretratoTotale) > 0.005 ? `<div style="font-size:10px;color:var(--muted);margin-top:1px">+ arretrato mesi precedenti: <span style="font-weight:700;color:${arretratoTotale>=0?'var(--muted)':'var(--red)'}">€${arretratoTotale.toFixed(2)}</span></div>` : ''}
         </div>
         <div style="text-align:right;flex-shrink:0">
           <div style="font-size:16px;font-weight:800;color:${netto>=0?'var(--green)':'var(--red)'}">€${netto.toFixed(2)}</div>
@@ -10786,7 +10796,16 @@ async function caricaStipendi() {
             <div style="font-size:22px;font-weight:800;color:${netto>=0?'var(--green)':'var(--red)'}">€${netto.toFixed(2)}</div>
           </div>
         </div>
-        <!-- Movimenti del mese (acconti + restituzioni): nascosti di default,
+        <!-- Arretrato mesi precedenti non liquidati: SEPARATO dal "Da
+             pagare" del mese in corso (che resta isolato e leggibile),
+             mostrato qui in modo discreto mese per mese — liquidando un
+             vecchio mese sparisce da qui per sempre, non lascia residui -->
+        ${arretratoDettaglio.length ? `<div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:10px">
+          <div style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Arretrato — mesi precedenti non liquidati</div>
+          ${arretratoDettaglio.map(a => `<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0"><span style="color:var(--muted);text-transform:capitalize">${a.meseLbl}</span><span style="font-weight:700;color:${a.netto>=0?'var(--text)':'var(--red)'}">€ ${a.netto.toFixed(2)}</span></div>`).join('')}
+          <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:800;padding-top:6px;margin-top:4px;border-top:1px solid var(--border)"><span>Totale arretrato</span><span style="color:${arretratoTotale>=0?'var(--text)':'var(--red)'}">€ ${arretratoTotale.toFixed(2)}</span></div>
+          <div style="font-size:10px;color:var(--muted);margin-top:6px">Per pagarlo: seleziona quel mese sopra e usa Liquida da lì — si chiude e non torna più qui.</div>
+        </div>` : ''}
              un tasto solo invece di due riquadri sempre aperti -->
         ${(accs.length || rests.length) ? `
         <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
@@ -10888,7 +10907,7 @@ function toggleStipCard(id) {
   if (chiuso && !det.dataset.restCaricato) {
     det.dataset.restCaricato = '1';
     const r = (_stipendiData||[]).find(x => x.id === id);
-    caricaAvvisoRestituzione(id, r ? (r.nome+' '+(r.cognome||'')).trim() : '');
+    caricaAvvisoRestituzione(id, r ? (r.nome+' '+(r.cognome||'')).trim() : '', r);
   }
 }
 
@@ -13551,10 +13570,10 @@ async function salvaLiquidazione() {
   if (insErr) {
     showMsg('liq-msg', insErr.code==='23505' ? 'Mese già liquidato' : insErr.message, 'err'); return;
   }
-  // Segna come "saldati" tutti gli acconti appena coperti da questa
-  // liquidazione (mese corrente + eventuali riportati da mesi precedenti
-  // mai liquidati) — altrimenti quelli riportati ricomparirebbero come
-  // ancora da recuperare anche dopo essere stati pagati.
+  // Segna come "saldati" gli acconti di questo mese appena liquidato —
+  // non è più strettamente necessario per l'arretrato (che ora si basa
+  // sulla presenza di una liquidazione per quel mese, non su questo flag),
+  // ma resta utile come traccia leggibile sull'acconto stesso.
   const idsAcconti = _accontiIdsPerDip[dipId];
   if (idsAcconti && idsAcconti.length) {
     await sb.from('presenze_acconti').update({ saldato: true }).in('id', idsAcconti);
@@ -13597,7 +13616,7 @@ async function openSheetFerieAdmin() {
   const list = $('fa-dip-list');
   list.innerHTML = (data||[]).map(d =>
     '<label style="display:flex;align-items:center;gap:10px;padding:7px 2px;border-bottom:1px solid var(--border)">'
-    + '<input type="checkbox" class="fa-dip-cb" value="'+d.id+'" style="width:18px;height:18px;flex-shrink:0">'
+    + '<input type="checkbox" class="fa-dip-cb" value="'+d.id+'" style="width:20px;height:20px;flex-shrink:0;-webkit-appearance:checkbox;appearance:auto;accent-color:var(--accent)">'
     + '<span style="font-size:14px">'+esc(d.nome+(d.cognome?' '+d.cognome:''))+'</span>'
     + '</label>'
   ).join('');
