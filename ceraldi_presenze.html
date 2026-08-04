@@ -10361,6 +10361,33 @@ function calcolaImportoFerieAcconto() {
   }
 }
 
+// Elimina un acconto/restituzione inserito per errore, con conferma a
+// doppio tocco (niente confirm() nativo, che in PWA su iPhone può
+// comportarsi in modo anomalo) — poi ricarica la schermata Stipendi.
+async function eliminaAccontoErrato(id, btn) {
+  if (btn && !btn.dataset.arm) {
+    btn.dataset.arm = '1'; btn.textContent = '❓';
+    setTimeout(() => { if (btn && btn.dataset.arm) { delete btn.dataset.arm; btn.textContent = '🗑'; } }, 4000);
+    return;
+  }
+  const ok = await DB.safe(() => DB.acconti.remove(id), 'Errore durante l\'eliminazione');
+  if (!ok) return;
+  toast('✓ Acconto eliminato');
+  await caricaStipendi();
+}
+
+async function eliminaRestituzioneErrata(id, btn) {
+  if (btn && !btn.dataset.arm) {
+    btn.dataset.arm = '1'; btn.textContent = '❓';
+    setTimeout(() => { if (btn && btn.dataset.arm) { delete btn.dataset.arm; btn.textContent = '🗑'; } }, 4000);
+    return;
+  }
+  const { error } = await sb.from('presenze_restituzioni').delete().eq('id', id);
+  if (error) { toast('Errore: '+error.message); return; }
+  toast('✓ Restituzione eliminata');
+  await caricaStipendi();
+}
+
 async function salvaAcconto() {
   const importo = parseFloat($('acc-importo').value);
   const data    = $('acc-data').value;
@@ -10728,7 +10755,7 @@ async function caricaStipendi() {
         ? '<span style="font-size:9px;font-weight:700;color:#d97706;background:rgba(217,119,6,.12);border-radius:6px;padding:1px 6px;margin-left:6px">📅 mese precedente</span>' : '';
       return '<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted);padding:4px 0;border-bottom:1px solid var(--border)">'
         +'<span>'+a.data+badgeMese+(a.causale&&a.causale!=='stipendio'?' · '+causaleLbl(a.causale):'')+(a.note?' · '+esc(a.note):'')+'</span>'
-        +'<span style="display:flex;align-items:center;gap:2px"><span style="color:var(--red);font-weight:600">- € '+parseFloat(a.importo).toFixed(2)+'</span>'+confBadge+'</span>'
+        +'<span style="display:flex;align-items:center;gap:5px"><span style="color:var(--red);font-weight:600">- € '+parseFloat(a.importo).toFixed(2)+'</span>'+confBadge+'<button type="button" style="background:none;border:none;color:var(--muted);font-size:14px;padding:2px 3px;cursor:pointer" onclick="eliminaAccontoErrato(\''+a.id+'\',this)" title="Elimina (inserito per errore)">🗑</button></span>'
         +'</div>';
     }).join('') : '';
 
@@ -10738,7 +10765,7 @@ async function caricaStipendi() {
     const restHtml = rests.length ? rests.map(r => {
       return '<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted);padding:4px 0;border-bottom:1px solid var(--border)">'
         +'<span>'+r.data+(r.note?' · '+esc(r.note):'')+'</span>'
-        +'<span style="color:var(--green);font-weight:600">+ € '+parseFloat(r.importo).toFixed(2)+'</span>'
+        +'<span style="display:flex;align-items:center;gap:5px"><span style="color:var(--green);font-weight:600">+ € '+parseFloat(r.importo).toFixed(2)+'</span><button type="button" style="background:none;border:none;color:var(--muted);font-size:14px;padding:2px 3px;cursor:pointer" onclick="eliminaRestituzioneErrata(\''+r.id+'\',this)" title="Elimina (inserita per errore)">🗑</button></span>'
         +'</div>';
     }).join('') : '';
 
@@ -10772,6 +10799,7 @@ async function caricaStipendi() {
         <div id="stip-rest-${d.id}"></div>
         <div style="display:flex;gap:8px;margin-bottom:10px">
           <button class="btn-sm" style="flex:1" onclick="openAcconto('${d.id}','${nomeOnclick}')">+ Acconto</button>
+          <button class="btn-sm" style="flex:1" onclick="openRestituzione('${d.id}','${nomeOnclick}')">↩ Restituzione</button>
           ${!liquidatiMap[d.id]
             ? `<button class="btn-sm primary" style="flex:1" onclick="openLiquidazione('${d.id}','${nomeOnclick}',${parseInt(m)},${parseInt(y)},${giorni},${paga},${totAcc},${presManualiNonValid},${totRestMese},${giorniFestivoLav},${totaleFestivoLav},${giorniFestivoNonLav},${totaleFestivoNonLav})">Liquida</button>`
             : ''
@@ -10811,6 +10839,7 @@ async function caricaStipendi() {
           <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:800;padding-top:6px;margin-top:4px;border-top:1px solid var(--border)"><span>Totale arretrato</span><span style="color:${arretratoTotale>=0?'var(--text)':'var(--red)'}">€ ${arretratoTotale.toFixed(2)}</span></div>
           <div style="font-size:10px;color:var(--muted);margin-top:6px">Per pagarlo: seleziona quel mese sopra e usa Liquida da lì — si chiude e non torna più qui.</div>
         </div>` : ''}
+        <!-- Movimenti del mese (acconti + restituzioni): nascosti di default,
              un tasto solo invece di due riquadri sempre aperti -->
         ${(accs.length || rests.length) ? `
         <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
