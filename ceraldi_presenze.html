@@ -8720,7 +8720,8 @@ async function caricaAttivitaDipendenti() {
     const [{ data: acconti }, { data: liquidaz }, { data: documenti }] = await Promise.all([
       sb.from('presenze_acconti').select('id,dipendente_id,importo,data,letto_dip,letto_il,causale,contestata_il').gte('data',d90).order('data',{ascending:false}),
       sb.from('presenze_liquidazioni').select('id,dipendente_id,importo_netto,anno,mese,confermata_dip,confermata_il,causale,contestata_il').order('anno',{ascending:false}).order('mese',{ascending:false}).limit(60),
-      sb.from('presenze_documenti').select('id,dipendente_id,categoria,nome_file,mese,anno,letto_il,creato_il,contestata_il').gte('creato_il',d90+'T00:00:00').order('creato_il',{ascending:false}),
+      sb.from('presenze_documenti').select('id,dipendente_id,categoria,nome_file,mese,anno,letto_il,creato_il,contestata_il,inviato_dip').gte('creato_il',d90+'T00:00:00').order('creato_il',{ascending:false})
+        .or('categoria.neq.busta_paga,inviato_dip.eq.true'),
     ]);
 
     const inSospeso = [];
@@ -8926,8 +8927,11 @@ async function contaTutteLeRichiesteInAttesa() {
       sb.from('presenze_acconti').select('id',{count:'exact',head:true}).eq('letto_dip',false),
       sb.from('presenze_liquidazioni').select('id',{count:'exact',head:true}).eq('confermata_dip',false),
       // Tutte le categorie di documento, non solo busta paga/CU — un
-      // contratto o un "altro" non letto è comunque qualcosa in attesa
-      sb.from('presenze_documenti').select('id',{count:'exact',head:true}).is('letto_il',null),
+      // contratto o un "altro" non letto è comunque qualcosa in attesa.
+      // Le buste paga ancora in bozza (non inviate) NON contano come "in
+      // attesa del dipendente": non le ha ancora nemmeno ricevute.
+      sb.from('presenze_documenti').select('id',{count:'exact',head:true}).is('letto_il',null)
+        .or('categoria.neq.busta_paga,inviato_dip.eq.true'),
       sb.from('presenze_cambi_turno').select('id',{count:'exact',head:true}).eq('stato','attesa_admin'),
     ]);
     return daPromemoria + (cAcconti||0) + (cLiquid||0) + (cDocumenti||0) + (cCambiTurno||0);
@@ -9119,7 +9123,8 @@ async function apriDettaglioStat(tipo, meseSel) {
     ] = await Promise.all([
       sb.from('presenze_acconti').select('dipendente_id,importo,data').eq('letto_dip',false),
       sb.from('presenze_liquidazioni').select('dipendente_id,mese,anno,importo_netto').eq('confermata_dip',false),
-      sb.from('presenze_documenti').select('dipendente_id,categoria,mese,anno').is('letto_il',null),
+      sb.from('presenze_documenti').select('dipendente_id,categoria,mese,anno').is('letto_il',null)
+        .or('categoria.neq.busta_paga,inviato_dip.eq.true'),
       sb.from('presenze_cambi_turno').select('nome_richiedente,nome_collega,fascia_oraria').eq('stato','attesa_admin'),
     ]);
     const voci = pr.map(p => ({ icona:p.icona, titolo:p.titolo, testo:p.testo }));
@@ -10627,7 +10632,7 @@ async function caricaStipendi() {
   // Ora si recuperano TUTTI gli acconti fino a fine mese selezionato, e si
   // segna quali mesi risultano già liquidati (quindi già "chiusi"), per
   // riportare in avanti solo quelli davvero ancora in sospeso.
-  const [{ data: dipendenti }, { data: presenze }, { data: accontiTutti }, { data: restituzioniTutte }, { data: ferieAnno }, { data: liquidazTutte }, { data: presenzePrecedenti }] = await Promise.all([
+  const [{ data: dipendenti }, { data: presenze }, { data: accontiTutti }, { data: restituzioniTutte }, { data: ferieAnno }, { data: liquidazTutte }, { data: presenzePrecedenti }, { data: cedoliniMese }] = await Promise.all([
     sb.from('presenze_profili').select('*').eq('ruolo','dipendente').eq('attivo',true).order('nome'),
     sb.from('presenze').select('*').gte('data',dal).lte('data',al),
     sb.from('presenze_acconti').select('id,dipendente_id,importo,data,note,letto_dip,causale,saldato').lte('data',al),
@@ -10650,7 +10655,14 @@ async function caricaStipendi() {
     // invece di confonderlo dentro il "Da pagare" del mese in corso.
     sb.from('presenze').select('dipendente_id,data')
       .lt('data', dal).gte('data', new Date(parseInt(y), parseInt(m)-13, 1).toISOString().split('T')[0]),
+    // Cedolini (buste paga) già caricati per questo mese/anno, con importo
+    // netto valorizzato — servono per il pulsante "Da cedolino" (precompila
+    // il bonifico in Liquida con l'importo reale della busta paga).
+    sb.from('presenze_documenti').select('dipendente_id,netto_busta')
+      .eq('categoria','busta_paga').eq('mese',parseInt(m)).eq('anno',parseInt(y)).not('netto_busta','is',null),
   ]);
+  const cedoliniMeseMap = {};
+  (cedoliniMese||[]).forEach(c => { cedoliniMeseMap[c.dipendente_id] = parseFloat(c.netto_busta); });
   // Insieme "dipendente-mese-anno già liquidati" — serve per l'arretrato:
   // un mese passato che compare qui è già stato saldato, non va incluso.
   const meseLiquidatoSet = new Set((liquidazTutte||[]).map(l => l.dipendente_id+'-'+l.mese+'-'+l.anno));
@@ -10875,6 +10887,10 @@ async function caricaStipendi() {
             : ''
           }
         </div>
+        ${(!liquidatiMap[d.id] && cedoliniMeseMap[d.id] != null)
+          ? `<button class="btn-sm" style="width:100%;margin:-4px 0 10px;background:var(--accent);color:#fff;border:none" onclick="apriLiquidaConCedolino('${d.id}','${nomeOnclick}',${parseInt(m)},${parseInt(y)},${giorni},${paga},${totAcc},${presManualiNonValid},${totRestMese},${giorniFestivoLav},${totaleFestivoLav},${giorniFestivoNonLav},${totaleFestivoNonLav})">📄 Salda con l'importo del cedolino (€${cedoliniMeseMap[d.id].toFixed(2)})</button>`
+          : ''
+        }
         <!-- Festività lavorate: paga doppia, sempre in evidenza a parte
              dall'ordinario così non si confonde col totale piatto -->
         ${giorniFestivoLav > 0 ? `<div style="background:rgba(200,135,58,.08);border:1.5px solid rgba(200,135,58,.3);border-radius:12px;padding:12px;margin-bottom:10px">
@@ -11857,10 +11873,11 @@ async function caricaDocumentiAdmin() {
   if (anno)  q = q.eq('anno', anno);
   const { data, error } = await q;
 
-  const btnAdd = '<div style="display:flex;gap:8px;margin-bottom:16px">'
+  const btnAdd = '<div style="display:flex;gap:8px;margin-bottom:8px">'
     + '<button class="btn-primary" style="flex:1" onclick="openSheetCaricaDoc()">+ Carica documento</button>'
     + '<button class="btn-secondary" style="flex:1" onclick="openSheetCedolini()">📎 Carica cedolini (PDF multiplo)</button>'
-    + '</div>';
+    + '</div>'
+    + '<button class="btn-green-solid" style="width:100%;margin-bottom:16px" onclick="inviaCedoliniInAttesa()">📤 Invia cedolini in attesa</button>';
 
   if (error) {
     wrap.innerHTML = btnAdd + '<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-txt">Errore: '+esc(error.message)+'</div></div>';
@@ -11917,7 +11934,10 @@ async function caricaDocumentiDip() {
     .order('anno',{ascending:false}).order('mese',{ascending:false});
   if (filtCat)  q = q.eq('categoria', filtCat);
   if (filtMese) q = q.eq('mese', filtMese);
-  const { data, error } = await q;
+  let { data, error } = await q;
+  // Le buste paga ancora in bozza (non inviate dall'admin) non devono
+  // comparire nell'area documenti del dipendente.
+  if (data) data = data.filter(d => !(d.categoria==='busta_paga' && d.inviato_dip===false));
 
   if (error) {
     wrap.innerHTML = '<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-txt">Errore: '+esc(error.message)+'</div></div>';
@@ -11976,13 +11996,18 @@ function renderDocCard(d, isAdmin) {
   const eContestato = !!d.contestata_il;
   // Finestra di 7 giorni per contestare, a partire dalla presa visione
   const in7gg = eLetto && !eContestato && (Date.now() - new Date(d.letto_il).getTime()) < 7*86400000;
+  // Bozza: busta paga caricata ma non ancora inviata al dipendente (di
+  // default true per i documenti pre-esistenti, quindi non tocca nulla
+  // di già inviato prima di questa funzionalità).
+  const nonInviata = d.categoria==='busta_paga' && d.inviato_dip === false;
   let statoHtml = '';
   if (!isAdmin) {
     if (eContestato)  statoHtml = '<div style="font-size:10px;font-weight:700;color:var(--red);margin-top:3px">⚠ Contestato il '+new Date(d.contestata_il).toLocaleDateString('it-IT')+'</div>';
     else if (eLetto)  statoHtml = '<div style="font-size:10px;font-weight:700;color:var(--green);margin-top:3px">✓ Letto e accettato il '+new Date(d.letto_il).toLocaleDateString('it-IT')+'</div>';
   } else {
-    if (eContestato)      statoHtml = '<div style="font-size:10px;font-weight:700;color:var(--red);margin-top:3px">⚠ Contestato dal dipendente</div>';
-    else if (eLetto)      statoHtml = '<div style="font-size:10px;font-weight:700;color:var(--green);margin-top:3px">✓✓ Letto il '+new Date(d.letto_il).toLocaleDateString('it-IT')+'</div>';
+    if (nonInviata)        statoHtml = '<div style="font-size:10px;font-weight:700;color:var(--muted);margin-top:3px">📝 Bozza — non ancora inviata al dipendente</div>';
+    else if (eContestato)  statoHtml = '<div style="font-size:10px;font-weight:700;color:var(--red);margin-top:3px">⚠ Contestato dal dipendente</div>';
+    else if (eLetto)       statoHtml = '<div style="font-size:10px;font-weight:700;color:var(--green);margin-top:3px">✓✓ Letto il '+new Date(d.letto_il).toLocaleDateString('it-IT')+'</div>';
     else if (d.categoria==='busta_paga'||d.categoria==='cu') statoHtml = '<div style="font-size:10px;font-weight:700;color:var(--yellow);margin-top:3px">⏳ Non ancora letto</div>';
   }
   let html = '<div class="card" style="margin-bottom:8px;display:flex;align-items:center;gap:12px">';
@@ -11997,6 +12022,10 @@ function renderDocCard(d, isAdmin) {
   // FIX: prima qui si chiamava apriDocumento(url, nome) senza id/categoria,
   // quindi letto_il non veniva MAI scritto e il tasto Sollecita non spariva.
   html += '<button class="btn-sm primary" onclick="clickDocumento(\'' + d.id + '\',' + (isAdmin?'true':'false') + ')">Apri</button>';
+  if (isAdmin && nonInviata) {
+    html += '<button class="btn-sm" style="background:var(--green);color:#fff" onclick="inviaCedolinoDoc(\'' + d.id + '\')">📤 Invia</button>';
+    html += '<button class="btn-sm" onclick="modificaCedolino(\'' + d.id + '\')">✏️ Modifica</button>';
+  }
   if (isAdmin) html += '<button class="btn-sm" style="color:var(--red)" onclick="eliminaDocumento(\'' + d.id + '\')">Elimina</button>';
   if (!isAdmin && in7gg) html += '<button class="btn-sm" style="color:var(--red)" onclick="openContesta(\'documento\',\'' + d.id + '\',\'' + esc(desc).replace(/'/g, "\\'") + (periodo?' '+periodo:'') + '\')">Contesta</button>';
   html += '</div></div>';
@@ -12465,6 +12494,9 @@ async function caricaDocumento() {
       nome_file: file.name, url: path, descrizione: desc || null,
       lordo, netto_busta: netto, contributi_dip: contributi, tfr_accantonato: tfr,
       letto_dip: false, letto_il: null,
+      // Busta paga: ricaricare il file (anche uno già inviato/modifica) la
+      // riporta in bozza — va inviata di nuovo consapevolmente.
+      ...(isBusta ? { inviato_dip: false, inviato_il: null } : {}),
     }).eq('id', esistente.id));
     if (!error && esistente.url && esistente.url !== path) {
       await sb.storage.from('presenze-allegati').remove([esistente.url]).catch(()=>{});
@@ -12478,7 +12510,10 @@ async function caricaDocumento() {
       url:           path,
       anno, mese,
       lordo, netto_busta: netto, contributi_dip: contributi, tfr_accantonato: tfr,
-      caricato_da:   ME.id
+      caricato_da:   ME.id,
+      // Busta paga: entra in bozza, il dipendente la vede solo dopo l'invio
+      // esplicito (tasto Invia). Le altre categorie restano come prima.
+      ...(isBusta ? { inviato_dip: false } : {}),
     }));
   }
 
@@ -12488,25 +12523,91 @@ async function caricaDocumento() {
     btn.disabled=false; btn.textContent='Carica documento'; return;
   }
 
-  // Notifica Telegram al dipendente — recupera nome
-  const { data: prof } = await sb.from('presenze_profili').select('nome').eq('id',dipId).single();
-  const nomeDip = prof ? prof.nome : 'Dipendente';
-  const catLabel = { busta_paga:'busta paga', cu:'CU', altro:'documento' };
-  const periodoStr = [anno, mese ? MESI[mese] : null].filter(Boolean).join(' ');
-  const tgMsg = [
-    '<b>Ceraldi Presenze - Nuovo documento disponibile</b>',
-    'Ciao ' + escTG(nomeDip) + ', è disponibile un nuovo ' + (catLabel[cat]||cat) + (periodoStr?' ('+periodoStr+')':'') + '.',
-    desc ? escTG(desc) : '',
-    '',
-    '<a href="https://valerioceraldi-hub.github.io/Ceraldi/ceraldi_presenze.html#documenti">Apri la tua area documenti</a>'
-  ].filter(Boolean).join('\n');
-  await inviaNotificaDipendente(dipId, tgMsg, '#docs');
-
-  toast('\u2713 Documento caricato \u2014 notifica inviata al dipendente');
+  if (isBusta) {
+    // Busta paga: nessuna notifica qui, resta in bozza — si invia da
+    // inviaCedolinoDoc()/inviaCedoliniInAttesa() quando l'admin decide.
+    toast('\u2713 Cedolino salvato in bozza \u2014 usa "Invia" quando vuoi mandarlo al dipendente');
+  } else {
+    // Notifica Telegram al dipendente — recupera nome
+    const { data: prof } = await sb.from('presenze_profili').select('nome').eq('id',dipId).single();
+    const nomeDip = prof ? prof.nome : 'Dipendente';
+    const catLabel = { cu:'CU', altro:'documento' };
+    const periodoStr = [anno, mese ? MESI[mese] : null].filter(Boolean).join(' ');
+    const tgMsg = [
+      '<b>Ceraldi Presenze - Nuovo documento disponibile</b>',
+      'Ciao ' + escTG(nomeDip) + ', è disponibile un nuovo ' + (catLabel[cat]||cat) + (periodoStr?' ('+periodoStr+')':'') + '.',
+      desc ? escTG(desc) : '',
+      '',
+      '<a href="https://valerioceraldi-hub.github.io/Ceraldi/ceraldi_presenze.html#documenti">Apri la tua area documenti</a>'
+    ].filter(Boolean).join('\n');
+    await inviaNotificaDipendente(dipId, tgMsg, '#docs');
+    toast('\u2713 Documento caricato \u2014 notifica inviata al dipendente');
+  }
   btn.disabled=false; btn.textContent='Carica documento';
   closeSheet('sh-caricaDoc');
   await caricaDocumentiAdmin();
   aggiornaNavBadge();
+}
+
+// Riapre "Carica documento" precompilato sui dati di una busta paga già
+// caricata (ma non ancora inviata), per sostituirne il file prima
+// dell'invio ufficiale — es. cedolino inserito per errore.
+async function modificaCedolino(docId) {
+  const { data: d, error } = await sb.from('presenze_documenti').select('*').eq('id',docId).single();
+  if (error || !d) { toast('Documento non trovato'); return; }
+  openSheetCaricaDoc();
+  $('cd-dip').value = d.dipendente_id;
+  $('cd-cat').value = 'busta_paga';
+  aggiornaMeseReq();
+  $('cd-anno').value = d.anno || new Date().getFullYear();
+  $('cd-mese').value = d.mese || '';
+  $('cd-desc').value = d.descrizione || '';
+  $('cd-netto').value = d.netto_busta ?? '';
+  $('cd-lordo').value = d.lordo ?? '';
+  $('cd-contributi').value = d.contributi_dip ?? '';
+  $('cd-tfr').value = d.tfr_accantonato ?? '';
+  showMsg('cd-msg','Stai sostituendo il file di questo cedolino: scegli il nuovo PDF e salva','warn');
+}
+
+// Invia (o re-invia) al dipendente UNA busta paga già caricata in bozza.
+async function inviaCedolinoDoc(docId) {
+  const { data: d, error } = await sb.from('presenze_documenti').select('*').eq('id',docId).single();
+  if (error || !d) { toast('Documento non trovato'); return; }
+  const { error: upErr } = await sb.from('presenze_documenti').update({
+    inviato_dip: true, inviato_il: new Date().toISOString()
+  }).eq('id', docId);
+  if (upErr) { toast('Errore: '+upErr.message); return; }
+  const tgMsg = '<b>Ceraldi Presenze — Nuova busta paga disponibile</b>\n'
+    + 'La tua busta paga di <b>'+MESI[d.mese]+' '+d.anno+'</b> è pronta.\n'
+    + 'Tocca "Leggi busta" per aprirla e confermarne la ricezione.';
+  await inviaNotificaDipendente(d.dipendente_id, tgMsg, '#documenti');
+  toast('✓ Cedolino inviato al dipendente');
+  await caricaDocumentiAdmin();
+}
+
+// Invia in un colpo solo tutte le buste paga ancora in bozza (non inviate).
+async function inviaCedoliniInAttesa() {
+  const { data, error } = await sb.from('presenze_documenti').select('*')
+    .eq('categoria','busta_paga').eq('inviato_dip', false);
+  if (error) { toast('Errore: '+error.message); return; }
+  if (!data || !data.length) { toast('Nessun cedolino in attesa di invio'); return; }
+  if (!confirm('Invia '+data.length+' cedolin'+(data.length===1?'o':'i')+' in attesa ai rispettivi dipendenti?')) return;
+  let ok = 0, ko = 0;
+  for (const d of data) {
+    try {
+      const { error: upErr } = await sb.from('presenze_documenti').update({
+        inviato_dip: true, inviato_il: new Date().toISOString()
+      }).eq('id', d.id);
+      if (upErr) throw upErr;
+      const tgMsg = '<b>Ceraldi Presenze — Nuova busta paga disponibile</b>\n'
+        + 'La tua busta paga di <b>'+MESI[d.mese]+' '+d.anno+'</b> è pronta.\n'
+        + 'Tocca "Leggi busta" per aprirla e confermarne la ricezione.';
+      await inviaNotificaDipendente(d.dipendente_id, tgMsg, '#documenti');
+      ok++;
+    } catch(e) { console.error('inviaCedoliniInAttesa:', d.id, e); ko++; }
+  }
+  toast('✓ '+ok+' cedolin'+(ok===1?'o inviato':'i inviati')+(ko?' — '+ko+' errore/i':''));
+  await caricaDocumentiAdmin();
 }
 
 /* ═══════ CARICA CEDOLINI — PDF unico multi-dipendente da scorporare ═══════
@@ -12977,6 +13078,9 @@ async function caricaUnGruppoCedolino(g, mese, anno, srcDoc) {
       lordo: g.lordo, netto_busta: g.netto,
       contributi_dip: g.contributiDip, tfr_accantonato: g.tfrAccantonato,
       letto_dip: false, letto_il: null,
+      // Ricaricare il file (anche se già inviato) riporta la busta in bozza:
+      // il contenuto è cambiato, va inviata di nuovo consapevolmente.
+      inviato_dip: false, inviato_il: null,
     }).eq('id', esistente.id);
     insErr = error;
     if (!error && esistente.url && esistente.url !== path) {
@@ -12988,16 +13092,17 @@ async function caricaUnGruppoCedolino(g, mese, anno, srcDoc) {
       descrizione: 'Busta paga '+MESI[mese]+' '+anno, url: path, anno, mese,
       lordo: g.lordo, netto_busta: g.netto,
       contributi_dip: g.contributiDip, tfr_accantonato: g.tfrAccantonato,
-      caricato_da: ME.id
+      caricato_da: ME.id,
+      // Bozza: entra subito in reportistica/Liquida, ma il dipendente non la
+      // vede finché l'admin non preme "Invia" (vedi inviaCedolinoDoc).
+      inviato_dip: false,
     });
     insErr = error;
   }
   if (insErr) throw insErr;
-
-  const tgMsg = '<b>Ceraldi Presenze — Nuova busta paga disponibile</b>\n'
-    + 'La tua busta paga di <b>'+MESI[mese]+' '+anno+'</b> è pronta.\n'
-    + 'Tocca "Leggi busta" per aprirla e confermarne la ricezione.';
-  await inviaNotificaDipendente(g.dipId, tgMsg, '#documenti');
+  // NIENTE notifica qui: il caricamento crea solo la bozza. L'invio vero e
+  // proprio (e la relativa notifica Telegram) avviene da inviaCedolinoDoc()
+  // o inviaCedoliniInAttesa(), quando l'admin decide di inviare.
 }
 
 // Carica UNA SOLA busta paga dalla schermata di revisione (bottone per riga),
@@ -13533,7 +13638,7 @@ async function openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, 
     bustaDoc = bd || null;
   } catch(e) { console.warn('riconciliazione busta paga:', e); }
 
-  _liqDati = { dipId, nome, mese, anno, giorni, paga, acconti, restituzioni, netto, totaleLordo, giorniFestivoLav, totaleFestivoLav, giorniFestivoNonLav, totaleFestivoNonLav, documentoId: bustaDoc ? bustaDoc.id : null };
+  _liqDati = { dipId, nome, mese, anno, giorni, paga, acconti, restituzioni, netto, totaleLordo, giorniFestivoLav, totaleFestivoLav, giorniFestivoNonLav, totaleFestivoNonLav, documentoId: bustaDoc ? bustaDoc.id : null, cedolinoNetto: (bustaDoc && bustaDoc.netto_busta != null) ? parseFloat(bustaDoc.netto_busta) : null };
   const meseLbl = new Date(anno, mese-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
   let riconciliazioneHtml = '';
   if (bustaDoc && bustaDoc.netto_busta != null) {
@@ -13600,6 +13705,27 @@ async function openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, 
     btnRestituzione.style.display = 'none';
   }
   openSheet('sh-liquida');
+}
+
+// Apre "Liquida" come il tasto normale, ma precompila subito il campo
+// bonifico con l'importo netto del cedolino già caricato per quel mese —
+// così il "bonifico" registrato è sempre pari al cedolino, non calcolato a
+// parte. Se il versato (bonifico + eventuali acconti già dati) supera il
+// dovuto reale, salvaLiquidazione() registra già in automatico l'eccedenza
+// come acconto: comparirà come saldo negativo ("Deve restituire") non
+// appena quell'acconto rientra nel calcolo di un mese, con tanto di tasto
+// pronto per registrare la restituzione quando avviene davvero. Se invece
+// il versato è inferiore al dovuto, il riquadro sotto mostra subito quanto
+// resta da pagare.
+async function apriLiquidaConCedolino(dipId, nome, mese, anno, giorni, paga, acconti, presDaValidare, restituzioni, giorniFestivoLav, totaleFestivoLav, giorniFestivoNonLav, totaleFestivoNonLav) {
+  await openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, presDaValidare, restituzioni, giorniFestivoLav, totaleFestivoLav, giorniFestivoNonLav, totaleFestivoNonLav);
+  if (_liqDati && _liqDati.cedolinoNetto != null) {
+    $('liq-bonifico').value = _liqDati.cedolinoNetto.toFixed(2);
+    $('liq-contanti').value = '';
+    verificaPagamentoLiquida();
+  } else {
+    showMsg('liq-msg','Nessun cedolino con importo netto trovato per questo mese — inserisci l\'importo manualmente','warn');
+  }
 }
 
 // Verifica che bonifico + contanti inseriti coincidano col netto da pagare.
@@ -13697,16 +13823,36 @@ async function salvaLiquidazione() {
   // tasto separato ("Registra la differenza come acconto") per tenerne
   // traccia — un passaggio manuale facile da dimenticare. Ora, se il
   // versato supera il netto, l'eccedenza diventa automaticamente un
-  // acconto per il mese corrente: il dipendente l'ha già ricevuta in
-  // anticipo, quindi verrà scalata dal prossimo stipendio (o restituita,
-  // se preferisci registrarla con "Registra restituzione" quando torna
-  // indietro davvero).
+  // acconto: il dipendente l'ha già ricevuta in anticipo, quindi verrà
+  // scalata dal prossimo stipendio (o restituita, se preferisci registrarla
+  // con "Registra restituzione" quando torna indietro davvero).
   if (diffPagamento > 0.01) {
+    // FIX: prima l'acconto veniva datato ad oggi. Se si liquida il MESE
+    // CORRENTE (es. proprio il caso del pulsante "Salda con l'importo del
+    // cedolino", usato appena arriva la busta paga del mese in corso),
+    // "oggi" cade dentro un mese che risulta già liquidato — un mese
+    // liquidato non viene più ricalcolato né riportato come arretrato,
+    // quindi quell'acconto extra non sarebbe MAI stato sottratto da
+    // nessuna parte: spariva nel nulla invece di comparire come debito.
+    // Datandolo al primo giorno del mese SUCCESSIVO a quello liquidato,
+    // rientra sempre in un mese ancora aperto e verrà sottratto/mostrato
+    // correttamente quando quel mese viene calcolato o liquidato.
+    let meseSucc = mese + 1, annoSucc = anno;
+    if (meseSucc > 12) { meseSucc = 1; annoSucc += 1; }
+    const dataEccedenza = annoSucc+'-'+String(meseSucc).padStart(2,'0')+'-01';
     await sb.from('presenze_acconti').insert({
-      dipendente_id: dipId, importo: diffPagamento, data: todayISO(),
+      dipendente_id: dipId, importo: diffPagamento, data: dataEccedenza,
       causale: 'altro', letto_dip: false,
       note: 'Eccedenza versata liquidando '+new Date(anno,mese-1,1).toLocaleDateString('it-IT',{month:'long',year:'numeric'})+' rispetto al netto reale — registrata automaticamente come acconto.',
     });
+    // Notifica dedicata: il dipendente ha ricevuto più di quanto maturato
+    // (es. bonifico pari al cedolino, superiore al netto reale calcolato
+    // dalle presenze) — VOLUTAMENTE generica come le altre notifiche
+    // push, l'importo si vede solo aprendo l'app.
+    const tgEcc = '↩ <b>Ceraldi Presenze</b>\n\n'
+      + 'Ciao <b>'+escTG(nome)+'</b>, dal pagamento di questo mese risulta un importo da regolare.\n'
+      + 'Apri l\'app per vedere i dettagli.';
+    await inviaNotificaDipendente(dipId, tgEcc, '#stipendi');
   }
   // Notifica Telegram al DIPENDENTE — VOLUTAMENTE generica (stesso motivo
   // dell'acconto: niente importo, periodo o causale in una notifica push).
@@ -13718,7 +13864,9 @@ async function salvaLiquidazione() {
   await inviaNotificaDipendente(dipId, tgDip, '#stipendi');
   // Notifica admin (conferma invio)
   inviaNotificaTelegram('💶 Stipendio <b>'+meseLblCap+'</b> segnato per <b>'+escTG(nome)+'</b> — \u20ac '+netto.toFixed(2)+' — in attesa conferma.');
-  toast('\u2713 Stipendio di '+nome+' segnato come pagato \u2014 notifica inviata');
+  toast(diffPagamento > 0.01
+    ? '\u2713 Stipendio di '+nome+' segnato come pagato \u2014 eccedenza di \u20ac'+diffPagamento.toFixed(2)+' registrata come acconto (da scalare/restituire) \u2014 notifica inviata'
+    : '\u2713 Stipendio di '+nome+' segnato come pagato \u2014 notifica inviata');
   closeSheet('sh-liquida');
   await caricaStipendi();
   aggiornaNavBadge();
@@ -14015,7 +14163,8 @@ async function getSospesiDip() {
     // mai la finestra "da leggere" né faceva comparire il numeretto,
     // a differenza di acconti/liquidazioni/richieste. Stessa logica per
     // tutti i tipi di documento, senza eccezioni.
-    sb.from('presenze_documenti').select('id,categoria,mese,anno').eq('dipendente_id',ME.id).is('letto_il',null),
+    sb.from('presenze_documenti').select('id,categoria,mese,anno,inviato_dip').eq('dipendente_id',ME.id).is('letto_il',null)
+      .or('categoria.neq.busta_paga,inviato_dip.eq.true'),
     sb.from('presenze_assenze').select('id').eq('dipendente_id',ME.id).eq('stato','admin_inviata'),
     sb.from('presenze').select('id,data,tipo_timbratura').eq('dipendente_id',ME.id).in('tipo_timbratura',['manuale','manuale_dip']).eq('confermata_dip',false),
     // Richieste admin di modifica/eliminazione su una timbratura già registrata
