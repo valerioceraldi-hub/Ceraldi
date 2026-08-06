@@ -1012,7 +1012,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div id="app" style="display:none">
 
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.171</span></div>
+    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.172</span></div>
     <span class="topbar-badge" id="role-badge"></span>
     <button class="btn-topbar" onclick="ricaricaApp()" title="Ricarica la pagina (per essere sicuro di avere l'ultima versione)" style="padding:6px 10px">🔄</button>
     <button id="btn-promemoria" class="btn-topbar" onclick="apriPromemoria()" style="display:none;position:relative;padding:6px 10px">
@@ -10655,14 +10655,16 @@ async function caricaStipendi() {
     // invece di confonderlo dentro il "Da pagare" del mese in corso.
     sb.from('presenze').select('dipendente_id,data')
       .lt('data', dal).gte('data', new Date(parseInt(y), parseInt(m)-13, 1).toISOString().split('T')[0]),
-    // Cedolini (buste paga) già caricati per questo mese/anno, con importo
-    // netto valorizzato — servono per il pulsante "Da cedolino" (precompila
-    // il bonifico in Liquida con l'importo reale della busta paga).
+    // Cedolini (buste paga) già caricati per questo mese/anno — servono
+    // per il pulsante "Da cedolino" (precompila il bonifico in Liquida con
+    // l'importo reale della busta paga). Presi TUTTI, anche quelli senza
+    // netto valorizzato: se manca l'importo va segnalato, non fatto
+    // sparire in silenzio (altrimenti sembra che il cedolino non esista).
     sb.from('presenze_documenti').select('dipendente_id,netto_busta')
-      .eq('categoria','busta_paga').eq('mese',parseInt(m)).eq('anno',parseInt(y)).not('netto_busta','is',null),
+      .eq('categoria','busta_paga').eq('mese',parseInt(m)).eq('anno',parseInt(y)),
   ]);
   const cedoliniMeseMap = {};
-  (cedoliniMese||[]).forEach(c => { cedoliniMeseMap[c.dipendente_id] = parseFloat(c.netto_busta); });
+  (cedoliniMese||[]).forEach(c => { cedoliniMeseMap[c.dipendente_id] = c.netto_busta != null ? parseFloat(c.netto_busta) : null; });
   // Insieme "dipendente-mese-anno già liquidati" — serve per l'arretrato:
   // un mese passato che compare qui è già stato saldato, non va incluso.
   const meseLiquidatoSet = new Set((liquidazTutte||[]).map(l => l.dipendente_id+'-'+l.mese+'-'+l.anno));
@@ -10887,9 +10889,11 @@ async function caricaStipendi() {
             : ''
           }
         </div>
-        ${(!liquidatiMap[d.id] && cedoliniMeseMap[d.id] != null)
+        ${(!liquidatiMap[d.id] && Object.prototype.hasOwnProperty.call(cedoliniMeseMap, d.id) && cedoliniMeseMap[d.id] != null)
           ? `<button class="btn-sm" style="width:100%;margin:-4px 0 10px;background:var(--accent);color:#fff;border:none" onclick="apriLiquidaConCedolino('${d.id}','${nomeOnclick}',${parseInt(m)},${parseInt(y)},${giorni},${paga},${totAcc},${presManualiNonValid},${totRestMese},${giorniFestivoLav},${totaleFestivoLav},${giorniFestivoNonLav},${totaleFestivoNonLav})">📄 Salda con l'importo del cedolino (€${cedoliniMeseMap[d.id].toFixed(2)})</button>`
-          : ''
+          : (!liquidatiMap[d.id] && Object.prototype.hasOwnProperty.call(cedoliniMeseMap, d.id) && cedoliniMeseMap[d.id] == null)
+            ? `<div style="font-size:11px;color:var(--yellow);background:rgba(200,135,58,.1);border-radius:8px;padding:8px 10px;margin:-4px 0 10px">⚠ C'è un cedolino caricato per questo mese ma senza importo netto — apri "Documenti" → "✏️ Modifica" su quel cedolino e compila il netto per poter usare "Salda con cedolino"</div>`
+            : ''
         }
         <!-- Festività lavorate: paga doppia, sempre in evidenza a parte
              dall'ordinario così non si confonde col totale piatto -->
