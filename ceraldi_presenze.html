@@ -1012,7 +1012,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div id="app" style="display:none">
 
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.174</span></div>
+    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.175</span></div>
     <span class="topbar-badge" id="role-badge"></span>
     <button class="btn-topbar" onclick="ricaricaApp()" title="Ricarica la pagina (per essere sicuro di avere l'ultima versione)" style="padding:6px 10px">🔄</button>
     <button id="btn-promemoria" class="btn-topbar" onclick="apriPromemoria()" style="display:none;position:relative;padding:6px 10px">
@@ -1748,6 +1748,36 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     </div>
     <div class="sheet-foot">
       <button class="btn-green-solid" onclick="salvaRestituzione()">&#x2713; Conferma ricezione</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── SHEET: salda differenza residua su un mese già liquidato ── -->
+<div class="overlay" id="sh-salda-diff">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-hdr"><span class="sheet-title">Salda differenza</span><button class="sheet-cls" onclick="closeSheet('sh-salda-diff')">✕</button></div>
+    <div class="sheet-body">
+      <div class="field-lbl">Dipendente</div>
+      <div id="sdiff-nome" style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:16px"></div>
+      <div style="background:rgba(43,74,203,.06);border:1px solid rgba(43,74,203,.18);border-radius:10px;padding:12px;margin-bottom:16px;font-size:13px;color:var(--muted);line-height:1.5">
+        Il mese risulta già liquidato ma con un versamento inferiore al netto dovuto — usa questo per registrare il pagamento della differenza residua, senza aprire una nuova liquidazione per lo stesso mese.
+      </div>
+      <div class="field-lbl">Importo versato ora (€)</div>
+      <input class="field-inp" type="number" id="sdiff-importo" placeholder="es. 102" step="0.01" min="0">
+      <div class="field-lbl">Modalità</div>
+      <select class="field-inp" id="sdiff-modalita">
+        <option value="contanti">💵 Contanti</option>
+        <option value="bonifico">🏦 Bonifico</option>
+      </select>
+      <div class="field-lbl">Data</div>
+      <input class="field-inp" type="date" id="sdiff-data">
+      <div class="field-lbl">Note (opzionale)</div>
+      <input class="field-inp field-inp last" type="text" id="sdiff-note" placeholder="es. saldo differenza">
+      <div class="msg" id="sdiff-msg"></div>
+    </div>
+    <div class="sheet-foot">
+      <button class="btn-green-solid" onclick="salvaDifferenzaStipendio()">&#x2713; Registra pagamento</button>
     </div>
   </div>
 </div>
@@ -9744,6 +9774,71 @@ async function salvaRestituzione() {
   toast('✓ Restituzione registrata');
 }
 
+let _sdiffDati = null;
+function openSaldaDifferenza(dipId, nome, liqId, residuo) {
+  _sdiffDati = { dipId, liqId };
+  $('sdiff-nome').textContent = nome;
+  $('sdiff-importo').value = residuo > 0 ? residuo.toFixed(2) : '';
+  $('sdiff-data').value = todayISO();
+  if ($('sdiff-modalita')) $('sdiff-modalita').value = 'contanti';
+  $('sdiff-note').value = '';
+  hideMsg('sdiff-msg');
+  openSheet('sh-salda-diff');
+}
+
+async function salvaDifferenzaStipendio() {
+  if (!_sdiffDati) return;
+  const importo = parseFloat($('sdiff-importo').value);
+  const data = $('sdiff-data').value;
+  if (!importo || importo<=0) { showMsg('sdiff-msg','Inserisci un importo valido','err'); return; }
+  if (!data) { showMsg('sdiff-msg','Inserisci la data','err'); return; }
+  const modalita = $('sdiff-modalita') ? $('sdiff-modalita').value : 'contanti';
+  const notaInserita = $('sdiff-note').value.trim();
+  const btn = document.querySelector('#sh-salda-diff .btn-green-solid');
+  if (btn) { btn.disabled = true; btn.textContent = 'Salvo…'; }
+
+  // Rilegge la riga corrente (non ci si fida della card, potrebbe essere
+  // cambiata da quando è stata aperta) e aggiunge questo pagamento
+  // all'importo bonifico/contanti già presente, invece di sovrascriverlo o
+  // creare una seconda liquidazione per lo stesso mese (bloccata dal
+  // vincolo unico su dipendente+mese+anno).
+  const { data: liq, error: readErr } = await sb.from('presenze_liquidazioni')
+    .select('*').eq('id', _sdiffDati.liqId).single();
+  if (readErr || !liq) {
+    showMsg('sdiff-msg', readErr ? readErr.message : 'Liquidazione non trovata', 'err');
+    if (btn) { btn.disabled = false; btn.textContent = '\u2713 Registra pagamento'; }
+    return;
+  }
+  const nuovoBonifico = parseFloat(liq.bonifico||0) + (modalita==='bonifico' ? importo : 0);
+  const nuovoContanti = parseFloat(liq.contanti||0) + (modalita==='contanti' ? importo : 0);
+  const nuovoNote = (liq.note ? liq.note+' — ' : '')
+    + 'Saldata differenza di € '+importo.toFixed(2)+' il '+new Date(data).toLocaleDateString('it-IT')+' ('+modalita+')'
+    + (notaInserita ? ': '+notaInserita : '.');
+  const { error } = await sb.from('presenze_liquidazioni').update({
+    bonifico: nuovoBonifico || null, contanti: nuovoContanti || null,
+    note: nuovoNote,
+    // Il versato è cambiato: va confermato di nuovo dal dipendente, non
+    // resta valida una conferma data su un importo diverso da quello reale.
+    confermata_dip: false, confermata_il: null,
+  }).eq('id', _sdiffDati.liqId);
+  if (error) {
+    showMsg('sdiff-msg', error.message, 'err');
+    if (btn) { btn.disabled = false; btn.textContent = '\u2713 Registra pagamento'; }
+    return;
+  }
+  const nome = $('sdiff-nome').textContent;
+  closeSheet('sh-salda-diff');
+  if (btn) { btn.disabled = false; btn.textContent = '\u2713 Registra pagamento'; }
+  // Notifica dedicata — VOLUTAMENTE generica come le altre, niente importo
+  // nel messaggio push.
+  const tgDip = '💶 <b>Ceraldi Presenze</b>\n\n'
+    + 'Ciao <b>'+escTG(nome)+'</b>, è stato registrato un pagamento a saldo di un mese precedente.\n'
+    + 'Apri l\'app per vedere i dettagli e confermare la ricezione.';
+  await inviaNotificaDipendente(liq.dipendente_id, tgDip, '#stipendi');
+  toast('\u2713 Differenza di \u20ac'+importo.toFixed(2)+' registrata per '+nome);
+  caricaStipendi();
+}
+
 // ── CARICAMENTO UNILAV: estrae mansione e data assunzione ────────
 // I moduli UNILAV non hanno un layout testuale del tutto identico a
 // seconda del software con cui sono generati (come i cedolini paga),
@@ -10622,7 +10717,7 @@ async function caricaStipendi() {
   const [y, m] = mese.split('-');
   // Carica liquidazioni esistenti per questo mese
   const { data: liquidaz } = await sb.from('presenze_liquidazioni')
-    .select('dipendente_id,importo_netto,confermata_dip,bonifico,contanti,note,confermata_il').eq('anno',parseInt(y)).eq('mese',parseInt(m));
+    .select('id,dipendente_id,importo_netto,confermata_dip,bonifico,contanti,note,confermata_il').eq('anno',parseInt(y)).eq('mese',parseInt(m));
   const liquidatiMap = {};
   (liquidaz||[]).forEach(l => { liquidatiMap[l.dipendente_id] = l; });
   const liquidatiSet = new Set(Object.keys(liquidatiMap));
@@ -10889,14 +10984,24 @@ async function caricaStipendi() {
         <div id="stip-rest-${d.id}"></div>
         ${liquidatiMap[d.id] ? (() => {
           const liq = liquidatiMap[d.id];
+          const versato = parseFloat(liq.bonifico||0) + parseFloat(liq.contanti||0);
+          const residuo = parseFloat(liq.importo_netto||0) - versato;
           const modalita = [];
           if (liq.bonifico) modalita.push('🏦 Bonifico <b>€'+parseFloat(liq.bonifico).toFixed(2)+'</b>');
           if (liq.contanti) modalita.push('💵 Contanti <b>€'+parseFloat(liq.contanti).toFixed(2)+'</b>');
-          return '<div style="font-size:12px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px">'
+          let html = '<div style="font-size:12px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px">'
             + '<div style="font-weight:700;color:var(--muted);margin-bottom:4px">COME È STATO PAGATO</div>'
             + (modalita.length ? '<div>'+modalita.join(' &nbsp;·&nbsp; ')+'</div>' : '<span style="color:var(--muted)">Non specificato</span>')
             + (liq.note ? '<div style="color:var(--muted);margin-top:5px;line-height:1.4">'+esc(liq.note)+'</div>' : '')
             + '</div>';
+          // Il mese è già liquidato ma manca ancora una parte del netto:
+          // niente Liquida (bloccato da un vincolo unico dipendente+mese),
+          // serve un modo per registrare SOLO la differenza residua senza
+          // aprire una nuova liquidazione duplicata per lo stesso mese.
+          if (residuo > 0.01) {
+            html += `<button class="btn-sm" style="width:100%;margin-bottom:10px;background:var(--yellow);color:#fff;border:none" onclick="openSaldaDifferenza('${d.id}','${nomeOnclick}','${liq.id}',${residuo.toFixed(2)})">💰 Salda differenza (€${residuo.toFixed(2)})</button>`;
+          }
+          return html;
         })() : ''}
         <div style="display:flex;gap:8px;margin-bottom:10px">
           <button class="btn-sm" style="flex:1" onclick="openAcconto('${d.id}','${nomeOnclick}')">+ Acconto</button>
