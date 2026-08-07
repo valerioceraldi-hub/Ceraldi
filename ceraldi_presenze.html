@@ -1012,7 +1012,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div id="app" style="display:none">
 
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.175</span></div>
+    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.178</span></div>
     <span class="topbar-badge" id="role-badge"></span>
     <button class="btn-topbar" onclick="ricaricaApp()" title="Ricarica la pagina (per essere sicuro di avere l'ultima versione)" style="padding:6px 10px">🔄</button>
     <button id="btn-promemoria" class="btn-topbar" onclick="apriPromemoria()" style="display:none;position:relative;padding:6px 10px">
@@ -2571,10 +2571,11 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     <div class="sheet-body">
       <div style="text-align:center;padding:10px 0 16px">
         <div style="font-size:48px;margin-bottom:10px">&#x1F4B6;</div>
-        <div style="font-size:14px;color:var(--muted);margin-bottom:4px">Hai ricevuto il pagamento di</div>
+        <div style="font-size:14px;color:var(--muted);margin-bottom:4px" id="cl-titolo">Hai ricevuto il pagamento di</div>
         <div style="font-size:36px;font-weight:800;letter-spacing:-1px;color:var(--green)" id="cl-importo"></div>
         <div style="font-size:13px;color:var(--muted);margin-top:6px" id="cl-periodo"></div>
       </div>
+      <div id="cl-residuo" style="background:rgba(200,135,58,.08);border:1px solid rgba(200,135,58,.3);border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:13px;color:var(--text);display:none"></div>
       <div id="cl-note" style="background:var(--bg);border-radius:10px;padding:12px;margin-bottom:14px;font-size:13px;color:var(--muted);display:none"></div>
       <button id="cl-btn-busta" style="display:none;width:100%;margin-bottom:14px" class="btn-secondary" onclick="apriBustaLegata()">📄 Leggi busta paga collegata</button>
       <div style="background:rgba(43,74,203,.04);border:1px solid rgba(43,74,203,.18);border-radius:12px;padding:14px">
@@ -9775,8 +9776,8 @@ async function salvaRestituzione() {
 }
 
 let _sdiffDati = null;
-function openSaldaDifferenza(dipId, nome, liqId, residuo) {
-  _sdiffDati = { dipId, liqId };
+function openSaldaDifferenza(dipId, nome, liqId, residuo, nettoLive) {
+  _sdiffDati = { dipId, liqId, nettoLive };
   $('sdiff-nome').textContent = nome;
   $('sdiff-importo').value = residuo > 0 ? residuo.toFixed(2) : '';
   $('sdiff-data').value = todayISO();
@@ -9814,8 +9815,15 @@ async function salvaDifferenzaStipendio() {
   const nuovoNote = (liq.note ? liq.note+' — ' : '')
     + 'Saldata differenza di € '+importo.toFixed(2)+' il '+new Date(data).toLocaleDateString('it-IT')+' ('+modalita+')'
     + (notaInserita ? ': '+notaInserita : '.');
+  // FIX (bug segnalato): importo_netto restava congelato al valore calcolato
+  // quando si è liquidato la prima volta, anche se nel frattempo presenze/
+  // acconti erano cambiati — quindi "quanto manca ancora" veniva ricalcolato
+  // su un numero vecchio. Qui si riallinea importo_netto al netto LIVE
+  // passato dalla card (nettoLive), così il record torna coerente col resto
+  // dell'app invece di restare uno snapshot obsoleto.
   const { error } = await sb.from('presenze_liquidazioni').update({
     bonifico: nuovoBonifico || null, contanti: nuovoContanti || null,
+    importo_netto: _sdiffDati.nettoLive != null ? _sdiffDati.nettoLive : liq.importo_netto,
     note: nuovoNote,
     // Il versato è cambiato: va confermato di nuovo dal dipendente, non
     // resta valida una conferma data su un importo diverso da quello reale.
@@ -9829,11 +9837,17 @@ async function salvaDifferenzaStipendio() {
   const nome = $('sdiff-nome').textContent;
   closeSheet('sh-salda-diff');
   if (btn) { btn.disabled = false; btn.textContent = '\u2713 Registra pagamento'; }
-  // Notifica dedicata — VOLUTAMENTE generica come le altre, niente importo
-  // nel messaggio push.
-  const tgDip = '💶 <b>Ceraldi Presenze</b>\n\n'
-    + 'Ciao <b>'+escTG(nome)+'</b>, è stato registrato un pagamento a saldo di un mese precedente.\n'
-    + 'Apri l\'app per vedere i dettagli e confermare la ricezione.';
+  // Notifica dedicata — dicitura "Saldo mensile", ma VOLUTAMENTE senza
+  // importi nel testo della notifica push (restano visibili solo aprendo
+  // l'app).
+  const meseLblSD = new Date(liq.anno, liq.mese-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
+  const meseLblSDCap = meseLblSD.charAt(0).toUpperCase()+meseLblSD.slice(1);
+  const nettoRif = _sdiffDati.nettoLive != null ? _sdiffDati.nettoLive : parseFloat(liq.importo_netto||0);
+  const residuoDopo = nettoRif - nuovoBonifico - nuovoContanti;
+  const tgDip = '💶 <b>Ceraldi Presenze — Saldo mensile</b>\n\n'
+    + 'Ciao <b>'+escTG(nome)+'</b>, è stato registrato un pagamento a saldo di <b>'+meseLblSDCap+'</b>.'
+    + (residuoDopo > 0.01 ? '\nResta ancora una differenza da saldare.' : '')
+    + '\nApri l\'app per vedere i dettagli e confermare la ricezione.';
   await inviaNotificaDipendente(liq.dipendente_id, tgDip, '#stipendi');
   toast('\u2713 Differenza di \u20ac'+importo.toFixed(2)+' registrata per '+nome);
   caricaStipendi();
@@ -10913,9 +10927,25 @@ async function caricaStipendi() {
     const arretratoDettaglio = calcolaArretratoMesi(d.id, paga, d.data_assunzione);
     const arretratoTotale = arretratoDettaglio.reduce((s,a) => s + a.netto, 0);
 
-    // Stato per il filtro e per il badge nella riga compatta
-    const stato = !liquidatiMap[d.id] ? 'da_liquidare' : (liquidatiMap[d.id].confermata_dip ? 'confermato' : 'in_attesa');
-    const statoLbl = { da_liquidare:'Da liquidare', in_attesa:'⏳ In attesa', confermato:'✓✓ Confermato' }[stato];
+    // Stato per il filtro e per il badge nella riga compatta.
+    // FIX (bug grave segnalato): la differenza veniva calcolata contro
+    // importo_netto, un valore CONGELATO al momento in cui si è premuto
+    // "Liquida"/"Salda cedolino"/"Salda differenza" — se dopo si aggiunge o
+    // modifica una timbratura (o un acconto/restituzione) per quel mese, il
+    // netto vero cambia ma importo_netto resta quello vecchio, e "quanto
+    // manca ancora" risultava calcolato su un numero ormai sbagliato. Ora si
+    // usa sempre `netto`, che è ricalcolato ad ogni apertura della pagina
+    // dalle presenze/acconti/restituzioni attuali — mai uno snapshot.
+    const liqCorrente = liquidatiMap[d.id];
+    const versatoLiq = liqCorrente ? (parseFloat(liqCorrente.bonifico||0) + parseFloat(liqCorrente.contanti||0)) : 0;
+    const residuoLiq = liqCorrente ? (netto - versatoLiq) : 0;
+    // Se lo snapshot e il ricalcolo live divergono, qualcosa è cambiato
+    // DOPO la liquidazione (nuova timbratura, acconto, restituzione...) —
+    // va segnalato esplicitamente invece di correggersi in silenzio.
+    const nettoCambiatoDopoLiquidazione = liqCorrente && Math.abs(netto - parseFloat(liqCorrente.importo_netto||0)) > 0.01;
+    const stato = !liqCorrente ? 'da_liquidare'
+      : (residuoLiq > 0.01 ? 'parziale' : (liqCorrente.confermata_dip ? 'confermato' : 'in_attesa'));
+    const statoLbl = { da_liquidare:'Da liquidare', parziale:'⚠ Pagamento parziale', in_attesa:'⏳ In attesa', confermato:'✓✓ Confermato' }[stato];
 
     // Calcolo ratei 13a e 14a secondo CCNL Pubblici Esercizi
     const ratei = calcolaRatei13a14a(d.data_assunzione, paga, parseInt(m), parseInt(y));
@@ -10960,6 +10990,7 @@ async function caricaStipendi() {
 
     const statoPill = {
       da_liquidare: '<span style="display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:20px;background:var(--bg);color:var(--muted);border:1px solid var(--border)">Da liquidare</span>',
+      parziale:     '<span style="display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:20px;background:rgba(200,135,58,.12);color:var(--yellow)">⚠ Pagamento parziale — mancano €'+residuoLiq.toFixed(2)+'</span>',
       in_attesa:    '<span style="display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:20px;background:rgba(43,74,203,.1);color:var(--accent)">⏳ In attesa conferma</span>',
       confermato:   '<span style="display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:20px;background:rgba(47,138,92,.12);color:var(--green)">✅ Pagato e confermato</span>',
     }[stato];
@@ -10984,8 +11015,10 @@ async function caricaStipendi() {
         <div id="stip-rest-${d.id}"></div>
         ${liquidatiMap[d.id] ? (() => {
           const liq = liquidatiMap[d.id];
-          const versato = parseFloat(liq.bonifico||0) + parseFloat(liq.contanti||0);
-          const residuo = parseFloat(liq.importo_netto||0) - versato;
+          const versato = versatoLiq;
+          // FIX: qui sotto si usava liq.importo_netto (snapshot congelato)
+          // invece del netto live — vedi commento sopra su residuoLiq.
+          const residuo = residuoLiq;
           const modalita = [];
           if (liq.bonifico) modalita.push('🏦 Bonifico <b>€'+parseFloat(liq.bonifico).toFixed(2)+'</b>');
           if (liq.contanti) modalita.push('💵 Contanti <b>€'+parseFloat(liq.contanti).toFixed(2)+'</b>');
@@ -10993,13 +11026,16 @@ async function caricaStipendi() {
             + '<div style="font-weight:700;color:var(--muted);margin-bottom:4px">COME È STATO PAGATO</div>'
             + (modalita.length ? '<div>'+modalita.join(' &nbsp;·&nbsp; ')+'</div>' : '<span style="color:var(--muted)">Non specificato</span>')
             + (liq.note ? '<div style="color:var(--muted);margin-top:5px;line-height:1.4">'+esc(liq.note)+'</div>' : '')
+            + (nettoCambiatoDopoLiquidazione
+              ? '<div style="color:var(--yellow);font-weight:700;margin-top:6px;line-height:1.4">⚠ Il calcolo di questo mese è cambiato dopo la liquidazione (allora era €'+parseFloat(liq.importo_netto||0).toFixed(2)+', ora è €'+netto.toFixed(2)+' — probabile timbratura/acconto/restituzione aggiunti dopo). Il residuo qui sotto è già ricalcolato sul valore aggiornato.</div>'
+              : '')
             + '</div>';
           // Il mese è già liquidato ma manca ancora una parte del netto:
           // niente Liquida (bloccato da un vincolo unico dipendente+mese),
           // serve un modo per registrare SOLO la differenza residua senza
           // aprire una nuova liquidazione duplicata per lo stesso mese.
           if (residuo > 0.01) {
-            html += `<button class="btn-sm" style="width:100%;margin-bottom:10px;background:var(--yellow);color:#fff;border:none" onclick="openSaldaDifferenza('${d.id}','${nomeOnclick}','${liq.id}',${residuo.toFixed(2)})">💰 Salda differenza (€${residuo.toFixed(2)})</button>`;
+            html += `<button class="btn-sm" style="width:100%;margin-bottom:10px;background:var(--yellow);color:#fff;border:none" onclick="openSaldaDifferenza('${d.id}','${nomeOnclick}','${liq.id}',${residuo.toFixed(2)},${netto.toFixed(2)})">💰 Salda differenza (€${residuo.toFixed(2)})</button>`;
           }
           return html;
         })() : ''}
@@ -13849,6 +13885,10 @@ async function apriLiquidaConCedolino(dipId, nome, mese, anno, giorni, paga, acc
     $('liq-bonifico').value = _liqDati.cedolinoNetto.toFixed(2);
     $('liq-contanti').value = '';
     verificaPagamentoLiquida();
+    // Ricordato per la notifica: questo pagamento nasce dal cedolino, non
+    // da una liquidazione "a mano" — cambia la dicitura del messaggio al
+    // dipendente (vedi salvaLiquidazione).
+    _liqDati.viaCedolino = true;
   } else {
     showMsg('liq-msg','Nessun cedolino con importo netto trovato per questo mese — inserisci l\'importo manualmente','warn');
   }
@@ -13905,7 +13945,7 @@ function registraDifferenzaComeAcconto() {
 
 async function salvaLiquidazione() {
   if (!_liqDati) return;
-  const { dipId, nome, mese, anno, giorni, paga, acconti, restituzioni, netto, documentoId } = _liqDati;
+  const { dipId, nome, mese, anno, giorni, paga, acconti, restituzioni, netto, documentoId, viaCedolino } = _liqDati;
   const noteInserita = $('liq-note').value.trim();
   const bonifico = parseFloat($('liq-bonifico').value) || 0;
   const contanti = parseFloat($('liq-contanti').value) || 0;
@@ -13980,13 +14020,24 @@ async function salvaLiquidazione() {
       + 'Apri l\'app per vedere i dettagli.';
     await inviaNotificaDipendente(dipId, tgEcc, '#stipendi');
   }
-  // Notifica Telegram al DIPENDENTE — VOLUTAMENTE generica (stesso motivo
-  // dell'acconto: niente importo, periodo o causale in una notifica push).
+  // Notifica Telegram al DIPENDENTE — dicitura distinta per cedolino vs
+  // liquidazione/saldo mensile, ma VOLUTAMENTE senza importi nel testo
+  // della notifica push (restano visibili solo aprendo l'app, nella
+  // schermata "Conferma pagamento" che già mostra il versato reale).
   const meseLbl = new Date(anno, mese-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
   const meseLblCap = meseLbl.charAt(0).toUpperCase()+meseLbl.slice(1);
-  const tgDip = '💶 <b>Ceraldi Presenze</b>\n\n'
-    + 'Ciao <b>'+escTG(nome)+'</b>, \u00e8 stato effettuato un pagamento.\n'
-    + 'Apri l\'app per vedere i dettagli e confermare la ricezione.';
+  const rigaDifferenza = diffPagamento < -0.01
+    ? '\nResta ancora una differenza da saldare a parte.'
+    : '';
+  const tgDip = viaCedolino
+    ? ('📄 <b>Ceraldi Presenze — Cedolino</b>\n\n'
+      + 'Ciao <b>'+escTG(nome)+'</b>, è stato registrato il pagamento del tuo cedolino di <b>'+meseLblCap+'</b>.'
+      + rigaDifferenza
+      + '\nApri l\'app per vedere i dettagli e confermare la ricezione.')
+    : ('💶 <b>Ceraldi Presenze — Liquidazione</b>\n\n'
+      + 'Ciao <b>'+escTG(nome)+'</b>, è stato registrato il saldo mensile di <b>'+meseLblCap+'</b>.'
+      + rigaDifferenza
+      + '\nApri l\'app per vedere i dettagli e confermare la ricezione.');
   await inviaNotificaDipendente(dipId, tgDip, '#stipendi');
   // Notifica admin (conferma invio)
   inviaNotificaTelegram('💶 Stipendio <b>'+meseLblCap+'</b> segnato per <b>'+escTG(nome)+'</b> — \u20ac '+netto.toFixed(2)+' — in attesa conferma.');
@@ -14228,9 +14279,25 @@ async function caricaLiquidazioniDipendenti() {
   _liqMostrato.add(liq.id);
   _confLiqId = liq.id;
   const meseLbl = new Date(liq.anno, liq.mese-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
-  $('cl-importo').textContent = '€ ' + parseFloat(liq.importo_netto).toFixed(2);
+  // FIX: qui veniva sempre mostrato importo_netto (il dovuto teorico),
+  // anche quando il versato reale (bonifico+contanti) era inferiore —
+  // dichiarando "Hai ricevuto il pagamento di €1292" a un dipendente che
+  // in realtà aveva ricevuto solo €949, fuorviante. Ora si mostra sempre
+  // quanto è stato VERSATO davvero, e se resta un residuo lo si dichiara
+  // esplicitamente invece di far sembrare il mese saldato per intero.
+  const versato = parseFloat(liq.bonifico||0) + parseFloat(liq.contanti||0);
+  const residuo = parseFloat(liq.importo_netto) - versato;
+  const parziale = residuo > 0.01;
+  $('cl-titolo').textContent = parziale ? 'Hai ricevuto un acconto sullo stipendio di' : 'Hai ricevuto il pagamento di';
+  $('cl-importo').textContent = '€ ' + (versato > 0 ? versato : parseFloat(liq.importo_netto)).toFixed(2);
   const clCau = causaleLbl(liq.causale);
   $('cl-periodo').textContent = meseLbl.charAt(0).toUpperCase() + meseLbl.slice(1) + (clCau ? ' · '+clCau : '');
+  if (parziale) {
+    $('cl-residuo').textContent = '⚠ Mancano ancora € '+residuo.toFixed(2)+' per saldare per intero '+meseLbl+' — verranno versati a parte.';
+    $('cl-residuo').style.display = 'block';
+  } else {
+    $('cl-residuo').style.display = 'none';
+  }
   if (liq.note) { $('cl-note').textContent = liq.note; $('cl-note').style.display='block'; }
   else { $('cl-note').style.display='none'; }
   const btnBusta = $('cl-btn-busta');
