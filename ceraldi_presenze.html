@@ -10572,27 +10572,58 @@ async function toggleAccontoRateiMesi() {
     const oggiCalc = new Date();
     const ratei = calcolaRatei13a14a(prof?.data_assunzione, prof?.paga_giornaliera, oggiCalc.getMonth()+1, oggiCalc.getFullYear());
     const isTredicesima = causale === 'acconto_13';
-    const inizioISO  = isTredicesima ? ratei.inizio13ISO : ratei.inizio14ISO;
-    const fineISO     = isTredicesima ? ratei.fine13ISO    : ratei.fine14ISO;
-    const maturato     = isTredicesima ? ratei.importo13   : ratei.importo14;
-    const numRatei      = isTredicesima ? ratei.ratei13      : ratei.ratei14;
-    const annoInizio    = isTredicesima ? ratei.annoInizio13 : ratei.annoInizio14;
+    // Tutti gli acconti di questa causale (nessun filtro data): serve a
+    // maturato1314 per sommare l'eventuale arretrato del periodo
+    // precedente (se non ancora saldato per intero) a quanto matura nel
+    // periodo nuovo, invece di far sparire un periodo mai pagato appena si
+    // passa a quello successivo.
+    const { data: tuttiAcconti } = await sb.from('presenze_acconti').select('importo,data')
+      .eq('dipendente_id', _accontoDipId).eq('causale', causale);
+    const mat = maturato1314(ratei, isTredicesima ? '13' : '14', tuttiAcconti||[]);
     const periodoLbl = isTredicesima
-      ? ('dic '+annoInizio+' – nov '+(annoInizio+1))
-      : ('lug '+annoInizio+' – giu '+(annoInizio+1));
-    const { data: giaErogati } = await sb.from('presenze_acconti').select('importo')
-      .eq('dipendente_id', _accontoDipId).eq('causale', causale)
-      .gte('data', inizioISO).lte('data', fineISO);
-    const erogatoAntecedente = (giaErogati||[]).reduce((s,a) => s + parseFloat(a.importo), 0);
-    _accRateiMaturato = { dipId: _accontoDipId, causale, maturato, erogatoAntecedente, numRatei, periodoLbl };
+      ? ('dic '+mat.annoInizio+' – nov '+(mat.annoInizio+1))
+      : ('lug '+mat.annoInizio+' – giu '+(mat.annoInizio+1));
+    const arretratoLbl = mat.haArretrato
+      ? (isTredicesima
+        ? ('dic '+mat.arretrato.annoInizio+' – nov '+(mat.arretrato.annoInizio+1))
+        : ('lug '+mat.arretrato.annoInizio+' – giu '+(mat.arretrato.annoInizio+1)))
+      : '';
+    // Anno di scadenza del periodo maturato e non saldato — dic per la 13a,
+    // lug per la 14a, sempre annoInizio+1 del periodo in questione. Cambia
+    // da solo in base a quando si guarda/paga (non è fisso).
+    const arretratoAnno = mat.haArretrato ? mat.arretrato.annoInizio + 1 : null;
+    _accRateiMaturato = {
+      dipId: _accontoDipId, causale, maturato: mat.importo, erogatoAntecedente: mat.erogato, numRatei: mat.ratei, periodoLbl,
+      haArretrato: mat.haArretrato, arretratoRatei: mat.haArretrato?mat.arretrato.ratei:0, arretratoLbl, arretratoAnno,
+      arretratoImporto: mat.haArretrato ? mat.arretrato.importo : 0,
+      arretratoResiduo: mat.haArretrato ? Math.max(0, mat.arretrato.importo - mat.arretrato.erogato) : 0,
+    };
   }
   const r = _accRateiMaturato;
   const residuo = Math.max(0, r.maturato - r.erogatoAntecedente);
   info.innerHTML = '<b>Periodo '+r.periodoLbl+'</b> · '+r.numRatei+'/12 ratei maturati · maturato € '+r.maturato.toFixed(2)
-    + (r.erogatoAntecedente > 0.01 ? '<br>già erogato € '+r.erogatoAntecedente.toFixed(2)+' · residuo € '+residuo.toFixed(2) : '');
+    + (r.haArretrato ? '<br><span style="color:var(--red);font-weight:700">⚠ di cui '+r.arretratoRatei+'/12 maturato anno '+r.arretratoAnno+' non saldato (€'+r.arretratoResiduo.toFixed(2)+')</span>' : '')
+    + (r.erogatoAntecedente > 0.01 ? '<br>già erogato € '+r.erogatoAntecedente.toFixed(2)+' · residuo € '+residuo.toFixed(2) : '')
+    + (r.haArretrato && r.arretratoResiduo > 0.01
+      ? '<br><button type="button" class="btn-sm" style="margin-top:8px;width:100%" onclick="pagaSoloArretrato1314()">💰 Paga maturato anno '+r.arretratoAnno+' — € '+r.arretratoResiduo.toFixed(2)+' ('+r.arretratoRatei+'/12 ratei)</button>'
+      : '');
   const importoDigitato = parseFloat($('acc-importo').value) || 0;
   const sarebbeSaldo = importoDigitato > 0 && (r.erogatoAntecedente + importoDigitato) >= (r.maturato - 0.01) && r.maturato > 0;
   wrap.style.display = sarebbeSaldo ? 'block' : 'none';
+}
+
+// Precompila l'importo con il residuo esatto dell'arretrato (13a/14a
+// maturata nel periodo precedente e non ancora saldata), più ratei/mesi di
+// riferimento — così un tap basta per pagare "quello che manca fino a
+// [mese di erogazione]" senza doverlo calcolare a mano.
+function pagaSoloArretrato1314() {
+  const r = _accRateiMaturato;
+  if (!r || !r.haArretrato) return;
+  $('acc-importo').value = r.arretratoResiduo.toFixed(2);
+  if ($('acc-ratei-coperti')) $('acc-ratei-coperti').value = r.arretratoRatei;
+  if ($('acc-mesi-riferimento')) $('acc-mesi-riferimento').value = r.arretratoLbl;
+  const wrap = $('acc-ratei-wrap');
+  if (wrap) wrap.style.display = 'block'; // mostra i campi anche se non copre l'intero maturato combinato
 }
 
 // Ferie non godute: mostra/nasconde il pannello di liquidazione e carica
@@ -10721,15 +10752,11 @@ async function salvaAcconto() {
     // stesso periodo) raggiunge o supera l'intero importo maturato.
     const oggiIns = new Date(data);
     const ratei = calcolaRatei13a14a(profAcc?.data_assunzione, profAcc?.paga_giornaliera, oggiIns.getMonth()+1, oggiIns.getFullYear());
-    const inizioISO = accCausale === 'acconto_13' ? ratei.inizio13ISO : ratei.inizio14ISO;
-    const fineISO    = accCausale === 'acconto_13' ? ratei.fine13ISO    : ratei.fine14ISO;
-    const maturato    = accCausale === 'acconto_13' ? ratei.importo13   : ratei.importo14;
-    const { data: giaErogati } = await sb.from('presenze_acconti').select('importo')
-      .eq('dipendente_id', _accontoDipId).eq('causale', accCausale)
-      .gte('data', inizioISO).lte('data', fineISO);
-    const totErogato = (giaErogati||[]).reduce((s,a) => s + parseFloat(a.importo), 0);
+    const { data: tuttiAcconti } = await sb.from('presenze_acconti').select('importo,data')
+      .eq('dipendente_id', _accontoDipId).eq('causale', accCausale);
+    const mat = maturato1314(ratei, accCausale === 'acconto_13' ? '13' : '14', tuttiAcconti||[]);
     const nomeMens = accCausale === 'acconto_13' ? 'tredicesima' : 'quattordicesima';
-    vocabolarioTipo = (totErogato >= maturato - 0.01) ? ('il saldo della '+nomeMens) : ('un acconto sulla '+nomeMens);
+    vocabolarioTipo = (mat.erogato >= mat.importo - 0.01) ? ('il saldo della '+nomeMens) : ('un acconto sulla '+nomeMens);
   } else if (accCausale === 'acconto_tfr') {
     vocabolarioTipo = 'un acconto sul TFR';
   } else if (accCausale === 'ferie_non_godute') {
@@ -11079,23 +11106,38 @@ async function caricaStipendi() {
     // Un "Acconto 13ª"/"Acconto 14ª" già erogato in passato va sottratto dal
     // maturato di QUESTA voce, non dallo stipendio del mese — si cercano tra
     // TUTTI gli acconti fino a fine mese (accontiTutti, non solo quelli del
-    // mese in corso), filtrati sul periodo di maturazione della mensilità.
-    const erogato13 = (accontiTutti||[]).filter(a => a.dipendente_id===d.id && a.causale==='acconto_13' && a.data>=ratei.inizio13ISO && a.data<=ratei.fine13ISO).reduce((s,a)=>s+parseFloat(a.importo),0);
-    const erogato14 = (accontiTutti||[]).filter(a => a.dipendente_id===d.id && a.causale==='acconto_14' && a.data>=ratei.inizio14ISO && a.data<=ratei.fine14ISO).reduce((s,a)=>s+parseFloat(a.importo),0);
-    const residuo13 = Math.max(0, ratei.importo13 - erogato13);
-    const residuo14 = Math.max(0, ratei.importo14 - erogato14);
-    const mostra13 = ratei.importo13 > 0;
-    const mostra14 = ratei.importo14 > 0;
-    const badge13 = ratei.maturata13
+    // mese in corso). Si usa maturato1314: se il periodo precedente a
+    // quello calendariale non risulta ancora saldato per intero, il suo
+    // residuo si SOMMA a quanto matura nel periodo nuovo — i ratei possono
+    // quindi superare 12/12 (es. 13/12), segnale visivo di un arretrato
+    // aperto, invece di nascondersi silenziosamente dietro al nuovo periodo
+    // appena iniziato (bug segnalato: la 14ª di un periodo mai pagato
+    // spariva da agosto in poi, sostituita dal nuovo periodo con 1/12
+    // ratei, nascondendo l'arretrato reale).
+    const accs13 = (accontiTutti||[]).filter(a => a.dipendente_id===d.id && a.causale==='acconto_13');
+    const accs14 = (accontiTutti||[]).filter(a => a.dipendente_id===d.id && a.causale==='acconto_14');
+    const mat13 = maturato1314(ratei, '13', accs13);
+    const mat14 = maturato1314(ratei, '14', accs14);
+    const erogato13 = mat13.erogato, erogato14 = mat14.erogato;
+    const residuo13 = mat13.residuo, residuo14 = mat14.residuo;
+    const mostra13 = mat13.importo > 0;
+    const mostra14 = mat14.importo > 0;
+    // "Maturata" (da erogare, avviso in fondo) vale sia per il mese di
+    // erogazione previsto sia, sempre, per un arretrato aperto — a
+    // prescindere dal mese in corso, quel debito non deve sparire
+    // dall'avviso finché non è saldato.
+    const maturata13Effettiva = ratei.maturata13 || mat13.haArretrato;
+    const maturata14Effettiva = ratei.maturata14 || mat14.haArretrato;
+    const badge13 = maturata13Effettiva
       ? (residuo13 > 0.01
         ? '<span style="font-size:10px;font-weight:700;background:rgba(43,74,203,.1);color:var(--accent);padding:2px 7px;border-radius:10px">DA EROGARE</span>'
         : '<span style="font-size:10px;font-weight:700;background:rgba(47,138,92,.12);color:var(--green);padding:2px 7px;border-radius:10px">✓ GIÀ EROGATA</span>')
-      : `<span style="font-size:10px;color:var(--muted)">${ratei.ratei13}/12 ratei</span>`;
-    const badge14 = ratei.maturata14
+      : `<span style="font-size:10px;color:var(--muted)">${mat13.ratei}/12 ratei</span>`;
+    const badge14 = maturata14Effettiva
       ? (residuo14 > 0.01
         ? '<span style="font-size:10px;font-weight:700;background:rgba(43,74,203,.1);color:var(--accent);padding:2px 7px;border-radius:10px">DA EROGARE</span>'
         : '<span style="font-size:10px;font-weight:700;background:rgba(47,138,92,.12);color:var(--green);padding:2px 7px;border-radius:10px">✓ GIÀ EROGATA</span>')
-      : `<span style="font-size:10px;color:var(--muted)">${ratei.ratei14}/12 ratei</span>`;
+      : `<span style="font-size:10px;color:var(--muted)">${mat14.ratei}/12 ratei</span>`;
 
     const accHtml = accs.length ? accs.slice().sort((a,b)=> a.data<b.data?-1:1).map(a => {
       // Su richiesta: una spunta appena registrato (l'admin l'ha già
@@ -11248,10 +11290,10 @@ async function caricaStipendi() {
           <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border)">
             <div>
               <span style="font-size:13px;font-weight:600">🎄 13ª mensilità</span>
-              <div style="font-size:11px;color:var(--muted)">Periodo dic/${ratei.annoInizio13}–nov/${ratei.annoInizio13+1} · ${ratei.ratei13}/12 ratei maturati</div>
+              <div style="font-size:11px;color:var(--muted)">Periodo dic/${mat13.annoInizio}–nov/${mat13.annoInizio+1} · ${mat13.ratei}/12 ratei maturati${mat13.haArretrato ? ' <span style="color:var(--red);font-weight:700">(di cui '+mat13.arretrato.ratei+'/12 maturato anno '+(mat13.arretrato.annoInizio+1)+' non saldato)</span>' : ''}</div>
             </div>
             <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:3px">
-              <span style="font-size:14px;font-weight:800">€ ${ratei.importo13.toFixed(2)}</span>
+              <span style="font-size:14px;font-weight:800">€ ${mat13.importo.toFixed(2)}</span>
               ${badge13}
               ${erogato13 > 0.01 ? '<span style="font-size:10px;color:var(--muted)">già erogato €'+erogato13.toFixed(2)+' · residuo €'+residuo13.toFixed(2)+'</span>' : ''}
             </div>
@@ -11259,15 +11301,15 @@ async function caricaStipendi() {
           <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0">
             <div>
               <span style="font-size:13px;font-weight:600">☀️ 14ª mensilità</span>
-              <div style="font-size:11px;color:var(--muted)">Periodo lug/${ratei.annoInizio14}–giu/${ratei.annoInizio14+1} · ${ratei.ratei14}/12 ratei maturati</div>
+              <div style="font-size:11px;color:var(--muted)">Periodo lug/${mat14.annoInizio}–giu/${mat14.annoInizio+1} · ${mat14.ratei}/12 ratei maturati${mat14.haArretrato ? ' <span style="color:var(--red);font-weight:700">(di cui '+mat14.arretrato.ratei+'/12 maturato anno '+(mat14.arretrato.annoInizio+1)+' non saldato)</span>' : ''}</div>
             </div>
             <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:3px">
-              <span style="font-size:14px;font-weight:800">€ ${ratei.importo14.toFixed(2)}</span>
+              <span style="font-size:14px;font-weight:800">€ ${mat14.importo.toFixed(2)}</span>
               ${badge14}
               ${erogato14 > 0.01 ? '<span style="font-size:10px;color:var(--muted)">già erogato €'+erogato14.toFixed(2)+' · residuo €'+residuo14.toFixed(2)+'</span>' : ''}
             </div>
           </div>
-          ${(ratei.maturata13 || ratei.maturata14) ? '<div style="font-size:11px;color:var(--accent);margin-top:8px;padding:6px 8px;background:rgba(43,74,203,.05);border-radius:8px">⚠️ Questo mese risulta da erogare la mensilità aggiuntiva — coordina con il consulente del lavoro.</div>' : ''}
+          ${(maturata13Effettiva || maturata14Effettiva) ? '<div style="font-size:11px;color:var(--accent);margin-top:8px;padding:6px 8px;background:rgba(43,74,203,.05);border-radius:8px">⚠️ Questo mese risulta da erogare la mensilità aggiuntiva — coordina con il consulente del lavoro.</div>' : ''}
           <div style="font-size:10px;color:var(--muted);margin-top:6px">Calcolate sulla paga mensile stimata (paga gg × 26 ÷ 12 = €${ratei.pagaMensile.toFixed(2)}). Verificare con il consulente.</div>
         </div>` : ''}
         <!-- Ferie + periodi goduti -->
@@ -11446,13 +11488,19 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro) {
   let qPresenze = sb.from('presenze').select('*').gte('data',dal).lte('data',al).order('data');
   let qAcconti = sb.from('presenze_acconti').select('*').gte('data',dal).lte('data',al);
   let qAssenze = sb.from('presenze_assenze').select('*').eq('stato','approvata').or(`and(data_inizio.lte.${al},data_fine.gte.${dal})`);
+  // Acconti 13a/14a SENZA filtro data (tutta la storia): serve a
+  // maturato1314 per capire se il periodo precedente a quello
+  // corrente è già stato saldato per intero, prima di considerarlo
+  // superato nell'export.
+  let qAcconti1314 = sb.from('presenze_acconti').select('dipendente_id,importo,data,causale').in('causale',['acconto_13','acconto_14']);
   if (dipIdFiltro) {
     qProfili  = qProfili.eq('id', dipIdFiltro);
     qPresenze = qPresenze.eq('dipendente_id', dipIdFiltro);
     qAcconti  = qAcconti.eq('dipendente_id', dipIdFiltro);
     qAssenze  = qAssenze.eq('dipendente_id', dipIdFiltro);
+    qAcconti1314 = qAcconti1314.eq('dipendente_id', dipIdFiltro);
   }
-  const [{ data: dipendenti }, { data: presenze }, { data: acconti }, { data: restituzioniXls }, { data: assenze }] = await Promise.all([
+  const [{ data: dipendenti }, { data: presenze }, { data: acconti }, { data: restituzioniXls }, { data: assenze }, { data: acconti1314Tutti }] = await Promise.all([
     qProfili, qPresenze, qAcconti,
     DB.safe(() => {
       let q = sb.from('presenze_restituzioni').select('*').gte('data',dal).lte('data',al);
@@ -11460,6 +11508,7 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro) {
       return q;
     }, null),
     qAssenze,
+    qAcconti1314,
   ]);
   if (dipIdFiltro && (!dipendenti || !dipendenti.length)) { toast('Dipendente non trovato o non attivo'); return; }
 
@@ -11539,15 +11588,22 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro) {
     const retrFlav = festiviLav * paga * 2;          // festività lavorate: 2 paghe
     const totLordoDip = retrOrd + retrFnl + retrFlav;
     const netto = totLordoDip - accTot + restTot;
-    // Ratei 13a e 14a (CCNL art. 183-184)
+    // Ratei 13a e 14a (CCNL art. 183-184) — maturato1314: se il periodo
+    // precedente non è ancora saldato per intero, il suo residuo si SOMMA
+    // al periodo nuovo (ratei possono superare 12/12, segnale di arretrato).
     const rateiXls = calcolaRatei13a14a(d.data_assunzione, paga, parseInt(m), parseInt(y));
+    const acc1314Dip = (acconti1314Tutti||[]).filter(a => a.dipendente_id === d.id);
+    const mat13Xls = maturato1314(rateiXls, '13', acc1314Dip.filter(a => a.causale === 'acconto_13'));
+    const mat14Xls = maturato1314(rateiXls, '14', acc1314Dip.filter(a => a.causale === 'acconto_14'));
+    const maturata13Xls = rateiXls.maturata13 || mat13Xls.haArretrato;
+    const maturata14Xls = rateiXls.maturata14 || mat14Xls.haArretrato;
     const note = [];
     if (festiviLav)  note.push('🔴 '+festiviLav+' festività LAVORATA/E → pagata/e doppia');
     if (festNonLav)  note.push('🟢 '+festNonLav+' festività pagata/e (non lavorata/e)');
     if (festInFerie) note.push((festInFerie)+' festività in ferie → pagata a parte, NON scalata dalle ferie');
     if (festInMal)   note.push((festInMal)+' festività in malattia → pagata comunque');
-    if (rateiXls.maturata13) note.push('🎄 13ª MENSILITÀ DA EROGARE — €'+rateiXls.importo13.toFixed(2));
-    if (rateiXls.maturata14) note.push('☀️ 14ª MENSILITÀ DA EROGARE — €'+rateiXls.importo14.toFixed(2));
+    if (maturata13Xls) note.push('🎄 13ª MENSILITÀ DA EROGARE'+(mat13Xls.haArretrato?' (di cui '+mat13Xls.arretrato.ratei+'/12 maturato anno '+(mat13Xls.arretrato.annoInizio+1)+' non saldato)':'')+' — €'+mat13Xls.importo.toFixed(2));
+    if (maturata14Xls) note.push('☀️ 14ª MENSILITÀ DA EROGARE'+(mat14Xls.haArretrato?' (di cui '+mat14Xls.arretrato.ratei+'/12 maturato anno '+(mat14Xls.arretrato.annoInizio+1)+' non saldato)':'')+' — €'+mat14Xls.importo.toFixed(2));
     if (malDip.length) {
       const prot = malDip.map(a=>a.protocollo_inps).filter(Boolean);
       if (prot.length) note.push('Prot. INPS: '+prot.join(', '));
@@ -11558,7 +11614,7 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro) {
     F1.push([
       nomeDi(d.id), d.codice_fiscale||'', giorniOrdinari, festiviLav, festNonLav, ggFerie, ggMal, ggAltro,
       paga, retrOrd, retrFnl, retrFlav, totLordoDip, accTot, restTot, netto,
-      rateiXls.ratei13+'/12', rateiXls.importo13, rateiXls.ratei14+'/12', rateiXls.importo14,
+      mat13Xls.ratei+'/12', mat13Xls.importo, mat14Xls.ratei+'/12', mat14Xls.importo,
       note.join('; ')
     ]);
     totGord+=giorniOrdinari; totFlav+=festiviLav; totFnonLav+=festNonLav;
@@ -16485,6 +16541,7 @@ function calcolaRatei13a14a(dataAssunzione, pagaGiornaliera, meseCorrente, annoC
   // Stima paga mensile base: paga giornaliera × 26 gg/anno ÷ 12
   // (compatibile con CCNL che usa divisore 26 per i lavoratori a giornata)
   const pagaMensile = paga * 26;
+  const rateo13mese = pagaMensile / 12;
 
   const oggi = new Date(annoCorrente, meseCorrente - 1, 1);
 
@@ -16494,7 +16551,6 @@ function calcolaRatei13a14a(dataAssunzione, pagaGiornaliera, meseCorrente, annoC
     : new Date(annoCorrente - 1, 11, 1);
   const fine13 = new Date(annoCorrente, 10, 30); // 30 novembre anno corrente
   const ratei13 = contaRateiCCNL(inizio13, fine13 < oggi ? fine13 : oggi);
-  const rateo13mese = pagaMensile / 12;
   // Trattenuta 23% applicata direttamente sull'importo (non mostrata a schermo)
   const importo13 = Math.round(ratei13 * rateo13mese * 0.77 * 100) / 100;
 
@@ -16517,6 +16573,29 @@ function calcolaRatei13a14a(dataAssunzione, pagaGiornaliera, meseCorrente, annoC
   // Trattenuta 23% applicata direttamente sull'importo (non mostrata a schermo)
   const importo14 = Math.round(ratei14 * rateo13mese * 0.77 * 100) / 100; // stessa paga, no scatti
 
+  // Periodo IMMEDIATAMENTE PRECEDENTE a quello corrente, sempre chiuso e mai
+  // troncato a oggi (a differenza di inizio/fine sopra) — serve a chi
+  // consuma questi dati per accorgersi se il periodo appena passato non è
+  // ancora stato saldato per intero PRIMA di considerarlo superato: senza
+  // questo, appena si passa al periodo nuovo (dicembre per la 13a, agosto
+  // per la 14a) un vecchio periodo mai pagato spariva semplicemente dalla
+  // vista invece di restare visibile come dovuto.
+  const annoInizio13Prec = annoCorrente - 2;
+  const inizio13Prec = dataAssunzione
+    ? new Date(Math.max(new Date(dataAssunzione), new Date(annoInizio13Prec, 11, 1)))
+    : new Date(annoInizio13Prec, 11, 1);
+  const fine13Prec = new Date(annoInizio13Prec + 1, 10, 30);
+  const ratei13Prec = inizio13Prec <= fine13Prec ? contaRateiCCNL(inizio13Prec, fine13Prec) : 0;
+  const importo13Prec = Math.round(ratei13Prec * rateo13mese * 0.77 * 100) / 100;
+
+  const annoInizio14Prec = annoInizio14 - 1;
+  const inizio14Prec = dataAssunzione
+    ? new Date(Math.max(new Date(dataAssunzione), new Date(annoInizio14Prec, 6, 1)))
+    : new Date(annoInizio14Prec, 6, 1);
+  const fine14Prec = new Date(annoInizio14Prec + 1, 5, 30);
+  const ratei14Prec = inizio14Prec <= fine14Prec ? contaRateiCCNL(inizio14Prec, fine14Prec) : 0;
+  const importo14Prec = Math.round(ratei14Prec * rateo13mese * 0.77 * 100) / 100;
+
   return {
     ratei13, importo13, ratei14, importo14, pagaMensile,
     maturata13: meseCorrente === 12, // erogata a dicembre
@@ -16534,6 +16613,36 @@ function calcolaRatei13a14a(dataAssunzione, pagaGiornaliera, meseCorrente, annoC
     // le date del mese in corso).
     inizio13ISO: _isoDate(inizio13), fine13ISO: _isoDate(fine13 < oggi ? fine13 : oggi),
     inizio14ISO: _isoDate(inizio14), fine14ISO: _isoDate(fine14 < oggi ? fine14 : oggi),
+    // Periodo precedente (sempre chiuso, per il controllo "è stato saldato?")
+    periodoPrec13: { ratei: ratei13Prec, importo: importo13Prec, annoInizio: annoInizio13Prec, inizioISO: _isoDate(inizio13Prec), fineISO: _isoDate(fine13Prec) },
+    periodoPrec14: { ratei: ratei14Prec, importo: importo14Prec, annoInizio: annoInizio14Prec, inizioISO: _isoDate(inizio14Prec), fineISO: _isoDate(fine14Prec) },
+  };
+}
+
+// Calcola il maturato PENDENTE per 13a/14a, sommando l'eventuale arretrato
+// del periodo precedente a quello che matura nel periodo nuovo — invece di
+// alternare tra i due (versione precedente), così il numero di ratei può
+// superare 12/12 (es. 13/12): è il segnale visivo che oltre alla mensilità
+// in corso c'è ancora un pregresso non saldato. Se il periodo precedente
+// risulta già saldato per intero, si comporta come prima: solo il periodo
+// corrente. tipo: '13' oppure '14'. accontiCausale: TUTTI gli acconti di
+// quel dipendente con quella causale (nessun filtro data).
+function maturato1314(ratei, tipo, accontiCausale) {
+  const corrente = tipo === '13'
+    ? { ratei: ratei.ratei13, importo: ratei.importo13, inizioISO: ratei.inizio13ISO, fineISO: ratei.fine13ISO, annoInizio: ratei.annoInizio13 }
+    : { ratei: ratei.ratei14, importo: ratei.importo14, inizioISO: ratei.inizio14ISO, fineISO: ratei.fine14ISO, annoInizio: ratei.annoInizio14 };
+  const prec = tipo === '13' ? ratei.periodoPrec13 : ratei.periodoPrec14;
+  const erogatoCorrente = (accontiCausale||[]).filter(a => a.data >= corrente.inizioISO && a.data <= corrente.fineISO).reduce((s,a) => s + parseFloat(a.importo), 0);
+  let erogatoPrec = 0;
+  const haArretrato = !!(prec && prec.importo > 0 && (erogatoPrec = (accontiCausale||[]).filter(a => a.data >= prec.inizioISO && a.data <= prec.fineISO).reduce((s,a) => s + parseFloat(a.importo), 0)) < prec.importo - 0.01);
+  const rateiTotali = corrente.ratei + (haArretrato ? prec.ratei : 0);
+  const importo = corrente.importo + (haArretrato ? prec.importo : 0);
+  const erogato = erogatoCorrente + (haArretrato ? erogatoPrec : 0);
+  return {
+    ratei: rateiTotali, importo, erogato, residuo: Math.max(0, importo - erogato),
+    annoInizio: corrente.annoInizio, inizioISO: corrente.inizioISO, fineISO: corrente.fineISO,
+    haArretrato, arretrato: haArretrato ? { ratei: prec.ratei, importo: prec.importo, erogato: erogatoPrec, annoInizio: prec.annoInizio } : null,
+    correnteRatei: corrente.ratei, correnteImporto: corrente.importo,
   };
 }
 
