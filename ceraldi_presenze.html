@@ -1666,7 +1666,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
       <div class="field-lbl">Dipendente</div>
       <div id="acc-nome" style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:16px"></div>
       <div class="field-lbl">A cosa si riferisce</div>
-      <select class="field-inp" id="acc-causale" onchange="toggleAccontoFerie()">
+      <select class="field-inp" id="acc-causale" onchange="toggleAccontoFerie(); toggleAccontoRateiMesi();">
         <option value="stipendio">💰 Acconto stipendio</option>
         <option value="acconto_tfr">🏦 Acconto TFR</option>
         <option value="acconto_13">🎄 Acconto 13ª mensilità</option>
@@ -1682,7 +1682,14 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
         <div id="acc-ferie-calcolo" style="font-size:11px;color:var(--muted);margin-top:8px"></div>
       </div>
       <div class="field-lbl">Importo (€)</div>
-      <input class="field-inp" type="number" id="acc-importo" placeholder="es. 200" step="0.01" min="0">
+      <input class="field-inp" type="number" id="acc-importo" placeholder="es. 200" step="0.01" min="0" oninput="toggleAccontoRateiMesi()">
+      <div id="acc-ratei-wrap" style="display:none;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:14px">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Questo importo copre l'intero maturato: è un saldo, non un acconto. Per evitare confusione l'anno prossimo su quali mesi sono già stati pagati, indica i ratei o il periodo coperti (facoltativo, ma consigliato).</div>
+        <div class="field-lbl">Ratei coperti (es. 12)</div>
+        <input class="field-inp" type="number" id="acc-ratei-coperti" placeholder="es. 12" min="0" step="1">
+        <div class="field-lbl">Mesi di riferimento coperti (es. dic 2025 - nov 2026)</div>
+        <input class="field-inp last" type="text" id="acc-mesi-riferimento" placeholder="es. dic 2025 - nov 2026" style="margin-bottom:0">
+      </div>
       <div class="field-lbl">Modalità di pagamento</div>
       <select class="field-inp" id="acc-modalita">
         <option value="contanti">💵 Contanti</option>
@@ -10525,9 +10532,47 @@ function openAcconto(dipId, nome, prefillImporto, prefillNota) {
   if ($('acc-causale')) $('acc-causale').value = 'stipendio';
   if ($('acc-modalita')) $('acc-modalita').value = 'contanti';
   $('acc-ferie-giorni').value = '';
+  if ($('acc-ratei-coperti')) $('acc-ratei-coperti').value = '';
+  if ($('acc-mesi-riferimento')) $('acc-mesi-riferimento').value = '';
+  _accRateiMaturato = null; // forza ricalcolo per il dipendente appena aperto
   toggleAccontoFerie();
+  toggleAccontoRateiMesi();
   hideMsg('acc-msg');
   openSheet('sh-acconto');
+}
+
+// 13a/14a: se l'importo digitato (sommato a quanto già erogato nel
+// periodo) copre l'intero maturato, questo NON è un acconto ma un saldo —
+// mostra i campi per indicare ratei/mesi coperti, così l'anno prossimo non
+// ci sia confusione su cosa è già stato pagato (es. un rateo di agosto
+// versato per errore). Cache per dipendente+causale per non rifare la
+// query a ogni tasto digitato sull'importo.
+let _accRateiMaturato = null;
+async function toggleAccontoRateiMesi() {
+  const wrap = $('acc-ratei-wrap');
+  if (!wrap) return;
+  const causale = $('acc-causale') ? $('acc-causale').value : '';
+  if ((causale !== 'acconto_13' && causale !== 'acconto_14') || !_accontoDipId) {
+    wrap.style.display = 'none';
+    return;
+  }
+  const importoDigitato = parseFloat($('acc-importo').value) || 0;
+  if (importoDigitato <= 0) { wrap.style.display = 'none'; return; }
+  if (!_accRateiMaturato || _accRateiMaturato.dipId !== _accontoDipId || _accRateiMaturato.causale !== causale) {
+    const { data: prof } = await sb.from('presenze_profili').select('data_assunzione,paga_giornaliera').eq('id',_accontoDipId).single();
+    const oggiCalc = new Date();
+    const ratei = calcolaRatei13a14a(prof?.data_assunzione, prof?.paga_giornaliera, oggiCalc.getMonth()+1, oggiCalc.getFullYear());
+    const inizioISO = causale === 'acconto_13' ? ratei.inizio13ISO : ratei.inizio14ISO;
+    const fineISO    = causale === 'acconto_13' ? ratei.fine13ISO    : ratei.fine14ISO;
+    const maturato    = causale === 'acconto_13' ? ratei.importo13   : ratei.importo14;
+    const { data: giaErogati } = await sb.from('presenze_acconti').select('importo')
+      .eq('dipendente_id', _accontoDipId).eq('causale', causale)
+      .gte('data', inizioISO).lte('data', fineISO);
+    const erogatoAntecedente = (giaErogati||[]).reduce((s,a) => s + parseFloat(a.importo), 0);
+    _accRateiMaturato = { dipId: _accontoDipId, causale, maturato, erogatoAntecedente };
+  }
+  const sarebbeSaldo = (_accRateiMaturato.erogatoAntecedente + importoDigitato) >= (_accRateiMaturato.maturato - 0.01) && _accRateiMaturato.maturato > 0;
+  wrap.style.display = sarebbeSaldo ? 'block' : 'none';
 }
 
 // Ferie non godute: mostra/nasconde il pannello di liquidazione e carica
@@ -10613,13 +10658,23 @@ async function salvaAcconto() {
     if (giorniFerieLiquidati > _accFerieResiduo) { showMsg('acc-msg','Superi il residuo ferie disponibile ('+_accFerieResiduo.toFixed(1)+' gg)','err'); return; }
   }
   let insertErr = null;
+  // Ratei/mesi coperti: compilati solo quando i campi (visibili se questo
+  // pagamento è un saldo, non un semplice acconto) sono stati riempiti —
+  // finiscono nella nota così, l'anno prossimo, resta scritto nero su
+  // bianco quali mesi copre questo pagamento specifico (niente più
+  // confusione da dover dedurre solo dalla data di inserimento).
+  const rateiCoperti = ($('acc-ratei-coperti') && $('acc-ratei-wrap').style.display !== 'none') ? $('acc-ratei-coperti').value.trim() : '';
+  const mesiRiferimento = ($('acc-mesi-riferimento') && $('acc-ratei-wrap').style.display !== 'none') ? $('acc-mesi-riferimento').value.trim() : '';
+  let noteAcconto = ($('acc-note').value.trim() || (giorniFerieLiquidati ? giorniFerieLiquidati.toFixed(1)+' giorni di ferie non godute liquidati' : ''));
+  if (rateiCoperti) noteAcconto += (noteAcconto ? ' — ' : '') + 'Ratei coperti: '+rateiCoperti+'.';
+  if (mesiRiferimento) noteAcconto += (noteAcconto ? ' ' : '') + 'Mesi di riferimento: '+mesiRiferimento+'.';
   try {
     await DB.acconti.insert({
       dipendente_id: _accontoDipId,
       importo, data,
       causale:       accCausale,
       modalita,
-      note:          ($('acc-note').value.trim() || (giorniFerieLiquidati ? giorniFerieLiquidati.toFixed(1)+' giorni di ferie non godute liquidati' : null)),
+      note:          noteAcconto || null,
       registrato_da: ME.id,
       letto_dip:     false
     });
@@ -11173,7 +11228,7 @@ async function caricaStipendi() {
           <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border)">
             <div>
               <span style="font-size:13px;font-weight:600">🎄 13ª mensilità</span>
-              <div style="font-size:11px;color:var(--muted)">Periodo dic/${parseInt(y)-1}–nov/${y} · ${ratei.ratei13}/12 ratei maturati</div>
+              <div style="font-size:11px;color:var(--muted)">Periodo dic/${ratei.annoInizio13}–nov/${ratei.annoInizio13+1} · ${ratei.ratei13}/12 ratei maturati</div>
             </div>
             <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:3px">
               <span style="font-size:14px;font-weight:800">€ ${ratei.importo13.toFixed(2)}</span>
@@ -11184,7 +11239,7 @@ async function caricaStipendi() {
           <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0">
             <div>
               <span style="font-size:13px;font-weight:600">☀️ 14ª mensilità</span>
-              <div style="font-size:11px;color:var(--muted)">Periodo lug/${parseInt(y)-1}–giu/${y} · ${ratei.ratei14}/12 ratei maturati</div>
+              <div style="font-size:11px;color:var(--muted)">Periodo lug/${ratei.annoInizio14}–giu/${ratei.annoInizio14+1} · ${ratei.ratei14}/12 ratei maturati</div>
             </div>
             <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:3px">
               <span style="font-size:14px;font-weight:800">€ ${ratei.importo14.toFixed(2)}</span>
@@ -16397,7 +16452,8 @@ async function caricaProfiloDip() {
 */
 /* ═══════ RATEI 13a e 14a MENSILITÀ — CCNL PUBBLICI ESERCIZI/TURISMO-FIPE ═══════
    Art. 183 CCNL — Tredicesima: 1 mensilità, periodo dic(anno prec) → nov(anno corr)
-   Art. 184 CCNL — Quattordicesima: 1 mensilità al 30/6, periodo lug(anno prec) → giu(anno corr)
+   Art. 184 CCNL — Quattordicesima: 1 mensilità, erogata a luglio, periodo
+   lug(anno prec) → giu(anno corr)
    Regola dei 15 giorni: frazione ≥ 15 gg = 1 rateo; < 15 gg non conta.
    Paga di riferimento: paga_giornaliera × 26 (giorni contrattuali/anno) come stima
    della paga mensile base per chi non ha stipendio mensile fisso configurato.
@@ -16422,11 +16478,21 @@ function calcolaRatei13a14a(dataAssunzione, pagaGiornaliera, meseCorrente, annoC
   // Trattenuta 23% applicata direttamente sull'importo (non mostrata a schermo)
   const importo13 = Math.round(ratei13 * rateo13mese * 0.77 * 100) / 100;
 
-  // ── 14a: periodo 1° luglio anno prec → 30 giugno anno corr ──
+  // ── 14a: periodo 1° luglio → 30 giugno anno successivo, erogata a luglio ──
+  // FIX bug reale segnalato: il periodo restava sempre "1° luglio anno
+  // prec → 30 giugno anno corr" qualunque fosse il mese selezionato, quindi
+  // una volta superato giugno i ratei restavano CONGELATI per sempre (non
+  // saliva più nulla, mai, guardando luglio, agosto o qualsiasi mese
+  // successivo — non solo temporaneamente). A luglio (mese di erogazione)
+  // continuiamo a mostrare il periodo appena chiuso, così l'importo dovuto
+  // resta quello giusto da pagare; da AGOSTO in poi il periodo scorre in
+  // avanti di un anno (1° luglio di QUEST'anno → 30 giugno del prossimo),
+  // che riparte da zero e torna a crescere mese per mese come deve.
+  const annoInizio14 = meseCorrente >= 8 ? annoCorrente : annoCorrente - 1;
   const inizio14 = dataAssunzione
-    ? new Date(Math.max(new Date(dataAssunzione), new Date(annoCorrente - 1, 6, 1)))
-    : new Date(annoCorrente - 1, 6, 1);
-  const fine14 = new Date(annoCorrente, 5, 30); // 30 giugno anno corrente
+    ? new Date(Math.max(new Date(dataAssunzione), new Date(annoInizio14, 6, 1)))
+    : new Date(annoInizio14, 6, 1);
+  const fine14 = new Date(annoInizio14 + 1, 5, 30); // 30 giugno dell'anno successivo a annoInizio14
   const ratei14 = contaRateiCCNL(inizio14, fine14 < oggi ? fine14 : oggi);
   // Trattenuta 23% applicata direttamente sull'importo (non mostrata a schermo)
   const importo14 = Math.round(ratei14 * rateo13mese * 0.77 * 100) / 100; // stessa paga, no scatti
@@ -16434,7 +16500,13 @@ function calcolaRatei13a14a(dataAssunzione, pagaGiornaliera, meseCorrente, annoC
   return {
     ratei13, importo13, ratei14, importo14, pagaMensile,
     maturata13: meseCorrente === 12, // erogata a dicembre
-    maturata14: meseCorrente === 6,  // erogata a giugno
+    maturata14: meseCorrente === 7,  // erogata a luglio (corretto: era giugno)
+    // Anno di inizio dei due periodi — usato per l'etichetta a schermo
+    // ("Periodo dic/X–nov/Y" ecc). Esposto esplicitamente perché fine13ISO/
+    // fine14ISO sotto sono TRONCATI a oggi se il periodo è ancora in corso,
+    // quindi non rappresentano in modo affidabile la vera fine del periodo.
+    annoInizio13: annoCorrente - 1,
+    annoInizio14,
     // Date del periodo di maturazione (per nettare eventuali acconti già
     // erogati con causale "acconto_13"/"acconto_14" in quel periodo — un
     // acconto TFR/13a/14a non deve scalare lo stipendio del mese, ma la
