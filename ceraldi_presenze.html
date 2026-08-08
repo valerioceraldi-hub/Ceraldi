@@ -1594,6 +1594,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
         <button class="btn-sm" style="flex-shrink:0;white-space:nowrap" onclick="apriStoricoPaga()">📈 Storico / aumento</button>
       </div>
       <div style="font-size:11px;color:var(--muted);margin:-10px 0 14px;line-height:1.5">Per modificarla usa "Storico / aumento": ogni cambio resta registrato con la data, così hai lo storico completo degli aumenti percepiti dal dipendente (usato anche per il calcolo del TFR).</div>
+      <button type="button" class="btn-sm" style="width:100%;margin-bottom:14px;background:rgba(43,74,203,.06);border-color:rgba(43,74,203,.25)" onclick="apriLiquidazioneCompleta()">💰 Situazione liquidazione completa</button>
       <div class="field-lbl" style="margin-top:14px">Compenso netto mensile fisso (€)</div>
       <input class="field-inp field-inp last" type="number" id="ana-netto-fisso" placeholder="es. 1500" step="0.01" min="0">
       <div style="font-size:11px;color:var(--muted);margin:-6px 0 14px;line-height:1.5">Per chi non è pagato in base alle presenze registrate (es. Co.Co.Co/amministratori con compenso mensile fisso): usato come base per la previsione F24 al posto del calcolo presenze × paga giornaliera.</div>
@@ -1624,6 +1625,15 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     <div class="sheet-foot">
       <button class="btn-primary" onclick="salvaAnagrafica()">Salva scheda</button>
     </div>
+  </div>
+</div>
+
+<!-- ── SHEET: situazione liquidazione completa ── -->
+<div class="overlay" id="sh-liquidazione-completa">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-hdr"><span class="sheet-title">Situazione liquidazione</span><button class="sheet-cls" onclick="closeSheet('sh-liquidazione-completa')">✕</button></div>
+    <div class="sheet-body" id="liqc-body"></div>
   </div>
 </div>
 
@@ -2548,13 +2558,13 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
   <div class="sheet">
     <div class="sheet-handle"></div>
     <div class="sheet-hdr">
-      <span class="sheet-title">Acconto ricevuto</span>
+      <span class="sheet-title" id="ca-titolo-sheet">Acconto ricevuto</span>
       <button class="sheet-cls" onclick="closeSheet('sh-confAcconto')">&#x2715;</button>
     </div>
     <div class="sheet-body">
       <div style="text-align:center;padding:10px 0 16px">
         <div style="font-size:48px;margin-bottom:10px">&#x1F4B6;</div>
-        <div style="font-size:14px;color:var(--muted);margin-bottom:4px">Hai ricevuto un acconto di</div>
+        <div style="font-size:14px;color:var(--muted);margin-bottom:4px" id="ca-titolo-testo">Hai ricevuto un acconto di</div>
         <div style="font-size:36px;font-weight:800;letter-spacing:-1px;color:var(--green)" id="ca-importo"></div>
         <div style="font-size:13px;color:var(--muted);margin-top:6px" id="ca-data"></div>
       </div>
@@ -10142,6 +10152,229 @@ async function salvaAnagrafica() {
   await caricaDipendenti();
 }
 
+/* ═══════ SITUAZIONE LIQUIDAZIONE COMPLETA (scheda dipendente) ═══════
+   Riepilogo di tutto ciò che risulterebbe da liquidare a un dipendente in
+   un dato momento: stipendio del mese in corso, arretrati di mesi passati
+   mai liquidati, 13a/14a maturate (con eventuale arretrato di periodi
+   precedenti, stessa logica di maturato1314), ferie non godute, TFR
+   stimato dalle presenze, e il totale storico di quanto già erogato in
+   acconti (informativo). Ricostruita dallo storico presenze/acconti/
+   liquidazioni — è una stima operativa, non sostituisce il consulente. */
+let _liqcUltimoCalcolo = null; // dati dell'ultima Situazione liquidazione calcolata, per l'export
+async function apriLiquidazioneCompleta() {
+  const dipId = _anagraficaId;
+  if (!dipId) return;
+  openSheet('sh-liquidazione-completa');
+  const body = $('liqc-body');
+  body.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+
+  const oggi = new Date();
+  const meseCorrente = oggi.getMonth()+1, annoCorrente = oggi.getFullYear();
+  const oggiISO = todayISO();
+
+  const [{ data: d }, { data: storicoPaga }, { data: presenzeTutte }, { data: accontiTutti }, { data: restituzioniTutte }, { data: liquidazTutte }, { data: assenzeFerie }] = await Promise.all([
+    sb.from('presenze_profili').select('*').eq('id', dipId).single(),
+    sb.from('presenze_storico_paga').select('paga_giornaliera,data_decorrenza').eq('dipendente_id', dipId).order('data_decorrenza',{ascending:true}),
+    sb.from('presenze').select('data').eq('dipendente_id', dipId),
+    sb.from('presenze_acconti').select('importo,data,causale').eq('dipendente_id', dipId),
+    sb.from('presenze_restituzioni').select('importo,data').eq('dipendente_id', dipId),
+    sb.from('presenze_liquidazioni').select('mese,anno').eq('dipendente_id', dipId),
+    sb.from('presenze_assenze').select('data_inizio,data_fine').eq('dipendente_id', dipId).eq('stato','approvata').eq('tipo','ferie'),
+  ]);
+  if (!d) { body.innerHTML = '<div class="empty"><div class="empty-txt">Dipendente non trovato</div></div>'; return; }
+
+  const nome = d.nome+(d.cognome?' '+d.cognome:'');
+  const paga = parseFloat(d.paga_giornaliera) || 0;
+  const dateTutte = new Set((presenzeTutte||[]).map(p=>p.data));
+  const giorniLavoratiTotali = dateTutte.size;
+  const causaliStip = a => !a.causale || a.causale==='stipendio' || a.causale==='acconto_stipendio';
+
+  function lordoPeriodo(dateSet, dalP, alP, pagaP, festSet) {
+    const giorni = dateSet.size;
+    const giorniFestivoLav = [...dateSet].filter(dt => festSet.has(dt)).length;
+    const giorniOrdinari = giorni - giorniFestivoLav;
+    const alPClamp = alP < oggiISO ? alP : oggiISO;
+    const festPeriodo = [...festSet].filter(dt => dt >= dalP && dt <= alPClamp);
+    const giorniFestivoNonLav = festPeriodo.filter(dt => !dateSet.has(dt)).length;
+    return giorniOrdinari*pagaP + giorniFestivoLav*pagaP*2 + giorniFestivoNonLav*pagaP;
+  }
+
+  // ── Stipendio mese in corso (non ancora liquidato) ──
+  const ultimoGgCorr = new Date(annoCorrente, meseCorrente, 0).getDate();
+  const dalMeseCorr = annoCorrente+'-'+String(meseCorrente).padStart(2,'0')+'-01';
+  const alMeseCorr  = annoCorrente+'-'+String(meseCorrente).padStart(2,'0')+'-'+String(ultimoGgCorr).padStart(2,'0');
+  const festSetAnnoCorr = new Set(Object.keys(festivitaItaliane(annoCorrente)));
+  const dateMeseCorr = new Set([...dateTutte].filter(dt => dt>=dalMeseCorr && dt<=alMeseCorr));
+  const lordoMeseCorr = lordoPeriodo(dateMeseCorr, dalMeseCorr, alMeseCorr, paga, festSetAnnoCorr);
+  const accMeseCorr = (accontiTutti||[]).filter(a => causaliStip(a) && a.data>=dalMeseCorr && a.data<=alMeseCorr).reduce((s,a)=>s+parseFloat(a.importo),0);
+  const restMeseCorr = (restituzioniTutte||[]).filter(r => r.data>=dalMeseCorr && r.data<=alMeseCorr).reduce((s,r)=>s+parseFloat(r.importo),0);
+  const meseCorrenteGiaLiquidato = (liquidazTutte||[]).some(l => l.mese===meseCorrente && l.anno===annoCorrente);
+  const stipendioInCorso = meseCorrenteGiaLiquidato ? 0 : (lordoMeseCorr - accMeseCorr + restMeseCorr);
+
+  // ── Arretrati/crediti: mesi PASSATI non liquidati, dall'assunzione a oggi ──
+  const meseLiquidatoSet = new Set((liquidazTutte||[]).map(l => l.mese+'-'+l.anno));
+  const arretratoDettaglio = [];
+  if (d.data_assunzione) {
+    let cy = annoCorrente, cm = meseCorrente - 1;
+    if (cm === 0) { cm = 12; cy -= 1; }
+    const dataAss = new Date(d.data_assunzione+'T00:00:00');
+    const storicoEff0 = (storicoPaga&&storicoPaga.length) ? storicoPaga : [{ paga_giornaliera: paga, data_decorrenza: d.data_assunzione }];
+    while (new Date(cy, cm-1, 1) >= new Date(dataAss.getFullYear(), dataAss.getMonth(), 1)) {
+      const key = cm+'-'+cy;
+      if (!meseLiquidatoSet.has(key)) {
+        const ultimoGg = new Date(cy, cm, 0).getDate();
+        const dalM = cy+'-'+String(cm).padStart(2,'0')+'-01';
+        const alM  = cy+'-'+String(cm).padStart(2,'0')+'-'+String(ultimoGg).padStart(2,'0');
+        const dateM = new Set([...dateTutte].filter(dt=>dt>=dalM&&dt<=alM));
+        const accM = (accontiTutti||[]).filter(a=>causaliStip(a) && a.data>=dalM&&a.data<=alM).reduce((s,a)=>s+parseFloat(a.importo),0);
+        const restM = (restituzioniTutte||[]).filter(r=>r.data>=dalM&&r.data<=alM).reduce((s,r)=>s+parseFloat(r.importo),0);
+        if (dateM.size>0 || accM>0 || restM>0) {
+          const festSetM = new Set(Object.keys(festivitaItaliane(cy)));
+          const pagaM = _pagaApplicabile(storicoEff0, alM) ?? storicoEff0[0].paga_giornaliera;
+          const lordoM = lordoPeriodo(dateM, dalM, alM, pagaM, festSetM);
+          const nettoM = lordoM - accM + restM;
+          if (Math.abs(nettoM) > 0.005) arretratoDettaglio.push({ meseLbl: new Date(cy,cm-1,1).toLocaleDateString('it-IT',{month:'long',year:'numeric'}), netto: nettoM });
+        }
+      }
+      cm -= 1; if (cm===0){cm=12;cy-=1;}
+    }
+  }
+  const arretratoTotale = arretratoDettaglio.reduce((s,a)=>s+a.netto,0);
+
+  // ── 13a / 14a (stessa logica del maturato1314 già usato in Stipendi) ──
+  const ratei = calcolaRatei13a14a(d.data_assunzione, paga, meseCorrente, annoCorrente);
+  const mat13 = maturato1314(ratei, '13', (accontiTutti||[]).filter(a=>a.causale==='acconto_13'));
+  const mat14 = maturato1314(ratei, '14', (accontiTutti||[]).filter(a=>a.causale==='acconto_14'));
+
+  // ── Ferie non godute ──
+  const goduteFerie = (assenzeFerie||[]).reduce((s,a)=> s + (Math.round((new Date(a.data_fine)-new Date(a.data_inizio))/86400000)+1), 0);
+  const ferieCalc = calcolaFerieMaturate(d.data_assunzione, d.ferie_annuali||26, goduteFerie, d.ferie_godute_extra);
+  const ferieValore = Math.max(0, ferieCalc.residue) * paga;
+
+  // ── TFR maturato (stessa logica di calcolaTfrStoricoDaPresenze, per il solo dipendente aperto) ──
+  const perMeseSet = {};
+  (presenzeTutte||[]).filter(p=>!d.data_assunzione || p.data>=d.data_assunzione).forEach(p => { const k=p.data.slice(0,7); (perMeseSet[k]=perMeseSet[k]||new Set()).add(p.data); });
+  const storicoEffTfr = (storicoPaga&&storicoPaga.length) ? storicoPaga : [{ paga_giornaliera: paga, data_decorrenza: d.data_assunzione }];
+  let tfrTotale = 0;
+  Object.keys(perMeseSet).sort().forEach(meseChiave => {
+    const giorni = perMeseSet[meseChiave].size;
+    const pagaM = _pagaApplicabile(storicoEffTfr, meseChiave+'-28') ?? storicoEffTfr[0].paga_giornaliera;
+    if (!pagaM) return;
+    const retribM = giorni*pagaM;
+    tfrTotale += retribM/13.5 - retribM*0.005;
+  });
+  const erogatoTfr = (accontiTutti||[]).filter(a=>a.causale==='acconto_tfr').reduce((s,a)=>s+parseFloat(a.importo),0);
+  const tfrResiduo = Math.max(0, tfrTotale - erogatoTfr);
+
+  // ── Acconti erogati totali (informativo — già scorporati singolarmente sopra, non si sottraggono di nuovo) ──
+  const accontiTotaliStorico = (accontiTutti||[]).reduce((s,a)=>s+parseFloat(a.importo),0);
+
+  const totaleFinale = stipendioInCorso + arretratoTotale + mat13.residuo + mat14.residuo + ferieValore + tfrResiduo;
+
+  // Salvato per l'export (evita ricalcolare tutto al click su "Esporta")
+  _liqcUltimoCalcolo = {
+    nome, dataAssunzione: d.data_assunzione, giorniLavoratiTotali, paga,
+    stipendioInCorso, meseCorrenteGiaLiquidato, arretratoDettaglio, arretratoTotale,
+    mat13, mat14, ferieCalc, ferieValore, tfrResiduo, accontiTotaliStorico, totaleFinale,
+  };
+
+  const riga = (l,v,opts) => '<div style="display:flex;justify-content:space-between;align-items:center;padding:'+(opts&&opts.big?'9px':'6px')+' 0'+(opts&&opts.border?';border-top:1px solid var(--border)':'')+'"><span style="font-size:'+(opts&&opts.big?'14px':'13px')+';font-weight:'+(opts&&opts.big?'800':'600')+'">'+l+'</span><span style="font-size:'+(opts&&opts.big?'16px':'13px')+';font-weight:'+(opts&&opts.big?'800':'700')+';color:'+(v<0?'var(--red)':'var(--text)')+'">€ '+v.toFixed(2)+'</span></div>';
+
+  let html = '<button type="button" class="btn-sm" style="width:100%;margin-bottom:14px" onclick="esportaLiquidazioneCompleta()">📄 Esporta per il dipendente</button>';
+  html += '<div style="font-size:11px;color:var(--muted);background:var(--bg);border-radius:10px;padding:10px 12px;margin-bottom:14px;line-height:1.5">Ricostruita dallo storico di presenze, acconti e liquidazioni registrati in app — è una stima operativa, verifica sempre col consulente prima di una liquidazione reale.</div>';
+
+  html += '<div class="card" style="padding:14px;margin-bottom:12px">'
+    + '<div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">📅 Storico</div>'
+    + '<div style="display:flex;justify-content:space-between;padding:6px 0"><span style="font-size:13px;font-weight:600">Giorni lavorati totali (da sempre)</span><span style="font-size:13px;font-weight:700">'+giorniLavoratiTotali+' gg</span></div>'
+    + (d.data_assunzione ? '<div style="display:flex;justify-content:space-between;padding:6px 0"><span style="font-size:13px;font-weight:600">Assunto il</span><span style="font-size:13px;font-weight:700">'+new Date(d.data_assunzione).toLocaleDateString('it-IT')+'</span></div>' : '')
+    + '</div>';
+
+  html += '<div class="card" style="padding:14px;margin-bottom:12px">'
+    + '<div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">💰 Stipendio</div>'
+    + riga(meseCorrenteGiaLiquidato ? 'Mese in corso (già liquidato)' : 'Mese in corso (non ancora liquidato)', stipendioInCorso)
+    + riga('Arretrati mesi precedenti'+(arretratoDettaglio.length?' ('+arretratoDettaglio.length+')':''), arretratoTotale)
+    + (arretratoDettaglio.length ? '<div style="margin-top:4px;padding-left:8px;border-left:2px solid var(--border)">' + arretratoDettaglio.map(a=>'<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);padding:2px 0;text-transform:capitalize"><span>'+a.meseLbl+'</span><span>€ '+a.netto.toFixed(2)+'</span></div>').join('') + '</div>' : '')
+    + '</div>';
+
+  html += '<div class="card" style="padding:14px;margin-bottom:12px">'
+    + '<div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">🎄☀️ Mensilità aggiuntive</div>'
+    + riga('13ª mensilità — residuo da erogare'+(mat13.haArretrato?' (incl. arretrato)':''), mat13.residuo)
+    + riga('14ª mensilità — residuo da erogare'+(mat14.haArretrato?' (incl. arretrato)':''), mat14.residuo)
+    + '</div>';
+
+  html += '<div class="card" style="padding:14px;margin-bottom:12px">'
+    + '<div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">🌴 Ferie non godute</div>'
+    + riga(ferieCalc.residue.toFixed(1)+' giorni residui × € '+paga.toFixed(2)+'/gg', ferieValore)
+    + '</div>';
+
+  html += '<div class="card" style="padding:14px;margin-bottom:12px">'
+    + '<div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">🏦 TFR</div>'
+    + riga('TFR lordo stimato dalle presenze', tfrResiduo)
+    + '<div style="font-size:10px;color:var(--muted);margin-top:4px">Stima dalle presenze in app, già al netto di eventuali acconti TFR erogati.</div>'
+    + '</div>';
+
+  if (accontiTotaliStorico > 0.01) {
+    html += '<div class="card" style="padding:14px;margin-bottom:12px">'
+      + '<div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">📋 Acconti erogati (storico, informativo)</div>'
+      + riga('Totale acconti erogati di ogni tipo, da sempre', accontiTotaliStorico)
+      + '<div style="font-size:10px;color:var(--muted);margin-top:4px">Già scorporati singolarmente nelle voci sopra — questa riga è solo un riepilogo, non va sottratta di nuovo dal totale.</div>'
+      + '</div>';
+  }
+
+  html += '<div class="card" style="padding:16px;background:rgba(47,138,92,.06);border-color:rgba(47,138,92,.3)">'
+    + riga('TOTALE DA LIQUIDARE', totaleFinale, {big:true})
+    + '</div>';
+
+  body.innerHTML = html;
+}
+
+// Genera un documento stampabile (via _wrapModello, stesso pattern usato
+// per gli altri modelli scaricabili) con il riepilogo della Situazione
+// liquidazione, da mostrare/consegnare al dipendente.
+function esportaLiquidazioneCompleta() {
+  const c = _liqcUltimoCalcolo;
+  if (!c) { toast('Calcola prima la situazione'); return; }
+  const oggiLbl = new Date().toLocaleDateString('it-IT',{day:'2-digit',month:'long',year:'numeric'});
+  const rigaDoc = (l,v) => '<div class="campo" style="display:flex;justify-content:space-between;border-bottom:1pt solid #ddd"><span>'+l+'</span><span><b>€ '+v.toFixed(2)+'</b></span></div>';
+  const corpo = '<div class="azienda">Ceraldi Group S.r.l. — Caffetteria Ceraldi<br>Piazza Carità 14, Napoli</div>'
+    + '<h1>SITUAZIONE LIQUIDAZIONE</h1>'
+    + '<div class="campo"><b>Dipendente:</b> '+esc(c.nome)+'</div>'
+    + (c.dataAssunzione ? '<div class="campo"><b>Data assunzione:</b> '+new Date(c.dataAssunzione).toLocaleDateString('it-IT')+'</div>' : '')
+    + '<div class="campo"><b>Giorni lavorati totali (da sempre):</b> '+c.giorniLavoratiTotali+'</div>'
+    + '<div class="campo"><b>Data calcolo:</b> '+oggiLbl+'</div>'
+    + '<h2>Stipendio</h2>'
+    + rigaDoc(c.meseCorrenteGiaLiquidato ? 'Mese in corso (già liquidato)' : 'Mese in corso (non ancora liquidato)', c.stipendioInCorso)
+    + rigaDoc('Arretrati mesi precedenti', c.arretratoTotale)
+    + (c.arretratoDettaglio.length ? '<div class="box" style="margin-top:6pt">' + c.arretratoDettaglio.map(a=>'<div style="display:flex;justify-content:space-between;text-transform:capitalize"><span>'+a.meseLbl+'</span><span>€ '+a.netto.toFixed(2)+'</span></div>').join('') + '</div>' : '')
+    + '<h2>Mensilità aggiuntive</h2>'
+    + rigaDoc('13ª mensilità — residuo da erogare'+(c.mat13.haArretrato?' (incl. arretrato)':''), c.mat13.residuo)
+    + rigaDoc('14ª mensilità — residuo da erogare'+(c.mat14.haArretrato?' (incl. arretrato)':''), c.mat14.residuo)
+    + '<h2>Ferie non godute</h2>'
+    + rigaDoc(c.ferieCalc.residue.toFixed(1)+' giorni residui × € '+c.paga.toFixed(2)+'/gg', c.ferieValore)
+    + '<h2>TFR</h2>'
+    + rigaDoc('TFR lordo stimato dalle presenze, già al netto di eventuali acconti TFR', c.tfrResiduo)
+    + (c.accontiTotaliStorico > 0.01 ? ('<h2>Acconti erogati (storico)</h2>' + rigaDoc('Totale acconti erogati di ogni tipo, da sempre (già scorporati sopra)', c.accontiTotaliStorico)) : '')
+    + '<div class="box" style="margin-top:16pt;font-size:13pt"><b>TOTALE DA LIQUIDARE: € '+c.totaleFinale.toFixed(2)+'</b></div>'
+    + '<p class="nota">Ricostruita dallo storico di presenze, acconti e liquidazioni registrati in app. È una stima operativa: verificare sempre col consulente del lavoro prima di una liquidazione reale.</p>';
+  try {
+    const htmlDoc = _wrapModello('Situazione liquidazione — '+c.nome, corpo);
+    const w = window.open('', '_blank');
+    if (w) {
+      w.document.write(htmlDoc);
+      w.document.close();
+      toast('✓ Documento aperto — usa Stampa per salvare PDF o condividerlo');
+    } else {
+      const blob = new Blob([htmlDoc], { type: 'text/html;charset=utf-8' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url; a.download = 'situazione_liquidazione_'+c.nome.replace(/\s+/g,'_')+'.html';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 3000);
+      toast('✓ File salvato — aprilo con Safari');
+    }
+  } catch(e) { toast('Errore: ' + e.message); }
+}
+
 /* ── CERTIFICAZIONE CONTATTI ────────────────────────── */
 let _certTipo = null; // 'tel' o 'email'
 let _certDipId = null;
@@ -10775,7 +11008,12 @@ async function salvaAcconto() {
       .eq('dipendente_id', _accontoDipId).eq('causale', accCausale);
     const mat = maturato1314(ratei, accCausale === 'acconto_13' ? '13' : '14', tuttiAcconti||[]);
     const nomeMens = accCausale === 'acconto_13' ? 'tredicesima' : 'quattordicesima';
-    vocabolarioTipo = (mat.erogato >= mat.importo - 0.01) ? ('il saldo della '+nomeMens) : ('un acconto sulla '+nomeMens);
+    if (mat.erogato >= mat.importo - 0.01 && mat.importo > 0) {
+      const annoRif = mat.haArretrato ? (mat.arretrato.annoInizio+1) : (mat.annoInizio+1);
+      vocabolarioTipo = 'la '+nomeMens+' '+annoRif;
+    } else {
+      vocabolarioTipo = 'un acconto sulla '+nomeMens;
+    }
   } else if (accCausale === 'acconto_tfr') {
     vocabolarioTipo = 'un acconto sul TFR';
   } else if (accCausale === 'ferie_non_godute') {
@@ -11026,7 +11264,7 @@ async function caricaStipendi() {
         const alMese  = cy+'-'+String(cm).padStart(2,'0')+'-'+String(ultimoGgMese).padStart(2,'0');
         const presMese = (presenzePrecedenti||[]).filter(p => p.dipendente_id===dipId && p.data>=dalMese && p.data<=alMese);
         const dateMese = new Set(presMese.map(p => p.data));
-        const accMese  = (accontiTutti||[]).filter(a => a.dipendente_id===dipId && a.data>=dalMese && a.data<=alMese && (!a.causale || a.causale==='stipendio'))
+        const accMese  = (accontiTutti||[]).filter(a => a.dipendente_id===dipId && a.data>=dalMese && a.data<=alMese && (!a.causale || a.causale==='stipendio' || a.causale==='acconto_stipendio'))
           .reduce((s,a)=>s+parseFloat(a.importo),0);
         const restMese = (restituzioniTutte||[]).filter(r => r.dipendente_id===dipId && r.data>=dalMese && r.data<=alMese)
           .reduce((s,r)=>s+parseFloat(r.importo),0);
@@ -11084,7 +11322,7 @@ async function caricaStipendi() {
     // "stipendio" (o senza causale, i record vecchi di prima che esistesse
     // questo campo) — le altre causali si vedono comunque nell'elenco qui
     // sotto, ma non toccano più "Da pagare".
-    const accsStipendio = accs.filter(a => !a.causale || a.causale === 'stipendio');
+    const accsStipendio = accs.filter(a => !a.causale || a.causale === 'stipendio' || a.causale === 'acconto_stipendio');
     const totAcc = accsStipendio.reduce((s,a) => s + parseFloat(a.importo), 0);
     // FIX: il netto non teneva conto delle restituzioni ricevute — se un
     // dipendente aveva restituito soldi presi in eccesso, quel rimborso
@@ -11600,7 +11838,7 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro) {
     // Stesso fix della schermata Stipendi: solo gli acconti causale
     // "stipendio" (o senza causale) riducono il Netto da pagare — un
     // acconto TFR/13a/14a/ferie non è un anticipo sullo stipendio.
-    const accTot = accs.filter(a => !a.causale || a.causale === 'stipendio').reduce((s,a)=>s+parseFloat(a.importo||0),0);
+    const accTot = accs.filter(a => !a.causale || a.causale === 'stipendio' || a.causale === 'acconto_stipendio').reduce((s,a)=>s+parseFloat(a.importo||0),0);
     const restTot = (restituzioniXls||[]).filter(r=>r.dipendente_id===d.id).reduce((s,r)=>s+parseFloat(r.importo||0),0);
     // Giorni ferie/malattia AL NETTO delle festività ricadenti (la festività non si conta come ferie/malattia)
     const ggFerie = Math.max(0, ferieDip.reduce((s,a)=>s+giorniNelMese(a.data_inizio,a.data_fine),0) - festInFerie);
@@ -11796,7 +12034,7 @@ async function esportaStipendi() {
   (dipendenti||[]).forEach(d => {
     const giorni = new Set((presenze||[]).filter(p=>p.dipendente_id===d.id).map(p=>p.data)).size;
     const paga   = parseFloat(d.paga_giornaliera)||0;
-    const totAcc = (acconti||[]).filter(a=>a.dipendente_id===d.id && (!a.causale || a.causale==='stipendio')).reduce((s,a)=>s+parseFloat(a.importo),0);
+    const totAcc = (acconti||[]).filter(a=>a.dipendente_id===d.id && (!a.causale || a.causale==='stipendio' || a.causale==='acconto_stipendio')).reduce((s,a)=>s+parseFloat(a.importo),0);
     csv += [
       '"'+(d.nome+(d.cognome?' '+d.cognome:''))+'"',
       '"'+(d.codice_fiscale||'')+'"',
@@ -14527,6 +14765,30 @@ async function caricaAccontiDipendenti() {
   _confAccId = acc.id;
   $('ca-importo').textContent = '€ ' + parseFloat(acc.importo).toFixed(2);
   $('ca-data').textContent = new Date(acc.data).toLocaleDateString('it-IT',{day:'2-digit',month:'long',year:'numeric'});
+  // Titolo dinamico: per 13a/14a, se l'importo (con lo storico della
+  // stessa causale) copre l'intero maturato del periodo, NON è un acconto
+  // — dirlo così è fuorviante. Si dice invece "hai avuto la
+  // tredicesima/quattordicesima [anno]", stessa logica già usata per il
+  // messaggio Telegram/push in salvaAcconto().
+  let titoloSheet = 'Acconto ricevuto';
+  let titoloTesto = 'Hai ricevuto un acconto di';
+  if (acc.causale === 'acconto_13' || acc.causale === 'acconto_14') {
+    const isTred = acc.causale === 'acconto_13';
+    const oggiAcc = new Date(acc.data);
+    const ratei = calcolaRatei13a14a(ME.data_assunzione, ME.paga_giornaliera, oggiAcc.getMonth()+1, oggiAcc.getFullYear());
+    const { data: storicoCausale } = await sb.from('presenze_acconti').select('importo,data').eq('dipendente_id', ME.id).eq('causale', acc.causale);
+    const mat = maturato1314(ratei, isTred?'13':'14', storicoCausale||[]);
+    const nomeMens = isTred ? 'tredicesima' : 'quattordicesima';
+    if (mat.erogato >= mat.importo - 0.01 && mat.importo > 0) {
+      const annoRif = mat.haArretrato ? (mat.arretrato.annoInizio+1) : (mat.annoInizio+1);
+      titoloSheet = (isTred?'13ª':'14ª')+' mensilità ricevuta';
+      titoloTesto = 'Hai avuto la '+nomeMens+' '+annoRif;
+    } else {
+      titoloTesto = 'Hai ricevuto un acconto sulla '+nomeMens+' di';
+    }
+  }
+  $('ca-titolo-sheet').textContent = titoloSheet;
+  $('ca-titolo-testo').textContent = titoloTesto;
   const caCau = causaleLbl(acc.causale);
   const caTxt = [caCau ? 'Riferimento: '+caCau : '', acc.note||''].filter(Boolean).join(' · ');
   if (caTxt) { $('ca-note').textContent = caTxt; $('ca-note').style.display='block'; }
