@@ -1681,6 +1681,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
         <input class="field-inp last" type="number" id="acc-ferie-giorni" placeholder="es. 3" min="0" step="0.5" oninput="calcolaImportoFerieAcconto()" style="margin-bottom:0">
         <div id="acc-ferie-calcolo" style="font-size:11px;color:var(--muted);margin-top:8px"></div>
       </div>
+      <div id="acc-13-14-info" style="display:none;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:14px;font-size:12px;color:var(--muted)">Calcolo del maturato...</div>
       <div class="field-lbl">Importo (€)</div>
       <input class="field-inp" type="number" id="acc-importo" placeholder="es. 200" step="0.01" min="0" oninput="toggleAccontoRateiMesi()">
       <div id="acc-ratei-wrap" style="display:none;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:14px">
@@ -2266,18 +2267,19 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     <div class="sheet-hdr"><span class="sheet-title">Liquida stipendio</span><button class="sheet-cls" onclick="closeSheet('sh-liquida')">&#x2715;</button></div>
     <div class="sheet-body">
       <div id="liq-riepilogo" style="background:var(--bg);border-radius:12px;padding:16px;margin-bottom:16px"></div>
-      <div class="field-lbl">A cosa si riferisce</div>
-      <select class="field-inp" id="liq-causale">
-        <option value="stipendio">💰 Stipendio</option>
-        <option value="acconto_tfr">🏦 Acconto TFR</option>
-        <option value="acconto_13">🎄 13ª mensilità</option>
-        <option value="acconto_14">☀️ 14ª mensilità</option>
-        <option value="ferie_non_godute">🌴 Ferie non godute</option>
-        <option value="straordinari">⏱ Straordinari</option>
-        <option value="altro">📋 Altro</option>
-      </select>
+      <!-- FIX: prima c'era qui una select "A cosa si riferisce" con TFR/13a/
+           14a/ferie/straordinari, ma questa sheet calcola e mostra SEMPRE e
+           SOLO il report dello stipendio mensile (giorni lavorati, paga
+           giornaliera, acconti, da pagare) — cambiare la causale non
+           cambiava il calcolo, mostrava solo un'etichetta sbagliata sopra
+           numeri che restavano quelli dello stipendio. Per TFR, 13ª, 14ª,
+           ferie non godute o straordinari usa invece "+ Acconto" (resta
+           sempre visibile, anche a mese già liquidato) — quello sì mostra
+           ratei/periodo/maturato reali per 13ª e 14ª.
+      -->
+      <div style="font-size:11px;color:var(--muted);background:var(--bg);border-radius:10px;padding:10px 12px;margin-bottom:14px;line-height:1.5">💰 Questa schermata liquida solo lo stipendio mensile. Per TFR, 13ª, 14ª mensilità, ferie non godute o straordinari usa <b>+ Acconto</b>.</div>
       <div class="field-lbl">Note (opzionale)</div>
-      <input class="field-inp field-inp last" type="text" id="liq-note" placeholder="es. saldo TFR, conguaglio...">
+      <input class="field-inp field-inp last" type="text" id="liq-note" placeholder="es. conguaglio, differenza cedolino...">
 
       <div id="liq-pagamento-wrap">
         <div class="field-lbl">Come hai pagato</div>
@@ -10534,6 +10536,7 @@ function openAcconto(dipId, nome, prefillImporto, prefillNota) {
   $('acc-ferie-giorni').value = '';
   if ($('acc-ratei-coperti')) $('acc-ratei-coperti').value = '';
   if ($('acc-mesi-riferimento')) $('acc-mesi-riferimento').value = '';
+  if ($('acc-13-14-info')) $('acc-13-14-info').style.display = 'none';
   _accRateiMaturato = null; // forza ricalcolo per il dipendente appena aperto
   toggleAccontoFerie();
   toggleAccontoRateiMesi();
@@ -10541,37 +10544,54 @@ function openAcconto(dipId, nome, prefillImporto, prefillNota) {
   openSheet('sh-acconto');
 }
 
-// 13a/14a: se l'importo digitato (sommato a quanto già erogato nel
-// periodo) copre l'intero maturato, questo NON è un acconto ma un saldo —
-// mostra i campi per indicare ratei/mesi coperti, così l'anno prossimo non
-// ci sia confusione su cosa è già stato pagato (es. un rateo di agosto
-// versato per errore). Cache per dipendente+causale per non rifare la
-// query a ogni tasto digitato sull'importo.
+// 13a/14a: mostra SEMPRE un riepilogo di quanto è maturato finora (periodo,
+// ratei, importo, già erogato, residuo) appena si seleziona la causale —
+// prima non si vedeva nulla finché non si arrivava a digitare un importo
+// che copriva l'intero maturato, e Valerio doveva "indovinare" i numeri
+// prima ancora di poter decidere quanto versare. In più, se l'importo
+// digitato (sommato a quanto già erogato) copre l'intero maturato, questo
+// NON è un acconto ma un saldo — mostra anche i campi per indicare
+// ratei/mesi coperti, così l'anno prossimo non ci sia confusione su cosa è
+// già stato pagato (es. un rateo di agosto versato per errore). Cache per
+// dipendente+causale per non rifare la query a ogni tasto digitato.
 let _accRateiMaturato = null;
 async function toggleAccontoRateiMesi() {
+  const info = $('acc-13-14-info');
   const wrap = $('acc-ratei-wrap');
-  if (!wrap) return;
+  if (!info || !wrap) return;
   const causale = $('acc-causale') ? $('acc-causale').value : '';
   if ((causale !== 'acconto_13' && causale !== 'acconto_14') || !_accontoDipId) {
+    info.style.display = 'none';
     wrap.style.display = 'none';
     return;
   }
-  const importoDigitato = parseFloat($('acc-importo').value) || 0;
-  if (importoDigitato <= 0) { wrap.style.display = 'none'; return; }
+  info.style.display = 'block';
+  info.textContent = 'Calcolo del maturato...';
   if (!_accRateiMaturato || _accRateiMaturato.dipId !== _accontoDipId || _accRateiMaturato.causale !== causale) {
     const { data: prof } = await sb.from('presenze_profili').select('data_assunzione,paga_giornaliera').eq('id',_accontoDipId).single();
     const oggiCalc = new Date();
     const ratei = calcolaRatei13a14a(prof?.data_assunzione, prof?.paga_giornaliera, oggiCalc.getMonth()+1, oggiCalc.getFullYear());
-    const inizioISO = causale === 'acconto_13' ? ratei.inizio13ISO : ratei.inizio14ISO;
-    const fineISO    = causale === 'acconto_13' ? ratei.fine13ISO    : ratei.fine14ISO;
-    const maturato    = causale === 'acconto_13' ? ratei.importo13   : ratei.importo14;
+    const isTredicesima = causale === 'acconto_13';
+    const inizioISO  = isTredicesima ? ratei.inizio13ISO : ratei.inizio14ISO;
+    const fineISO     = isTredicesima ? ratei.fine13ISO    : ratei.fine14ISO;
+    const maturato     = isTredicesima ? ratei.importo13   : ratei.importo14;
+    const numRatei      = isTredicesima ? ratei.ratei13      : ratei.ratei14;
+    const annoInizio    = isTredicesima ? ratei.annoInizio13 : ratei.annoInizio14;
+    const periodoLbl = isTredicesima
+      ? ('dic '+annoInizio+' – nov '+(annoInizio+1))
+      : ('lug '+annoInizio+' – giu '+(annoInizio+1));
     const { data: giaErogati } = await sb.from('presenze_acconti').select('importo')
       .eq('dipendente_id', _accontoDipId).eq('causale', causale)
       .gte('data', inizioISO).lte('data', fineISO);
     const erogatoAntecedente = (giaErogati||[]).reduce((s,a) => s + parseFloat(a.importo), 0);
-    _accRateiMaturato = { dipId: _accontoDipId, causale, maturato, erogatoAntecedente };
+    _accRateiMaturato = { dipId: _accontoDipId, causale, maturato, erogatoAntecedente, numRatei, periodoLbl };
   }
-  const sarebbeSaldo = (_accRateiMaturato.erogatoAntecedente + importoDigitato) >= (_accRateiMaturato.maturato - 0.01) && _accRateiMaturato.maturato > 0;
+  const r = _accRateiMaturato;
+  const residuo = Math.max(0, r.maturato - r.erogatoAntecedente);
+  info.innerHTML = '<b>Periodo '+r.periodoLbl+'</b> · '+r.numRatei+'/12 ratei maturati · maturato € '+r.maturato.toFixed(2)
+    + (r.erogatoAntecedente > 0.01 ? '<br>già erogato € '+r.erogatoAntecedente.toFixed(2)+' · residuo € '+residuo.toFixed(2) : '');
+  const importoDigitato = parseFloat($('acc-importo').value) || 0;
+  const sarebbeSaldo = importoDigitato > 0 && (r.erogatoAntecedente + importoDigitato) >= (r.maturato - 0.01) && r.maturato > 0;
   wrap.style.display = sarebbeSaldo ? 'block' : 'none';
 }
 
@@ -14119,7 +14139,7 @@ async function salvaLiquidazione() {
   }
   if (noteInserita) note += noteInserita;
   note = note.trim();
-  let causale = $('liq-causale') ? $('liq-causale').value : 'stipendio';
+  let causale = 'stipendio'; // questa sheet gestisce SOLO lo stipendio mensile (select causale rimossa, era fuorviante — vedi nota sopra)
   // Acconto vs saldo: se stiamo liquidando lo stipendio (causale base
   // 'stipendio') ma il versato NON copre l'intero netto dovuto, questo
   // non è un vero saldo — è un acconto sullo stipendio, anche se arriva
