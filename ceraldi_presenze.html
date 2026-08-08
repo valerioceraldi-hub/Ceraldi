@@ -2717,6 +2717,7 @@ if (KIOSK) {
 // Causali per acconti e liquidazioni (colonna `causale` su presenze_acconti e presenze_liquidazioni)
 const CAUSALI = {
   stipendio:        '💰 Stipendio',
+  acconto_stipendio:'💶 Acconto stipendio',
   acconto_tfr:      '🏦 Acconto TFR',
   acconto_13:       '🎄 13ª mensilità',
   acconto_14:       '☀️ 14ª mensilità',
@@ -4314,7 +4315,9 @@ function avviaApp(p) {
     // Deep link dal sollecito Telegram: apre direttamente la sezione giusta
     const hDip = window.location.hash;
     if (hDip) window.location.hash = '';
-    switchPage(hDip === '#documenti' ? 'pg-docs-dip' : 'pg-qr');
+    if (!gestisciDeepLinkDoc(hDip)) {
+      switchPage(hDip === '#documenti' ? 'pg-docs-dip' : 'pg-qr');
+    }
     initDipendente(hDip);
     // Guida rapida: mostrata una sola volta, al primo accesso completato
     // Guida rapida: mostrata una sola volta, al primo accesso completato.
@@ -4622,6 +4625,11 @@ sb.auth.getSession().then(async ({ data }) => {
 // Gestisci deep link #assenze
 window.addEventListener('hashchange', () => {
   if (!ME) return;
+  if (window.location.hash.indexOf('#doc-') === 0 && ME.ruolo === 'dipendente') {
+    const h = window.location.hash; window.location.hash = '';
+    gestisciDeepLinkDoc(h);
+    return;
+  }
   if (window.location.hash === '#richieste' && ME.ruolo === 'admin') {
     switchPage('pg-assenze-admin'); window.location.hash = '';
   }
@@ -10624,18 +10632,45 @@ async function salvaAcconto() {
   } catch (e) { insertErr = e; }
   if (insertErr) { showMsg('acc-msg', insertErr.message, 'err'); return; }
   // Notifica Telegram dipendente con deep link alla conferma — VOLUTAMENTE
-  // generica (niente importo, data, causale o note): è una notifica push,
-  // può comparire sulla schermata di blocco o essere vista da altri.
-  // I dettagli si vedono solo aprendo l'app ed autenticandosi.
-  const profAcc = await DB.safe(() => DB.profili.byId(_accontoDipId, 'nome,cognome'), null);
+  // senza importo/data/note (è una notifica push, può comparire sulla
+  // schermata di blocco o essere vista da altri), MA specifica a cosa si
+  // riferisce (stipendio/TFR/tredicesima/quattordicesima/ferie/straordinari)
+  // invece del generico "un acconto" di prima — un acconto TFR non è un
+  // acconto stipendio, il dipendente deve saperlo anche solo dalla notifica.
+  const profAcc = await DB.safe(() => DB.profili.byId(_accontoDipId, 'nome,cognome,data_assunzione,paga_giornaliera'), null);
   const nomeAcc = profAcc ? profAcc.nome+(profAcc.cognome?' '+profAcc.cognome:'') : 'Dipendente';
+  let vocabolarioTipo = 'un acconto sullo stipendio'; // default: causale 'stipendio' o assente
+  if (accCausale === 'acconto_13' || accCausale === 'acconto_14') {
+    // Per 13a/14a: "acconto" se copre solo parte del maturato del periodo,
+    // "saldo" se questo pagamento (sommato agli eventuali precedenti dello
+    // stesso periodo) raggiunge o supera l'intero importo maturato.
+    const oggiIns = new Date(data);
+    const ratei = calcolaRatei13a14a(profAcc?.data_assunzione, profAcc?.paga_giornaliera, oggiIns.getMonth()+1, oggiIns.getFullYear());
+    const inizioISO = accCausale === 'acconto_13' ? ratei.inizio13ISO : ratei.inizio14ISO;
+    const fineISO    = accCausale === 'acconto_13' ? ratei.fine13ISO    : ratei.fine14ISO;
+    const maturato    = accCausale === 'acconto_13' ? ratei.importo13   : ratei.importo14;
+    const { data: giaErogati } = await sb.from('presenze_acconti').select('importo')
+      .eq('dipendente_id', _accontoDipId).eq('causale', accCausale)
+      .gte('data', inizioISO).lte('data', fineISO);
+    const totErogato = (giaErogati||[]).reduce((s,a) => s + parseFloat(a.importo), 0);
+    const nomeMens = accCausale === 'acconto_13' ? 'tredicesima' : 'quattordicesima';
+    vocabolarioTipo = (totErogato >= maturato - 0.01) ? ('il saldo della '+nomeMens) : ('un acconto sulla '+nomeMens);
+  } else if (accCausale === 'acconto_tfr') {
+    vocabolarioTipo = 'un acconto sul TFR';
+  } else if (accCausale === 'ferie_non_godute') {
+    vocabolarioTipo = 'la liquidazione di ferie non godute';
+  } else if (accCausale === 'straordinari') {
+    vocabolarioTipo = 'il pagamento di straordinari';
+  } else if (accCausale === 'altro') {
+    vocabolarioTipo = 'un pagamento';
+  }
   const tgTestoAcc = '💶 <b>Ceraldi Presenze</b>\n\n'
-    + 'Ciao <b>'+escTG(nomeAcc)+'</b>, hai ricevuto un acconto.\n'
+    + 'Ciao <b>'+escTG(nomeAcc)+'</b>, hai ricevuto '+vocabolarioTipo+'.\n'
     + 'Apri l\'app per vedere i dettagli e confermare la ricezione.';
   await inviaNotificaDipendente(_accontoDipId, tgTestoAcc, '#stipendi');
-  // Notifica admin
-  inviaNotificaTelegram('✅ Acconto €'+parseFloat(importo).toFixed(2)+' registrato per '+escTG(nomeAcc)+' — in attesa di conferma dipendente.');
-  toast('Acconto registrato — notifica inviata al dipendente');
+  // Notifica admin — ora indica anche il tipo, non solo "Acconto" generico
+  inviaNotificaTelegram('✅ Registrato: '+causaleLbl(accCausale||'stipendio')+' € '+parseFloat(importo).toFixed(2)+' per '+escTG(nomeAcc)+' — in attesa di conferma dipendente.');
+  toast('Registrato — notifica inviata al dipendente');
   closeSheet('sh-acconto');
   await caricaStipendi();
 }
@@ -12254,7 +12289,23 @@ async function clickDocumento(docId, isAdmin) {
     openSheet('sh-accettaDoc');
     return;
   }
+  // Ogni riapertura successiva (documento già accettato in precedenza)
+  // avvisa comunque l'admin di cosa e quando — prima notificava solo la
+  // primissima apertura (quella con "Apro e accetto"), le riaperture
+  // successive erano invisibili.
+  if (!isAdmin) notificaAperturaDoc(d);
   await apriDocumento(d.url, d.nome_file);
+}
+
+// Notifica l'admin che il dipendente ha aperto un documento, con
+// categoria/periodo e orario esatto — usata sia per le riaperture (qui)
+// sia, con testo dedicato, per la primissima apertura/accettazione.
+function notificaAperturaDoc(d) {
+  const nomeDip = ME ? (ME.nome+(ME.cognome?' '+ME.cognome:'')) : 'Dipendente';
+  const catLbl  = etichettaCategoriaDoc(d.categoria);
+  const periodo = d.mese ? new Date(d.anno,(d.mese||1)-1,1).toLocaleDateString('it-IT',{month:'long',year:'numeric'}) : (d.anno||'');
+  const oraFmt  = new Date().toLocaleString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  inviaNotificaTelegram('👁 <b>Ceraldi Presenze \u2014 Documento aperto</b>\n'+escTG(nomeDip)+' ha aperto '+(d.categoria==='busta_paga'||d.categoria==='cu'?'la ':'il ')+catLbl.toLowerCase()+(periodo?' di <b>'+periodo+'</b>':'')+' \u2014 '+oraFmt+'.');
 }
 
 function etichettaCategoriaDoc(cat) {
@@ -12262,6 +12313,18 @@ function etichettaCategoriaDoc(cat) {
     : cat === 'cu'        ? 'CU'
     : cat === 'contratto' ? 'Contratto'
     : 'Documento';
+}
+
+// Deep link diretto a un documento specifico (hash tipo '#doc-<id>'),
+// usato dalle notifiche stipendio per aprire direttamente la busta paga
+// invece di lasciare il dipendente cercarla nell'area Documenti.
+function gestisciDeepLinkDoc(hash) {
+  if (!hash || hash.indexOf('#doc-') !== 0) return false;
+  const docId = hash.slice(5);
+  if (!docId) return false;
+  switchPage('pg-docs-dip');
+  setTimeout(() => clickDocumento(docId, false), 600);
+  return true;
 }
 
 // Il dipendente ha toccato "Apro e accetto": marca letto, avvisa l'admin, apre il file.
@@ -12276,7 +12339,8 @@ async function confermaAperturaDoc() {
   const nomeDip = ME ? (ME.nome+(ME.cognome?' '+ME.cognome:'')) : 'Dipendente';
   const catLbl  = etichettaCategoriaDoc(d.categoria);
   const periodo = d.mese ? new Date(d.anno,(d.mese||1)-1,1).toLocaleDateString('it-IT',{month:'long',year:'numeric'}) : (d.anno||'');
-  inviaNotificaTelegram('📖 <b>Ceraldi Presenze \u2014 Documento letto</b>\n'+escTG(nomeDip)+' ha aperto e accettato '+(d.categoria==='busta_paga'||d.categoria==='cu'?'la ':'il ')+catLbl.toLowerCase()+(periodo?' di <b>'+periodo+'</b>':'')+'. Contestazioni possibili entro 7 giorni.');
+  const oraFmt  = new Date().toLocaleString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  inviaNotificaTelegram('📖 <b>Ceraldi Presenze \u2014 Documento letto</b>\n'+escTG(nomeDip)+' ha aperto e accettato '+(d.categoria==='busta_paga'||d.categoria==='cu'?'la ':'il ')+catLbl.toLowerCase()+(periodo?' di <b>'+periodo+'</b>':'')+' \u2014 '+oraFmt+'. Contestazioni possibili entro 7 giorni.');
   _docApri = null;
   closeSheet('sh-accettaDoc');
   await apriDocumento(d.url, d.nome_file);
@@ -14000,7 +14064,16 @@ async function salvaLiquidazione() {
   }
   if (noteInserita) note += noteInserita;
   note = note.trim();
-  const causale = $('liq-causale') ? $('liq-causale').value : 'stipendio';
+  let causale = $('liq-causale') ? $('liq-causale').value : 'stipendio';
+  // Acconto vs saldo: se stiamo liquidando lo stipendio (causale base
+  // 'stipendio') ma il versato NON copre l'intero netto dovuto, questo
+  // non è un vero saldo — è un acconto sullo stipendio, anche se arriva
+  // "sotto forma di cedolino". Usiamo una causale ad hoc dedicata così
+  // resta distinguibile ovunque (etichette, storico, notifiche) da una
+  // vera liquidazione mensile. Se invece copre l'intero importo (o lo
+  // supera, gestito sotto con l'eccedenza), resta 'stipendio' = saldo vero.
+  const eStipendioParziale = (causale === 'stipendio') && (diffPagamento < -0.01);
+  if (eStipendioParziale) causale = 'acconto_stipendio';
   let insErr = null;
   try {
     await DB.liquidazioni.insert({
@@ -14065,28 +14138,41 @@ async function salvaLiquidazione() {
     await inviaNotificaDipendente(dipId, tgEcc, '#stipendi');
   }
   // Notifica Telegram al DIPENDENTE — dicitura distinta per cedolino vs
-  // liquidazione/saldo mensile, ma VOLUTAMENTE senza importi nel testo
-  // della notifica push (restano visibili solo aprendo l'app, nella
-  // schermata "Conferma pagamento" che già mostra il versato reale).
+  // liquidazione/saldo mensile vs acconto sullo stipendio (versato parziale),
+  // ma VOLUTAMENTE senza importi nel testo della notifica push (restano
+  // visibili solo aprendo l'app, nella schermata "Conferma pagamento" che
+  // già mostra il versato reale).
   const meseLbl = new Date(anno, mese-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
   const meseLblCap = meseLbl.charAt(0).toUpperCase()+meseLbl.slice(1);
   const rigaDifferenza = diffPagamento < -0.01
     ? '\nResta ancora una differenza da saldare a parte.'
     : '';
-  const tgDip = viaCedolino
+  const tgDip = eStipendioParziale
+    ? ('💶 <b>Ceraldi Presenze</b>\n\n'
+      + 'Ciao <b>'+escTG(nome)+'</b>, hai ricevuto un acconto sullo stipendio di <b>'+meseLblCap+'</b>.'
+      + rigaDifferenza
+      + '\nApri l\'app per vedere i dettagli e confermare la ricezione.')
+    : viaCedolino
     ? ('📄 <b>Ceraldi Presenze — Cedolino</b>\n\n'
       + 'Ciao <b>'+escTG(nome)+'</b>, è stato registrato il pagamento del tuo cedolino di <b>'+meseLblCap+'</b>.'
       + rigaDifferenza
       + '\nApri l\'app per vedere i dettagli e confermare la ricezione.')
-    : ('💶 <b>Ceraldi Presenze — Liquidazione</b>\n\n'
+    : ('💶 <b>Ceraldi Presenze — Saldo</b>\n\n'
       + 'Ciao <b>'+escTG(nome)+'</b>, è stato registrato il saldo mensile di <b>'+meseLblCap+'</b>.'
       + rigaDifferenza
       + '\nApri l\'app per vedere i dettagli e confermare la ricezione.');
-  await inviaNotificaDipendente(dipId, tgDip, '#stipendi');
-  // Notifica admin (conferma invio)
-  inviaNotificaTelegram('💶 Stipendio <b>'+meseLblCap+'</b> segnato per <b>'+escTG(nome)+'</b> — \u20ac '+netto.toFixed(2)+' — in attesa conferma.');
+  // Deep link diretto alla busta paga di questo mese, quando esiste — sia
+  // che si tratti di acconto, saldo o saldo via cedolino, il dipendente
+  // deve poterla aprire subito dalla notifica push, non solo arrivare
+  // alla schermata Stipendi e doverla cercare da sé.
+  const deepLinkStipendio = documentoId ? ('#doc-'+documentoId) : '#stipendi';
+  await inviaNotificaDipendente(dipId, tgDip, deepLinkStipendio);
+  // Notifica admin (conferma invio) — indica se è un acconto parziale o il saldo vero
+  inviaNotificaTelegram((eStipendioParziale ? '💶 Acconto stipendio ' : '💶 Stipendio ')+'<b>'+meseLblCap+'</b> segnato per <b>'+escTG(nome)+'</b> — \u20ac '+netto.toFixed(2)+' — in attesa conferma.');
   toast(diffPagamento > 0.01
     ? '\u2713 Stipendio di '+nome+' segnato come pagato \u2014 eccedenza di \u20ac'+diffPagamento.toFixed(2)+' registrata come acconto (da scalare/restituire) \u2014 notifica inviata'
+    : eStipendioParziale
+    ? '\u2713 Acconto sullo stipendio di '+nome+' registrato \u2014 notifica inviata'
     : '\u2713 Stipendio di '+nome+' segnato come pagato \u2014 notifica inviata');
   closeSheet('sh-liquida');
   await caricaStipendi();
@@ -16333,7 +16419,8 @@ function calcolaRatei13a14a(dataAssunzione, pagaGiornaliera, meseCorrente, annoC
   const fine13 = new Date(annoCorrente, 10, 30); // 30 novembre anno corrente
   const ratei13 = contaRateiCCNL(inizio13, fine13 < oggi ? fine13 : oggi);
   const rateo13mese = pagaMensile / 12;
-  const importo13 = Math.round(ratei13 * rateo13mese * 100) / 100;
+  // Trattenuta 23% applicata direttamente sull'importo (non mostrata a schermo)
+  const importo13 = Math.round(ratei13 * rateo13mese * 0.77 * 100) / 100;
 
   // ── 14a: periodo 1° luglio anno prec → 30 giugno anno corr ──
   const inizio14 = dataAssunzione
@@ -16341,7 +16428,8 @@ function calcolaRatei13a14a(dataAssunzione, pagaGiornaliera, meseCorrente, annoC
     : new Date(annoCorrente - 1, 6, 1);
   const fine14 = new Date(annoCorrente, 5, 30); // 30 giugno anno corrente
   const ratei14 = contaRateiCCNL(inizio14, fine14 < oggi ? fine14 : oggi);
-  const importo14 = Math.round(ratei14 * rateo13mese * 100) / 100; // stessa paga, no scatti
+  // Trattenuta 23% applicata direttamente sull'importo (non mostrata a schermo)
+  const importo14 = Math.round(ratei14 * rateo13mese * 0.77 * 100) / 100; // stessa paga, no scatti
 
   return {
     ratei13, importo13, ratei14, importo14, pagaMensile,
