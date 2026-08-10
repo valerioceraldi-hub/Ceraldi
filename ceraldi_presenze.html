@@ -1012,7 +1012,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div id="app" style="display:none">
 
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.182</span></div>
+    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.183</span></div>
     <span class="topbar-badge" id="role-badge"></span>
     <button class="btn-topbar" onclick="ricaricaApp()" title="Ricarica la pagina (per essere sicuro di avere l'ultima versione)" style="padding:6px 10px">🔄</button>
     <button id="btn-promemoria" class="btn-topbar" onclick="apriPromemoria()" style="display:none;position:relative;padding:6px 10px">
@@ -11162,7 +11162,7 @@ async function caricaStipendi() {
   const [y, m] = mese.split('-');
   // Carica liquidazioni esistenti per questo mese
   const { data: liquidaz } = await sb.from('presenze_liquidazioni')
-    .select('id,dipendente_id,importo_netto,confermata_dip,bonifico,contanti,note,confermata_il').eq('anno',parseInt(y)).eq('mese',parseInt(m));
+    .select('id,dipendente_id,importo_netto,confermata_dip,bonifico,contanti,note,confermata_il,causale,creato_il').eq('anno',parseInt(y)).eq('mese',parseInt(m));
   const liquidatiMap = {};
   (liquidaz||[]).forEach(l => { liquidatiMap[l.dipendente_id] = l; });
   const liquidatiSet = new Set(Object.keys(liquidatiMap));
@@ -11436,7 +11436,33 @@ async function caricaStipendi() {
         : '<span style="font-size:10px;font-weight:700;background:rgba(47,138,92,.12);color:var(--green);padding:2px 7px;border-radius:10px">✓ GIÀ EROGATA</span>')
       : `<span style="font-size:10px;color:var(--muted)">${mat14.ratei}/12 ratei</span>`;
 
-    const accHtml = accs.length ? accs.slice().sort((a,b)=> a.data<b.data?-1:1).map(a => {
+    // Il saldo/acconto stipendio (tabella liquidazioni, non acconti) viene
+    // mostrato come UNA RIGA IN PIÙ nello stesso elenco cronologico invece
+    // che in un riquadro separato — prima non c'era modo di vedere QUANDO
+    // era stato fatto il pagamento finale, ora ha la sua data come tutto
+    // il resto. creato_il è quando è stata registrata la liquidazione in
+    // app (non modificabile), non necessariamente il giorno esatto del
+    // bonifico/contanti se inserita a posteriori.
+    const liqRiga = liquidatiMap[d.id] ? (() => {
+      const liq = liquidatiMap[d.id];
+      const dataLiq = liq.creato_il ? liq.creato_il.slice(0,10) : '';
+      const modalita = [];
+      if (liq.bonifico) modalita.push('🏦 bonifico €'+parseFloat(liq.bonifico).toFixed(2));
+      if (liq.contanti) modalita.push('💵 contanti €'+parseFloat(liq.contanti).toFixed(2));
+      const versatoRiga = parseFloat(liq.bonifico||0) + parseFloat(liq.contanti||0);
+      const etichetta = liq.causale === 'acconto_stipendio' ? '💰 Acconto stipendio' : '💰 Saldo stipendio';
+      const confBadgeLiq = liq.confermata_dip
+        ? '<span style="font-size:10px;color:var(--green);font-weight:700;margin-left:4px">✓✓</span>'
+        : '<span style="font-size:10px;color:var(--muted);font-weight:700;margin-left:4px">✓</span>';
+      return { data: dataLiq, sortKey: dataLiq || '9999-99-99', html:
+        '<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted);padding:4px 0;border-bottom:1px solid var(--border);background:rgba(43,74,203,.05)">'
+        +'<span><b style="color:var(--text)">'+etichetta+'</b>'+(dataLiq?' · '+dataLiq:'')+(modalita.length?' · '+modalita.join(', '):'')+'</span>'
+        +'<span style="display:flex;align-items:center;gap:5px"><span style="color:var(--accent);font-weight:700">- € '+versatoRiga.toFixed(2)+'</span>'+confBadgeLiq+'</span>'
+        +'</div>'
+      };
+    })() : null;
+
+    const accRighe = accs.slice().sort((a,b)=> a.data<b.data?-1:1).map(a => {
       // Su richiesta: una spunta appena registrato (l'admin l'ha già
       // salvato e la notifica è partita), doppia spunta verde quando il
       // dipendente conferma di averlo ricevuto.
@@ -11456,11 +11482,19 @@ async function caricaStipendi() {
         ? '<span style="font-size:9px;font-weight:700;color:var(--accent);background:rgba(43,74,203,.1);border-radius:6px;padding:1px 6px;margin-left:6px">↪ riferito a '+String(a.mese_riferimento).padStart(2,'0')+'/'+a.anno_riferimento+'</span>'
         : (riportato
           ? '<span style="font-size:9px;font-weight:700;color:#d97706;background:rgba(217,119,6,.12);border-radius:6px;padding:1px 6px;margin-left:6px">📅 mese precedente</span>' : '');
-      return '<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted);padding:4px 0;border-bottom:1px solid var(--border)">'
+      return { sortKey: a.data, html:
+        '<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted);padding:4px 0;border-bottom:1px solid var(--border)">'
         +'<span>'+a.data+badgeMese+(a.causale&&a.causale!=='stipendio'?' · '+causaleLbl(a.causale):'')+(a.note?' · '+esc(a.note):'')+'</span>'
         +'<span style="display:flex;align-items:center;gap:5px"><span style="color:var(--red);font-weight:600">- € '+parseFloat(a.importo).toFixed(2)+'</span>'+confBadge+'<button type="button" style="background:none;border:none;color:var(--muted);font-size:14px;padding:2px 3px;cursor:pointer" onclick="eliminaAccontoErrato(\''+a.id+'\',this)" title="Elimina (inserito per errore)">🗑</button></span>'
-        +'</div>';
-    }).join('') : '';
+        +'</div>'
+      };
+    });
+    // Elenco UNICO, in ordine cronologico: acconti + il saldo/acconto
+    // stipendio insieme, non più in due riquadri separati — così si legge
+    // in un colpo solo tutto quello che è stato dato e quando.
+    const movimentiRighe = liqRiga ? accRighe.concat([liqRiga]) : accRighe;
+    movimentiRighe.sort((x,y) => x.sortKey < y.sortKey ? -1 : (x.sortKey > y.sortKey ? 1 : 0));
+    const accHtml = movimentiRighe.map(r => r.html).join('');
 
     // Restituzioni ricevute questo mese — così in Stipendi si ha la
     // contezza completa di soldi dati (acconti) e ricevuti indietro
@@ -11503,21 +11537,24 @@ async function caricaStipendi() {
         <div id="stip-rest-${d.id}"></div>
         ${liquidatiMap[d.id] ? (() => {
           const liq = liquidatiMap[d.id];
-          const versato = versatoLiq;
           // FIX: qui sotto si usava liq.importo_netto (snapshot congelato)
           // invece del netto live — vedi commento sopra su residuoLiq.
           const residuo = residuoLiq;
-          const modalita = [];
-          if (liq.bonifico) modalita.push('🏦 Bonifico <b>€'+parseFloat(liq.bonifico).toFixed(2)+'</b>');
-          if (liq.contanti) modalita.push('💵 Contanti <b>€'+parseFloat(liq.contanti).toFixed(2)+'</b>');
-          let html = '<div style="font-size:12px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px">'
-            + '<div style="font-weight:700;color:var(--muted);margin-bottom:4px">COME È STATO PAGATO</div>'
-            + (modalita.length ? '<div>'+modalita.join(' &nbsp;·&nbsp; ')+'</div>' : '<span style="color:var(--muted)">Non specificato</span>')
-            + (liq.note ? '<div style="color:var(--muted);margin-top:5px;line-height:1.4">'+esc(liq.note)+'</div>' : '')
-            + (nettoCambiatoDopoLiquidazione
-              ? '<div style="color:var(--yellow);font-weight:700;margin-top:6px;line-height:1.4">⚠ Il calcolo di questo mese è cambiato dopo la liquidazione (allora era €'+parseFloat(liq.importo_netto||0).toFixed(2)+', ora è €'+netto.toFixed(2)+' — probabile timbratura/acconto/restituzione aggiunti dopo). Il residuo qui sotto è già ricalcolato sul valore aggiornato.</div>'
-              : '')
-            + '</div>';
+          // Come è stato pagato (modalità/data) ora si vede direttamente
+          // nell'elenco "Pagamenti effettuati" più sotto (riga 💰 Saldo/
+          // Acconto stipendio, con data) — qui resta solo quello che serve
+          // in più: la nota testuale e l'eventuale avviso che il calcolo è
+          // cambiato dopo la liquidazione, così non si ripete la stessa
+          // informazione in due posti diversi della stessa card.
+          let html = '';
+          if (liq.note || nettoCambiatoDopoLiquidazione) {
+            html += '<div style="font-size:12px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px">'
+              + (liq.note ? '<div style="color:var(--muted);line-height:1.4">'+esc(liq.note)+'</div>' : '')
+              + (nettoCambiatoDopoLiquidazione
+                ? '<div style="color:var(--yellow);font-weight:700;'+(liq.note?'margin-top:6px;':'')+'line-height:1.4">⚠ Il calcolo di questo mese è cambiato dopo la liquidazione (allora era €'+parseFloat(liq.importo_netto||0).toFixed(2)+', ora è €'+netto.toFixed(2)+' — probabile timbratura/acconto/restituzione aggiunti dopo). Il residuo qui sotto è già ricalcolato sul valore aggiornato.</div>'
+                : '')
+              + '</div>';
+          }
           // Il mese è già liquidato ma manca ancora una parte del netto:
           // niente Liquida (bloccato da un vincolo unico dipendente+mese),
           // serve un modo per registrare SOLO la differenza residua senza
@@ -11575,17 +11612,20 @@ async function caricaStipendi() {
           <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:800;padding-top:6px;margin-top:4px;border-top:1px solid var(--border)"><span>Totale arretrato</span><span style="color:${arretratoTotale>=0?'var(--text)':'var(--red)'}">€ ${arretratoTotale.toFixed(2)}</span></div>
           <div style="font-size:10px;color:var(--muted);margin-top:6px">Per pagarlo: seleziona quel mese sopra e usa Liquida da lì — si chiude e non torna più qui.</div>
         </div>` : ''}
-        <!-- Movimenti del mese (acconti + restituzioni): nascosti di default,
-             un tasto solo invece di due riquadri sempre aperti -->
-        ${(accs.length || rests.length) ? `
+        <!-- Movimenti del mese (acconti + saldo/acconto stipendio +
+             restituzioni): nascosti di default, un tasto solo invece di
+             riquadri sempre aperti -->
+        ${(accs.length || rests.length || liqRiga) ? `
         <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
           ${accs.length ? 'Acconti: <span style="color:var(--red);font-weight:600">- € '+totAcc.toFixed(2)+'</span>' : ''}
-          ${accs.length && rests.length ? ' · ' : ''}
+          ${accs.length && (rests.length || liqRiga) ? ' · ' : ''}
+          ${liqRiga ? 'Saldo/acconto stipendio: <span style="color:var(--accent);font-weight:600">- € '+(parseFloat(liquidatiMap[d.id].bonifico||0)+parseFloat(liquidatiMap[d.id].contanti||0)).toFixed(2)+'</span>' : ''}
+          ${liqRiga && rests.length ? ' · ' : ''}
           ${rests.length ? 'Restituito: <span style="color:var(--green);font-weight:600">+ € '+totRestMese.toFixed(2)+'</span>' : ''}
           <span style="color:var(--accent);cursor:pointer;margin-left:6px" onclick="const d=this.parentElement.nextElementSibling;d.style.display=d.style.display==='none'?'block':'none';this.textContent=d.style.display==='none'?'▾ dettaglio':'▴ nascondi'">▾ dettaglio</span>
         </div>
         <div style="display:none">
-          ${accs.length ? '<div style="border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:10px"><div style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Acconti erogati</div>'+accHtml+'<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;padding:6px 0 0;color:var(--red)"><span>Totale acconti</span><span>- € '+totAcc.toFixed(2)+'</span></div></div>' : ''}
+          ${(accs.length || liqRiga) ? '<div style="border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:10px"><div style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Pagamenti effettuati</div>'+accHtml+'<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;padding:6px 0 0;color:var(--red)"><span>Totale acconti</span><span>- € '+totAcc.toFixed(2)+'</span></div>'+(liqRiga?'<div style="font-size:10px;color:var(--muted);margin-top:2px">Il saldo/acconto stipendio evidenziato sopra non è incluso in questo totale — è un pagamento a parte, non un anticipo.</div>':'')+'</div>' : ''}
           ${rests.length ? '<div style="border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:10px"><div style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Restituzioni ricevute</div>'+restHtml+'<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;padding:6px 0 0;color:var(--green)"><span>Totale restituito</span><span>+ € '+totRestMese.toFixed(2)+'</span></div></div>' : ''}
         </div>` : ''}
         <!-- 13a e 14a mensilità (CCNL Pubblici Esercizi art. 183-184) -->
