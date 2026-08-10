@@ -10247,7 +10247,10 @@ async function apriLiquidazioneCompleta() {
   const mat14 = maturato1314(ratei, '14', (accontiTutti||[]).filter(a=>a.causale==='acconto_14'));
 
   // ── Ferie non godute ──
-  const goduteFerie = (assenzeFerie||[]).reduce((s,a)=> s + (Math.round((new Date(a.data_fine)-new Date(a.data_inizio))/86400000)+1), 0);
+  const cicloFerieIso = _cicloFerieInizioISO();
+  const goduteFerie = (assenzeFerie||[])
+    .filter(a => !cicloFerieIso || a.data_inizio >= cicloFerieIso)
+    .reduce((s,a)=> s + (Math.round((new Date(a.data_fine)-new Date(a.data_inizio))/86400000)+1), 0);
   const ferieCalc = calcolaFerieMaturate(d.data_assunzione, d.ferie_annuali||26, goduteFerie, d.ferie_godute_extra);
   const ferieValore = Math.max(0, ferieCalc.residue) * paga;
 
@@ -10890,8 +10893,10 @@ async function toggleAccontoFerie() {
     .select('ferie_annuali,data_assunzione,ferie_godute_extra,paga_giornaliera').eq('id',_accontoDipId).single();
   const { data: assenzeFerie } = await sb.from('presenze_assenze')
     .select('data_inizio,data_fine').eq('dipendente_id',_accontoDipId).eq('stato','approvata').eq('tipo','ferie');
+  const cicloFerieIso = _cicloFerieInizioISO();
   let godute = 0;
-  (assenzeFerie||[]).forEach(a => { godute += Math.round((new Date(a.data_fine)-new Date(a.data_inizio))/86400000)+1; });
+  (assenzeFerie||[]).filter(a => !cicloFerieIso || a.data_inizio >= cicloFerieIso)
+    .forEach(a => { godute += Math.round((new Date(a.data_fine)-new Date(a.data_inizio))/86400000)+1; });
   const calc = calcolaFerieMaturate(p?.data_assunzione, p?.ferie_annuali||26, godute, p?.ferie_godute_extra);
   _accFerieResiduo = calc.residue;
   _accFeriePagaGiornaliera = parseFloat(p?.paga_giornaliera) || 0;
@@ -11967,16 +11972,18 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro) {
     .select('dipendente_id,data_inizio,data_fine')
     .eq('tipo','ferie').eq('stato','approvata');
   if (dipIdFiltro) qFerieAnno = qFerieAnno.eq('dipendente_id', dipIdFiltro);
+  const cicloFerieIsoXls = _cicloFerieInizioISO();
+  if (cicloFerieIsoXls) qFerieAnno = qFerieAnno.gte('data_inizio', cicloFerieIsoXls);
   const { data: ferieAnno } = await qFerieAnno;
   const ferieMap = {};
   (ferieAnno||[]).forEach(f => {
     ferieMap[f.dipendente_id] = (ferieMap[f.dipendente_id]||0) + giorniTra(f.data_inizio,f.data_fine);
   });
   const F5 = [];
-  F5.push(['SALDO FERIE — CERALDI GROUP S.r.l. (calcolato su tutta l\'anzianità)']);
-  F5.push(['Maturazione secondo CCNL Pubblici Esercizi: 26 gg/anno, rateo 2,17 gg/mese, regola dei 15 giorni, dalla data di assunzione.']);
+  F5.push(['SALDO FERIE — CERALDI GROUP S.r.l. ('+(cicloFerieIsoXls ? 'ciclo dal '+new Date(cicloFerieIsoXls).toLocaleDateString('it-IT')+' — azzerato ogni 1° settembre' : 'calcolato su tutta l\'anzianità')+')']);
+  F5.push(['Maturazione secondo CCNL Pubblici Esercizi: 26 gg/anno, rateo 2,17 gg/mese, regola dei 15 giorni'+(cicloFerieIsoXls ? ', dal 1° settembre 2026 azzerata ogni anno il 1° settembre.' : ', dalla data di assunzione.')]);
   F5.push([]);
-  F5.push(['Dipendente','Data assunzione','Spettanti/anno','Mesi maturati','Ferie maturate ad oggi','Ferie godute','Ferie residue']);
+  F5.push(['Dipendente','Data assunzione','Spettanti/anno','Mesi maturati','Ferie maturate'+(cicloFerieIsoXls?' nel ciclo':' ad oggi'),'Ferie godute'+(cicloFerieIsoXls?' nel ciclo':''),'Ferie residue']);
   (dipendenti||[]).forEach(d => {
     const spett = d.ferie_annuali || 26;
     const god = ferieMap[d.id] || 0;
@@ -16674,16 +16681,17 @@ async function caricaProfiloDip() {
   const { data: p, error: pErr } = await sb.from('presenze_profili').select('*').eq('id', ME.id).single();
   if (pErr || !p) { wrap.innerHTML = '<div class="empty"><div class="empty-txt">Profilo non disponibile</div></div>'; return; }
 
-  // Ferie godute su TUTTA l'anzianità (non solo l'anno corrente), per
-  // calcolare correttamente maturato/residuo dalla vera data di assunzione
+  // Ferie godute — sull'intera anzianità fino al 31/8/2026, poi filtrate
+  // sul ciclo corrente (1 settembre - 31 agosto, azzerato ogni anno).
   const { data: assenze } = await sb.from('presenze_assenze')
     .select('tipo,data_inizio,data_fine')
     .eq('dipendente_id', ME.id)
     .eq('stato','approvata')
     .eq('tipo','ferie');
 
+  const cicloFerieIsoProf = _cicloFerieInizioISO();
   let ferieGodute = 0;
-  (assenze||[]).forEach(a => {
+  (assenze||[]).filter(a => !cicloFerieIsoProf || a.data_inizio >= cicloFerieIsoProf).forEach(a => {
     const gg = Math.round((new Date(a.data_fine)-new Date(a.data_inizio))/86400000)+1;
     ferieGodute += gg;
   });
@@ -16950,28 +16958,64 @@ function contaRateiCCNL(dataInizio, dataFine) {
   return ratei;
 }
 
-// Calcola le ferie maturate/godute/residue sull'INTERA anzianità dalla
-// vera data di assunzione (non solo dall'1 gennaio dell'anno corrente),
-// nettando TUTTE le ferie già godute risultanti nel sistema più
-// un'eventuale correzione manuale "ferieGoduteExtra" per le ferie prese
-// PRIMA di iniziare a usare l'app (quindi non tracciate come richieste).
-// Questa correzione va SOTTRATTA al residuo, mai sommata.
+// FIX (richiesta): dal 1° settembre 2026 le ferie NON si accumulano più su
+// tutta l'anzianità — si azzerano ogni anno il 1° settembre e ripartono da
+// zero (ciclo 1 settembre - 31 agosto). Prima di quella data restano
+// calcolate sull'intera anzianità dalla vera data di assunzione, come era
+// impostato finora — il cambio si applica solo in avanti, non riscrive il
+// passato. _cicloFerieInizioISO() sotto è usata dai chiamanti per filtrare
+// le ferie GODUTE sullo stesso ciclo (altrimenti il residuo del nuovo
+// ciclo sarebbe comunque netto di ferie prese in cicli precedenti).
+const _FERIE_CUTOVER = new Date(2026, 8, 1); // 1 settembre 2026
+
+function _cicloFerieInizioISO(riferimento) {
+  const oggi = riferimento || new Date();
+  if (oggi < _FERIE_CUTOVER) return null; // ancora vecchio sistema: nessun filtro per ciclo
+  const annoCiclo = oggi.getMonth() >= 8 ? oggi.getFullYear() : oggi.getFullYear() - 1;
+  return annoCiclo + '-09-01';
+}
+
 function calcolaFerieMaturate(dataAssunzione, ferieAnnuali, ferieGoduteTotali, ferieGoduteExtra) {
   const fAnn = ferieAnnuali || 26;
-  const goduteExtra = parseFloat(ferieGoduteExtra) || 0;
   const rateoMensile = fAnn / 12;
   const oggi = new Date();
+
+  if (oggi >= _FERIE_CUTOVER) {
+    // ── Nuovo sistema: ciclo 1° settembre - 31 agosto, azzerato ogni anno.
+    // La correzione manuale "ferie prese prima dell'app" non si applica più
+    // qui: aveva senso solo per l'anzianità pre-app sull'unico conteggio a
+    // vita di prima, con un azzeramento annuale non ha più un ciclo a cui
+    // riferirsi e resterebbe sottratta per sempre da ogni ciclo futuro.
+    const annoCiclo = oggi.getMonth() >= 8 ? oggi.getFullYear() : oggi.getFullYear() - 1;
+    const cicloInizio = new Date(annoCiclo, 8, 1);
+    const assunz = dataAssunzione ? new Date(dataAssunzione) : cicloInizio;
+    const inizioConteggio = assunz > cicloInizio ? assunz : cicloInizio;
+    let mesiMaturati = 0;
+    let cursore = new Date(inizioConteggio.getFullYear(), inizioConteggio.getMonth(), 1);
+    while (cursore <= oggi) {
+      const meseInizio = (cursore.getFullYear()===inizioConteggio.getFullYear() && cursore.getMonth()===inizioConteggio.getMonth()) ? inizioConteggio.getDate() : 1;
+      const ultimoGgMese = new Date(cursore.getFullYear(), cursore.getMonth()+1, 0).getDate();
+      const meseFine = (cursore.getFullYear()===oggi.getFullYear() && cursore.getMonth()===oggi.getMonth()) ? oggi.getDate() : ultimoGgMese;
+      const giorniServizio = meseFine - meseInizio + 1;
+      if (giorniServizio >= 15) mesiMaturati++;
+      cursore.setMonth(cursore.getMonth()+1);
+    }
+    const maturate = Math.round(rateoMensile * mesiMaturati * 10) / 10;
+    // ferieGoduteTotali va già passato dal chiamante filtrato sul ciclo corrente (via _cicloFerieInizioISO)
+    const godute = Math.round((parseFloat(ferieGoduteTotali)||0) * 10) / 10;
+    const residue = Math.round((maturate - godute) * 10) / 10;
+    return { maturate, godute, residue, rateoMensile, mesiMaturati, inizioConteggio: inizioConteggio.toISOString().split('T')[0], cicloInizio: cicloInizio.toISOString().split('T')[0] };
+  }
+
+  // ── Sistema precedente (valido solo fino al 31 agosto 2026): sull'intera anzianità, mai azzerato ──
+  const goduteExtra = parseFloat(ferieGoduteExtra) || 0;
   if (!dataAssunzione) {
-    // Senza data assunzione nota: fallback prudente, un anno pieno
     const annoCorrente = oggi.getFullYear();
     const godute = Math.round(((parseFloat(ferieGoduteTotali)||0) + goduteExtra) * 10) / 10;
     const residue = Math.round((fAnn - godute) * 10) / 10;
     return { maturate: fAnn, godute, residue, rateoMensile, mesiMaturati: 12, inizioConteggio: annoCorrente+'-01-01' };
   }
   const assunz = new Date(dataAssunzione);
-  // Conta TUTTI i mesi maturati dall'assunzione ad oggi (intera
-  // anzianità, non solo l'anno corrente), regola dei 15 giorni sul
-  // primo mese parziale.
   let mesiMaturati = 0;
   let cursore = new Date(assunz.getFullYear(), assunz.getMonth(), 1);
   while (cursore <= oggi) {
@@ -16992,11 +17036,16 @@ async function caricaFerieAdmin(dipId, wrap) {
   const anno = new Date().getFullYear();
   const { data: p } = await sb.from('presenze_profili')
     .select('ferie_annuali,permessi_annui,data_assunzione,ferie_godute_extra').eq('id',dipId).single();
-  // Ferie: TUTTA l'anzianità (non si azzerano ogni anno, si accumulano).
-  // Permessi: restano legati all'anno corrente (monte ore annuale).
-  const { data: assenzeFerie } = await sb.from('presenze_assenze')
+  // Ferie: fino al 31/8/2026 sull'intera anzianità (mai azzerate); dal
+  // 1/9/2026 in poi si azzerano ogni anno il 1° settembre (ciclo 1 set-31
+  // ago) — vedi _cicloFerieInizioISO(). Permessi: restano legati
+  // all'anno corrente (monte ore annuale), invariato.
+  const cicloFerieIsoAdmin = _cicloFerieInizioISO();
+  let qFerieAdmin = sb.from('presenze_assenze')
     .select('data_inizio,data_fine')
     .eq('dipendente_id', dipId).eq('stato','approvata').eq('tipo','ferie');
+  if (cicloFerieIsoAdmin) qFerieAdmin = qFerieAdmin.gte('data_inizio', cicloFerieIsoAdmin);
+  const { data: assenzeFerie } = await qFerieAdmin;
   const { data: assenzePerm } = await sb.from('presenze_assenze')
     .select('data_inizio,data_fine')
     .eq('dipendente_id', dipId).eq('stato','approvata').eq('tipo','permesso')
@@ -17010,7 +17059,7 @@ async function caricaFerieAdmin(dipId, wrap) {
   const anzMesi = p?.data_assunzione ? Math.floor((new Date()-new Date(p.data_assunzione))/2629800000) : null;
   const anzLbl = anzMesi!=null ? (anzMesi>=12 ? Math.floor(anzMesi/12)+' anni e '+(anzMesi%12)+' mesi' : anzMesi+' mesi') : 'n/d';
   wrap.innerHTML =
-    '<div class="sec-title" style="margin:16px 0 10px">Ferie (tutta l\'anzianità) e permessi '+anno+'</div>'
+    '<div class="sec-title" style="margin:16px 0 10px">Ferie ('+(cicloFerieIsoAdmin ? 'ciclo dal '+new Date(cicloFerieIsoAdmin).toLocaleDateString('it-IT') : 'tutta l\'anzianità')+') e permessi '+anno+'</div>'
     +'<div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:var(--muted);line-height:1.6">'
     +'Anzianità: <b style="color:var(--text)">'+anzLbl+'</b> · Rateo: <b style="color:var(--text)">'+calc.rateoMensile.toFixed(2)+' gg/mese</b><br>'
     +'Maturati in '+calc.mesiMaturati+' mesi dall\'assunzione → <b style="color:var(--accent)">'+calc.maturate+' gg maturati</b></div>'
