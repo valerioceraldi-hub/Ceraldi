@@ -2546,7 +2546,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
       <div class="msg" id="tmDip-msg"></div>
     </div>
     <div class="sheet-foot">
-      <button class="btn-primary" onclick="salvaTimbrManualeDip()">Invia richiesta</button>
+      <button class="btn-primary" id="btn-salva-timbr-manuale-dip" onclick="salvaTimbrManualeDip()">Invia richiesta</button>
     </div>
   </div>
 </div>
@@ -10502,6 +10502,8 @@ async function openTimbraManualeDip() {
   $('tmDip-ora').value = oraNow().substring(0,5);
   $('tmDip-motivo').value = '';
   hideMsg('tmDip-msg');
+  const btnSalvaDip = $('btn-salva-timbr-manuale-dip');
+  if (btnSalvaDip) { btnSalvaDip.disabled = false; btnSalvaDip.textContent = 'Invia richiesta'; }
   openSheet('sh-timbrManualeDip');
 }
 
@@ -10511,9 +10513,18 @@ async function salvaTimbrManualeDip() {
   const motivo = $('tmDip-motivo').value.trim();
   if (!ora) { showMsg('tmDip-msg', 'Inserisci l\u2019orario', 'err'); return; }
   if (data > todayISO()) { showMsg('tmDip-msg', 'Non puoi registrare una data futura', 'err'); return; }
+  // Disabilita subito il pulsante per tutta la durata di controllo+scrittura:
+  // un doppio/triplo tocco (o una connessione lenta che invita a ritoccare)
+  // prima d'ora poteva far passare TUTTI i tentativi il controllo "già
+  // timbrato" perché nessuno aveva ancora scritto — creando righe duplicate
+  // identiche (bug reale segnalato: 3 timbrature di Guarino alle 23:22,
+  // stesso fix già applicato a salvaTimbrManuale lato admin).
+  const btnSalvaDip = $('btn-salva-timbr-manuale-dip');
+  if (btnSalvaDip) { if (btnSalvaDip.disabled) return; btnSalvaDip.disabled = true; btnSalvaDip.textContent = 'Invio…'; }
+  const riabilitaDip = () => { if (btnSalvaDip) { btnSalvaDip.disabled = false; btnSalvaDip.textContent = 'Invia richiesta'; } };
   // Controllo "già timbrato" sulla DATA scelta (non più fisso su oggi)
   const gia = await DB.safe(() => DB.presenze.diOggiPerDip(ME.id, data), null);
-  if (gia) { showMsg('tmDip-msg', 'Hai già una timbratura per questa data', 'err'); return; }
+  if (gia) { showMsg('tmDip-msg', 'Hai già una timbratura per questa data', 'err'); riabilitaDip(); return; }
   // Blocco: non si può registrare una presenza in un giorno coperto da
   // ferie/malattia già approvata/confermata — né dal dipendente né
   // dall'admin (stesso identico controllo usato per lo scan QR). Per
@@ -10523,7 +10534,7 @@ async function salvaTimbrManualeDip() {
   if (assenzaBlocco) {
     const lbl = assenzaBlocco.tipo === 'ferie' ? 'ferie' : 'malattia';
     showMsg('tmDip-msg', 'Risulti in '+lbl+' in questa data — non puoi registrare una presenza finché non viene eliminata', 'err');
-    return;
+    riabilitaDip(); return;
   }
   const ts = buildTS(data, ora);
   let insertErr = null;
@@ -10539,11 +10550,12 @@ async function salvaTimbrManualeDip() {
       confermata_dip: false  // in attesa OTP admin
     });
   } catch (e) { insertErr = e; }
-  if (insertErr) { showMsg('tmDip-msg', insertErr.message, 'err'); return; }
+  if (insertErr) { showMsg('tmDip-msg', insertErr.message, 'err'); riabilitaDip(); return; }
   // Notifica admin per generare OTP
   const dataLbl = data === todayISO() ? '' : ' del '+new Date(data+'T12:00:00').toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit'});
   inviaNotificaTelegram('\u270b <b>Ceraldi Presenze \u2014 Timbratura manuale</b>\n'+escTG(ME.nome+(ME.cognome?' '+ME.cognome:''))+' ha registrato una timbratura manuale'+dataLbl+' alle <b>'+ora+'</b>'+(motivo ? ' \u00b7 <i>'+escTG(motivo)+'</i>' : '')+'.\n\nGenera l\u2019OTP per approvarla.', '#richieste');
   toast('\u2713 Timbratura registrata \u2014 in attesa di approvazione admin');
+  riabilitaDip();
   closeSheet('sh-timbrManualeDip');
   caricaStoricoDip();
 }
