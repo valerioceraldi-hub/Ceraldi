@@ -1250,7 +1250,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
           </select>
         </div>
         <div id="pt-legend" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;font-size:11px;color:var(--muted)">
-          <span>🟩 Presente</span><span>🌴 Ferie</span><span>🤒 Malattia</span><span>📋 Altro</span><span>· Nessun dato</span>
+          <span>🟩 Presente</span><span>🟧 In attesa di approvazione</span><span>🌴 Ferie</span><span>🤒 Malattia</span><span>📋 Altro</span><span>· Nessun dato</span>
         </div>
         <div id="pt-content"></div>
       </div>
@@ -17558,8 +17558,13 @@ async function caricaPresenzeTeam() {
   (presenze||[]).forEach(p => {
     if (!stato[p.dipendente_id]) return;
     const gg = parseInt(p.data.split('-')[2]);
+    // Timbratura manuale (dipendente o admin) non ancora confermata/approvata:
+    // resta "in attesa" (arancione) finché non risulta confermata_dip=true —
+    // prima veniva mostrata identica a una presenza normale (verde), dando
+    // l'impressione che fosse già confermata quando non lo era ancora.
+    const inAttesa = (p.tipo_timbratura === 'manuale' || p.tipo_timbratura === 'manuale_dip') && !p.confermata_dip;
     stato[p.dipendente_id][gg] = {
-      cod:'P', presenzaId:p.id, tsEntrata:p.ts_entrata, data:p.data,
+      cod: inAttesa ? 'PA' : 'P', presenzaId:p.id, tsEntrata:p.ts_entrata, data:p.data,
       richiestaTipo: p.richiesta_tipo || null
     };
   });
@@ -17572,9 +17577,10 @@ async function caricaPresenzeTeam() {
     const fine   = new Date(Math.min(new Date(a.data_fine+'T00:00:00'),   new Date(al+'T00:00:00')));
     for (let cursore = inizio; cursore <= fine; cursore.setDate(cursore.getDate()+1)) {
       const gg = cursore.getDate();
-      // Una timbratura reale prevale sempre su un'assenza registrata per lo stesso giorno
+      // Una timbratura reale (confermata o in attesa) prevale sempre su
+      // un'assenza registrata per lo stesso giorno
       const esistente = stato[a.dipendente_id][gg];
-      if (!esistente || esistente.cod !== 'P') stato[a.dipendente_id][gg] = { cod, assenzaId: a.id };
+      if (!esistente || (esistente.cod !== 'P' && esistente.cod !== 'PA')) stato[a.dipendente_id][gg] = { cod, assenzaId: a.id };
     }
   });
 
@@ -17591,7 +17597,7 @@ async function caricaPresenzeTeam() {
 
 function renderCartellonePresenze(dipendenti, stato, giorniInMese, anno, mese) {
   const wrap = $('pt-content');
-  const icone = { P:'🟩', F:'🌴', M:'🤒', A:'📋' };
+  const icone = { P:'🟩', PA:'🟧', F:'🌴', M:'🤒', A:'📋' };
 
   let headCells = '';
   for (let g=1; g<=giorniInMese; g++) {
@@ -17626,7 +17632,7 @@ function renderSchedaDipendentePT(dip, statoGiorni, giorniInMese, anno, mese) {
   let nP=0, nF=0, nM=0, nA=0, nVuoti=0;
   for (let g=1; g<=giorniInMese; g++) {
     const c = statoGiorni[g] ? statoGiorni[g].cod : null;
-    if (c==='P') nP++; else if (c==='F') nF++; else if (c==='M') nM++; else if (c==='A') nA++; else nVuoti++;
+    if (c==='P'||c==='PA') nP++; else if (c==='F') nF++; else if (c==='M') nM++; else if (c==='A') nA++; else nVuoti++;
   }
   const riepilogo = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:14px">
     <div style="background:var(--bg);border-radius:10px;padding:9px 4px;text-align:center"><div style="font-size:18px;font-weight:800">${nP}</div><div style="font-size:10px;color:var(--muted)">Presenti</div></div>
@@ -17639,8 +17645,8 @@ function renderSchedaDipendentePT(dip, statoGiorni, giorniInMese, anno, mese) {
   const primoDelMese = new Date(anno, mese-1, 1);
   let offset = primoDelMese.getDay();
   offset = offset===0 ? 6 : offset-1;
-  const icone = { P:'🟩', F:'🌴', M:'🤒', A:'📋' };
-  const coloreBg = { P:'rgba(47,138,92,.10)', F:'rgba(43,74,203,.10)', M:'rgba(217,48,37,.10)', A:'rgba(200,135,58,.10)' };
+  const icone = { P:'🟩', PA:'🟧', F:'🌴', M:'🤒', A:'📋' };
+  const coloreBg = { P:'rgba(47,138,92,.10)', PA:'rgba(200,135,58,.16)', F:'rgba(43,74,203,.10)', M:'rgba(217,48,37,.10)', A:'rgba(200,135,58,.10)' };
 
   const nomeAttr = nomeCompleto.replace(/'/g, "\\'");
   let celle = '';
@@ -17648,10 +17654,11 @@ function renderSchedaDipendentePT(dip, statoGiorni, giorniInMese, anno, mese) {
   for (let g=1; g<=giorniInMese; g++) {
     const cell = statoGiorni[g];
     const c = cell ? cell.cod : null;
-    // Tap sul giorno: presenza → Correggi/Elimina (con conferma dip.);
-    // ferie/malattia → dettaglio, da cui l'admin può chiedere l'eliminazione
+    // Tap sul giorno: presenza (confermata o in attesa) → Correggi/Elimina
+    // (con conferma dip.); ferie/malattia → dettaglio, da cui l'admin può
+    // chiedere l'eliminazione
     let onClickAttr = '';
-    if (cell && c === 'P' && cell.presenzaId) {
+    if (cell && (c === 'P' || c === 'PA') && cell.presenzaId) {
       onClickAttr = ` onclick="openCorreggi('${cell.presenzaId}','${nomeAttr}','${cell.tsEntrata}','${cell.data}','${cell.richiestaTipo||''}')"`;
     } else if (cell && cell.assenzaId) {
       onClickAttr = ` onclick="openDettaglioAssenza('${cell.assenzaId}',true)"`;
