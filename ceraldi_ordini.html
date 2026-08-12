@@ -1597,7 +1597,12 @@ function _normFornitore(fornitoreFattura){
     return _cleanSupplierName(s.name).toLowerCase()===newName.toLowerCase()||s.name===newName;
   });
   if(alreadyAdded)return alreadyAdded.name;
-  S.suppliers.push({name:newName,whatsapp:'',email:'',abbinaCeraldi:true,_autoAdded:true});
+  // FIX (12/08): prima un fornitore auto-aggiunto partiva SUBITO abilitato
+  // (abbinaCeraldi:true) — bastava una fattura con un nome mai visto per
+  // farlo entrare senza approvazione nel giro di matching IA a pagamento.
+  // Ora parte disattivato: il fornitore viene comunque creato (il dato non
+  // si perde), ma serve un'attivazione esplicita da Impostazioni.
+  S.suppliers.push({name:newName,whatsapp:'',email:'',abbinaCeraldi:false,_autoAdded:true});
   ss();
   syncSuppliersToSupabase();
   console.log('[Fornitori] auto-aggiunto: "'+newName+'" da "'+fornitoreFattura+'"');
@@ -1624,48 +1629,64 @@ async function matchProductsAI(candidati){
   if(!apiKey||!candidati.length)return {};
   var catalogLines=S.products.map(function(p){return p.id+'\t'+p.name;}).join('\n');
   var supplierHint=S.suppliers.map(function(s){return s.name;}).join(', ');
-  // Raggruppa per il nome fornitore SCRITTO IN FATTURA (non quello già risolto
-  // localmente) — così anche le righe il cui fornitore il match locale non ha
-  // riconosciuto affatto arrivano comunque all'IA, che lo riconosce come fa
-  // già "Verifica Fattura" (stessa lista FORNITORI CONOSCIUTI).
-  var byRawForn={};
-  candidati.forEach(function(c){
-    var chiave=(c.row.fornitore||'—').trim();
-    (byRawForn[chiave]=byRawForn[chiave]||[]).push(c);
-  });
   var risultati={};
 
-  for(var rawForn in byRawForn){
-    var gruppo=byRawForn[rawForn];
-    var righeTesto=gruppo.map(function(c,i){
-      return i+': "'+(c.row.descrizione||'').replace(/\s+/g,' ').trim()+'"'+(c.row.cod_articolo?' [codice fornitore: '+c.row.cod_articolo+']':'');
+  // FIX CONSUMO TOKEN (12/08): prima si faceva una chiamata separata PER OGNI
+  // fornitore grezzo diverso trovato nel batch, e ogni chiamata riscriveva da
+  // capo l'intero catalogo prodotti (~3.500-4.000 token, la parte di gran
+  // lunga più pesante del prompt) — con un backlog di N fornitori diversi si
+  // pagava il catalogo N volte per lo stesso identico contenuto. Ora si fa
+  // un'unica chiamata (a blocchi, per tenere sotto controllo dimensione
+  // prompt/risposta) con TUTTE le righe di TUTTI i fornitori insieme: il
+  // catalogo viene scritto una sola volta per blocco, e ogni riga porta con
+  // sé il proprio fornitore grezzo tra parentesi quadre così l'IA continua a
+  // poter risolvere fornitori diversi riga per riga esattamente come prima.
+  // Contratto dati verso processPendingPrezzi() invariato: risultati[row.id]
+  // = {riga, fornitore_catalogo, id_catalogo, confidenza}, stessi campi di prima.
+  //
+  // PROMPT CACHING (12/08): la parte statica (istruzioni+fornitori+catalogo)
+  // è identica ad ogni chunk di questa stessa esecuzione — separata nel primo
+  // blocco del messaggio e marcata cache_control:ephemeral. Dal secondo chunk
+  // in poi (e da eventuali riavvii entro 5 minuti) quella parte si paga ~90%
+  // in meno invece che a prezzo pieno. Il blocco dinamico (le righe da
+  // riconoscere) resta a parte, cambia ad ogni chunk quindi non va in cache.
+  var promptStatico='Sei un magazziniere esperto di un bar/ristorante. Devi riconoscere sia il FORNITORE che gli ARTICOLI scritti in una fattura, confrontandoli con quelli già conosciuti — anche se scritti in modo diverso (fornitore con forma legale o abbreviazione diversa; articoli con ordine delle parole cambiato, abbreviazioni, formato scritto diversamente ma stesso valore, es. "75CL"="CL75").\n\n'
+    +'ATTENZIONE: una taglia/formato/quantità DIVERSA è un prodotto diverso (es. 75CL e 100CL NON sono lo stesso prodotto), anche se il nome sembra identico.\n\n'
+    +'FORNITORI CONOSCIUTI: '+supplierHint+'\n'
+    +'Ogni riga che ti passerò riporta tra parentesi quadre il fornitore scritto in fattura per QUELLA riga (righe diverse possono avere fornitori diversi tra loro) — per ciascuna riga indica quale dei FORNITORI CONOSCIUTI corrisponde (stesso nome esatto), oppure null se è davvero un fornitore mai visto prima.\n\n'
+    +'CATALOGO PRODOTTI (ID poi nome):\n'+catalogLines+'\n\n'
+    +'Per ogni riga che ti passerò, rispondi SOLO con un array JSON valido, un oggetto per ogni riga numerata, zero testo/backtick extra:\n'
+    +'[{"riga":0,"fornitore_catalogo":"Siro","id_catalogo":123,"confidenza":"alta"},{"riga":1,"fornitore_catalogo":null,"id_catalogo":null,"confidenza":"nessuna"}]\n'
+    +'confidenza: "alta" (sicuro), "media" (probabile ma non certo al 100%), "nessuna" (nessun prodotto corrisponde, è un articolo nuovo).';
+
+  var CHUNK=60;
+  for(var start=0; start<candidati.length; start+=CHUNK){
+    var blocco=candidati.slice(start, start+CHUNK);
+    var righeTesto=blocco.map(function(c,i){
+      var fornRiga=(c.row.fornitore||'—').trim();
+      return i+': [fornitore fattura: "'+fornRiga+'"] "'+(c.row.descrizione||'').replace(/\s+/g,' ').trim()+'"'+(c.row.cod_articolo?' [codice fornitore: '+c.row.cod_articolo+']':'');
     }).join('\n');
-    var prompt='Sei un magazziniere esperto di un bar/ristorante. Devi riconoscere sia il FORNITORE che gli ARTICOLI scritti in una fattura, confrontandoli con quelli già conosciuti — anche se scritti in modo diverso (fornitore con forma legale o abbreviazione diversa; articoli con ordine delle parole cambiato, abbreviazioni, formato scritto diversamente ma stesso valore, es. "75CL"="CL75").\n\n'
-      +'ATTENZIONE: una taglia/formato/quantità DIVERSA è un prodotto diverso (es. 75CL e 100CL NON sono lo stesso prodotto), anche se il nome sembra identico.\n\n'
-      +'FORNITORI CONOSCIUTI: '+supplierHint+'\n'
-      +'Il fornitore scritto in fattura è: "'+rawForn+'" — indica quale dei FORNITORI CONOSCIUTI corrisponde (stesso nome esatto), oppure null se è davvero un fornitore mai visto prima.\n\n'
-      +'CATALOGO PRODOTTI (ID poi nome):\n'+catalogLines+'\n\n'
-      +'RIGHE FATTURA DA RICONOSCERE:\n'+righeTesto+'\n\n'
-      +'Rispondi SOLO con un array JSON valido, un oggetto per ogni riga numerata sopra, zero testo/backtick extra (il fornitore va ripetuto identico su ogni riga):\n'
-      +'[{"riga":0,"fornitore_catalogo":"Siro","id_catalogo":123,"confidenza":"alta"},{"riga":1,"fornitore_catalogo":null,"id_catalogo":null,"confidenza":"nessuna"}]\n'
-      +'confidenza: "alta" (sicuro), "media" (probabile ma non certo al 100%), "nessuna" (nessun prodotto corrisponde, è un articolo nuovo).';
+    var contentBlocks=[
+      {type:'text',text:promptStatico,cache_control:{type:'ephemeral'}},
+      {type:'text',text:'RIGHE FATTURA DA RICONOSCERE:\n'+righeTesto}
+    ];
 
     try{
       var resp=await fetch('https://api.anthropic.com/v1/messages',{
         method:'POST',
         headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-        body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:4000,messages:[{role:'user',content:prompt}]})
+        body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:Math.min(8000,300+blocco.length*80),messages:[{role:'user',content:contentBlocks}]})
       });
-      if(!resp.ok){console.warn('[MatchAI] HTTP',resp.status,rawForn);continue;}
+      if(!resp.ok){console.warn('[MatchAI] HTTP',resp.status,'blocco da riga',start);continue;}
       var data=await resp.json();
       var testo=(data.content&&data.content[0]&&data.content[0].text)||'';
       testo=testo.replace(/```json|```/g,'').trim();
       var parsed=JSON.parse(testo);
       parsed.forEach(function(mm){
-        var c=gruppo[mm.riga];
+        var c=blocco[mm.riga];
         if(c)risultati[c.row.id]=mm;
       });
-    }catch(e){console.warn('[MatchAI] errore fornitore "'+rawForn+'":',e.message);}
+    }catch(e){console.warn('[MatchAI] errore blocco da riga '+start+':',e.message);}
   }
   return risultati;
 }
@@ -1737,14 +1758,14 @@ async function processPendingPrezzi(){
       var fornNorm=_normFornitore(row.fornitore);
       console.log('[Prezzi] #'+row.id+' "'+row.fornitore+'" -> "'+fornNorm+'" | "'+(row.descrizione||'').slice(0,20)+'"');
 
-      // Rispetta il toggle per-fornitore "Abbina a Ceraldi Ordini": se
-      // disattivato esplicitamente, non tocchiamo la riga (resta 'pending'
-      // finché il fornitore non viene riattivato, invece di essere comunque
-      // processata e segnalata come se il toggle non esistesse).
-      var fornMatch=fornNorm?S.suppliers.find(function(s){return s.name===fornNorm;}):null;
-      if(fornMatch && fornMatch.abbinaCeraldi===false){
-        continue;
-      }
+      // FIX (12/08): rimosso il controllo del toggle locale "Abbina a Ceraldi
+      // Ordini" (S.suppliers[].abbinaCeraldi) come filtro qui — era un secondo
+      // gate scollegato da quello vero in Ceraldi Fatture (ceraldi_abbina_ordini_v1),
+      // con liste diverse e mai sincronizzate tra loro (causa di molta confusione
+      // sui fornitori "attivi"). Ora Ceraldi Fatture è l'UNICA fonte di verità:
+      // se una riga è arrivata qui in prezzi_da_fatture, vuol dire che Fatture
+      // ha già verificato che il fornitore è abbinato — Ordini si fida e la
+      // processa sempre, senza un secondo controllo ridondante.
 
       var prezzo=parseFloat(row.prezzo_ivato||0)>0?parseFloat(row.prezzo_ivato):parseFloat(row.prezzo_unit||0);
       if(!prezzo||isNaN(prezzo)){
@@ -1815,12 +1836,8 @@ async function processPendingPrezzi(){
         counters.noMatch++;
         continue;
       }
-      // Stesso rispetto del toggle per-fornitore, ora applicato anche al
-      // fornitore che l'IA ha risolto (non solo quello locale).
-      var fornRisoltoObj=S.suppliers.find(function(s){return s.name===fornRisolto;});
-      if(fornRisoltoObj && fornRisoltoObj.abbinaCeraldi===false){
-        continue; // resta pending
-      }
+      // FIX (12/08): rimosso anche qui lo stesso controllo ridondante — vedi
+      // nota sopra in processPendingPrezzi(). Fatture è l'unica fonte di verità.
 
       var idIA=esitoIA&&esitoIA.id_catalogo;
       var prodIA=idIA?S.products.find(function(p){return p.id===idIA;}):null;
@@ -2000,19 +2017,31 @@ async function renderPrezziFatturePage(){
       var card=document.createElement('div');
       card.style.cssText='background:var(--card);border:1.5px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px';
 
-      var descHtml='<div style="font-size:13px;font-weight:600;color:var(--text)">'+((row.descrizione||'(senza descrizione)').split('\n')[0])+'</div>';
+      var descHtml='<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;margin-bottom:1px">Scritto in fattura</div>'
+        +'<div style="font-size:13px;font-weight:600;color:var(--text)">'+((row.descrizione||'(senza descrizione)').split('\n')[0])+'</div>';
       if(row.cod_articolo)descHtml+='<div style="font-size:10px;color:var(--muted)">codice: '+row.cod_articolo+'</div>';
       card.innerHTML=descHtml;
 
       var infoRow=document.createElement('div');
-      infoRow.style.cssText='display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:12px;gap:8px';
+      infoRow.style.cssText='margin-top:8px;font-size:12px';
       if(prod){
+        // FIX (12/08, segnalato da Valerio: "non vedo il prezzo del catalogo"):
+        // gp() cerca il prezzo con corrispondenza ESATTA sul nome fornitore —
+        // se la riga ha ancora salvato il nome grezzo di fattura invece di
+        // quello canonico, non trovava nulla anche quando il prezzo esisteva
+        // davvero. Ora si ritenta con il nome normalizzato come fallback.
         var prezzoAtt=gp(prod,fn);
-        infoRow.innerHTML='<span style="color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+prod.name+'</span>'
-          +'<span style="flex-shrink:0">'+(prezzoAtt!=null?'€'+Number(prezzoAtt).toFixed(2)+' → ':'')+'<b style="color:var(--gold)">€'+prezzoNuovo.toFixed(2)+'</b></span>';
+        if(prezzoAtt==null){
+          var fnNorm=_normFornitore(fn);
+          if(fnNorm)prezzoAtt=gp(prod,fnNorm);
+        }
+        infoRow.innerHTML='<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;margin-bottom:1px">Prodotto a catalogo</div>'
+          +'<div style="font-weight:600;color:var(--text);margin-bottom:4px">'+prod.name+'</div>'
+          +'<div>'+(prezzoAtt!=null?'Prezzo attuale ('+fn+'): €'+Number(prezzoAtt).toFixed(2)+' &rarr; ':'Nessun prezzo precedente per questo fornitore &rarr; ')
+          +'<b style="color:var(--gold)">€'+prezzoNuovo.toFixed(2)+'</b></div>';
       } else {
         infoRow.innerHTML='<span style="color:var(--muted)">Nessun prodotto corrispondente nel catalogo</span>'
-          +'<span style="flex-shrink:0"><b style="color:var(--gold)">€'+prezzoNuovo.toFixed(2)+'</b></span>';
+          +'<div style="margin-top:2px"><b style="color:var(--gold)">€'+prezzoNuovo.toFixed(2)+'</b></div>';
       }
       card.appendChild(infoRow);
 
@@ -3723,28 +3752,12 @@ function renderSettings(){
       secRow.appendChild(cb);
     });
     card.appendChild(secRow);
-    // Toggle "Abbina a Ceraldi Ordini" per il matching prezzi da fatture
-    var abbRow=document.createElement('div');
-    abbRow.style.cssText='display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--accent-light);border-radius:8px;margin-bottom:8px;border:1px solid rgba(43,74,203,.15)';
-    var abbLabel=document.createElement('div');
-    abbLabel.style.cssText='font-size:11px;font-weight:600;color:var(--text);line-height:1.3';
-    abbLabel.innerHTML='🔗 Abbina a Ceraldi Ordini<br><span style="font-size:10px;font-weight:400;color:var(--muted)">Verifica variazioni prezzo dalle fatture</span>';
-    var abbTog=document.createElement('div');
-    var abbOn=s.abbinaCeraldi!==false; // default: true per tutti
-    abbTog.style.cssText='width:40px;height:22px;border-radius:11px;background:'+(abbOn?'var(--accent)':'#ccc')+';position:relative;cursor:pointer;flex-shrink:0;transition:background .2s';
-    var abbThumb=document.createElement('div');
-    abbThumb.style.cssText='width:18px;height:18px;border-radius:50%;background:#fff;position:absolute;top:2px;left:'+(abbOn?'20px':'2px')+';transition:left .2s;box-shadow:0 1px 3px rgba(0,0,0,.2)';
-    abbTog.appendChild(abbThumb);
-    abbTog.onclick=(function(idx,tog,thumb){return function(){
-      S.suppliers[idx].abbinaCeraldi=!S.suppliers[idx].abbinaCeraldi;
-      var on=S.suppliers[idx].abbinaCeraldi;
-      tog.style.background=on?'var(--accent)':'#ccc';
-      thumb.style.left=on?'20px':'2px';
-      saveState();
-      syncSuppliersToSupabase();
-    };})(i,abbTog,abbThumb);
-    abbRow.appendChild(abbLabel);abbRow.appendChild(abbTog);
-    card.appendChild(abbRow);
+    // FIX (12/08): rimosso il toggle "Abbina a Ceraldi Ordini" da qui —
+    // esisteva un secondo toggle identico (stesso nome) in Ceraldi Fatture,
+    // con una lista completamente diversa e mai sincronizzata, causa di
+    // molta confusione su quali fornitori fossero davvero attivi. Ora la
+    // gestione vive SOLO in Ceraldi Fatture (Impostazioni → Fornitori →
+    // Abbina a Ceraldi Ordini) — un solo posto, non più due.
 
     var prow=document.createElement('div');prow.style.cssText='display:flex;gap:6px;margin-bottom:6px';
     var badge=document.createElement('div');badge.style.cssText='flex:1;background:var(--gold);color:#fff;border-radius:7px;padding:5px 8px;font-size:10px;font-weight:700;text-align:center';
@@ -9062,7 +9075,7 @@ function gdLoadScript(cb){
 /* ── FINE GOOGLE DRIVE ───────────────────────────────────────── */
 
 // ── AVVIO: carica Supabase poi inizializza tutto ─────────────
-var BUILD_VERSION='34 (nuova pagina dedicata "Da Fatture" con badge in tab bar: aggiorna prezzo o aggiungi al catalogo direttamente dalle fatture importate da Ceraldi Fatture; match IA esteso anche al riconoscimento del fornitore, non solo del prodotto)';
+var BUILD_VERSION='39 (pagina "Da Fatture": prezzo catalogo ora trovato anche col nome fornitore normalizzato se la ricerca esatta fallisce — prima spariva silenziosamente; descrizione fattura e nome catalogo mostrati per intero su righe separate invece che schiacciati/troncati, per poter confrontare con certezza prima di aggiornare)';
 // BUG CORRETTO (09/08, segnalato da Valerio: "mi dice di aggiornare ma è già
 // l'ultima, e con l'avviso non riesco a fare l'ordine") — il controllo
 // confrontava l'INTERO testo descrittivo di BUILD_VERSION, carattere per
