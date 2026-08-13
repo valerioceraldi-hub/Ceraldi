@@ -15091,6 +15091,11 @@ let _confLiqId = null;
 /* ── CONFERMA ACCONTO DIPENDENTE ────────────────────── */
 const _accMostrato = new Set();
 let _confAccId = null;
+// Metadati dell'acconto aperto nella sheet di conferma (causale, se è un
+// SALDO COMPLETO della mensilità o solo un acconto parziale, nome/anno
+// della mensilità) — riusati dalla notifica Telegram di conferma, per non
+// dire "acconto" quando in realtà è un pagamento completo.
+let _confAccMeta = null;
 
 /* ── CERTIFICAZIONE CONTATTI (lato dipendente) ─────── */
 let _certDipTipo = null;
@@ -15195,9 +15200,14 @@ async function caricaAccontiDipendenti() {
   // stessa causale) copre l'intero maturato del periodo, NON è un acconto
   // — dirlo così è fuorviante. Si dice invece "hai avuto la
   // tredicesima/quattordicesima [anno]", stessa logica già usata per il
-  // messaggio Telegram/push in salvaAcconto().
+  // messaggio Telegram/push in salvaAcconto(). Lo stesso esito (saldo
+  // completo o solo acconto) viene salvato in _confAccMeta e riusato dalla
+  // notifica Telegram di conferma in confermaAcconto() — prima diceva
+  // sempre "Acconto confermato"/"ha confermato l'acconto", fuorviante
+  // quando in realtà è il pagamento COMPLETO della mensilità.
   let titoloSheet = 'Acconto ricevuto';
   let titoloTesto = 'Hai ricevuto un acconto di';
+  _confAccMeta = { causale: acc.causale, isSaldoCompleto: false, nomeMens: null, annoRif: null };
   if (acc.causale === 'acconto_13' || acc.causale === 'acconto_14') {
     const isTred = acc.causale === 'acconto_13';
     const oggiAcc = new Date(acc.data);
@@ -15209,8 +15219,10 @@ async function caricaAccontiDipendenti() {
       const annoRif = mat.haArretrato ? (mat.arretrato.annoInizio+1) : (mat.annoInizio+1);
       titoloSheet = (isTred?'13ª':'14ª')+' mensilità ricevuta';
       titoloTesto = 'Hai avuto la '+nomeMens+' '+annoRif;
+      _confAccMeta = { causale: acc.causale, isSaldoCompleto: true, nomeMens, annoRif };
     } else {
       titoloTesto = 'Hai ricevuto un acconto sulla '+nomeMens+' di';
+      _confAccMeta = { causale: acc.causale, isSaldoCompleto: false, nomeMens, annoRif: null };
     }
   }
   $('ca-titolo-sheet').textContent = titoloSheet;
@@ -15233,10 +15245,22 @@ async function confermaAcconto() {
   const nomeDip = ME.nome + (ME.cognome ? ' '+ME.cognome : '');
   const importoAcc = $('ca-importo') ? $('ca-importo').textContent : '';
   const dataAcc    = $('ca-data')    ? $('ca-data').textContent    : '';
-  inviaNotificaTelegram('\u2713\u2713 <b>Ceraldi Presenze \u2014 Acconto confermato</b>\n'+escTG(nomeDip)+' ha confermato l\'acconto di <b>'+importoAcc+'</b> del '+dataAcc+'.');
-  toast('\u2713 Acconto '+importoAcc+' confermato \u2014 grazie!');
+  // FIX (richiesta esplicita, fuorviante per eventuali contestazioni): se
+  // è il pagamento COMPLETO della 13ª/14ª (non solo un acconto parziale),
+  // la notifica non deve dire "Acconto confermato"/"ha confermato
+  // l'acconto" — stessa distinzione già usata nel titolo della sheet e nel
+  // messaggio di salvaAcconto().
+  let titoloTg = 'Acconto confermato', fraseTg = 'ha confermato l\'acconto di';
+  if (_confAccMeta && _confAccMeta.isSaldoCompleto) {
+    const nomeMensCap = _confAccMeta.nomeMens.charAt(0).toUpperCase()+_confAccMeta.nomeMens.slice(1);
+    titoloTg = nomeMensCap+' '+_confAccMeta.annoRif+' confermata';
+    fraseTg = 'ha confermato la '+_confAccMeta.nomeMens+' '+_confAccMeta.annoRif+' di';
+  }
+  inviaNotificaTelegram('\u2713\u2713 <b>Ceraldi Presenze \u2014 '+titoloTg+'</b>\n'+escTG(nomeDip)+' '+fraseTg+' <b>'+importoAcc+'</b> del '+dataAcc+'.');
+  toast('\u2713 '+(_confAccMeta && _confAccMeta.isSaldoCompleto ? importoAcc+' confermato' : 'Acconto '+importoAcc+' confermato')+' \u2014 grazie!');
   _accMostrato.delete(_confAccId);
   _confAccId = null;
+  _confAccMeta = null;
   closeSheet('sh-confAcconto');
   mostraProssimaAzioneInSospesa();
 }
