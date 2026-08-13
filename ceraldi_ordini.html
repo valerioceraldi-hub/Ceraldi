@@ -2055,17 +2055,67 @@ async function renderPrezziFatturePage(){
         updBtn.style.cssText='flex:1;padding:8px;border-radius:8px;border:none;background:var(--accent);color:#fff;font-size:11px;font-weight:700;cursor:pointer';
         updBtn.onclick=(function(rid,pid,forn,prezzo){return function(){_pf_aggiornaPrezzo(rid,pid,forn,prezzo);};})(row.id,prod.id,fn,prezzoNuovo);
         actRow.appendChild(updBtn);
-      } else {
-        var addBtn=document.createElement('button');
-        addBtn.textContent='➕ Aggiungi al catalogo';
-        addBtn.style.cssText='flex:1;padding:8px;border-radius:8px;border:none;background:var(--accent);color:#fff;font-size:11px;font-weight:700;cursor:pointer';
-        addBtn.onclick=(function(rid,desc,forn,prezzo,iva){return function(){
-          var nome=prompt('Nome prodotto da aggiungere al catalogo:',desc.split('\n')[0]);
-          if(nome===null)return;
-          _pf_aggiungiCatalogo(rid,nome,forn,prezzo,iva);
-        };})(row.id,row.descrizione||'',fn,prezzoNuovo,row.iva);
-        actRow.appendChild(addBtn);
       }
+
+      // FIX (14/08, Valerio: match sbagliato tra fattura e catalogo — es.
+      // "SCAGLIETTA DI SURROGATO..." abbinato per errore a "GOCCINE MIGNON
+      // DI SURROGATO..."): prima, se un match (anche sbagliato) veniva
+      // trovato, l'UNICA azione possibile era confermarlo o ignorare la
+      // riga — nessun modo di correggerlo. Ora, sempre disponibili:
+      // ricerca manuale nel catalogo (per abbinare al prodotto giusto) e
+      // aggiunta come prodotto nuovo (se davvero non è a catalogo).
+      var searchBtn=document.createElement('button');
+      searchBtn.textContent='🔍 Trova prodotto giusto';
+      searchBtn.style.cssText='padding:8px 12px;border-radius:8px;border:1.5px solid var(--border);background:transparent;color:var(--text);font-size:11px;font-weight:700;cursor:pointer';
+      actRow.appendChild(searchBtn);
+
+      var addNewBtn=document.createElement('button');
+      addNewBtn.textContent=prod?'➕ Non è questo, è nuovo':'➕ Aggiungi al catalogo';
+      addNewBtn.style.cssText=prod
+        ?'padding:8px 12px;border-radius:8px;border:1.5px solid var(--border);background:transparent;color:var(--text);font-size:11px;font-weight:700;cursor:pointer'
+        :'flex:1;padding:8px;border-radius:8px;border:none;background:var(--accent);color:#fff;font-size:11px;font-weight:700;cursor:pointer';
+      addNewBtn.onclick=(function(rid,desc,forn,prezzo,iva){return function(){
+        var nome=prompt('Nome prodotto da aggiungere al catalogo:',desc.split('\n')[0]);
+        if(nome===null)return;
+        _pf_aggiungiCatalogo(rid,nome,forn,prezzo,iva);
+      };})(row.id,row.descrizione||'',fn,prezzoNuovo,row.iva);
+      actRow.appendChild(addNewBtn);
+
+      // Riquadro di ricerca, nascosto finché non tocchi "Trova prodotto giusto"
+      var searchWrap=document.createElement('div');
+      searchWrap.style.cssText='display:none;width:100%;margin-top:8px';
+      var searchInput=document.createElement('input');
+      searchInput.type='text';
+      searchInput.placeholder='Cerca nel catalogo per nome...';
+      searchInput.style.cssText='width:100%;padding:8px 10px;border-radius:8px;border:1.5px solid var(--border);font-size:12px;box-sizing:border-box';
+      var searchResults=document.createElement('div');
+      searchResults.style.cssText='max-height:180px;overflow-y:auto;margin-top:6px';
+      searchBtn.onclick=function(){
+        var vis=searchWrap.style.display!=='none';
+        searchWrap.style.display=vis?'none':'block';
+        if(!vis)searchInput.focus();
+      };
+      function _pfRenderRisultati(query){
+        searchResults.innerHTML='';
+        var q=(query||'').trim().toLowerCase();
+        if(q.length<2)return;
+        var trovati=S.products.filter(function(p){return p.name&&p.name.toLowerCase().indexOf(q)>=0;}).slice(0,15);
+        if(!trovati.length){
+          searchResults.innerHTML='<div style="font-size:11px;color:var(--muted);padding:6px 2px">Nessun prodotto trovato</div>';
+          return;
+        }
+        trovati.forEach(function(p){
+          var rEl=document.createElement('div');
+          rEl.textContent=p.name;
+          rEl.style.cssText='padding:8px;font-size:12px;border-bottom:1px solid var(--border);cursor:pointer';
+          rEl.onclick=(function(pid,rid,forn,prezzo){return function(){_pf_aggiornaPrezzo(rid,pid,forn,prezzo);};})(p.id,row.id,fn,prezzoNuovo);
+          searchResults.appendChild(rEl);
+        });
+      }
+      searchInput.oninput=function(){_pfRenderRisultati(searchInput.value);};
+      searchWrap.appendChild(searchInput);
+      searchWrap.appendChild(searchResults);
+      actRow.appendChild(searchWrap);
 
       var ignBtn=document.createElement('button');
       ignBtn.textContent='✖ Ignora';
@@ -9081,7 +9131,7 @@ function gdLoadScript(cb){
 /* ── FINE GOOGLE DRIVE ───────────────────────────────────────── */
 
 // ── AVVIO: carica Cloud poi inizializza tutto ─────────────
-var BUILD_VERSION='41 (soglia di tolleranza per l\'aggiornamento automatico del prezzo abbassata da 5% a 1% — sopra l\'1% di variazione chiede sempre conferma invece di applicare in automatico)';
+var BUILD_VERSION='42 (pagina "Da Fatture": aggiunta ricerca manuale nel catalogo per correggere un abbinamento automatico sbagliato, e possibilità di aggiungere come prodotto nuovo anche quando un match — corretto o no — era già stato trovato, non solo quando mancava del tutto)';
 // BUG CORRETTO (09/08, segnalato da Valerio: "mi dice di aggiornare ma è già
 // l'ultima, e con l'avviso non riesco a fare l'ordine") — il controllo
 // confrontava l'INTERO testo descrittivo di BUILD_VERSION, carattere per
