@@ -1701,8 +1701,10 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
       <input class="field-inp" type="number" id="acc-importo" placeholder="es. 200" step="0.01" min="0" oninput="toggleAccontoRateiMesi()">
       <div id="acc-ratei-wrap" style="display:none;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:14px">
         <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Questo importo copre l'intero maturato: è un saldo, non un acconto. Per evitare confusione l'anno prossimo su quali mesi sono già stati pagati, indica i ratei o il periodo coperti (facoltativo, ma consigliato).</div>
-        <div class="field-lbl">Ratei coperti (es. 12)</div>
-        <input class="field-inp" type="number" id="acc-ratei-coperti" placeholder="es. 12" min="0" step="1">
+        <div id="acc-ratei-coperti-wrap">
+          <div class="field-lbl">Ratei coperti (es. 12)</div>
+          <input class="field-inp" type="number" id="acc-ratei-coperti" placeholder="es. 12" min="0" step="1">
+        </div>
         <div class="field-lbl">Mesi di riferimento coperti (es. dic 2025 - nov 2026)</div>
         <input class="field-inp last" type="text" id="acc-mesi-riferimento" placeholder="es. dic 2025 - nov 2026" style="margin-bottom:0">
       </div>
@@ -10828,6 +10830,25 @@ async function toggleAccontoRateiMesi() {
   const wrap = $('acc-ratei-wrap');
   if (!info || !wrap) return;
   const causale = $('acc-causale') ? $('acc-causale').value : '';
+  const introEl = wrap.querySelector('div[style*="font-size:11px"]');
+  const introOriginale = 'Questo importo copre l\'intero maturato: è un saldo, non un acconto. Per evitare confusione l\'anno prossimo su quali mesi sono già stati pagati, indica i ratei o il periodo coperti (facoltativo, ma consigliato).';
+  // TFR: nessun calcolo automatico di ratei/maturato (non è per periodo
+  // come 13a/14a), ma il periodo di riferimento resta utile da indicare
+  // esplicitamente (es. "TFR 2020-2025") — mostra solo quel campo,
+  // sempre facoltativo, senza il blocco "ratei coperti" che non si applica.
+  if (causale === 'acconto_tfr') {
+    info.style.display = 'none';
+    wrap.style.display = 'block';
+    if ($('acc-ratei-coperti-wrap')) $('acc-ratei-coperti-wrap').style.display = 'none';
+    if (introEl) introEl.textContent = 'Indica facoltativamente a quale periodo si riferisce questo TFR (es. "2020-2025"), per chiarezza futura.';
+    if ($('acc-mesi-riferimento')) $('acc-mesi-riferimento').placeholder = 'es. 2020-2025';
+    return;
+  }
+  // Ripristina testo/campi originali (13a/14a) nel caso siano stati
+  // sovrascritti passando prima da una selezione "Acconto TFR"
+  if ($('acc-ratei-coperti-wrap')) $('acc-ratei-coperti-wrap').style.display = 'block';
+  if (introEl) introEl.textContent = introOriginale;
+  if ($('acc-mesi-riferimento')) $('acc-mesi-riferimento').placeholder = 'es. dic 2025 - nov 2026';
   if ((causale !== 'acconto_13' && causale !== 'acconto_14') || !_accontoDipId) {
     info.style.display = 'none';
     wrap.style.display = 'none';
@@ -11050,6 +11071,11 @@ async function salvaAcconto() {
   const profAcc = await DB.safe(() => DB.profili.byId(_accontoDipId, 'nome,cognome,data_assunzione,paga_giornaliera'), null);
   const nomeAcc = profAcc ? profAcc.nome+(profAcc.cognome?' '+profAcc.cognome:'') : 'Dipendente';
   let vocabolarioTipo = 'un acconto sullo stipendio'; // default: causale 'stipendio' o assente
+  // FIX (richiesta esplicita): né la notifica Telegram all'admin né quella
+  // al dipendente dicevano MAI a quale competenza (mese per lo stipendio,
+  // anno per 13ª/14ª) si riferisse il pagamento — solo importo e tipo
+  // generico. Ora, quando disponibile, la competenza viene sempre inclusa
+  // nel testo stesso invece di dover aprire l'app per saperlo.
   if (accCausale === 'acconto_13' || accCausale === 'acconto_14') {
     // Per 13a/14a: "acconto" se copre solo parte del maturato del periodo,
     // "saldo" se questo pagamento (sommato agli eventuali precedenti dello
@@ -11060,27 +11086,37 @@ async function salvaAcconto() {
       .eq('dipendente_id', _accontoDipId).eq('causale', accCausale);
     const mat = maturato1314(ratei, accCausale === 'acconto_13' ? '13' : '14', tuttiAcconti||[]);
     const nomeMens = accCausale === 'acconto_13' ? 'tredicesima' : 'quattordicesima';
+    const annoRif = mat.haArretrato ? (mat.arretrato.annoInizio+1) : (mat.annoInizio+1);
     if (mat.erogato >= mat.importo - 0.01 && mat.importo > 0) {
-      const annoRif = mat.haArretrato ? (mat.arretrato.annoInizio+1) : (mat.annoInizio+1);
       vocabolarioTipo = 'la '+nomeMens+' '+annoRif;
     } else {
-      vocabolarioTipo = 'un acconto sulla '+nomeMens;
+      vocabolarioTipo = 'un acconto sulla '+nomeMens+' '+annoRif;
     }
   } else if (accCausale === 'acconto_tfr') {
     vocabolarioTipo = 'un acconto sul TFR';
+    if (mesiRiferimento) vocabolarioTipo += ' (periodo: '+mesiRiferimento+')';
   } else if (accCausale === 'ferie_non_godute') {
-    vocabolarioTipo = 'la liquidazione di ferie non godute';
+    vocabolarioTipo = 'la liquidazione di '+giorniFerieLiquidati.toFixed(giorniFerieLiquidati % 1 === 0 ? 0 : 1)+' giorn'+(giorniFerieLiquidati===1?'o':'i')+' di ferie non godute';
   } else if (accCausale === 'straordinari') {
     vocabolarioTipo = 'il pagamento di straordinari';
   } else if (accCausale === 'altro') {
     vocabolarioTipo = 'un pagamento';
   }
+  // Competenza per lo stipendio: solo se il mese di riferimento è stato
+  // esplicitamente indicato (campo visibile solo per causale 'stipendio')
+  // e diverge — altrimenti si dà per scontato sia il mese in cui viene dato.
+  if ((accCausale === 'stipendio' || !accCausale) && meseRif && annoRif2) {
+    const meseRifLbl = new Date(annoRif2, meseRif-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
+    vocabolarioTipo += ' di '+meseRifLbl;
+  }
   const tgTestoAcc = '💶 <b>Ceraldi Presenze</b>\n\n'
     + 'Ciao <b>'+escTG(nomeAcc)+'</b>, hai ricevuto '+vocabolarioTipo+'.\n'
     + 'Apri l\'app per vedere i dettagli e confermare la ricezione.';
   await inviaNotificaDipendente(_accontoDipId, tgTestoAcc, '#stipendi');
-  // Notifica admin — ora indica anche il tipo, non solo "Acconto" generico
-  inviaNotificaTelegram('✅ Registrato: '+causaleLbl(accCausale||'stipendio')+' € '+parseFloat(importo).toFixed(2)+' per '+escTG(nomeAcc)+' — in attesa di conferma dipendente.');
+  // Notifica admin — ora usa lo stesso testo arricchito di competenza
+  // (prima diceva solo la causale generica, es. "Acconto stipendio", senza
+  // dire a quale mese si riferisse).
+  inviaNotificaTelegram('✅ Registrato: '+vocabolarioTipo.charAt(0).toUpperCase()+vocabolarioTipo.slice(1)+' — € '+parseFloat(importo).toFixed(2)+' per '+escTG(nomeAcc)+' — in attesa di conferma dipendente.');
   toast('Registrato — notifica inviata al dipendente');
   closeSheet('sh-acconto');
   await caricaStipendi();
@@ -15207,7 +15243,12 @@ async function caricaAccontiDipendenti() {
   // quando in realtà è il pagamento COMPLETO della mensilità.
   let titoloSheet = 'Acconto ricevuto';
   let titoloTesto = 'Hai ricevuto un acconto di';
-  _confAccMeta = { causale: acc.causale, isSaldoCompleto: false, nomeMens: null, annoRif: null };
+  // _confAccMeta.competenza: testo pronto (es. "la tredicesima 2025",
+  // "un acconto sulla quattordicesima 2026", "lo stipendio di luglio
+  // 2026") riusato dalla notifica Telegram di conferma in
+  // confermaAcconto() — prima quella notifica non diceva MAI a quale
+  // competenza si riferisse il pagamento, solo "l'acconto".
+  _confAccMeta = { causale: acc.causale, isSaldoCompleto: false, nomeMens: null, annoRif: null, competenza: null };
   if (acc.causale === 'acconto_13' || acc.causale === 'acconto_14') {
     const isTred = acc.causale === 'acconto_13';
     const oggiAcc = new Date(acc.data);
@@ -15215,15 +15256,31 @@ async function caricaAccontiDipendenti() {
     const { data: storicoCausale } = await sb.from('presenze_acconti').select('importo,data').eq('dipendente_id', ME.id).eq('causale', acc.causale);
     const mat = maturato1314(ratei, isTred?'13':'14', storicoCausale||[]);
     const nomeMens = isTred ? 'tredicesima' : 'quattordicesima';
+    const annoRif = mat.haArretrato ? (mat.arretrato.annoInizio+1) : (mat.annoInizio+1);
     if (mat.erogato >= mat.importo - 0.01 && mat.importo > 0) {
-      const annoRif = mat.haArretrato ? (mat.arretrato.annoInizio+1) : (mat.annoInizio+1);
       titoloSheet = (isTred?'13ª':'14ª')+' mensilità ricevuta';
       titoloTesto = 'Hai avuto la '+nomeMens+' '+annoRif;
-      _confAccMeta = { causale: acc.causale, isSaldoCompleto: true, nomeMens, annoRif };
+      _confAccMeta = { causale: acc.causale, isSaldoCompleto: true, nomeMens, annoRif, competenza: nomeMens+' '+annoRif };
     } else {
       titoloTesto = 'Hai ricevuto un acconto sulla '+nomeMens+' di';
-      _confAccMeta = { causale: acc.causale, isSaldoCompleto: false, nomeMens, annoRif: null };
+      _confAccMeta = { causale: acc.causale, isSaldoCompleto: false, nomeMens, annoRif: null, competenza: 'un acconto sulla '+nomeMens+' '+annoRif };
     }
+  } else if ((acc.causale === 'stipendio' || !acc.causale) && acc.mese_riferimento && acc.anno_riferimento) {
+    const meseRifLbl = new Date(acc.anno_riferimento, acc.mese_riferimento-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
+    _confAccMeta.competenza = 'lo stipendio di '+meseRifLbl;
+  } else if (acc.causale === 'acconto_tfr') {
+    // Il periodo di riferimento del TFR (se indicato) è salvato dentro
+    // "note" come "Mesi di riferimento: X." (vedi salvaAcconto) — lo si
+    // riestrae qui per non doverlo ricalcolare (per il TFR non c'è nulla
+    // da calcolare, è un testo libero facoltativo inserito dall'admin).
+    const mRif = (acc.note||'').match(/Mesi di riferimento:\s*([^.]+)\./);
+    _confAccMeta.competenza = 'un acconto sul TFR' + (mRif ? ' (periodo: '+mRif[1].trim()+')' : '');
+  } else if (acc.causale === 'ferie_non_godute') {
+    // I giorni liquidati sono salvati dentro "note" (vedi salvaAcconto:
+    // "N giorni di ferie non godute liquidati", a meno che l'admin non
+    // abbia scritto una nota personalizzata al posto di quella di default).
+    const gRif = (acc.note||'').match(/^([\d.,]+)\s*giorni di ferie non godute liquidati/);
+    _confAccMeta.competenza = gRif ? 'la liquidazione di '+gRif[1]+' giorni di ferie non godute' : 'la liquidazione di ferie non godute';
   }
   $('ca-titolo-sheet').textContent = titoloSheet;
   $('ca-titolo-testo').textContent = titoloTesto;
@@ -15249,12 +15306,16 @@ async function confermaAcconto() {
   // è il pagamento COMPLETO della 13ª/14ª (non solo un acconto parziale),
   // la notifica non deve dire "Acconto confermato"/"ha confermato
   // l'acconto" — stessa distinzione già usata nel titolo della sheet e nel
-  // messaggio di salvaAcconto().
+  // messaggio di salvaAcconto(). E in ogni caso, quando nota, la
+  // competenza (mese per lo stipendio, anno per 13ª/14ª) va sempre
+  // indicata — prima non compariva mai, né qui né alla registrazione.
   let titoloTg = 'Acconto confermato', fraseTg = 'ha confermato l\'acconto di';
   if (_confAccMeta && _confAccMeta.isSaldoCompleto) {
     const nomeMensCap = _confAccMeta.nomeMens.charAt(0).toUpperCase()+_confAccMeta.nomeMens.slice(1);
     titoloTg = nomeMensCap+' '+_confAccMeta.annoRif+' confermata';
     fraseTg = 'ha confermato la '+_confAccMeta.nomeMens+' '+_confAccMeta.annoRif+' di';
+  } else if (_confAccMeta && _confAccMeta.competenza) {
+    fraseTg = 'ha confermato '+_confAccMeta.competenza+' di';
   }
   inviaNotificaTelegram('\u2713\u2713 <b>Ceraldi Presenze \u2014 '+titoloTg+'</b>\n'+escTG(nomeDip)+' '+fraseTg+' <b>'+importoAcc+'</b> del '+dataAcc+'.');
   toast('\u2713 '+(_confAccMeta && _confAccMeta.isSaldoCompleto ? importoAcc+' confermato' : 'Acconto '+importoAcc+' confermato')+' \u2014 grazie!');
