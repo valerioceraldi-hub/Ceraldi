@@ -11222,8 +11222,15 @@ async function caricaStipendi() {
     // per ricostruire — mese per mese — quanto spetta ancora al dipendente
     // sui mesi passati mai liquidati, da mostrare come arretrato separato
     // invece di confonderlo dentro il "Da pagare" del mese in corso.
+    // Estesa anche a 14gg DOPO la fine del mese selezionato (oltre ai 13
+    // mesi prima): serve per il calcolo ferie/riposo settimanale sotto, che
+    // deve poter vedere se il riposo di una settimana è caduto fuori dal
+    // periodo di ferie (anche nei giorni successivi, se la ferie è a fine
+    // mese) — calcolaArretratoMesi filtra comunque sempre solo su mesi <
+    // dal, quindi queste righe in più non lo alterano.
     sb.from('presenze').select('dipendente_id,data')
-      .lt('data', dal).gte('data', new Date(parseInt(y), parseInt(m)-13, 1).toISOString().split('T')[0]),
+      .lt('data', new Date(new Date(al+'T00:00:00').getTime()+14*86400000).toISOString().split('T')[0])
+      .gte('data', new Date(parseInt(y), parseInt(m)-13, 1).toISOString().split('T')[0]),
     // Cedolini (buste paga) già caricati per questo mese/anno — servono
     // per il pulsante "Da cedolino" (precompila il bonifico in Liquida con
     // l'importo reale della busta paga). Presi TUTTI, anche quelli senza
@@ -11255,16 +11262,6 @@ async function caricaStipendi() {
   });
   const restituzioniMese = (restituzioniTutte||[]).filter(r => r.data >= dal && r.data <= al);
 
-  // Calcola ferie godute + raccoglie periodi per ogni dipendente
-  const ferieGodute = {};
-  const feriePeriodi = {};
-  (ferieAnno||[]).forEach(a => {
-    const gg = Math.round((new Date(a.data_fine)-new Date(a.data_inizio))/86400000)+1;
-    ferieGodute[a.dipendente_id] = (ferieGodute[a.dipendente_id]||0) + gg;
-    if (!feriePeriodi[a.dipendente_id]) feriePeriodi[a.dipendente_id] = [];
-    feriePeriodi[a.dipendente_id].push({ dal: a.data_inizio, al: a.data_fine, gg });
-  });
-
   if (!dipendenti || !dipendenti.length) {
     wrap.innerHTML = '<div class="empty"><div class="empty-txt">Nessun dipendente attivo</div></div>';
     return;
@@ -11281,6 +11278,31 @@ async function caricaStipendi() {
   // dell'anno scorso se si sta guardando gennaio/febbraio
   const festSetAnnoPrec = new Set(Object.keys(festivitaItaliane(parseInt(y)-1)));
   const festSetDueAnni = new Set([...festSetAnno, ...festSetAnnoPrec]);
+
+  // Giorni EFFETTIVAMENTE lavorati per ciascun dipendente (mese in corso +
+  // finestra estesa di presenzePrecedenti) — serve SOLO a capire, settimana
+  // per settimana, se il riposo settimanale è già caduto in un giorno fuori
+  // dal periodo di ferie (vedi classificaGiorniFerieReale sotto).
+  const workedSetPerDip = {};
+  const aggiungiWorked = (dipId, data) => { if (!workedSetPerDip[dipId]) workedSetPerDip[dipId] = new Set(); workedSetPerDip[dipId].add(data); };
+  (presenze||[]).forEach(p => aggiungiWorked(p.dipendente_id, p.data));
+  (presenzePrecedenti||[]).forEach(p => aggiungiWorked(p.dipendente_id, p.data));
+
+  // Calcola ferie godute (giorni LAVORATIVI, esclusi riposo settimanale e
+  // festività — vedi classificaGiorniFerieReale) + raccoglie periodi per
+  // ogni dipendente. FIX (richiesta esplicita): prima contava tutti i
+  // giorni di calendario del periodo (compreso riposo e festività),
+  // scalando il residuo ferie annuale più del dovuto.
+  const riposoFissoMap = {};
+  dipendenti.forEach(d => { riposoFissoMap[d.id] = d.turni_riposo_fisso; });
+  const ferieGodute = {};
+  const feriePeriodi = {};
+  (ferieAnno||[]).forEach(a => {
+    const cls = classificaGiorniFerieReale(a.data_inizio, a.data_fine, riposoFissoMap[a.dipendente_id], festSetAnno, workedSetPerDip[a.dipendente_id] || new Set());
+    ferieGodute[a.dipendente_id] = (ferieGodute[a.dipendente_id]||0) + cls.goduti;
+    if (!feriePeriodi[a.dipendente_id]) feriePeriodi[a.dipendente_id] = [];
+    feriePeriodi[a.dipendente_id].push({ dal: a.data_inizio, al: a.data_fine, gg: cls.goduti });
+  });
   // Festività del mese in corso (per trovare quelle NON lavorate, da
   // pagare comunque 1 giornata per CCNL — prima calcolato solo nell'export
   // Excel, mai in questa schermata).
@@ -11294,14 +11316,114 @@ async function caricaStipendi() {
   // stesse regole di festività lavorata (doppia)/non lavorata (comunque
   // pagata) già usate per il mese in corso — riusata anche per ricostruire
   // ogni mese arretrato.
-  function calcolaLordoPeriodo(datePresSet, dalPeriodo, alPeriodo, paga, festSet) {
+  // Classifica, giorno per giorno, un periodo di ferie — versione "reale":
+  // a differenza di classificaGiorniFerie (che assume sempre un riposo
+  // fisso sullo stesso giorno ogni settimana), qui si guarda settimana per
+  // settimana (lun-dom) se il riposo di quella settimana è GIÀ caduto in un
+  // giorno FUORI dal periodo di ferie (workedSet = giorni realmente
+  // lavorati): se sì, quella settimana il riposo è "già sceso" altrove e
+  // TUTTI i giorni di ferie di quella settimana contano come goduti; se no
+  // (il dipendente ha lavorato tutti i giorni di quella settimana fuori
+  // ferie, quindi il riposo non è ancora avvenuto), un giorno DENTRO il
+  // periodo di ferie di quella settimana va considerato riposo (non
+  // consuma né paga ferie) — preferenza al giorno di riposo fisso se
+  // impostato e se cade tra i giorni di ferie di quella settimana,
+  // altrimenti domenica se presente, altrimenti l'ultimo giorno disponibile
+  // di quella settimana all'interno del periodo di ferie.
+  function classificaGiorniFerieReale(dalISO, alISO, riposoFisso, festSet, workedSet) {
+    const riposoIdx = (riposoFisso !== null && riposoFisso !== undefined && riposoFisso !== '') ? parseInt(riposoFisso) : null;
+    const inizio = new Date(dalISO+'T12:00:00');
+    const fine = new Date(alISO+'T12:00:00');
+    let goduti = 0, riposo = 0, festivi = 0;
+    // Lunedì della settimana di "inizio"
+    let cursoreSett = new Date(inizio);
+    cursoreSett.setDate(cursoreSett.getDate() - ((cursoreSett.getDay()+6)%7));
+    while (cursoreSett <= fine) {
+      const giorniSett = [];
+      for (let i=0; i<7; i++) { const d = new Date(cursoreSett); d.setDate(d.getDate()+i); giorniSett.push(d); }
+      let riposoGiaPreso = false;
+      giorniSett.forEach(d => {
+        if (d >= inizio && d <= fine) return; // dentro la ferie, non conta per questo controllo
+        const iso = _isoDate(d);
+        if (!festSet.has(iso) && !workedSet.has(iso)) riposoGiaPreso = true;
+      });
+      let giornoRiposoScelto = null;
+      if (!riposoGiaPreso) {
+        const giorniFerieSett = giorniSett.filter(d => d >= inizio && d <= fine);
+        let scelto = riposoIdx !== null ? (giorniFerieSett.find(d => (d.getDay()+6)%7 === riposoIdx) || null) : null;
+        if (!scelto) scelto = giorniFerieSett.find(d => (d.getDay()+6)%7 === 6) || giorniFerieSett[giorniFerieSett.length-1] || null;
+        if (scelto) giornoRiposoScelto = _isoDate(scelto);
+      }
+      giorniSett.forEach(d => {
+        if (d < inizio || d > fine) return;
+        const iso = _isoDate(d);
+        if (festSet.has(iso)) festivi++;
+        else if (iso === giornoRiposoScelto) riposo++;
+        else goduti++;
+      });
+      cursoreSett.setDate(cursoreSett.getDate()+7);
+    }
+    return { goduti, riposo, festivi };
+  }
+
+  // Classifica, giorno per giorno, un periodo di ferie: quanti giorni sono
+  // effettivamente "goduti" (lavorativi, da pagare come giornata normale —
+  // Art. 2109 c.c.), quanti cadono nel riposo settimanale fisso del
+  // dipendente (default domenica se non impostato) e quanti su una
+  // festività — questi ultimi due NON consumano né pagano un giorno di
+  // ferie. riposoFisso segue la stessa codifica già usata per i turni:
+  // 0=Lunedì … 6=Domenica. Versione più semplice, senza guardare le
+  // presenze reali — tenuta come fallback per chi la richiama altrove.
+  function classificaGiorniFerie(dalISO, alISO, riposoFisso, festSet) {
+    const riposoIdx = (riposoFisso !== null && riposoFisso !== undefined && riposoFisso !== '') ? parseInt(riposoFisso) : 6;
+    let goduti = 0, riposo = 0, festivi = 0;
+    let cursore = new Date(dalISO+'T12:00:00');
+    const fine = new Date(alISO+'T12:00:00');
+    while (cursore <= fine) {
+      const iso = _isoDate(cursore);
+      const dowISO = (cursore.getDay() + 6) % 7; // JS 0=Dom..6=Sab → 0=Lun..6=Dom
+      if (festSet.has(iso)) festivi++;
+      else if (dowISO === riposoIdx) riposo++;
+      else goduti++;
+      cursore.setDate(cursore.getDate()+1);
+    }
+    return { goduti, riposo, festivi };
+  }
+
+  // Somma i giorni di ferie GODUTI (lavorativi) tra tutti i periodi di un
+  // dipendente che intersecano [dalPeriodo, alPeriodo] — usata sia per il
+  // lordo di un mese/periodo, sia altrove.
+  function sommaGiorniFerieGoduti(feriePeriodiDip, dalPeriodo, alPeriodo, riposoFisso, festSet, workedSet) {
+    let tot = 0;
+    (feriePeriodiDip||[]).forEach(fp => {
+      const dalI = fp.dal > dalPeriodo ? fp.dal : dalPeriodo;
+      const alI  = fp.al  < alPeriodo  ? fp.al  : alPeriodo;
+      if (dalI > alI) return;
+      // NB: si riclassifica sull'intersezione [dalI,alI] col periodo
+      // richiesto, ma il controllo "riposo già sceso" dentro
+      // classificaGiorniFerieReale guarda sempre l'intera settimana
+      // (anche oltre l'intersezione), quindi resta corretto anche quando
+      // l'intersezione taglia un periodo di ferie a metà settimana.
+      tot += classificaGiorniFerieReale(dalI, alI, riposoFisso, festSet, workedSet || new Set()).goduti;
+    });
+    return tot;
+  }
+
+  function calcolaLordoPeriodo(datePresSet, dalPeriodo, alPeriodo, paga, festSet, feriePeriodiDip, riposoFisso, workedSet) {
     const giorni = datePresSet.size;
     const giorniFestivoLav = [...datePresSet].filter(dt => festSet.has(dt)).length;
     const giorniOrdinari = giorni - giorniFestivoLav;
     const festPeriodo = [...festSet].filter(dt => dt >= dalPeriodo && dt <= alPeriodo);
     const giorniFestivoNonLav = festPeriodo.filter(dt => !datePresSet.has(dt)).length;
-    const totale = giorniOrdinari*paga + giorniFestivoLav*paga*2 + giorniFestivoNonLav*paga;
-    return { giorni, giorniOrdinari, giorniFestivoLav, giorniFestivoNonLav, totale };
+    // Ferie godute nel periodo, PAGATE come giornata normale (Art. 2109 c.c.:
+    // durante le ferie spetta la normale retribuzione). Non consumano né
+    // pagano un giorno di ferie il riposo settimanale (mai retribuito a sé,
+    // già "dentro" il divisore 26/anno usato per la paga) e le festività che
+    // vi cadono (già pagate a parte sopra, in giorniFestivoNonLav — evita un
+    // doppio pagamento dello stesso giorno).
+    const giorniFerie = sommaGiorniFerieGoduti(feriePeriodiDip, dalPeriodo, alPeriodo, riposoFisso, festSet, workedSet);
+    const totale = giorniOrdinari*paga + giorniFestivoLav*paga*2 + giorniFestivoNonLav*paga + giorniFerie*paga;
+    return { giorni, giorniOrdinari, giorniFestivoLav, giorniFestivoNonLav, giorniFerie, totale };
   }
 
   // Ricostruisce, mese per mese, quanto spetta ancora al dipendente sui
@@ -11332,7 +11454,12 @@ async function caricaStipendi() {
         const restMese = (restituzioniTutte||[]).filter(r => r.dipendente_id===dipId && r.data>=dalMese && r.data<=alMese)
           .reduce((s,r)=>s+parseFloat(r.importo),0);
         if (dateMese.size > 0 || accMese > 0 || restMese > 0) {
-          const lordo = calcolaLordoPeriodo(dateMese, dalMese, alMese, paga, festSetDueAnni);
+          // Ferie godute in quel mese arretrato — stessa logica del mese
+          // corrente (vedi sopra). NB: feriePeriodi è popolato solo per
+          // l'anno "y" in visualizzazione: un arretrato che risale a
+          // dicembre dell'anno PRIMA di "y" non troverà qui le sue ferie
+          // (limite noto, da estendere se serve davvero).
+          const lordo = calcolaLordoPeriodo(dateMese, dalMese, alMese, paga, festSetDueAnni, feriePeriodi[dipId], riposoFissoMap[dipId], workedSetPerDip[dipId]);
           const nettoMese = lordo.totale - accMese + restMese;
           if (Math.abs(nettoMese) > 0.005) {
             const meseLbl = new Date(cy, cm-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
@@ -11376,7 +11503,18 @@ async function caricaStipendi() {
     const totaleOrdinario = giorniOrdinari * paga;
     const totaleFestivoLav = giorniFestivoLav * paga * 2;
     const totaleFestivoNonLav = giorniFestivoNonLav * paga;
-    const totale = totaleOrdinario + totaleFestivoLav + totaleFestivoNonLav;
+    // Ferie godute nel mese: contribuiscono al lordo come una giornata
+    // normale (Art. 2109 c.c. — durante le ferie spetta la retribuzione
+    // piena), scorporando dal periodo di ferie il riposo settimanale fisso
+    // del dipendente e le festività che vi ricadono (non pagate qui perché
+    // già conteggiate sopra in giorniFestivoNonLav, o non retribuite se
+    // riposo — evita sia il buco che il doppio pagamento). FIX (richiesta
+    // esplicita): prima le ferie non contribuivano in alcun modo al
+    // "Totale lordo"/"Da pagare" del mese, restando solo un contatore
+    // separato di residuo, come se non fossero giorni retribuiti.
+    const giorniFerie = sommaGiorniFerieGoduti(feriePeriodi[d.id], dal, al, riposoFissoMap[d.id], festSetAnno, workedSetPerDip[d.id]);
+    const totaleFerie = giorniFerie * paga;
+    const totale = totaleOrdinario + totaleFestivoLav + totaleFestivoNonLav + totaleFerie;
     // FIX (bug grave segnalato): qui venivano sottratti TUTTI gli acconti
     // del mese, qualunque fosse la causale — un "Acconto TFR" o "Acconto
     // 13ª" finiva per scalare lo STIPENDIO mensile, quando invece deve
@@ -11582,12 +11720,12 @@ async function caricaStipendi() {
           <button class="btn-sm" style="flex:1" onclick="openAcconto('${d.id}','${nomeOnclick}')">+ Acconto</button>
           <button class="btn-sm" style="flex:1" onclick="openRestituzione('${d.id}','${nomeOnclick}')">↩ Restituzione</button>
           ${!liquidatiMap[d.id]
-            ? `<button class="btn-sm primary" style="flex:1" onclick="openLiquidazione('${d.id}','${nomeOnclick}',${parseInt(m)},${parseInt(y)},${giorni},${paga},${totAcc},${presManualiNonValid},${totRestMese},${giorniFestivoLav},${totaleFestivoLav},${giorniFestivoNonLav},${totaleFestivoNonLav})">Liquida</button>`
+            ? `<button class="btn-sm primary" style="flex:1" onclick="openLiquidazione('${d.id}','${nomeOnclick}',${parseInt(m)},${parseInt(y)},${giorni},${paga},${totAcc},${presManualiNonValid},${totRestMese},${giorniFestivoLav},${totaleFestivoLav},${giorniFestivoNonLav},${totaleFestivoNonLav},${giorniFerie},${totaleFerie})">Liquida</button>`
             : ''
           }
         </div>
         ${(!liquidatiMap[d.id] && Object.prototype.hasOwnProperty.call(cedoliniMeseMap, d.id) && cedoliniMeseMap[d.id] != null)
-          ? `<button class="btn-sm" style="width:100%;margin:-4px 0 10px;background:var(--accent);color:#fff;border:none" onclick="apriLiquidaConCedolino('${d.id}','${nomeOnclick}',${parseInt(m)},${parseInt(y)},${giorni},${paga},${totAcc},${presManualiNonValid},${totRestMese},${giorniFestivoLav},${totaleFestivoLav},${giorniFestivoNonLav},${totaleFestivoNonLav})">📄 Salda con l'importo del cedolino (€${cedoliniMeseMap[d.id].toFixed(2)})</button>`
+          ? `<button class="btn-sm" style="width:100%;margin:-4px 0 10px;background:var(--accent);color:#fff;border:none" onclick="apriLiquidaConCedolino('${d.id}','${nomeOnclick}',${parseInt(m)},${parseInt(y)},${giorni},${paga},${totAcc},${presManualiNonValid},${totRestMese},${giorniFestivoLav},${totaleFestivoLav},${giorniFestivoNonLav},${totaleFestivoNonLav},${giorniFerie},${totaleFerie})">📄 Salda con l'importo del cedolino (€${cedoliniMeseMap[d.id].toFixed(2)})</button>`
           : (!liquidatiMap[d.id] && Object.prototype.hasOwnProperty.call(cedoliniMeseMap, d.id) && cedoliniMeseMap[d.id] == null)
             ? `<div style="font-size:11px;color:var(--yellow);background:rgba(200,135,58,.1);border-radius:8px;padding:8px 10px;margin:-4px 0 10px">⚠ C'è un cedolino caricato per questo mese ma senza importo netto — apri "Documenti" → "✏️ Modifica" su quel cedolino e compila il netto per poter usare "Salda con cedolino"</div>`
             : ''
@@ -11604,6 +11742,15 @@ async function caricaStipendi() {
         ${giorniFestivoNonLav > 0 ? `<div style="background:rgba(47,138,92,.08);border:1.5px solid rgba(47,138,92,.3);border-radius:12px;padding:12px;margin-bottom:10px">
           <div style="font-size:11px;font-weight:800;color:var(--green);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">🟢 Festività non lavorata — pagata comunque</div>
           <div style="display:flex;justify-content:space-between;font-size:13px"><span>${giorniFestivoNonLav} giorn${giorniFestivoNonLav===1?'o':'i'} festiv${giorniFestivoNonLav===1?'o':'i'} di riposo × €${paga.toFixed(2)}</span><span style="font-weight:700">€${totaleFestivoNonLav.toFixed(2)}</span></div>
+        </div>` : ''}
+        <!-- Ferie godute nel mese: pagate come giornata normale (Art. 2109
+             c.c.), scorporate da riposo settimanale e festività che vi
+             ricadono (già gestiti sopra/né retribuiti a sé) — mostrate a
+             parte così si vede subito quanto del lordo viene dalle ferie -->
+        ${giorniFerie > 0 ? `<div style="background:rgba(43,74,203,.06);border:1.5px solid rgba(43,74,203,.25);border-radius:12px;padding:12px;margin-bottom:10px">
+          <div style="font-size:11px;font-weight:800;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">🌴 Ferie godute nel mese — pagate</div>
+          <div style="display:flex;justify-content:space-between;font-size:13px"><span>${giorniFerie} giorn${giorniFerie===1?'o':'i'} di ferie × €${paga.toFixed(2)}</span><span style="font-weight:700">€${totaleFerie.toFixed(2)}</span></div>
+          <div style="font-size:10px;color:var(--muted);margin-top:4px">Escluso il riposo settimanale e le eventuali festività cadute nel periodo — non consumano né pagano un giorno di ferie.</div>
         </div>` : ''}
         <!-- Totale lordo e netto: i due numeri che contano, sempre in cima
              e ben visibili. Il box a destra ora riflette lo STATO reale del
@@ -14521,7 +14668,7 @@ function openLiqBtn(el) {
   openLiquidazione(dipId, nome, mese, anno, giorni, paga, totAcc);
 }
 
-async function openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, presDaValidare, restituzioni, giorniFestivoLav, totaleFestivoLav, giorniFestivoNonLav, totaleFestivoNonLav) {
+async function openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, presDaValidare, restituzioni, giorniFestivoLav, totaleFestivoLav, giorniFestivoNonLav, totaleFestivoNonLav, giorniFerie, totaleFerie) {
   // FIX: presManualiNonValid era una variabile fuori scope (dichiarata dentro
   // caricaStipendi) → ReferenceError e il tasto Liquida moriva in silenzio.
   // Ora arriva come parametro opzionale.
@@ -14542,8 +14689,15 @@ async function openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, 
   // affatto in questa schermata.
   giorniFestivoNonLav = giorniFestivoNonLav || 0;
   totaleFestivoNonLav = totaleFestivoNonLav || 0;
+  // Ferie godute nel mese: pagate come giornata normale (Art. 2109 c.c.) —
+  // FIX (richiesta esplicita): prima non contribuivano affatto al lordo
+  // liquidato, disallineando questo calcolo da quello mostrato nella card
+  // (che ora le include) e facendo scattare un falso "importo cambiato
+  // dopo la liquidazione" al primo ricalcolo.
+  giorniFerie = giorniFerie || 0;
+  totaleFerie = totaleFerie || 0;
   const giorniOrdinari = giorni - giorniFestivoLav;
-  const totaleLordo = (giorniOrdinari * paga) + totaleFestivoLav + totaleFestivoNonLav;
+  const totaleLordo = (giorniOrdinari * paga) + totaleFestivoLav + totaleFestivoNonLav + totaleFerie;
   const netto = totaleLordo - acconti + restituzioni;
 
   // Riconciliazione con la busta paga caricata (se già presente per questo
@@ -14558,7 +14712,7 @@ async function openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, 
     bustaDoc = bd || null;
   } catch(e) { console.warn('riconciliazione busta paga:', e); }
 
-  _liqDati = { dipId, nome, mese, anno, giorni, paga, acconti, restituzioni, netto, totaleLordo, giorniFestivoLav, totaleFestivoLav, giorniFestivoNonLav, totaleFestivoNonLav, documentoId: bustaDoc ? bustaDoc.id : null, cedolinoNetto: (bustaDoc && bustaDoc.netto_busta != null) ? parseFloat(bustaDoc.netto_busta) : null };
+  _liqDati = { dipId, nome, mese, anno, giorni, paga, acconti, restituzioni, netto, totaleLordo, giorniFestivoLav, totaleFestivoLav, giorniFestivoNonLav, totaleFestivoNonLav, giorniFerie, totaleFerie, documentoId: bustaDoc ? bustaDoc.id : null, cedolinoNetto: (bustaDoc && bustaDoc.netto_busta != null) ? parseFloat(bustaDoc.netto_busta) : null };
   const meseLbl = new Date(anno, mese-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
   let riconciliazioneHtml = '';
   if (bustaDoc && bustaDoc.netto_busta != null) {
@@ -14587,6 +14741,14 @@ async function openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, 
       + '<div style="display:flex;justify-content:space-between"><span>'+giorniFestivoNonLav+' giorn'+(giorniFestivoNonLav===1?'o':'i')+' festiv'+(giorniFestivoNonLav===1?'o':'i')+' di riposo × € '+paga.toFixed(2)+'</span><span style="font-weight:700">€ '+totaleFestivoNonLav.toFixed(2)+'</span></div>'
       + '</div>'
     : '';
+  // Ferie godute nel mese: pagate come giornata normale, mostrate a parte
+  // anche qui, coerente con la card (vedi caricaStipendi)
+  const ferieHtml = giorniFerie > 0
+    ? '<div style="background:rgba(43,74,203,.06);border:1.5px solid rgba(43,74,203,.25);border-radius:10px;padding:10px 12px;margin:8px 0;font-size:12px">'
+      + '<div style="font-weight:800;color:var(--accent);text-transform:uppercase;font-size:10px;letter-spacing:.5px;margin-bottom:5px">🌴 Ferie godute nel mese — pagate</div>'
+      + '<div style="display:flex;justify-content:space-between"><span>'+giorniFerie+' giorn'+(giorniFerie===1?'o':'i')+' di ferie × € '+paga.toFixed(2)+'</span><span style="font-weight:700">€ '+totaleFerie.toFixed(2)+'</span></div>'
+      + '</div>'
+    : '';
   $('liq-riepilogo').innerHTML =
     '<div style="font-size:15px;font-weight:700;margin-bottom:12px">'+esc(nome)+'</div>'
     +'<div style="font-size:13px;color:var(--muted);margin-bottom:10px">'+meseLbl.charAt(0).toUpperCase()+meseLbl.slice(1)+'</div>'
@@ -14594,6 +14756,7 @@ async function openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, 
     +'<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px"><span>Paga giornaliera</span><span>€ '+parseFloat(paga).toFixed(2)+'</span></div>'
     +festivoLavHtml
     +festivoNonLavHtml
+    +ferieHtml
     +'<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px"><span>Totale lordo</span><span>€ '+totaleLordo.toFixed(2)+'</span></div>'
     +'<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px"><span>Acconti erogati</span><span style="color:var(--red)">- € '+acconti.toFixed(2)+'</span></div>'
     +(restituzioni > 0 ? '<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px"><span>Restituzione ricevuta</span><span style="color:var(--green)">+ € '+restituzioni.toFixed(2)+'</span></div>' : '')
@@ -14637,8 +14800,8 @@ async function openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, 
 // pronto per registrare la restituzione quando avviene davvero. Se invece
 // il versato è inferiore al dovuto, il riquadro sotto mostra subito quanto
 // resta da pagare.
-async function apriLiquidaConCedolino(dipId, nome, mese, anno, giorni, paga, acconti, presDaValidare, restituzioni, giorniFestivoLav, totaleFestivoLav, giorniFestivoNonLav, totaleFestivoNonLav) {
-  await openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, presDaValidare, restituzioni, giorniFestivoLav, totaleFestivoLav, giorniFestivoNonLav, totaleFestivoNonLav);
+async function apriLiquidaConCedolino(dipId, nome, mese, anno, giorni, paga, acconti, presDaValidare, restituzioni, giorniFestivoLav, totaleFestivoLav, giorniFestivoNonLav, totaleFestivoNonLav, giorniFerie, totaleFerie) {
+  await openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, presDaValidare, restituzioni, giorniFestivoLav, totaleFestivoLav, giorniFestivoNonLav, totaleFestivoNonLav, giorniFerie, totaleFerie);
   if (_liqDati && _liqDati.cedolinoNetto != null) {
     $('liq-bonifico').value = _liqDati.cedolinoNetto.toFixed(2);
     $('liq-contanti').value = '';
