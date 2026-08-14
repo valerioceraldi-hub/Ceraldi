@@ -3294,20 +3294,30 @@ function renderCart(){
           // Mostra solo se il fornitore serve questo settore
           if(supSecs.indexOf(prodSector)<0)return;
           var p2=gp(e.item.product,s2.name);
+          // FIX (14/08, Valerio: "solo quelli con prezzi, senza gli altri"):
+          // prima un fornitore del settore giusto ma senza prezzo per QUESTO
+          // prodotto veniva comunque mostrato, solo sbiadito ("---") — ora
+          // viene proprio nascosto, a meno che non sia già il fornitore
+          // attivo per questa riga (altrimenti spariva la pill selezionata).
+          if(p2===null&&s2.name!==activeSup)return;
           var pill=document.createElement('button');
           pill.className='sup-pill'+(s2.name===activeSup?' on':'');
           pill.textContent=s2.name+(p2!==null?' €'+p2.toFixed(2):' ---');
           if(p2===null)pill.style.opacity='.45';
-          pill.onclick=(function(pid,sname,prod){return function(){
+          pill.onclick=(function(pid,sname){return function(){
+            // FIX (14/08, richiesto da Valerio: "vale la regola del sempre
+            // più economico"): prima toccare una pillola fissava quel
+            // fornitore per SEMPRE su quel prodotto (scritto su Cloud come
+            // best_override), scavalcando il calcolo del prezzo più basso
+            // anche per tutti gli ordini futuri. Ora il tocco vale solo per
+            // l'ordine che stai componendo in questo momento — il prodotto
+            // torna sempre al fornitore più economico calcolato in automatico
+            // la volta successiva.
             S.orderSupOverride[pid]=sname;
             if(S.cart[pid])delete S.cart[pid]._freeSupplier;
             scartov();
-            // La scelta dalla pillola ora è permanente (non solo per quest'ordine):
-            // aggiorna anche il fornitore pinnato del prodotto, sincronizzato su Cloud,
-            // così resta valida per tutti gli ordini futuri finché non la cambi di nuovo.
-            if(prod){prod.best_override=sname;saveCatalogToSupabase([prod]);}
             renderCart();
-          };})(e.pid,s2.name,e.item.product);
+          };})(e.pid,s2.name);
           pills.appendChild(pill);
         });
         // Pill "Altro..." per fornitore libero
@@ -3718,6 +3728,14 @@ function genReport(fv,tv,el){
   el.appendChild(wrap);
 }
 
+// FIX (14/08, Valerio: "ad ogni modifica o cancellazione si chiude il menu a
+// tendina e tocca ripartire da capo"): lo stato aperto/chiuso di ogni
+// sezione delle Impostazioni viveva in una variabile LOCALE dentro
+// renderSettings() — ad ogni chiamata (che succede dopo ogni aggiunta,
+// modifica, cancellazione o riordino) la funzione ripartiva da zero e la
+// variabile tornava sempre a "chiuso". Ora lo stato vive qui fuori,
+// sopravvive ai ridisegni.
+var _settingsOpenState={};
 function renderSettings(){
   var el=document.getElementById('pg-settings');el.innerHTML='';
 
@@ -3754,9 +3772,11 @@ function renderSettings(){
     if(meta){var m=document.createElement('div');m.style.cssText='font-size:11px;color:var(--muted)';m.textContent=meta;left.appendChild(m);}
     var arrow=document.createElement('span');arrow.style.cssText='font-size:14px;color:var(--muted);transition:transform .2s';arrow.textContent='▼';
     hdr.appendChild(left);hdr.appendChild(arrow);s.appendChild(hdr);
-    var body=document.createElement('div');body.style.display='none';
-    var open=false;
-    hdr.onclick=function(){open=!open;body.style.display=open?'block':'none';arrow.style.transform=open?'rotate(180deg)':'';};
+    var body=document.createElement('div');
+    var open=!!_settingsOpenState[title];
+    body.style.display=open?'block':'none';
+    arrow.style.transform=open?'rotate(180deg)':'';
+    hdr.onclick=function(){open=!open;_settingsOpenState[title]=open;body.style.display=open?'block':'none';arrow.style.transform=open?'rotate(180deg)':'';};
     s.appendChild(body);
     return body;
   }
@@ -3774,11 +3794,14 @@ function renderSettings(){
   supLeft.appendChild(supTitle);supLeft.appendChild(supMeta);
   supHeader.appendChild(supLeft);supHeader.appendChild(supArrow);
   supSec.appendChild(supHeader);
-  // Contenuto collassabile (chiuso di default)
-  var supBody=document.createElement('div');supBody.id='sup-body';supBody.style.display='none';
-  var supOpen=false;
+  // Contenuto collassabile (persiste aperto/chiuso tra un ridisegno e l'altro)
+  var supBody=document.createElement('div');supBody.id='sup-body';
+  var supOpen=!!_settingsOpenState['Fornitori'];
+  supBody.style.display=supOpen?'block':'none';
+  supArrow.style.transform=supOpen?'rotate(180deg)':'';
   supHeader.onclick=function(){
     supOpen=!supOpen;
+    _settingsOpenState['Fornitori']=supOpen;
     supBody.style.display=supOpen?'block':'none';
     supArrow.style.transform=supOpen?'rotate(180deg)':'';
   };
@@ -3863,7 +3886,7 @@ function renderSettings(){
   });
   supBody.appendChild(sl);
   var asb=document.createElement('button');asb.className='add-sup';asb.textContent='+ Aggiungi fornitore';
-  asb.onclick=function(){S.suppliers.push({name:'',whatsapp:'',email:''});renderSettings();supOpen=true;supBody.style.display='block';};
+  asb.onclick=function(){S.suppliers.push({name:'',whatsapp:'',email:''});_settingsOpenState['Fornitori']=true;renderSettings();};
   supBody.appendChild(asb);
   supSec.appendChild(supBody);
 
@@ -6160,7 +6183,14 @@ function getSectorForProduct(prod) {
 function getSupplierSectors(supName) {
   if (S.supplierSectors && S.supplierSectors[supName])
     return S.supplierSectors[supName];
-  return ['Bar']; // default
+  // FIX (14/08, Valerio: "mi fai vedere tutti i fornitori, anche quelli che
+  // non c'entrano col settore del prodotto"): prima un fornitore senza
+  // settore configurato veniva considerato automaticamente 'Bar' — con la
+  // maggior parte dei fornitori mai classificati esplicitamente, finivano
+  // TUTTI per apparire come fornitori Bar, anche quelli di altri reparti.
+  // Ora un fornitore senza settore configurato non appartiene a NESSUN
+  // settore finché non lo assegni tu esplicitamente da Impostazioni.
+  return [];
 }
 
 function saveProductSectors() {
@@ -6339,7 +6369,7 @@ async function loadSuppliersFromSupabase(){
       // ── Cloud è l'UNICA fonte di verità: sostituisce sempre il locale ──
       // Niente più merge/unione — eliminava la causa di ripubblicazioni indesiderate.
       _applySupplierRows(remote);
-      var cacheRows=remote.map(function(f){return {nome:f.nome,whatsapp:f.whatsapp||'',email:f.email||'',settori:f.settori||['Bar'],abbina_ceraldi:f.abbina_ceraldi!==false,ordine:f.ordine||0};});
+      var cacheRows=remote.map(function(f){return {nome:f.nome,whatsapp:f.whatsapp||'',email:f.email||'',settori:f.settori||[],abbina_ceraldi:f.abbina_ceraldi!==false,ordine:f.ordine||0};});
       _saveSuppliersCache(cacheRows);
       console.log('[Fornitori] caricati da Cloud (sostituzione totale): '+remote.length);
       return;
@@ -6362,7 +6392,7 @@ async function loadSuppliersFromSupabase(){
 async function _sbUpsertFornitore(sup,ordine){
   if(!sup||!sup.name)return false;
   var row={nome:sup.name,whatsapp:sup.whatsapp||'',email:sup.email||'',
-    settori:getSupplierSectors(sup.name)||['Bar'],
+    settori:getSupplierSectors(sup.name)||[],
     abbina_ceraldi:sup.abbinaCeraldi!==false,
     ordine:ordine!=null?ordine:0};
   try{
@@ -9157,7 +9187,7 @@ function gdLoadScript(cb){
 /* ── FINE GOOGLE DRIVE ───────────────────────────────────────── */
 
 // ── AVVIO: carica Cloud poi inizializza tutto ─────────────
-var BUILD_VERSION='43 (aggiornare il prezzo di un prodotto ora risolve automaticamente anche le altre righe pendenti dello stesso prodotto/fornitore provenienti da fatture con data uguale o precedente — non chiede più conferma più volte per lo stesso prodotto quando è già stato aggiornato da una fattura più recente)';
+var BUILD_VERSION='46 (rimosso l\'abbinamento fornitore permanente dal tocco pillola nel carrello — ora vale solo per l\'ordine in corso, il "migliore" torna sempre a essere calcolato in automatico sul prezzo più basso; ripuliti anche i 7 abbinamenti fissi già impostati in passato)';
 // BUG CORRETTO (09/08, segnalato da Valerio: "mi dice di aggiornare ma è già
 // l'ultima, e con l'avviso non riesco a fare l'ordine") — il controllo
 // confrontava l'INTERO testo descrittivo di BUILD_VERSION, carattere per
