@@ -1514,6 +1514,89 @@ function matchProduct(rigaDesc, rigaCodArt, fornitore){
   return {product:best, score:Math.min(100,Math.round(bestScore*10)/10)};
 }
 
+// ── MATCH IBRIDO: locale + IA solo sui casi ambigui (18/08) ──
+// Valerio ha segnalato con dati reali che il solo matching testuale
+// (Jaccard su parole) produce falsi positivi pericolosi quando due prodotti
+// condividono categoria/formato ma sono marche diverse: "AMARO JAGERMEISTER
+// CL.100" abbinato a "AMARO CYNAR CL.100", "AMARETTO DISARONNO CL.100" a
+// "COINTREAU CL.100", "BIRRA NASTRO AZZURRO..." a "BIRRA PERONI..." — il
+// testo condiviso (categoria+formato) supera la soglia anche se il prodotto
+// è chiaramente un altro. La sola similarità testuale NON è affidabile per
+// distinguere le marche, quindi qui il locale viene usato solo ai due
+// estremi (match quasi verbatim, o chiaramente nulla) mentre tutta la zona
+// grigia in mezzo — dove serve capire se "stesso prodotto scritto diverso"
+// oppure "stessa categoria ma marca diversa" — torna a passare dall'IA,
+// con l'istruzione esplicita sulla marca che avevamo nel prompt originale,
+// ma solo su questi item (non su ogni prodotto) e con una rosa di massimo 8
+// candidati locali a testa (non l'intero catalogo): il risparmio token
+// resta comunque grande, la qualità del match torna quella di prima.
+function _localCandidates(name, catalogList, topN, codArt, fornitore){
+  var scored=catalogList.map(function(c){
+    var s=_similarity(name,(c.name||'')+' '+(c.conf||''));
+    if(codArt&&c.codArt&&String(codArt).toLowerCase()===String(c.codArt).toLowerCase())s+=30;
+    if(fornitore&&c.prices&&c.prices[fornitore])s+=10;
+    return {c:c,s:Math.min(100,Math.round(s*10)/10)};
+  }).sort(function(a,b){return b.s-a.s;});
+  return scored.slice(0,topN);
+}
+async function _hybridMatchCatalog(names,catalogList,apiKey,extras){
+  var results=new Array(names.length);
+  var toAI=[];
+  names.forEach(function(name,idx){
+    var ex=(extras&&extras[idx])||{};
+    var cands=_localCandidates(name,catalogList,8,ex.codArt,ex.fornitore);
+    var best=cands[0];
+    if(best&&best.s>=88){
+      results[idx]={matchTipo:'esatto',id:best.c.id,name:best.c.name};
+    }else if(!best||best.s<15){
+      results[idx]={matchTipo:'nessuno',id:null,name:null};
+    }else{
+      toAI.push({idx:idx,name:name,candidates:cands.filter(function(x){return x.s>=15;}).map(function(x){return{id:x.c.id,name:x.c.name};})});
+    }
+  });
+  if(toAI.length&&apiKey){
+    try{
+      var prompt='Per ciascuna voce sotto, decidi se corrisponde a UNO dei prodotti candidati elencati (stesso prodotto, anche scritto diversamente) oppure a NESSUNO.\n'
+        +'ATTENZIONE MARCA: la marca/produttore è parte identificativa del prodotto tanto quanto il tipo — prodotti con marca diversa (es. "JAGERMEISTER" vs "CYNAR", "DISARONNO" vs "COINTREAU", "PERONI" vs "NASTRO AZZURRO") NON sono lo stesso prodotto anche se categoria/formato/parole coincidono. Match solo se la marca (quando indicata) coincide e cambia solo formato/confezione/sinonimo/ordine parole.\n\n'
+        +'VOCI DA VERIFICARE:\n'
+        +toAI.map(function(t,i){return i+'. "'+t.name+'" — candidati: '+t.candidates.map(function(c){return '[id:'+c.id+'] '+c.name;}).join(' | ');}).join('\n')
+        +'\n\nRispondi SOLO array JSON, un elemento per voce nello stesso ordine (stessa lunghezza, nessuna voce saltata), formato: [{"match_id":123,"confidenza":"alta"},{"match_id":null,"confidenza":"nessuna"}]. confidenza: "alta" se sicuro sia lo stesso prodotto, "bassa" se probabile ma non certo, "nessuna" se nessun candidato corrisponde davvero (marca diversa conta come nessuna).';
+      var resp=await fetch('https://api.anthropic.com/v1/messages',{
+        method:'POST',headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+        body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:Math.min(8000,300+toAI.length*60),messages:[{role:'user',content:prompt}]})
+      });
+      var data=await resp.json();
+      var tb=(data.content||[]).find(function(b){return b.type==='text';});
+      var txt=tb?tb.text.replace(/```json|```/g,'').trim():'[]';
+      var arr=JSON.parse(txt);
+      toAI.forEach(function(t,i){
+        var res=arr[i];
+        if(res&&res.match_id!=null&&res.confidenza!=='nessuna'){
+          var cand=t.candidates.find(function(c){return c.id===res.match_id;});
+          results[t.idx]={matchTipo:res.confidenza==='alta'?'esatto':'probabile',id:res.match_id,name:cand?cand.name:null};
+        }else{
+          results[t.idx]={matchTipo:'nessuno',id:null,name:null};
+        }
+      });
+    }catch(e){
+      console.warn('[Match IA] fallback fallito:',e.message);
+      // Se l'IA fallisce (rete, chiave, ecc.) meglio segnare "da verificare"
+      // col miglior candidato locale piuttosto che perdere la riga: l'utente
+      // la vede comunque e decide, invece di sparire silenziosamente.
+      toAI.forEach(function(t){
+        var best=t.candidates[0];
+        results[t.idx]=best?{matchTipo:'probabile',id:best.id,name:best.name}:{matchTipo:'nessuno',id:null,name:null};
+      });
+    }
+  }else{
+    toAI.forEach(function(t){
+      var best=t.candidates[0];
+      results[t.idx]=best?{matchTipo:'probabile',id:best.id,name:best.name}:{matchTipo:'nessuno',id:null,name:null};
+    });
+  }
+  return results;
+}
+
 // Carica righe pending/review da Cloud e fa match
 // Pulisce il nome legale → nome commerciale breve
 function _cleanSupplierName(raw){
@@ -1969,14 +2052,50 @@ async function _pf_ignora(rowId){
   renderPrezziFatturePage();
 }
 
+// ── Righe con prodotto abbinato e prezzo già identico al catalogo (±1
+// centesimo) sono redundanti: chiedere conferma non cambierebbe nulla.
+// Usata sia dal badge (contatore) sia dalla pagina "Da Fatture" (lista),
+// così i due numeri restano sempre coerenti tra loro. ──
+async function _pf_autoResolveEqualPrices(rows){
+  var autoResolveIds=[];
+  var kept=rows.filter(function(row){
+    if(!row.product_id)return true;
+    var prod=S.products.find(function(p){return p.id===row.product_id;});
+    if(!prod)return true;
+    var prezzoNuovo=parseFloat(row.prezzo_ivato||0)>0?parseFloat(row.prezzo_ivato):parseFloat(row.prezzo_unit||0);
+    var fn=row.fornitore||'';
+    var prezzoAtt=gp(prod,fn);
+    if(prezzoAtt==null){
+      var fnNorm=_normFornitore(fn);
+      if(fnNorm)prezzoAtt=gp(prod,fnNorm);
+    }
+    if(prezzoAtt!=null&&Math.abs(prezzoAtt-prezzoNuovo)<0.01){
+      autoResolveIds.push(row.id);
+      return false;
+    }
+    return true;
+  });
+  if(autoResolveIds.length){
+    try{
+      await fetch(SUPABASE_URL+'/rest/v1/prezzi_da_fatture?id=in.('+autoResolveIds.join(',')+')',{
+        method:'PATCH',
+        headers:{apikey:SUPABASE_KEY,Authorization:'Bearer '+AUTH_TOKEN,'Content-Type':'application/json','Prefer':'return=minimal'},
+        body:JSON.stringify({stato:'approved',note:'Risolto automaticamente: prezzo già identico a catalogo'})
+      });
+    }catch(are){console.warn('[PrezziFatture] auto-resolve:',are.message);}
+  }
+  return {kept:kept,resolvedCount:autoResolveIds.length};
+}
 async function aggiornaBadgePrezziFatture(){
   var badge=document.getElementById('prezzifatture-badge');
   if(!badge)return;
   try{
-    var r=await fetch(SUPABASE_URL+'/rest/v1/prezzi_da_fatture?stato=in.(new_product,new_price,review,no_match)&select=id',{
-      headers:{apikey:SUPABASE_KEY,Authorization:'Bearer '+AUTH_TOKEN,Prefer:'count=exact'}
+    var r=await fetch(SUPABASE_URL+'/rest/v1/prezzi_da_fatture?stato=in.(new_product,new_price,review,no_match)&select=id,product_id,fornitore,prezzo_ivato,prezzo_unit',{
+      headers:{apikey:SUPABASE_KEY,Authorization:'Bearer '+AUTH_TOKEN}
     });
-    var n=(await r.json()).length;
+    var raw=await r.json();
+    var res=await _pf_autoResolveEqualPrices(raw);
+    var n=res.kept.length;
     if(n){badge.textContent=n>99?'99+':n;badge.style.display='flex';}
     else badge.style.display='none';
   }catch(e){}
@@ -1994,6 +2113,20 @@ async function renderPrezziFatturePage(){
     });
     if(r.ok)rows=await r.json();
   }catch(e){console.warn('[PrezziFatture] fetch:',e.message);}
+
+  // ── FIX (18/08, Valerio: "inutile che mi dia questo match perché i prezzi
+  // sono uguali") — la classificazione di una riga (review/new_price/...)
+  // viene decisa UNA VOLTA in processPendingPrezzi(), ma il prezzo mostrato
+  // qui è sempre letto dal vivo dal catalogo: se nel frattempo il prezzo a
+  // catalogo per quel fornitore è diventato identico al prezzo in fattura
+  // (perché aggiornato da un'altra fattura, da "Verifica Fattura", o a mano),
+  // confermare la riga non cambierebbe nulla — è un tap inutile. Le righe con
+  // prodotto abbinato e prezzo già identico (±1 centesimo) vengono marcate
+  // 'approved' in automatico e tolte dalla lista (stessa logica del badge,
+  // vedi _pf_autoResolveEqualPrices). ──
+  var _pfRes=await _pf_autoResolveEqualPrices(rows);
+  rows=_pfRes.kept;
+  if(_pfRes.resolvedCount)toast('✅ '+_pfRes.resolvedCount+' prezzo/i già allineati, risolti automaticamente');
 
   var badge=document.getElementById('prezzifatture-badge');
   if(badge){
@@ -6857,7 +6990,7 @@ function analizzaFattura(file,tipo){
       })
     })
     .then(function(r){return r.json();})
-    .then(function(data){
+    .then(async function(data){
       statusDiv.style.display='none';
       var resEl=document.getElementById('fattura-results');
       resEl.style.display='block';
@@ -6908,22 +7041,23 @@ function analizzaFattura(file,tipo){
           +'⚠️ Risposta parziale — alcuni prodotti potrebbero mancare. Risultati comunque mostrati.</div>';
         resEl.style.display='block';
       }
-      // ── Matching locale (18/08): l'AI ha estratto solo i prodotti, il
-      // confronto col catalogo lo facciamo qui via matchProduct() — stessa
-      // funzione già usata e validata per prezzi_da_fatture. Soglie coerenti
-      // con quelle già in produzione altrove: score<35 = nessun match
-      // ("nessuno", trattato come prodotto nuovo), 35-69 = "probabile" (da
-      // confermare), ≥70 = "esatto" — ma anche "esatto" resta comunque solo
-      // proposto: nulla viene scritto senza conferma esplicita in UI. ──
+      // ── Matching ibrido (18/08, corretto dopo segnalazione Valerio su
+      // falsi match tra marche diverse — vedi nota su _hybridMatchCatalog):
+      // locale per gli estremi, IA solo sulla zona grigia con lista
+      // candidati ristretta e istruzione esplicita sulla marca. ──
       var _fornNorm=_normFornitore(parsed.fornitore)||parsed.fornitore||'';
-      (parsed.prodotti||[]).forEach(function(p){
-        var m=matchProduct(p.nome_fattura,null,_fornNorm);
-        if(m.product&&m.score>=70){
-          p.match_tipo='esatto';p.id_catalogo=m.product.id;p.nome_catalogo=m.product.name;p.fornitore_catalogo=_fornNorm;p.match_note=null;
-        }else if(m.product&&m.score>=35){
-          p.match_tipo='probabile';p.id_catalogo=m.product.id;p.nome_catalogo=m.product.name;p.fornitore_catalogo=_fornNorm;p.match_note='Corrispondenza automatica da verificare';
-        }else{
+      var _apiKeyMatch=localStorage.getItem('ceraldi_apikey')||'';
+      var _prodottiF=parsed.prodotti||[];
+      var _namesF=_prodottiF.map(function(p){return p.nome_fattura||'';});
+      var _extrasF=_prodottiF.map(function(p){return{codArt:p.cod_articolo||null,fornitore:_fornNorm};});
+      var _matchResF=await _hybridMatchCatalog(_namesF,S.products,_apiKeyMatch,_extrasF);
+      _prodottiF.forEach(function(p,i){
+        var mr=_matchResF[i];
+        if(mr.matchTipo==='nessuno'){
           p.match_tipo='nessuno';p.id_catalogo=null;p.nome_catalogo=null;p.fornitore_catalogo=_fornNorm;p.match_note=null;
+        }else{
+          p.match_tipo=mr.matchTipo;p.id_catalogo=mr.id;p.nome_catalogo=mr.name;p.fornitore_catalogo=_fornNorm;
+          p.match_note=mr.matchTipo==='probabile'?'Corrispondenza automatica da verificare':null;
         }
       });
       mostraRisultatiFattura(parsed);
@@ -9198,7 +9332,7 @@ function gdLoadScript(cb){
 /* ── FINE GOOGLE DRIVE ───────────────────────────────────────── */
 
 // ── AVVIO: carica Cloud poi inizializza tutto ─────────────
-var BUILD_VERSION='49 (risparmio token: in "Verifica Fattura" e "Carica PDF preventivo" l\'AI ora fa SOLO estrazione — il confronto col catalogo per capire se un prodotto è già presente lo fa il codice localmente con matchProduct(), stessa funzione già validata su dati reali in altre parti dell\'app; l\'AI non riceve più il catalogo intero ad ogni chiamata. Nessun cambiamento nel comportamento visibile: tutto resta da confermare manualmente come prima, cambia solo chi decide il match)';
+var BUILD_VERSION='51 (CORREZIONE su segnalazione Valerio con dati reali: il match locale puro introdotto in v49 confondeva prodotti diversi che condividono categoria/formato — "AMARO JAGERMEISTER" abbinato a "AMARO CYNAR", "DISARONNO" a "COINTREAU", "BIRRA NASTRO AZZURRO" a "BIRRA PERONI". In "Verifica Fattura" e "Carica PDF preventivo" il match ora è ibrido: locale solo per i casi estremi — chiaramente uguale o chiaramente senza nulla in comune — mentre tutta la zona intermedia (dove il testo si somiglia ma può trattarsi di marche diverse) torna a passare dall\'IA, con l\'istruzione esplicita sulla marca e una rosa ristretta di massimo 8 candidati locali per voce invece dell\'intero catalogo — risparmio token mantenuto, qualità del match tornata quella di prima)';
 // BUG CORRETTO (09/08, segnalato da Valerio: "mi dice di aggiornare ma è già
 // l'ultima, e con l'avviso non riesco a fare l'ordine") — il controllo
 // confrontava l'INTERO testo descrittivo di BUILD_VERSION, carattere per
@@ -9863,24 +9997,21 @@ function _pdfImportInit(){
       var text=tb?tb.text.replace(/```json|```/g,'').trim():'';
       var parsed=JSON.parse(text);
       if(!Array.isArray(parsed)||!parsed.length)throw new Error('Nessun prodotto trovato');
-      // ── Matching locale (18/08, richiesto da Valerio): l'AI ora fa solo
-      // estrazione, il confronto col catalogo di settore è qui via
-      // matchProduct() ristretto ai soli id del settore scelto. Stesse
-      // soglie usate in analizzaFattura/prezzi_da_fatture: ≥70 "exact",
-      // 35-69 "similar" (comunque da confermare), <35 "none" (trattato da
-      // nuovo prodotto). Nulla si scrive senza conferma esplicita in UI. ──
-      parsed.forEach(function(p){
-        var best=null,bestScore=0;
-        S.products.forEach(function(prod){
-          if(!catalogoSettoreIds[prod.id])return;
-          var s=_similarity(p.name||'',(prod.name||'')+' '+(prod.conf||''));
-          if(fornitoreSel&&prod.prices&&prod.prices[fornitoreSel])s+=10;
-          if(s>bestScore){bestScore=s;best=prod;}
-        });
-        var score=Math.min(100,Math.round(bestScore*10)/10);
-        if(best&&score>=70){p.match='exact';p.match_id=best.id;}
-        else if(best&&score>=35){p.match='similar';p.match_id=best.id;}
-        else{p.match='none';p.match_id=null;}
+      // ── Matching ibrido (18/08, corretto dopo segnalazione Valerio con
+      // screenshot reali: "AMARO JAGERMEISTER" abbinato a "AMARO CYNAR",
+      // "AMARETTO DISARONNO" a "COINTREAU", "BIRRA NASTRO AZZURRO" a
+      // "BIRRA PERONI" — il solo testo non distingue le marche). Locale
+      // solo per gli estremi, IA sulla zona grigia con lista candidati
+      // ristretta al settore e istruzione esplicita sulla marca — vedi
+      // _hybridMatchCatalog per i dettagli. ──
+      var catalogoSettoreArr=S.products.filter(function(prod){return catalogoSettoreIds[prod.id];});
+      var _namesP=parsed.map(function(p){return p.name||'';});
+      var _extrasP=parsed.map(function(){return{fornitore:fornitoreSel};});
+      var _matchResP=await _hybridMatchCatalog(_namesP,catalogoSettoreArr,apiKey,_extrasP);
+      parsed.forEach(function(p,i){
+        var mr=_matchResP[i];
+        p.match=mr.matchTipo==='esatto'?'exact':(mr.matchTipo==='probabile'?'similar':'none');
+        p.match_id=mr.id;
       });
       var startId=parseInt(document.getElementById('pdfimport-startid').value)||1;
       var ivaNote='';var ivaGroups={};
