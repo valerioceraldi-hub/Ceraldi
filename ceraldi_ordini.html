@@ -6801,37 +6801,30 @@ function analizzaFattura(file,tipo){
     var base64=ev.target.result.split(',')[1];
     statusTxt.textContent='Analisi AI in corso...';
 
-    // Catalogo compatto: solo ID+nome per minimizzare token (prezzi letti localmente)
-    var catalogLines=S.products.map(function(p){
-      return p.id+'\t'+p.name;
-    }).join('\n');
+    // ── FIX TOKEN (18/08, richiesto da Valerio): prima l'AI riceveva l'intero
+    // catalogo (336 prodotti) e faceva ANCHE il matching per ogni fattura,
+    // anche quando il matching testuale locale (matchProduct, già validato su
+    // dati reali — vedi nota 12/08) sarebbe bastato da solo. Ora l'AI fa SOLO
+    // estrazione (nessun catalogo nel prompt); il matching viene fatto in
+    // JavaScript subito dopo, con la stessa soglia (score<35 → "nessuno")
+    // già in uso altrove nell'app per lo stesso scopo. Nessun dato scritto
+    // automaticamente: sia "esatto" che "probabile" restano da confermare
+    // dall'utente in "Prezzi difformi/Forse" come già oggi. ──
     var _supplierHint=S.suppliers.map(function(s){return s.name;}).join(', ');
     var prompt=
       'Analizza questa fattura italiana di un fornitore di bevande/alimentari per un bar.\n\n'
       +'FORMATO FATTURA: Righe prodotto: NR | DESCRIZIONE | QTA | CODICE | PREZZO_NETTO\u20ac | IMPORTO_NETTO\u20ac | IVA%\n'
       +'Il prezzo netto usa virgola decimale italiana (es: 12,29508=12.29508). E\' SEMPRE IVA ESCLUSA.\n'
       +'Ignora: SPESE DI TRASPORTO, intestazioni, totali, riepilogo IVA.\n\n'
-      +'FORNITORI NEL CATALOGO (usa questi nomi esatti per fornitore_catalogo): '+_supplierHint+'\n'
-      +'CATALOGO (ID\\tNOME — solo per riconoscimento prodotto):\n'
-      +catalogLines+'\n\n'
+      +'FORNITORI CONOSCIUTI (usa il nome esatto tra questi se riconosci il fornitore della fattura, altrimenti il nome così come scritto): '+_supplierHint+'\n\n'
       +'ISTRUZIONI:\n'
       +'1. Estrai OGNI riga prodotto: nome esatto, prezzo_netto (virgola->punto), aliquota_iva (numero es: 22)\n'
-      +'2. prezzo_ivato = prezzo_netto * (1 + aliquota_iva/100), arrotonda a 5 decimali\n'
-      +'3. Trova match nel catalogo per nome. REGOLE MATCHING:\n'
-      +'   - Match ESATTO o quasi (stessa cosa scritta diversamente): id_catalogo=ID, match_tipo="esatto"\n'
-      +'   - Match PROBABILE (stesso prodotto ma descrizione parziale/diversa, es formato diverso, parole mancanti): id_catalogo=ID, match_tipo="probabile", match_note="spiegazione breve"\n'
-      +'   - NESSUN match (prodotto chiaramente diverso o non presente): id_catalogo=null, match_tipo="nessuno"\n'
-      +'4. Identifica il fornitore dalla lista FORNITORI (es SIRO->Siro). Metti il nome esatto in fornitore_catalogo.\n'
-      +'5. prezzo_catalogo=null (letto localmente). diff e discrepanza solo se match esatto o probabile e prezzo_catalogo noto.\n'
-      +'6. discrepanza=true se match trovato e |prezzo_ivato-prezzo_catalogo|>0.10\n\n'
+      +'2. prezzo_ivato = prezzo_netto * (1 + aliquota_iva/100), arrotonda a 5 decimali\n\n'
       +'Rispondi SOLO JSON valido, COMPATTO (no spazi/newline extra), zero testo, zero backtick:\n'
       +'{"fornitore":"SIRO S.R.L.","numero_fattura":"2/3161","data_fattura":"17/09/2025","totale_imponibile":1413.94,"totale_documento":1725.01,'
-      +'"prodotti":[{"nome_fattura":"BITTER CAMPARI CL.100","prezzo_netto":12.295,"aliquota_iva":22,"prezzo_ivato":15.0,"id_catalogo":12,'
-      +'"nome_catalogo":"BITTER CAMPARI CL.100","fornitore_catalogo":"Siro","match_tipo":"esatto","match_note":null,"discrepanza":true,"diff":0.50},'
-      +'{"nome_fattura":"CAMPARI SODA 1L","prezzo_netto":14.0,"aliquota_iva":22,"prezzo_ivato":17.08,"id_catalogo":12,'
-      +'"nome_catalogo":"BITTER CAMPARI CL.100","fornitore_catalogo":"Siro","match_tipo":"probabile","match_note":"Stesso prodotto formato diverso","discrepanza":true,"diff":2.58},'
-      +'{"nome_fattura":"SCIROPPO MENTA","prezzo_netto":5.0,"aliquota_iva":22,"prezzo_ivato":6.1,"id_catalogo":null,'
-      +'"nome_catalogo":null,"fornitore_catalogo":"Siro","match_tipo":"nessuno","match_note":null,"discrepanza":false,"diff":null}]}';
+      +'"prodotti":[{"nome_fattura":"BITTER CAMPARI CL.100","prezzo_netto":12.295,"aliquota_iva":22,"prezzo_ivato":15.0},'
+      +'{"nome_fattura":"CAMPARI SODA 1L","prezzo_netto":14.0,"aliquota_iva":22,"prezzo_ivato":17.08},'
+      +'{"nome_fattura":"SCIROPPO MENTA","prezzo_netto":5.0,"aliquota_iva":22,"prezzo_ivato":6.1}]}';
     var _apiKey=localStorage.getItem('ceraldi_apikey')||'';
     if(!_apiKey){
       statusDiv.style.display='none';
@@ -6915,6 +6908,24 @@ function analizzaFattura(file,tipo){
           +'⚠️ Risposta parziale — alcuni prodotti potrebbero mancare. Risultati comunque mostrati.</div>';
         resEl.style.display='block';
       }
+      // ── Matching locale (18/08): l'AI ha estratto solo i prodotti, il
+      // confronto col catalogo lo facciamo qui via matchProduct() — stessa
+      // funzione già usata e validata per prezzi_da_fatture. Soglie coerenti
+      // con quelle già in produzione altrove: score<35 = nessun match
+      // ("nessuno", trattato come prodotto nuovo), 35-69 = "probabile" (da
+      // confermare), ≥70 = "esatto" — ma anche "esatto" resta comunque solo
+      // proposto: nulla viene scritto senza conferma esplicita in UI. ──
+      var _fornNorm=_normFornitore(parsed.fornitore)||parsed.fornitore||'';
+      (parsed.prodotti||[]).forEach(function(p){
+        var m=matchProduct(p.nome_fattura,null,_fornNorm);
+        if(m.product&&m.score>=70){
+          p.match_tipo='esatto';p.id_catalogo=m.product.id;p.nome_catalogo=m.product.name;p.fornitore_catalogo=_fornNorm;p.match_note=null;
+        }else if(m.product&&m.score>=35){
+          p.match_tipo='probabile';p.id_catalogo=m.product.id;p.nome_catalogo=m.product.name;p.fornitore_catalogo=_fornNorm;p.match_note='Corrispondenza automatica da verificare';
+        }else{
+          p.match_tipo='nessuno';p.id_catalogo=null;p.nome_catalogo=null;p.fornitore_catalogo=_fornNorm;p.match_note=null;
+        }
+      });
       mostraRisultatiFattura(parsed);
     })
     .catch(function(err){
@@ -9187,7 +9198,7 @@ function gdLoadScript(cb){
 /* ── FINE GOOGLE DRIVE ───────────────────────────────────────── */
 
 // ── AVVIO: carica Cloud poi inizializza tutto ─────────────
-var BUILD_VERSION='48 (aggiunto bottone "È già in catalogo" su ogni card di "Prodotti estratti": permette di cercare e associare il prodotto a uno già esistente a catalogo invece di salvarlo come nuovo, per i casi in cui il matching automatico non riconosce un prodotto scritto in modo diverso; aggiorna il prezzo su quello esistente invece di creare un duplicato)';
+var BUILD_VERSION='49 (risparmio token: in "Verifica Fattura" e "Carica PDF preventivo" l\'AI ora fa SOLO estrazione — il confronto col catalogo per capire se un prodotto è già presente lo fa il codice localmente con matchProduct(), stessa funzione già validata su dati reali in altre parti dell\'app; l\'AI non riceve più il catalogo intero ad ogni chiamata. Nessun cambiamento nel comportamento visibile: tutto resta da confermare manualmente come prima, cambia solo chi decide il match)';
 // BUG CORRETTO (09/08, segnalato da Valerio: "mi dice di aggiornare ma è già
 // l'ultima, e con l'avviso non riesco a fare l'ordine") — il controllo
 // confrontava l'INTERO testo descrittivo di BUILD_VERSION, carattere per
@@ -9819,8 +9830,10 @@ function _pdfImportInit(){
       var apiKey=localStorage.getItem('ceraldi_apikey')||'';
       var fornitoreSel=document.getElementById('pdfimport-fornitore').value.trim();
       var settoreSel=document.getElementById('pdfimport-settore').value;
-      var catalogoSettore=S.products.filter(function(p){return getSectorForProduct(p)===settoreSel;}).map(function(p){return{id:p.id,name:p.name};});
-      var catalogoCtx=catalogoSettore.length?JSON.stringify(catalogoSettore):'[]';
+      // Catalogo di settore: non più mandato all'AI (matching ora locale, vedi sotto),
+      // ma serve ancora qui per limitare matchProduct() ai soli prodotti del settore scelto.
+      var catalogoSettoreIds={};
+      S.products.forEach(function(p){if(getSectorForProduct(p)===settoreSel)catalogoSettoreIds[p.id]=true;});
       var catOptionsPrompt=(AL_SECTOR_CATS[settoreSel]||['ALTRO']);
       var catOptionsCtx=JSON.stringify(catOptionsPrompt);
       var data,lastErr;
@@ -9833,12 +9846,8 @@ function _pdfImportInit(){
             body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:64000,messages:[{role:'user',content:[
               {type:'document',source:{type:'base64',media_type:'application/pdf',data:base64}},
               {type:'text',text:'Estrai tutti i prodotti da questo preventivo. '+promptIva+' '+
-                'Ti fornisco anche il catalogo esistente per il settore "'+settoreSel+'" (array di {id,name}): '+catalogoCtx+'. '+
-                'Per ogni prodotto estratto confrontalo semanticamente coi nomi del catalogo (capisci sinonimi, abbreviazioni, ordine parole diverso) e imposta match:"exact" se è chiaramente lo stesso prodotto, match:"similar" se potrebbe esserlo ma non sei sicuro, match:"none" se non corrisponde a nulla. '+
-                'ATTENZIONE MARCA: la marca/produttore (es. Barilla, De Cecco, Divella, Lavazza, ecc.) è parte identificativa del prodotto tanto quanto il tipo. Se il preventivo e il catalogo indicano marche diverse per lo stesso tipo di articolo (es. "BARILLA SPAGHETTI" vs "SPAGHETTI DE CECCO"), NON sono lo stesso prodotto: imposta match:"none", anche se il resto del nome è molto simile. Usa match:"exact" o "similar" solo quando la marca coincide (o non è indicata in nessuno dei due) e cambia solo formato/grammatura/confezione/sinonimo. '+
-                'Se match e exact o similar, includi match_id con l\'id del prodotto catalogo corrispondente. '+
                 'Per ogni prodotto assegna anche la categoria merceologica più adatta, scegliendo ESATTAMENTE una tra queste (nessun\'altra ammessa): '+catOptionsCtx+'. Es. birre e affini vanno in BIRRE, vini in VINO, acqua minerale in ACQUA, bibite/cola/aranciata in SODATI, succhi di frutta in SUCCHI, superalcolici/amari/distillati in AMARI o LIQUORI a seconda del tipo — mettila nel campo cat. '+
-                'Rispondi SOLO con array JSON valido senza markdown. Formato: [{"name":"NOME MAIUSCOLO","conf":"PZ","price":3.50,"iva":22,"already_vat":false,"vat_detected":"","cat":"ACQUA","match":"none","match_id":null},...] Includi TUTTI i prodotti del preventivo.'}
+                'Rispondi SOLO con array JSON valido senza markdown. Formato: [{"name":"NOME MAIUSCOLO","conf":"PZ","price":3.50,"iva":22,"already_vat":false,"vat_detected":"","cat":"ACQUA"},...] Includi TUTTI i prodotti del preventivo.'}
             ]}]})
           });
           data=await resp.json();
@@ -9854,6 +9863,25 @@ function _pdfImportInit(){
       var text=tb?tb.text.replace(/```json|```/g,'').trim():'';
       var parsed=JSON.parse(text);
       if(!Array.isArray(parsed)||!parsed.length)throw new Error('Nessun prodotto trovato');
+      // ── Matching locale (18/08, richiesto da Valerio): l'AI ora fa solo
+      // estrazione, il confronto col catalogo di settore è qui via
+      // matchProduct() ristretto ai soli id del settore scelto. Stesse
+      // soglie usate in analizzaFattura/prezzi_da_fatture: ≥70 "exact",
+      // 35-69 "similar" (comunque da confermare), <35 "none" (trattato da
+      // nuovo prodotto). Nulla si scrive senza conferma esplicita in UI. ──
+      parsed.forEach(function(p){
+        var best=null,bestScore=0;
+        S.products.forEach(function(prod){
+          if(!catalogoSettoreIds[prod.id])return;
+          var s=_similarity(p.name||'',(prod.name||'')+' '+(prod.conf||''));
+          if(fornitoreSel&&prod.prices&&prod.prices[fornitoreSel])s+=10;
+          if(s>bestScore){bestScore=s;best=prod;}
+        });
+        var score=Math.min(100,Math.round(bestScore*10)/10);
+        if(best&&score>=70){p.match='exact';p.match_id=best.id;}
+        else if(best&&score>=35){p.match='similar';p.match_id=best.id;}
+        else{p.match='none';p.match_id=null;}
+      });
       var startId=parseInt(document.getElementById('pdfimport-startid').value)||1;
       var ivaNote='';var ivaGroups={};
       var nextIdCounter=startId;
