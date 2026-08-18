@@ -1569,15 +1569,44 @@ async function _hybridMatchCatalog(names,catalogList,apiKey,extras){
       var tb=(data.content||[]).find(function(b){return b.type==='text';});
       var txt=tb?tb.text.replace(/```json|```/g,'').trim():'[]';
       var arr=JSON.parse(txt);
-      toAI.forEach(function(t,i){
-        var res=arr[i];
-        if(res&&res.match_id!=null&&res.confidenza!=='nessuna'){
-          var cand=t.candidates.find(function(c){return c.id===res.match_id;});
-          results[t.idx]={matchTipo:res.confidenza==='alta'?'esatto':'probabile',id:res.match_id,name:cand?cand.name:null};
-        }else{
-          results[t.idx]={matchTipo:'nessuno',id:null,name:null};
-        }
-      });
+      // FIX (18/08, bug trovato da Valerio con match totalmente assurdi tipo
+      // "GIN BULLDOG" abbinato a "DE KUYPER TRIPLE SEC"): prima, se l'IA
+      // rispondeva con un match_id che NON era tra i candidati proposti per
+      // quella specifica voce — per un disallineamento nell'array di
+      // risposta, o perché l'IA ha risposto "a memoria" invece che dalla
+      // lista data — il codice lo scriveva comunque, fidandosi ciecamente
+      // dell'id anche senza trovarlo tra i candidati. Ora un id che non
+      // torna tra i candidati proposti per quella voce viene trattato come
+      // "nessun match" invece che accettato alla cieca. In più, se l'array
+      // di risposta ha una lunghezza diversa da quella richiesta (segno di
+      // disallineamento sistemico), l'intero gruppo passa al fallback
+      // locale invece di fidarsi di un ordinamento che potrebbe essere
+      // sfasato per tutti gli elementi.
+      if(!Array.isArray(arr)||arr.length!==toAI.length){
+        console.warn('[Match IA] risposta di lunghezza inattesa ('+(Array.isArray(arr)?arr.length:'non array')+' vs '+toAI.length+' attesi) — uso fallback locale per l\'intero gruppo');
+        toAI.forEach(function(t){
+          var best=t.candidates[0];
+          results[t.idx]=best?{matchTipo:'probabile',id:best.id,name:best.name}:{matchTipo:'nessuno',id:null,name:null};
+        });
+      }else{
+        toAI.forEach(function(t,i){
+          var res=arr[i];
+          if(res&&res.match_id!=null&&res.confidenza!=='nessuna'){
+            var cand=t.candidates.find(function(c){return c.id===res.match_id;});
+            if(cand){
+              results[t.idx]={matchTipo:res.confidenza==='alta'?'esatto':'probabile',id:res.match_id,name:cand.name};
+            }else{
+              // id non tra i candidati proposti per QUESTA voce: non ci si fida,
+              // meglio "nessun match" (l'utente lo vede comunque tra i "Prodotti
+              // estratti" e può associarlo a mano) che un abbinamento sbagliato.
+              console.warn('[Match IA] match_id '+res.match_id+' non tra i candidati proposti per "'+t.name+'" — scartato');
+              results[t.idx]={matchTipo:'nessuno',id:null,name:null};
+            }
+          }else{
+            results[t.idx]={matchTipo:'nessuno',id:null,name:null};
+          }
+        });
+      }
     }catch(e){
       console.warn('[Match IA] fallback fallito:',e.message);
       // Se l'IA fallisce (rete, chiave, ecc.) meglio segnare "da verificare"
@@ -9332,7 +9361,7 @@ function gdLoadScript(cb){
 /* ── FINE GOOGLE DRIVE ───────────────────────────────────────── */
 
 // ── AVVIO: carica Cloud poi inizializza tutto ─────────────
-var BUILD_VERSION='51 (CORREZIONE su segnalazione Valerio con dati reali: il match locale puro introdotto in v49 confondeva prodotti diversi che condividono categoria/formato — "AMARO JAGERMEISTER" abbinato a "AMARO CYNAR", "DISARONNO" a "COINTREAU", "BIRRA NASTRO AZZURRO" a "BIRRA PERONI". In "Verifica Fattura" e "Carica PDF preventivo" il match ora è ibrido: locale solo per i casi estremi — chiaramente uguale o chiaramente senza nulla in comune — mentre tutta la zona intermedia (dove il testo si somiglia ma può trattarsi di marche diverse) torna a passare dall\'IA, con l\'istruzione esplicita sulla marca e una rosa ristretta di massimo 8 candidati locali per voce invece dell\'intero catalogo — risparmio token mantenuto, qualità del match tornata quella di prima)';
+var BUILD_VERSION='52 (bug reale trovato da Valerio con match ancora assurdi dopo v51, es. "GIN BULLDOG" abbinato a "DE KUYPER TRIPLE SEC": in _hybridMatchCatalog, se l\'IA rispondeva con un match_id che non era tra i candidati proposti per quella voce specifica — disallineamento nell\'array di risposta, o id "a memoria" invece che dalla lista data — il codice lo scriveva comunque senza verificarlo. Ora un id fuori dai candidati proposti viene scartato come "nessun match" invece che accettato alla cieca; se l\'intero array di risposta ha lunghezza diversa da quella richiesta, l\'intero gruppo passa al fallback locale invece di fidarsi di un possibile disallineamento generale)';
 // BUG CORRETTO (09/08, segnalato da Valerio: "mi dice di aggiornare ma è già
 // l'ultima, e con l'avviso non riesco a fare l'ordine") — il controllo
 // confrontava l'INTERO testo descrittivo di BUILD_VERSION, carattere per
