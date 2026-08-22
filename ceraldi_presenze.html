@@ -1709,10 +1709,18 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
         <input class="field-inp last" type="text" id="acc-mesi-riferimento" placeholder="es. dic 2025 - nov 2026" style="margin-bottom:0">
       </div>
       <div class="field-lbl">Modalità di pagamento</div>
-      <select class="field-inp" id="acc-modalita">
+      <select class="field-inp" id="acc-modalita" onchange="toggleAccFonteWrap()">
         <option value="contanti">💵 Contanti</option>
         <option value="bonifico">🏦 Bonifico</option>
       </select>
+      <div id="acc-fonte-wrap" style="display:none;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:14px">
+        <div class="field-lbl" style="margin-top:0">Da dove prendi i contanti</div>
+        <div style="display:flex;gap:8px">
+          <button type="button" id="acc-fonte-cassetto" class="btn-sm" style="flex:1" onclick="setAccFonte('cassetto')">🗄 Cassetto (incasso di oggi)</button>
+          <button type="button" id="acc-fonte-fondo" class="btn-sm" style="flex:1" onclick="setAccFonte('fondo')">🏦 Fondo (accumulo)</button>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:8px">Scelta obbligatoria: serve a Prima Nota (Ceraldi Fatture) per tenere corretto il conteggio del contante.</div>
+      </div>
       <div class="field-lbl">Data</div>
       <input class="field-inp" type="date" id="acc-data">
       <div class="field-lbl">Note (opzionale)</div>
@@ -1791,10 +1799,17 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
       <div class="field-lbl">Importo versato ora (€)</div>
       <input class="field-inp" type="number" id="sdiff-importo" placeholder="es. 102" step="0.01" min="0">
       <div class="field-lbl">Modalità</div>
-      <select class="field-inp" id="sdiff-modalita">
+      <select class="field-inp" id="sdiff-modalita" onchange="toggleSdiffFonteWrap()">
         <option value="contanti">💵 Contanti</option>
         <option value="bonifico">🏦 Bonifico</option>
       </select>
+      <div id="sdiff-fonte-wrap" style="display:none;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:14px">
+        <div class="field-lbl" style="margin-top:0">Da dove prendi i contanti</div>
+        <div style="display:flex;gap:8px">
+          <button type="button" id="sdiff-fonte-cassetto" class="btn-sm" style="flex:1" onclick="setSdiffFonte('cassetto')">🗄 Cassetto</button>
+          <button type="button" id="sdiff-fonte-fondo" class="btn-sm" style="flex:1" onclick="setSdiffFonte('fondo')">🏦 Fondo</button>
+        </div>
+      </div>
       <div class="field-lbl">Data</div>
       <input class="field-inp" type="date" id="sdiff-data">
       <div class="field-lbl">Note (opzionale)</div>
@@ -2306,6 +2321,8 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
            ratei/periodo/maturato reali per 13ª e 14ª.
       -->
       <div style="font-size:11px;color:var(--muted);background:var(--bg);border-radius:10px;padding:10px 12px;margin-bottom:14px;line-height:1.5">💰 Questa schermata liquida solo lo stipendio mensile. Per TFR, 13ª, 14ª mensilità, ferie non godute o straordinari usa <b>+ Acconto</b>.</div>
+      <div class="field-lbl">Data del pagamento</div>
+      <input class="field-inp" type="date" id="liq-data">
       <div class="field-lbl">Note (opzionale)</div>
       <input class="field-inp field-inp last" type="text" id="liq-note" placeholder="es. conguaglio, differenza cedolino...">
 
@@ -2322,6 +2339,14 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
           </div>
         </div>
         <div id="liq-check-pagamento" style="font-size:12px;border-radius:10px;padding:10px 12px;margin-top:6px"></div>
+        <div id="liq-fonte-wrap" style="display:none;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-top:8px">
+          <div class="field-lbl" style="margin-top:0">Da dove prendi i contanti</div>
+          <div style="display:flex;gap:8px">
+            <button type="button" id="liq-fonte-cassetto" class="btn-sm" style="flex:1" onclick="setLiqFonte('cassetto')">🗄 Cassetto (incasso di oggi)</button>
+            <button type="button" id="liq-fonte-fondo" class="btn-sm" style="flex:1" onclick="setLiqFonte('fondo')">🏦 Fondo (accumulo)</button>
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-top:8px">Scelta obbligatoria: serve a Prima Nota (Ceraldi Fatture) per tenere corretto il conteggio del contante.</div>
+        </div>
       </div>
 
       <div id="liq-avviso-negativo" style="display:none;background:rgba(217,48,37,.06);border:1px solid rgba(217,48,37,.2);border-radius:10px;padding:12px;margin-top:8px;font-size:12px;color:var(--red);line-height:1.5">
@@ -2766,6 +2791,69 @@ const causaleLbl = (c) => c ? (CAUSALI[c] || c) : '';
 
 const { createClient } = supabase;
 const sb = createClient(SB_URL, SB_KEY);
+
+/* ══════════════════════════════════════════════════════════════════
+   RICONCILIAZIONE CON CERALDI FATTURE — pagamenti dipendenti in
+   contanti scritti automaticamente in Prima Nota (23/08).
+   Stesso backend Supabase condiviso, stessa tabella prima_nota_movimenti
+   già usata da Ceraldi Fatture per le spese fornitori/riconciliazione.
+   categoria:'stipendio' — DIVERSA da 'spesa' (quella usata da Fatture per
+   le fatture fornitori), così il motore di riconciliazione fatture↔Prima
+   Nota di Fatture (che filtra esplicitamente categoria==='spesa') non
+   tenta mai di abbinare un pagamento stipendio a una fattura fornitore.
+   Segno importo: SEMPRE positivo qui — rappresenta soldi USCITI dal
+   cassetto/fondo per pagare il dipendente (acconto, saldo, differenza),
+   stessa convenzione delle spese fornitori in Fatture (riduce il fondo,
+   si somma alle "spese cassetto" del giorno). Le restituzioni ricevute
+   dal dipendente (direzione opposta, soldi che RIENTRANO) sono
+   VOLUTAMENTE escluse da questa scrittura per ora — il segno inverso
+   comprometterebbe il calcolo "incasso reale" di Fatture (verificato con
+   una simulazione: farebbe apparire l'incasso del giorno più basso di
+   quanto realmente venduto), da decidere con Valerio come gestirle prima
+   di implementarle.
+   origine_esterna: chiave univoca per record sorgente (es.
+   'presenze_acconto_123') — permette un upsert idempotente: se questa
+   funzione viene richiamata più volte per lo stesso pagamento (es. una
+   modifica), aggiorna la riga già esistente invece di duplicarla. Non
+   assume un vincolo UNIQUE lato database (non verificato) — cerca prima
+   la riga esistente via select, poi decide insert o update, stesso
+   pattern difensivo già usato da Fatture (pnRegistraSpesaFattura).
+   ══════════════════════════════════════════════════════════════════ */
+async function presenzeScriviPrimaNota({ origineEsterna, data, importo, fonte, descrizione }){
+  if (!origineEsterna || !data || !fonte || !(importo > 0)) return;
+  try {
+    const { data: esistenti } = await sb.from('prima_nota_movimenti')
+      .select('id').eq('origine_esterna', origineEsterna).is('deleted_at', null);
+    const payload = {
+      data, categoria: 'stipendio', importo, fonte,
+      descrizione: descrizione || null,
+      origine_esterna: origineEsterna
+    };
+    if (esistenti && esistenti.length) {
+      await sb.from('prima_nota_movimenti').update(payload).eq('id', esistenti[0].id);
+    } else {
+      await sb.from('prima_nota_movimenti').insert(payload);
+    }
+  } catch (e) {
+    console.warn('presenzeScriviPrimaNota:', e.message || e);
+    toast('⚠️ Pagamento salvato, ma Prima Nota non aggiornata: '+String(e.message||e).slice(0,60));
+  }
+}
+
+// Cancella (soft-delete, stesso pattern di Fatture) il movimento di Prima
+// Nota collegato a un pagamento eliminato qui in Presenze — così cassetto/
+// fondo restano corretti anche quando un acconto viene tolto perché
+// inserito per errore.
+async function presenzeEliminaPrimaNota(origineEsterna){
+  if (!origineEsterna) return;
+  try {
+    await sb.from('prima_nota_movimenti')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('origine_esterna', origineEsterna);
+  } catch (e) {
+    console.warn('presenzeEliminaPrimaNota:', e.message || e);
+  }
+}
 
 
 /* ======================================================================
@@ -9828,8 +9916,25 @@ function openSaldaDifferenza(dipId, nome, liqId, residuo, nettoLive) {
   $('sdiff-data').value = todayISO();
   if ($('sdiff-modalita')) $('sdiff-modalita').value = 'contanti';
   $('sdiff-note').value = '';
+  _sdiffFonte = '';
+  ['cassetto','fondo'].forEach(k=>{ const b=$('sdiff-fonte-'+k); if(b) b.className='btn-sm'; });
+  toggleSdiffFonteWrap();
   hideMsg('sdiff-msg');
   openSheet('sh-salda-diff');
+}
+
+let _sdiffFonte = '';
+function toggleSdiffFonteWrap(){
+  const modalita = $('sdiff-modalita') ? $('sdiff-modalita').value : 'contanti';
+  const wrap = $('sdiff-fonte-wrap');
+  if(wrap) wrap.style.display = modalita==='contanti' ? 'block' : 'none';
+}
+function setSdiffFonte(f){
+  _sdiffFonte = f;
+  ['cassetto','fondo'].forEach(k=>{
+    const b = $('sdiff-fonte-'+k);
+    if(b) b.className = 'btn-sm'+(k===f?' primary':'');
+  });
 }
 
 async function salvaDifferenzaStipendio() {
@@ -9839,6 +9944,7 @@ async function salvaDifferenzaStipendio() {
   if (!importo || importo<=0) { showMsg('sdiff-msg','Inserisci un importo valido','err'); return; }
   if (!data) { showMsg('sdiff-msg','Inserisci la data','err'); return; }
   const modalita = $('sdiff-modalita') ? $('sdiff-modalita').value : 'contanti';
+  if (modalita === 'contanti' && !_sdiffFonte) { showMsg('sdiff-msg','Indica se prendi i contanti dal cassetto o dal fondo','err'); return; }
   const notaInserita = $('sdiff-note').value.trim();
   const btn = document.querySelector('#sh-salda-diff .btn-green-solid');
   if (btn) { btn.disabled = true; btn.textContent = 'Salvo…'; }
@@ -9878,6 +9984,20 @@ async function salvaDifferenzaStipendio() {
     showMsg('sdiff-msg', error.message, 'err');
     if (btn) { btn.disabled = false; btn.textContent = '\u2713 Registra pagamento'; }
     return;
+  }
+  // Scrittura automatica in Prima Nota (Ceraldi Fatture) — solo se questo
+  // saldo differenza è stato versato in contanti. Chiave univoca con
+  // timestamp (non solo liqId) perché la stessa liquidazione può essere
+  // saldata a differenza più volte in momenti diversi. Descrizione
+  // analitica: dipendente + di quale mese + che è una differenza residua
+  // (non un pagamento nuovo), stesso stile delle altre due scritture.
+  if (modalita === 'contanti') {
+    const meseLblSdiffPN = new Date(liq.anno, liq.mese-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
+    await presenzeScriviPrimaNota({
+      origineEsterna: 'presenze_sdiff_'+_sdiffDati.liqId+'_'+Date.now(),
+      data, importo, fonte: _sdiffFonte,
+      descrizione: $('sdiff-nome').textContent+' — differenza residua stipendio di '+meseLblSdiffPN
+    });
   }
   const nome = $('sdiff-nome').textContent;
   closeSheet('sh-salda-diff');
@@ -10808,10 +10928,32 @@ function openAcconto(dipId, nome, prefillImporto, prefillNota) {
   // acconto per un mese che si sta ancora guardando/saldando.
   if ($('acc-mese-rif')) $('acc-mese-rif').value = ($('st-mese-sel') && $('st-mese-sel').value) || todayISO().slice(0,7);
   _accRateiMaturato = null; // forza ricalcolo per il dipendente appena aperto
+  _accFonte = '';
+  ['cassetto','fondo'].forEach(k=>{ const b=$('acc-fonte-'+k); if(b) b.classList.remove('active'); });
+  toggleAccFonteWrap();
   toggleAccontoFerie();
   toggleAccontoRateiMesi();
   hideMsg('acc-msg');
   openSheet('sh-acconto');
+}
+
+// Pannello "da dove prendi i contanti" (cassetto/fondo) — visibile solo se
+// la modalità scelta è "contanti" (per bonifico non ha senso). Scelta
+// SEMPRE esplicita, mai precompilata (stesso principio già usato in Ceraldi
+// Fatture per lo stesso identico pannello): il salvataggio blocca se
+// modalità=contanti e nessuna fonte è stata toccata.
+let _accFonte = '';
+function toggleAccFonteWrap(){
+  const modalita = $('acc-modalita') ? $('acc-modalita').value : 'contanti';
+  const wrap = $('acc-fonte-wrap');
+  if(wrap) wrap.style.display = modalita==='contanti' ? 'block' : 'none';
+}
+function setAccFonte(f){
+  _accFonte = f;
+  ['cassetto','fondo'].forEach(k=>{
+    const b = $('acc-fonte-'+k);
+    if(b) b.className = 'btn-sm'+(k===f?' primary':'');
+  });
 }
 
 // 13a/14a: mostra SEMPRE un riepilogo di quanto è maturato finora (periodo,
@@ -10989,6 +11131,7 @@ async function eliminaAccontoErrato(id, btn) {
   }
   const ok = await DB.safe(() => DB.acconti.remove(id), 'Errore durante l\'eliminazione');
   if (!ok) return;
+  await presenzeEliminaPrimaNota('presenze_acconto_'+id);
   toast('✓ Acconto eliminato');
   await caricaStipendi();
 }
@@ -11012,6 +11155,7 @@ async function salvaAcconto() {
   if (!data) { showMsg('acc-msg','Inserisci la data','err'); return; }
   const modalita = $('acc-modalita') ? $('acc-modalita').value : 'contanti';
   if (!modalita) { showMsg('acc-msg','Indica se è stato contanti o bonifico','err'); return; }
+  if (modalita === 'contanti' && !_accFonte) { showMsg('acc-msg','Indica se prendi i contanti dal cassetto o dal fondo','err'); return; }
   const accCausale = $('acc-causale') ? $('acc-causale').value : 'stipendio';
   // Ferie non godute: i giorni liquidati scalano dal progressivo, così il
   // residuo resta corretto anche senza aver preso un giorno di ferie vero
@@ -11043,8 +11187,9 @@ async function salvaAcconto() {
   let noteAcconto = ($('acc-note').value.trim() || (giorniFerieLiquidati ? giorniFerieLiquidati.toFixed(1)+' giorni di ferie non godute liquidati' : ''));
   if (rateiCoperti) noteAcconto += (noteAcconto ? ' — ' : '') + 'Ratei coperti: '+rateiCoperti+'.';
   if (mesiRiferimento) noteAcconto += (noteAcconto ? ' ' : '') + 'Mesi di riferimento: '+mesiRiferimento+'.';
+  let accontoInserito = null;
   try {
-    await DB.acconti.insert({
+    accontoInserito = await DB.acconti.insert({
       dipendente_id: _accontoDipId,
       importo, data,
       causale:       accCausale,
@@ -11108,6 +11253,26 @@ async function salvaAcconto() {
   if ((accCausale === 'stipendio' || !accCausale) && meseRif && annoRif2) {
     const meseRifLbl = new Date(annoRif2, meseRif-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
     vocabolarioTipo += ' di '+meseRifLbl;
+  }
+  // Scrittura automatica in Prima Nota (Ceraldi Fatture) — SOLO se il
+  // pagamento è avvenuto in contanti: stesso backend Supabase condiviso,
+  // stessa tabella prima_nota_movimenti già usata da Fatture per le spese
+  // fornitori. categoria:'stipendio' (diversa da 'spesa') così il motore di
+  // riconciliazione fatture↔Prima Nota di Fatture non tenta mai di abbinare
+  // questo movimento a una fattura fornitore. Descrizione analitica —
+  // dipendente + esattamente a cosa si riferisce + se acconto o saldo —
+  // riusando la STESSA frase (vocabolarioTipo) già calcolata sopra per la
+  // notifica Telegram, invece di un'etichetta diversa/più povera: stessa
+  // fonte di verità testuale ovunque appaia questo pagamento. Non blocca il
+  // salvataggio dell'acconto se fallisce (l'acconto è già registrato ed è
+  // la fonte di verità: Prima Nota è un riflesso, non il contrario).
+  const accontoIdIns = accontoInserito && accontoInserito[0] && accontoInserito[0].id;
+  if (modalita === 'contanti' && accontoIdIns) {
+    await presenzeScriviPrimaNota({
+      origineEsterna: 'presenze_acconto_'+accontoIdIns,
+      data, importo, fonte: _accFonte,
+      descrizione: nomeAcc+' — '+vocabolarioTipo
+    });
   }
   const tgTestoAcc = '💶 <b>Ceraldi Presenze</b>\n\n'
     + 'Ciao <b>'+escTG(nomeAcc)+'</b>, hai ricevuto '+vocabolarioTipo+'.\n'
@@ -14688,6 +14853,14 @@ async function annullaRichiestaTimbratura() {
 
 /* ── LIQUIDAZIONI ───────────────────────────────────── */
 let _liqDati = null;
+let _liqFonte = '';
+function setLiqFonte(f){
+  _liqFonte = f;
+  ['cassetto','fondo'].forEach(k=>{
+    const b = $('liq-fonte-'+k);
+    if(b) b.className = 'btn-sm'+(k===f?' primary':'');
+  });
+}
 
 function openLiqBtn(el) {
   const dipId = el.getAttribute('data-did');
@@ -14802,6 +14975,9 @@ async function openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, 
   if ($('liq-causale')) $('liq-causale').value = 'stipendio';
   $('liq-bonifico').value = '';
   $('liq-contanti').value = '';
+  if ($('liq-data')) $('liq-data').value = todayISO();
+  _liqFonte = '';
+  ['cassetto','fondo'].forEach(k=>{ const b=$('liq-fonte-'+k); if(b) b.className='btn-sm'; });
   hideMsg('liq-msg');
   verificaPagamentoLiquida();
   // FIX: prima, se il netto calcolato dalle presenze risultava negativo,
@@ -14859,6 +15035,11 @@ function verificaPagamentoLiquida() {
   if (!box || !_liqDati) return;
   const bonifico = parseFloat($('liq-bonifico').value) || 0;
   const contanti = parseFloat($('liq-contanti').value) || 0;
+  // Pannello "da dove prendi i contanti" — visibile solo se la parte
+  // contanti di questo pagamento è > 0 (stesso principio già usato in
+  // Ceraldi Fatture: scelta sempre esplicita, mai precompilata).
+  const fonteWrap = $('liq-fonte-wrap');
+  if (fonteWrap) fonteWrap.style.display = contanti > 0 ? 'block' : 'none';
   const versato = bonifico + contanti;
   const netto = _liqDati.netto;
   if (bonifico === 0 && contanti === 0) {
@@ -14908,6 +15089,8 @@ async function salvaLiquidazione() {
   const contanti = parseFloat($('liq-contanti').value) || 0;
   // Va sempre chiesto come è stato versato il denaro — non è più facoltativo
   if (bonifico === 0 && contanti === 0) { showMsg('liq-msg','Indica come hai versato il netto: contanti, bonifico, o entrambi','err'); return; }
+  if (contanti > 0 && !_liqFonte) { showMsg('liq-msg','Indica se prendi i contanti dal cassetto o dal fondo','err'); return; }
+  const dataPagamento = $('liq-data') ? ($('liq-data').value || todayISO()) : todayISO();
   const diffPagamento = (bonifico + contanti) - netto;
   // Tiene traccia nello storico che il netto include una restituzione, e
   // come è stato versato (bonifico/contanti) — comprese eventuali
@@ -14930,9 +15113,9 @@ async function salvaLiquidazione() {
   // supera, gestito sotto con l'eccedenza), resta 'stipendio' = saldo vero.
   const eStipendioParziale = (causale === 'stipendio') && (diffPagamento < -0.01);
   if (eStipendioParziale) causale = 'acconto_stipendio';
-  let insErr = null;
+  let insErr = null, liquidazioneInserita = null;
   try {
-    await DB.liquidazioni.insert({
+    liquidazioneInserita = await DB.liquidazioni.insert({
       dipendente_id: dipId, anno, mese, giorni,
       importo_lordo: giorni*paga, acconti, importo_netto: netto,
       causale, documento_id: documentoId || null,
@@ -14942,6 +15125,27 @@ async function salvaLiquidazione() {
   } catch (e) { insErr = e; }
   if (insErr) {
     showMsg('liq-msg', insErr.code==='23505' ? 'Mese già liquidato' : insErr.message, 'err'); return;
+  }
+  // Scrittura automatica in Prima Nota (Ceraldi Fatture) — solo la QUOTA
+  // CONTANTI di questo pagamento (il bonifico non passa mai dal
+  // cassetto/fondo fisico). Stessa tabella condivisa prima_nota_movimenti,
+  // categoria:'stipendio' — mai confusa con le spese fornitori di Fatture.
+  // Descrizione analitica: dipendente + competenza (mese) + se acconto,
+  // saldo o saldo-da-cedolino — leggibile da sola in Fatture senza dover
+  // aprire Presenze per capire di cosa si tratta.
+  const liqIdIns = liquidazioneInserita && liquidazioneInserita[0] && liquidazioneInserita[0].id;
+  if (contanti > 0 && liqIdIns) {
+    const meseLblPN = new Date(anno, mese-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
+    const tipoPagPN = eStipendioParziale
+      ? 'acconto sullo stipendio di '+meseLblPN
+      : viaCedolino
+      ? 'saldo stipendio (da cedolino) di '+meseLblPN
+      : 'saldo stipendio di '+meseLblPN;
+    await presenzeScriviPrimaNota({
+      origineEsterna: 'presenze_liquidazione_'+liqIdIns,
+      data: dataPagamento, importo: contanti, fonte: _liqFonte,
+      descrizione: nome+' — '+tipoPagPN
+    });
   }
   // Segna come "saldati" gli acconti di questo mese appena liquidato —
   // non è più strettamente necessario per l'arretrato (che ora si basa
