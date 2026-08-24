@@ -1012,7 +1012,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div id="app" style="display:none">
 
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.186</span></div>
+    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.187</span></div>
     <span class="topbar-badge" id="role-badge"></span>
     <button class="btn-topbar" onclick="ricaricaApp()" title="Ricarica la pagina (per essere sicuro di avere l'ultima versione)" style="padding:6px 10px">🔄</button>
     <button id="btn-promemoria" class="btn-topbar" onclick="apriPromemoria()" style="display:none;position:relative;padding:6px 10px">
@@ -11563,7 +11563,7 @@ async function caricaStipendi() {
   // Ora si recuperano TUTTI gli acconti fino a fine mese selezionato, e si
   // segna quali mesi risultano già liquidati (quindi già "chiusi"), per
   // riportare in avanti solo quelli davvero ancora in sospeso.
-  const [{ data: dipendenti }, { data: presenze }, { data: accontiTutti }, { data: restituzioniTutte }, { data: ferieAnno }, { data: liquidazTutte }, { data: presenzePrecedenti }, { data: cedoliniMese }] = await Promise.all([
+  const [{ data: dipendenti }, { data: presenze }, { data: accontiTutti }, { data: restituzioniTutte }, { data: ferieAnno }, { data: liquidazTutte }, { data: presenzePrecedenti }, { data: cedoliniMese }, { data: acconti1314Storico }] = await Promise.all([
     sb.from('presenze_profili').select('*').eq('attivo',true).or('ruolo.eq.dipendente,percepisce_stipendio.eq.true').order('nome'),
     sb.from('presenze').select('*').gte('data',dal).lte('data',al),
     sb.from('presenze_acconti').select('id,dipendente_id,importo,data,note,letto_dip,causale,saldato,mese_riferimento,anno_riferimento,periodo_anno_inizio,saldo_periodo').lte('data',al),
@@ -11600,6 +11600,18 @@ async function caricaStipendi() {
     // sparire in silenzio (altrimenti sembra che il cedolino non esista).
     sb.from('presenze_documenti').select('dipendente_id,netto_busta')
       .eq('categoria','busta_paga').eq('mese',parseInt(m)).eq('anno',parseInt(y)),
+    // FIX BUG GRAVE: gli acconti/correzioni 13a/14a usavano finora
+    // accontiTutti, che è filtrato con .lte('data',al) — cioè escluso di
+    // netto qualunque riga datata DOPO il mese che si sta guardando in
+    // questo momento. Un pagamento reale (Liquida periodo) o una
+    // correzione storica, entrambi datati "oggi", diventavano quindi
+    // invisibili non appena si tornava a sfogliare un mese PRECEDENTE a
+    // oggi — il periodo tornava a mostrarsi "DA EROGARE" nonostante fosse
+    // già stato saldato. La 13a/14a non deve mai dipendere dal mese che
+    // si sta guardando: qui si recupera TUTTA la storia acconto_13/
+    // acconto_14, senza alcun limite di data.
+    sb.from('presenze_acconti').select('dipendente_id,importo,data,causale,periodo_anno_inizio,saldo_periodo')
+      .in('causale',['acconto_13','acconto_14']),
   ]);
   const cedoliniMeseMap = {};
   (cedoliniMese||[]).forEach(c => { cedoliniMeseMap[c.dipendente_id] = c.netto_busta != null ? parseFloat(c.netto_busta) : null; });
@@ -11953,8 +11965,8 @@ async function caricaStipendi() {
     // appena iniziato (bug segnalato: la 14ª di un periodo mai pagato
     // spariva da agosto in poi, sostituita dal nuovo periodo con 1/12
     // ratei, nascondendo l'arretrato reale).
-    const accs13 = (accontiTutti||[]).filter(a => a.dipendente_id===d.id && a.causale==='acconto_13');
-    const accs14 = (accontiTutti||[]).filter(a => a.dipendente_id===d.id && a.causale==='acconto_14');
+    const accs13 = (acconti1314Storico||[]).filter(a => a.dipendente_id===d.id && a.causale==='acconto_13');
+    const accs14 = (acconti1314Storico||[]).filter(a => a.dipendente_id===d.id && a.causale==='acconto_14');
     const mat13 = maturato1314(ratei, '13', accs13);
     const mat14 = maturato1314(ratei, '14', accs14);
     const mostra13 = mat13.importo > 0;
