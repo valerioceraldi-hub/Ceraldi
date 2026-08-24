@@ -1594,7 +1594,15 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
         <button class="btn-sm" style="flex-shrink:0;white-space:nowrap" onclick="apriStoricoPaga()">📈 Storico / aumento</button>
       </div>
       <div style="font-size:11px;color:var(--muted);margin:-10px 0 14px;line-height:1.5">Per modificarla usa "Storico / aumento": ogni cambio resta registrato con la data, così hai lo storico completo degli aumenti percepiti dal dipendente (usato anche per il calcolo del TFR).</div>
+      <div id="ana-percepisce-stipendio-wrap" style="display:none;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:14px">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer">
+          <input type="checkbox" id="ana-percepisce-stipendio" style="width:18px;height:18px">
+          Percepisce stipendio — mostra anche qui nella card Stipendi
+        </label>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px">Per soci/admin che ricevono compenso (es. Co.Co.Co): permette di caricare buste paga, registrare acconti/liquidazioni e vedere la Situazione liquidazione come per un dipendente. Se il compenso è fisso mensile (non a presenze), imposta "Compenso netto mensile fisso" qui sotto invece della paga giornaliera.</div>
+      </div>
       <button type="button" class="btn-sm" style="width:100%;margin-bottom:14px;background:rgba(43,74,203,.06);border-color:rgba(43,74,203,.25)" onclick="apriLiquidazioneCompleta()">💰 Situazione liquidazione completa</button>
+      <button type="button" class="btn-sm" style="width:100%;margin-bottom:14px" onclick="esportaStoricoDipendente()">📤 Esporta storico completo (Excel)</button>
       <div class="field-lbl" style="margin-top:14px">Compenso netto mensile fisso (€)</div>
       <input class="field-inp field-inp last" type="number" id="ana-netto-fisso" placeholder="es. 1500" step="0.01" min="0">
       <div style="font-size:11px;color:var(--muted);margin:-6px 0 14px;line-height:1.5">Per chi non è pagato in base alle presenze registrate (es. Co.Co.Co/amministratori con compenso mensile fisso): usato come base per la previsione F24 al posto del calcolo presenze × paga giornaliera.</div>
@@ -1671,7 +1679,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div class="overlay" id="sh-acconto">
   <div class="sheet">
     <div class="sheet-handle"></div>
-    <div class="sheet-hdr"><span class="sheet-title">Registra acconto</span><button class="sheet-cls" onclick="closeSheet('sh-acconto')">✕</button></div>
+    <div class="sheet-hdr"><span class="sheet-title" id="acc-sheet-title">Registra acconto</span><button class="sheet-cls" onclick="closeSheet('sh-acconto')">✕</button></div>
     <div class="sheet-body">
       <div class="field-lbl">Dipendente</div>
       <div id="acc-nome" style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:16px"></div>
@@ -1707,6 +1715,13 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
         </div>
         <div class="field-lbl">Mesi di riferimento coperti (es. dic 2025 - nov 2026)</div>
         <input class="field-inp last" type="text" id="acc-mesi-riferimento" placeholder="es. dic 2025 - nov 2026" style="margin-bottom:0">
+      </div>
+      <div id="acc-saldo-periodo-wrap" style="display:none;background:rgba(47,138,92,.08);border:1.5px solid rgba(47,138,92,.3);border-radius:10px;padding:12px;margin-bottom:14px">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer">
+          <input type="checkbox" id="acc-saldo-periodo" checked style="width:18px;height:18px">
+          Considera saldata questa competenza<span id="acc-saldo-periodo-lbl"></span>
+        </label>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px">Chiude il periodo indipendentemente dall'importo qui sopra — anche se dai di più o di meno rispetto al maturato consigliato. Despunta solo se vuoi che resti tracciato un residuo aperto.</div>
       </div>
       <div class="field-lbl">Modalità di pagamento</div>
       <select class="field-inp" id="acc-modalita" onchange="toggleAccFonteWrap()">
@@ -1768,6 +1783,11 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
       </div>
       <div class="field-lbl">Importo restituito (€)</div>
       <input class="field-inp" type="number" id="rest-importo" placeholder="es. 50" step="0.01" min="0">
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:14px">
+        <div class="field-lbl" style="margin-top:0">Mese a cui si riferisce questa restituzione</div>
+        <input class="field-inp last" type="month" id="rest-mese-rif" style="margin-bottom:0">
+        <div style="font-size:11px;color:var(--muted);margin-top:8px">Il credito che stai azzerando — non il mese in cui incassi fisicamente i soldi. Es. se a luglio Luigi ha ricevuto 8€ in più e te li restituisce oggi, qui va "luglio": azzera il credito di luglio invece di aggiungersi al dovuto del mese che stai guardando ora.</div>
+      </div>
       <div class="field-lbl">Modalità</div>
       <select class="field-inp" id="rest-modalita">
         <option value="contanti">💵 Contanti</option>
@@ -9762,6 +9782,10 @@ async function openAnagrafica(id) {
   $('ana-assunzione').value = d.data_assunzione || '';
   $('ana-paga').value            = d.paga_giornaliera || '';
   $('ana-netto-fisso').value     = d.netto_fisso_mensile || '';
+  // Il checkbox "Percepisce stipendio" ha senso solo per gli admin — un
+  // dipendente è sempre presente in Stipendi, non serve spuntare nulla.
+  if ($('ana-percepisce-stipendio-wrap')) $('ana-percepisce-stipendio-wrap').style.display = (d.ruolo === 'admin') ? 'block' : 'none';
+  if ($('ana-percepisce-stipendio')) $('ana-percepisce-stipendio').checked = !!d.percepisce_stipendio;
   $('ana-tipo-contratto').value  = d.tipo_contratto   || '';
   $('ana-scadenza').value        = d.scadenza_contratto || '';
   $('ana-livello').value         = d.livello_ccnl     || '';
@@ -9865,6 +9889,12 @@ function openRestituzione(dipId, nome, prefillImporto) {
   $('rest-nome').textContent = nome;
   $('rest-importo').value = (prefillImporto != null && prefillImporto > 0) ? prefillImporto.toFixed(2) : '';
   $('rest-data').value = todayISO();
+  // Precompilato col mese attualmente aperto in Stipendi (come per
+  // l'acconto) — è il caso più comune quando davvero è un residuo del mese
+  // che si sta guardando; se invece si tratta di un credito di un mese
+  // passato (es. eccedenza versata liquidando un mese precedente), va
+  // cambiato manualmente prima di salvare.
+  if ($('rest-mese-rif')) $('rest-mese-rif').value = ($('st-mese-sel') && $('st-mese-sel').value) || todayISO().slice(0,7);
   if ($('rest-modalita')) $('rest-modalita').value = 'contanti';
   $('rest-note').value = '';
   hideMsg('rest-msg');
@@ -9878,11 +9908,17 @@ async function salvaRestituzione() {
   if (!data) { showMsg('rest-msg','Inserisci la data','err'); return; }
   const modalita = $('rest-modalita') ? $('rest-modalita').value : 'contanti';
   if (!modalita) { showMsg('rest-msg','Indica se è stato contanti o bonifico','err'); return; }
+  let meseRifRest = null, annoRifRest = null;
+  if ($('rest-mese-rif') && $('rest-mese-rif').value) {
+    const [yRifR, mRifR] = $('rest-mese-rif').value.split('-');
+    meseRifRest = parseInt(mRifR); annoRifRest = parseInt(yRifR);
+  }
   const btn = document.querySelector('#sh-restituzione .btn-green-solid');
   if (btn) { btn.disabled = true; btn.textContent = 'Salvo…'; }
   const { error } = await sb.from('presenze_restituzioni').insert({
     dipendente_id: _restDipId, importo, data,
     modalita,
+    mese_riferimento: meseRifRest, anno_riferimento: annoRifRest,
     note: $('rest-note').value.trim() || null,
     registrato_da: ME.id
   });
@@ -10279,6 +10315,7 @@ async function salvaAnagrafica() {
     iban:               $('ana-iban').value.trim().replace(/\s/g,'').toUpperCase() || null,
     ferie_annuali:      parseInt($('ana-ferie').value) || 26,
     ferie_godute_extra: parseFloat($('ana-ferie-godute-extra').value) || 0,
+    percepisce_stipendio: ($('ana-percepisce-stipendio-wrap') && $('ana-percepisce-stipendio-wrap').style.display !== 'none') ? !!$('ana-percepisce-stipendio').checked : undefined,
     responsabile_turni: _anaRespTurni,
     turni_idoneo_sala: _anaIdoneo.sala,
     turni_idoneo_banco_bar: _anaIdoneo.bar,
@@ -10314,8 +10351,8 @@ async function apriLiquidazioneCompleta() {
     sb.from('presenze_profili').select('*').eq('id', dipId).single(),
     sb.from('presenze_storico_paga').select('paga_giornaliera,data_decorrenza').eq('dipendente_id', dipId).order('data_decorrenza',{ascending:true}),
     sb.from('presenze').select('data').eq('dipendente_id', dipId),
-    sb.from('presenze_acconti').select('importo,data,causale').eq('dipendente_id', dipId),
-    sb.from('presenze_restituzioni').select('importo,data').eq('dipendente_id', dipId),
+    sb.from('presenze_acconti').select('importo,data,causale,mese_riferimento,anno_riferimento,periodo_anno_inizio,saldo_periodo').eq('dipendente_id', dipId),
+    sb.from('presenze_restituzioni').select('importo,data,mese_riferimento,anno_riferimento').eq('dipendente_id', dipId),
     sb.from('presenze_liquidazioni').select('mese,anno').eq('dipendente_id', dipId),
     sb.from('presenze_assenze').select('data_inizio,data_fine').eq('dipendente_id', dipId).eq('stato','approvata').eq('tipo','ferie'),
   ]);
@@ -10344,8 +10381,12 @@ async function apriLiquidazioneCompleta() {
   const festSetAnnoCorr = new Set(Object.keys(festivitaItaliane(annoCorrente)));
   const dateMeseCorr = new Set([...dateTutte].filter(dt => dt>=dalMeseCorr && dt<=alMeseCorr));
   const lordoMeseCorr = lordoPeriodo(dateMeseCorr, dalMeseCorr, alMeseCorr, paga, festSetAnnoCorr);
-  const accMeseCorr = (accontiTutti||[]).filter(a => causaliStip(a) && a.data>=dalMeseCorr && a.data<=alMeseCorr).reduce((s,a)=>s+parseFloat(a.importo),0);
-  const restMeseCorr = (restituzioniTutte||[]).filter(r => r.data>=dalMeseCorr && r.data<=alMeseCorr).reduce((s,r)=>s+parseFloat(r.importo),0);
+  const accMeseCorr = (accontiTutti||[]).filter(a => causaliStip(a) && (
+      (a.mese_riferimento && a.anno_riferimento) ? (a.mese_riferimento===meseCorrente && a.anno_riferimento===annoCorrente) : (a.data>=dalMeseCorr && a.data<=alMeseCorr)
+    )).reduce((s,a)=>s+parseFloat(a.importo),0);
+  const restMeseCorr = (restituzioniTutte||[]).filter(r => (
+      (r.mese_riferimento && r.anno_riferimento) ? (r.mese_riferimento===meseCorrente && r.anno_riferimento===annoCorrente) : (r.data>=dalMeseCorr && r.data<=alMeseCorr)
+    )).reduce((s,r)=>s+parseFloat(r.importo),0);
   const meseCorrenteGiaLiquidato = (liquidazTutte||[]).some(l => l.mese===meseCorrente && l.anno===annoCorrente);
   const stipendioInCorso = meseCorrenteGiaLiquidato ? 0 : (lordoMeseCorr - accMeseCorr + restMeseCorr);
 
@@ -10364,8 +10405,12 @@ async function apriLiquidazioneCompleta() {
         const dalM = cy+'-'+String(cm).padStart(2,'0')+'-01';
         const alM  = cy+'-'+String(cm).padStart(2,'0')+'-'+String(ultimoGg).padStart(2,'0');
         const dateM = new Set([...dateTutte].filter(dt=>dt>=dalM&&dt<=alM));
-        const accM = (accontiTutti||[]).filter(a=>causaliStip(a) && a.data>=dalM&&a.data<=alM).reduce((s,a)=>s+parseFloat(a.importo),0);
-        const restM = (restituzioniTutte||[]).filter(r=>r.data>=dalM&&r.data<=alM).reduce((s,r)=>s+parseFloat(r.importo),0);
+        const accM = (accontiTutti||[]).filter(a=>causaliStip(a) && (
+            (a.mese_riferimento && a.anno_riferimento) ? (a.mese_riferimento===cm && a.anno_riferimento===cy) : (a.data>=dalM&&a.data<=alM)
+          )).reduce((s,a)=>s+parseFloat(a.importo),0);
+        const restM = (restituzioniTutte||[]).filter(r=>(
+            (r.mese_riferimento && r.anno_riferimento) ? (r.mese_riferimento===cm && r.anno_riferimento===cy) : (r.data>=dalM&&r.data<=alM)
+          )).reduce((s,r)=>s+parseFloat(r.importo),0);
         if (dateM.size>0 || accM>0 || restM>0) {
           const festSetM = new Set(Object.keys(festivitaItaliane(cy)));
           const pagaM = _pagaApplicabile(storicoEff0, alM) ?? storicoEff0[0].paga_giornaliera;
@@ -10416,7 +10461,7 @@ async function apriLiquidazioneCompleta() {
   _liqcUltimoCalcolo = {
     nome, dataAssunzione: d.data_assunzione, giorniLavoratiTotali, paga,
     stipendioInCorso, meseCorrenteGiaLiquidato, arretratoDettaglio, arretratoTotale,
-    mat13, mat14, ferieCalc, ferieValore, tfrResiduo, accontiTotaliStorico, totaleFinale,
+    mat13, mat14, ferieCalc, ferieValore, tfrTotale, erogatoTfr, tfrResiduo, accontiTotaliStorico, totaleFinale,
   };
 
   const riga = (l,v,opts) => '<div style="display:flex;justify-content:space-between;align-items:center;padding:'+(opts&&opts.big?'9px':'6px')+' 0'+(opts&&opts.border?';border-top:1px solid var(--border)':'')+'"><span style="font-size:'+(opts&&opts.big?'14px':'13px')+';font-weight:'+(opts&&opts.big?'800':'600')+'">'+l+'</span><span style="font-size:'+(opts&&opts.big?'16px':'13px')+';font-weight:'+(opts&&opts.big?'800':'700')+';color:'+(v<0?'var(--red)':'var(--text)')+'">€ '+v.toFixed(2)+'</span></div>';
@@ -10450,8 +10495,10 @@ async function apriLiquidazioneCompleta() {
 
   html += '<div class="card" style="padding:14px;margin-bottom:12px">'
     + '<div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">🏦 TFR</div>'
-    + riga('TFR lordo stimato dalle presenze', tfrResiduo)
-    + '<div style="font-size:10px;color:var(--muted);margin-top:4px">Stima dalle presenze in app, già al netto di eventuali acconti TFR erogati.</div>'
+    + riga('TFR lordo stimato (maturato)', tfrTotale)
+    + (erogatoTfr > 0.01 ? riga('Acconti TFR già erogati', -erogatoTfr) : '')
+    + riga('Residuo TFR da accantonare', tfrResiduo, {border:true})
+    + '<div style="font-size:10px;color:var(--muted);margin-top:4px">Stima dalle presenze in app.</div>'
     + '</div>';
 
   if (accontiTotaliStorico > 0.01) {
@@ -10493,7 +10540,9 @@ function esportaLiquidazioneCompleta() {
     + '<h2>Ferie non godute</h2>'
     + rigaDoc(c.ferieCalc.residue.toFixed(1)+' giorni residui × € '+c.paga.toFixed(2)+'/gg', c.ferieValore)
     + '<h2>TFR</h2>'
-    + rigaDoc('TFR lordo stimato dalle presenze, già al netto di eventuali acconti TFR', c.tfrResiduo)
+    + rigaDoc('TFR lordo stimato (maturato)', c.tfrTotale)
+    + (c.erogatoTfr > 0.01 ? rigaDoc('Acconti TFR già erogati', -c.erogatoTfr) : '')
+    + rigaDoc('Residuo TFR da accantonare', c.tfrResiduo)
     + (c.accontiTotaliStorico > 0.01 ? ('<h2>Acconti erogati (storico)</h2>' + rigaDoc('Totale acconti erogati di ogni tipo, da sempre (già scorporati sopra)', c.accontiTotaliStorico)) : '')
     + '<div class="box" style="margin-top:16pt;font-size:13pt"><b>TOTALE DA LIQUIDARE: € '+c.totaleFinale.toFixed(2)+'</b></div>'
     + '<p class="nota">Ricostruita dallo storico di presenze, acconti e liquidazioni registrati in app. È una stima operativa: verificare sempre col consulente del lavoro prima di una liquidazione reale.</p>';
@@ -10514,6 +10563,65 @@ function esportaLiquidazioneCompleta() {
       toast('✓ File salvato — aprilo con Safari');
     }
   } catch(e) { toast('Errore: ' + e.message); }
+}
+
+// Export storico completo del dipendente (Excel, un foglio per tipo di
+// dato) — richiesto separatamente da "Situazione liquidazione completa":
+// quella è un RIEPILOGO calcolato (quanto resta da liquidare oggi), questo
+// è l'ELENCO GREZZO di ogni singolo movimento/evento registrato da sempre,
+// per poter controllare/riesportare/consegnare lo storico integrale.
+async function esportaStoricoDipendente() {
+  if (typeof XLSX === 'undefined') { toast('Libreria Excel non caricata, riprova'); return; }
+  const dipId = _anagraficaId;
+  if (!dipId) return;
+  toast('Preparo l\'export…');
+  const [{ data: d }, { data: presenze }, { data: acconti }, { data: restituzioni }, { data: assenze }, { data: liquidazioni }] = await Promise.all([
+    sb.from('presenze_profili').select('nome,cognome,data_assunzione,paga_giornaliera').eq('id', dipId).single(),
+    sb.from('presenze').select('data,tipo_timbratura,confermata_dip').eq('dipendente_id', dipId).order('data'),
+    sb.from('presenze_acconti').select('data,importo,causale,modalita,note,letto_dip').eq('dipendente_id', dipId).order('data'),
+    sb.from('presenze_restituzioni').select('data,importo,modalita,note').eq('dipendente_id', dipId).order('data'),
+    sb.from('presenze_assenze').select('tipo,data_inizio,data_fine,stato').eq('dipendente_id', dipId).order('data_inizio'),
+    sb.from('presenze_liquidazioni').select('mese,anno,importo_netto,bonifico,contanti,causale,confermata_dip,creato_il').eq('dipendente_id', dipId).order('anno').order('mese'),
+  ]);
+  if (!d) { toast('Dipendente non trovato'); return; }
+  const nome = d.nome+(d.cognome?' '+d.cognome:'');
+  const causaleLbl = c => ({ stipendio:'Stipendio', acconto_stipendio:'Acconto stipendio', acconto_tfr:'Acconto TFR', acconto_13:'Acconto 13ª', acconto_14:'Acconto 14ª', ferie_non_godute:'Ferie non godute', straordinari:'Straordinari', altro:'Altro' }[c] || (c||'Stipendio'));
+
+  const wb = XLSX.utils.book_new();
+
+  const F0 = [
+    ['Storico completo — '+nome],
+    ['Assunto il', d.data_assunzione ? new Date(d.data_assunzione).toLocaleDateString('it-IT') : ''],
+    ['Paga giornaliera attuale', parseFloat(d.paga_giornaliera||0).toFixed(2)],
+    ['Esportato il', new Date().toLocaleDateString('it-IT')],
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(F0), 'Riepilogo');
+
+  const F1 = [['Data','Tipo timbratura','Confermata dal dipendente']];
+  (presenze||[]).forEach(p => F1.push([p.data, p.tipo_timbratura||'', p.confermata_dip===false?'No':'Sì']));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(F1), 'Presenze');
+
+  const F2 = [['Data','Importo €','A cosa si riferisce','Modalità','Confermato dal dipendente','Note']];
+  (acconti||[]).forEach(a => F2.push([a.data, parseFloat(a.importo).toFixed(2), causaleLbl(a.causale), a.modalita||'', a.letto_dip?'Sì':'No', a.note||'']));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(F2), 'Acconti');
+
+  const F3 = [['Data','Importo €','Modalità','Note']];
+  (restituzioni||[]).forEach(r => F3.push([r.data, parseFloat(r.importo).toFixed(2), r.modalita||'', r.note||'']));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(F3), 'Restituzioni');
+
+  const F4 = [['Tipo','Dal','Al','Giorni','Stato']];
+  (assenze||[]).forEach(a => {
+    const giorni = Math.round((new Date(a.data_fine)-new Date(a.data_inizio))/86400000)+1;
+    F4.push([a.tipo||'', a.data_inizio, a.data_fine, giorni, a.stato||'']);
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(F4), 'Ferie e malattie');
+
+  const F5 = [['Mese','Anno','Netto €','Bonifico €','Contanti €','Tipo','Confermata dal dipendente','Registrata il']];
+  (liquidazioni||[]).forEach(l => F5.push([l.mese, l.anno, parseFloat(l.importo_netto||0).toFixed(2), parseFloat(l.bonifico||0).toFixed(2), parseFloat(l.contanti||0).toFixed(2), causaleLbl(l.causale), l.confermata_dip?'Sì':'No', l.creato_il ? l.creato_il.slice(0,10) : '']));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(F5), 'Liquidazioni');
+
+  XLSX.writeFile(wb, 'storico_'+nome.replace(/\s+/g,'_')+'.xlsx');
+  toast('✓ Storico esportato');
 }
 
 /* ── CERTIFICAZIONE CONTATTI ────────────────────────── */
@@ -10762,6 +10870,11 @@ async function convalidaTimbr() {
 
 /* ── ACCONTI ────────────────────────────────────────── */
 let _accontoDipId = null;
+// Contesto attivo SOLO quando la sheet Acconto è stata aperta dal nuovo
+// tasto "💰 Liquida periodo" su una riga 13ª/14ª (vedi renderRigaMensAgg),
+// non dal normale "+ Acconto": { tipo:'13'|'14', annoInizio }. Null = flusso
+// acconto classico, il checkbox "Considera saldata" resta nascosto.
+let _accLiquidaPeriodo = null;
 
 /* ── STORICO PAGA GIORNALIERA / AUMENTI ────────────────────────────
    Prima la paga giornaliera era un campo che si sovrascriveva senza
@@ -10913,6 +11026,14 @@ async function calcolaTfrStoricoDaPresenze() {
 
 function openAcconto(dipId, nome, prefillImporto, prefillNota) {
   _accontoDipId = dipId;
+  // Reset del contesto "Liquida periodo" — così la normale apertura da
+  // "+ Acconto" resta sempre l'acconto parziale di sempre, mai col
+  // checkbox/etichetta di chiusura periodo lasciati accesi da un'apertura
+  // precedente. apriLiquidaPeriodo1314() li riattiva subito dopo, se serve.
+  _accLiquidaPeriodo = null;
+  if ($('acc-sheet-title')) $('acc-sheet-title').textContent = 'Registra acconto';
+  if ($('acc-saldo-periodo-wrap')) $('acc-saldo-periodo-wrap').style.display = 'none';
+  if ($('acc-saldo-periodo')) $('acc-saldo-periodo').checked = false;
   $('acc-nome').textContent = nome;
   $('acc-importo').value = (prefillImporto != null && prefillImporto > 0) ? prefillImporto.toFixed(2) : '';
   $('acc-data').value    = todayISO();
@@ -10935,6 +11056,26 @@ function openAcconto(dipId, nome, prefillImporto, prefillNota) {
   toggleAccontoRateiMesi();
   hideMsg('acc-msg');
   openSheet('sh-acconto');
+}
+
+// Apre la sheet Acconto in modalità "Liquida periodo": stessa sheet
+// riusata (nessun modale nuovo da mantenere), ma con causale bloccata su
+// 13ª/14ª, importo precompilato col consigliato ma MODIFICABILE, e il
+// checkbox "Considera saldata" sempre visibile e spuntato di default — a
+// differenza del normale "+ Acconto", qui la notifica dirà sempre "la
+// tredicesima/quattordicesima X" (mai "acconto") quando il checkbox resta
+// spuntato, indipendentemente dall'importo effettivamente versato.
+function apriLiquidaPeriodo1314(dipId, nome, tipo, annoInizio, importoConsigliato, periodoLbl) {
+  openAcconto(dipId, nome, importoConsigliato, '');
+  const causale = tipo === '13' ? 'acconto_13' : 'acconto_14';
+  if ($('acc-causale')) $('acc-causale').value = causale;
+  toggleAccontoFerie();
+  toggleAccontoRateiMesi();
+  _accLiquidaPeriodo = { tipo, annoInizio };
+  if ($('acc-sheet-title')) $('acc-sheet-title').textContent = 'Liquida periodo';
+  if ($('acc-saldo-periodo-wrap')) $('acc-saldo-periodo-wrap').style.display = 'block';
+  if ($('acc-saldo-periodo')) $('acc-saldo-periodo').checked = true;
+  if ($('acc-saldo-periodo-lbl')) $('acc-saldo-periodo-lbl').textContent = periodoLbl ? (' — '+periodoLbl) : '';
 }
 
 // Pannello "da dove prendi i contanti" (cassetto/fondo) — visibile solo se
@@ -11008,7 +11149,7 @@ async function toggleAccontoRateiMesi() {
     // precedente (se non ancora saldato per intero) a quanto matura nel
     // periodo nuovo, invece di far sparire un periodo mai pagato appena si
     // passa a quello successivo.
-    const { data: tuttiAcconti } = await sb.from('presenze_acconti').select('importo,data')
+    const { data: tuttiAcconti } = await sb.from('presenze_acconti').select('importo,data,periodo_anno_inizio,saldo_periodo')
       .eq('dipendente_id', _accontoDipId).eq('causale', causale);
     const mat = maturato1314(ratei, isTredicesima ? '13' : '14', tuttiAcconti||[]);
     // Date REALI (da quando a quando sono maturati i ratei), non il
@@ -11187,6 +11328,13 @@ async function salvaAcconto() {
   let noteAcconto = ($('acc-note').value.trim() || (giorniFerieLiquidati ? giorniFerieLiquidati.toFixed(1)+' giorni di ferie non godute liquidati' : ''));
   if (rateiCoperti) noteAcconto += (noteAcconto ? ' — ' : '') + 'Ratei coperti: '+rateiCoperti+'.';
   if (mesiRiferimento) noteAcconto += (noteAcconto ? ' ' : '') + 'Mesi di riferimento: '+mesiRiferimento+'.';
+  // "Liquida periodo" (vedi apriLiquidaPeriodo1314): valorizzato SOLO se la
+  // sheet è stata aperta da lì per una causale 13a/14a — il normale
+  // "+ Acconto" non tocca mai questi due campi.
+  const isLiquidaPeriodo1314 = !!_accLiquidaPeriodo && (accCausale === 'acconto_13' || accCausale === 'acconto_14');
+  const periodoAnnoInizioIns = isLiquidaPeriodo1314 ? _accLiquidaPeriodo.annoInizio : null;
+  const saldoPeriodoIns = isLiquidaPeriodo1314 && $('acc-saldo-periodo') ? $('acc-saldo-periodo').checked : false;
+  if (saldoPeriodoIns) noteAcconto += (noteAcconto ? ' — ' : '') + 'Considerata saldata per intero questa competenza.';
   let accontoInserito = null;
   try {
     accontoInserito = await DB.acconti.insert({
@@ -11195,6 +11343,8 @@ async function salvaAcconto() {
       causale:       accCausale,
       modalita,
       mese_riferimento: meseRif, anno_riferimento: annoRif2,
+      periodo_anno_inizio: periodoAnnoInizioIns,
+      saldo_periodo: saldoPeriodoIns,
       note:          noteAcconto || null,
       registrato_da: ME.id,
       letto_dip:     false
@@ -11222,21 +11372,26 @@ async function salvaAcconto() {
   // generico. Ora, quando disponibile, la competenza viene sempre inclusa
   // nel testo stesso invece di dover aprire l'app per saperlo.
   if (accCausale === 'acconto_13' || accCausale === 'acconto_14') {
-    // Per 13a/14a: "acconto" se copre solo parte del maturato del periodo,
-    // "saldo" se questo pagamento (sommato agli eventuali precedenti dello
-    // stesso periodo) raggiunge o supera l'intero importo maturato.
+    // FIX bug segnalato: prima si confrontava l'erogato TOTALE (arretrato +
+    // periodo in corso sommati) col maturato TOTALE — quindi saldare per
+    // intero un arretrato restava "acconto" finché anche il periodo nuovo,
+    // ancora in maturazione, non risultava coperto per intero (cosa che
+    // capita quasi mai, essendo per definizione non ancora finito). Ora si
+    // guarda il periodo più vecchio ancora aperto DOPO questo pagamento: se
+    // non ce n'è più nessuno (saldato dall'importo versato, o dalla spunta
+    // "Considera saldata" di Liquida periodo), il messaggio dice sempre
+    // "la tredicesima/quattordicesima", mai più "acconto".
     const oggiIns = new Date(data);
     const ratei = calcolaRatei13a14a(profAcc?.data_assunzione, profAcc?.paga_giornaliera, oggiIns.getMonth()+1, oggiIns.getFullYear());
-    const { data: tuttiAcconti } = await sb.from('presenze_acconti').select('importo,data')
+    const { data: tuttiAcconti } = await sb.from('presenze_acconti').select('importo,data,periodo_anno_inizio,saldo_periodo')
       .eq('dipendente_id', _accontoDipId).eq('causale', accCausale);
     const mat = maturato1314(ratei, accCausale === 'acconto_13' ? '13' : '14', tuttiAcconti||[]);
     const nomeMens = accCausale === 'acconto_13' ? 'tredicesima' : 'quattordicesima';
-    const annoRif = mat.haArretrato ? (mat.arretrato.annoInizio+1) : (mat.annoInizio+1);
-    if (mat.erogato >= mat.importo - 0.01 && mat.importo > 0) {
-      vocabolarioTipo = 'la '+nomeMens+' '+annoRif;
-    } else {
-      vocabolarioTipo = 'un acconto sulla '+nomeMens+' '+annoRif;
-    }
+    const periodoAperto = (mat.haArretrato && mat.arretrato.residuo > 0.01)
+      ? mat.arretrato
+      : (mat.correnteResiduo > 0.01 ? { annoInizio: mat.annoInizio } : null);
+    const annoRif = periodoAperto ? periodoAperto.annoInizio + 1 : (mat.haArretrato ? mat.arretrato.annoInizio + 1 : mat.annoInizio + 1);
+    vocabolarioTipo = periodoAperto ? ('un acconto sulla '+nomeMens+' '+annoRif) : ('la '+nomeMens+' '+annoRif);
   } else if (accCausale === 'acconto_tfr') {
     vocabolarioTipo = 'un acconto sul TFR';
     if (mesiRiferimento) vocabolarioTipo += ' (periodo: '+mesiRiferimento+')';
@@ -11283,6 +11438,7 @@ async function salvaAcconto() {
   // dire a quale mese si riferisse).
   inviaNotificaTelegram('✅ Registrato: '+vocabolarioTipo.charAt(0).toUpperCase()+vocabolarioTipo.slice(1)+' — € '+parseFloat(importo).toFixed(2)+' per '+escTG(nomeAcc)+' — in attesa di conferma dipendente.');
   toast('Registrato — notifica inviata al dipendente');
+  _accLiquidaPeriodo = null;
   closeSheet('sh-acconto');
   await caricaStipendi();
 }
@@ -11318,7 +11474,7 @@ async function apriControlloMensile() {
   openSheet('sh-controlloMensile');
 
   const [{ data: dipendenti }, { data: buste }, { data: liquidaz }] = await Promise.all([
-    sb.from('presenze_profili').select('id,nome,cognome').eq('ruolo','dipendente').eq('attivo',true).order('nome'),
+    sb.from('presenze_profili').select('id,nome,cognome').eq('attivo',true).or('ruolo.eq.dipendente,percepisce_stipendio.eq.true').order('nome'),
     sb.from('presenze_documenti').select('dipendente_id').eq('categoria','busta_paga').eq('mese',m).eq('anno',y),
     sb.from('presenze_liquidazioni').select('dipendente_id,confermata_dip').eq('mese',m).eq('anno',y),
   ]);
@@ -11403,9 +11559,9 @@ async function caricaStipendi() {
   // segna quali mesi risultano già liquidati (quindi già "chiusi"), per
   // riportare in avanti solo quelli davvero ancora in sospeso.
   const [{ data: dipendenti }, { data: presenze }, { data: accontiTutti }, { data: restituzioniTutte }, { data: ferieAnno }, { data: liquidazTutte }, { data: presenzePrecedenti }, { data: cedoliniMese }] = await Promise.all([
-    sb.from('presenze_profili').select('*').eq('ruolo','dipendente').eq('attivo',true).order('nome'),
+    sb.from('presenze_profili').select('*').eq('attivo',true).or('ruolo.eq.dipendente,percepisce_stipendio.eq.true').order('nome'),
     sb.from('presenze').select('*').gte('data',dal).lte('data',al),
-    sb.from('presenze_acconti').select('id,dipendente_id,importo,data,note,letto_dip,causale,saldato,mese_riferimento,anno_riferimento').lte('data',al),
+    sb.from('presenze_acconti').select('id,dipendente_id,importo,data,note,letto_dip,causale,saldato,mese_riferimento,anno_riferimento,periodo_anno_inizio,saldo_periodo').lte('data',al),
     // FIX (acconto "sdoppiato" tra mesi): un acconto non liquidato viene
     // riportato avanti nei mesi successivi (vedi acconti sotto), ma la
     // relativa restituzione veniva presa SOLO se caduta nel mese in corso
@@ -11413,7 +11569,7 @@ async function caricaStipendi() {
     // restituzione che lo azzerava) nel calcolo di agosto, raddoppiando il
     // debito. Ora si recuperano TUTTE le restituzioni fino a fine mese,
     // con lo stesso identico criterio di riporto usato per gli acconti.
-    DB.safe(() => sb.from('presenze_restituzioni').select('id,dipendente_id,importo,data,note').lte('data',al), null),
+    DB.safe(() => sb.from('presenze_restituzioni').select('id,dipendente_id,importo,data,note,mese_riferimento,anno_riferimento').lte('data',al), null),
     sb.from('presenze_assenze').select('dipendente_id,data_inizio,data_fine,tipo')
       .eq('tipo','ferie').eq('stato','approvata')
       .gte('data_inizio', y+'-01-01').lte('data_fine', y+'-12-31'),
@@ -11461,7 +11617,18 @@ async function caricaStipendi() {
     }
     return a.data >= dal && a.data <= al;
   });
-  const restituzioniMese = (restituzioniTutte||[]).filter(r => r.data >= dal && r.data <= al);
+  // Stessa regola per le restituzioni (FIX bug segnalato): una restituzione
+  // che chiude un credito di un mese PASSATO già liquidato (es. un
+  // dipendente restituisce un'eccedenza ricevuta mesi fa) non deve gonfiare
+  // il dovuto del mese che si sta guardando ora — deve azzerare il credito
+  // di quel mese specifico. Senza mese_riferimento esplicito, resta come
+  // prima (si somma al mese in cui è stata fisicamente incassata).
+  const restituzioniMese = (restituzioniTutte||[]).filter(r => {
+    if (r.mese_riferimento && r.anno_riferimento) {
+      return r.mese_riferimento === parseInt(m) && r.anno_riferimento === parseInt(y);
+    }
+    return r.data >= dal && r.data <= al;
+  });
 
   if (!dipendenti || !dipendenti.length) {
     wrap.innerHTML = '<div class="empty"><div class="empty-txt">Nessun dipendente attivo</div></div>';
@@ -11652,7 +11819,9 @@ async function caricaStipendi() {
             (a.mese_riferimento && a.anno_riferimento) ? (a.mese_riferimento===cm && a.anno_riferimento===cy) : (a.data>=dalMese && a.data<=alMese)
           ))
           .reduce((s,a)=>s+parseFloat(a.importo),0);
-        const restMese = (restituzioniTutte||[]).filter(r => r.dipendente_id===dipId && r.data>=dalMese && r.data<=alMese)
+        const restMese = (restituzioniTutte||[]).filter(r => r.dipendente_id===dipId && (
+            (r.mese_riferimento && r.anno_riferimento) ? (r.mese_riferimento===cm && r.anno_riferimento===cy) : (r.data>=dalMese && r.data<=alMese)
+          ))
           .reduce((s,r)=>s+parseFloat(r.importo),0);
         if (dateMese.size > 0 || accMese > 0 || restMese > 0) {
           // Ferie godute in quel mese arretrato — stessa logica del mese
@@ -11715,7 +11884,13 @@ async function caricaStipendi() {
     // separato di residuo, come se non fossero giorni retribuiti.
     const giorniFerie = sommaGiorniFerieGoduti(feriePeriodi[d.id], dal, al, riposoFissoMap[d.id], festSetAnno, workedSetPerDip[d.id]);
     const totaleFerie = giorniFerie * paga;
-    const totale = totaleOrdinario + totaleFestivoLav + totaleFestivoNonLav + totaleFerie;
+    // Compenso netto mensile fisso (tipico di admin/soci Co.Co.Co, senza
+    // paga giornaliera): se impostato e non c'è paga giornaliera, il lordo
+    // del mese è quel fisso invece del calcolo a presenze — tutto il resto
+    // (acconti, restituzioni, Liquida, 13ª/14ª se applicabile, TFR) resta
+    // identico a un dipendente normale.
+    const usaCompensoFisso = paga === 0 && parseFloat(d.netto_fisso_mensile) > 0;
+    const totale = usaCompensoFisso ? parseFloat(d.netto_fisso_mensile) : (totaleOrdinario + totaleFestivoLav + totaleFestivoNonLav + totaleFerie);
     // FIX (bug grave segnalato): qui venivano sottratti TUTTI gli acconti
     // del mese, qualunque fosse la causale — un "Acconto TFR" o "Acconto
     // 13ª" finiva per scalare lo STIPENDIO mensile, quando invece deve
@@ -12004,8 +12179,8 @@ async function caricaStipendi() {
         <!-- 13a e 14a mensilità (CCNL Pubblici Esercizi art. 183-184) -->
         ${(mostra13 || mostra14) ? `<div style="border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:10px">
           <div style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);margin-bottom:10px">Mensilità aggiuntive — CCNL (artt. 183-184)</div>
-          ${mostra13 ? renderRigaMensAgg('🎄','13ª mensilità', mat13, anno => 'Periodo gen/'+anno+'–dic/'+anno, ratei.maturata13) : ''}
-          ${mostra14 ? renderRigaMensAgg('☀️','14ª mensilità', mat14, anno => 'Periodo lug/'+anno+'–giu/'+(anno+1), ratei.maturata14) : ''}
+          ${mostra13 ? renderRigaMensAgg('🎄','13ª mensilità', mat13, anno => 'Periodo gen/'+anno+'–dic/'+anno, ratei.maturata13, d.id, nomeOnclick, '13') : ''}
+          ${mostra14 ? renderRigaMensAgg('☀️','14ª mensilità', mat14, anno => 'Periodo lug/'+anno+'–giu/'+(anno+1), ratei.maturata14, d.id, nomeOnclick, '14') : ''}
           ${(maturata13Effettiva || maturata14Effettiva) ? '<div style="font-size:11px;color:var(--accent);margin-top:8px;padding:6px 8px;background:rgba(43,74,203,.05);border-radius:8px">⚠️ Questo mese risulta da erogare la mensilità aggiuntiva — coordina con il consulente del lavoro.</div>' : ''}
           <div style="font-size:10px;color:var(--muted);margin-top:6px">Calcolate sulla paga mensile stimata (paga gg × 26 ÷ 12 = €${ratei.pagaMensile.toFixed(2)}). Verificare con il consulente.</div>
         </div>` : ''}
@@ -12243,7 +12418,7 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
   // maturato1314 per capire se il periodo precedente a quello
   // corrente è già stato saldato per intero, prima di considerarlo
   // superato nell'export.
-  let qAcconti1314 = sb.from('presenze_acconti').select('dipendente_id,importo,data,causale').in('causale',['acconto_13','acconto_14']);
+  let qAcconti1314 = sb.from('presenze_acconti').select('dipendente_id,importo,data,causale,periodo_anno_inizio,saldo_periodo').in('causale',['acconto_13','acconto_14']);
   if (dipIdFiltro) {
     qProfili  = qProfili.eq('id', dipIdFiltro);
     qPresenze = qPresenze.eq('dipendente_id', dipIdFiltro);
@@ -12628,7 +12803,7 @@ async function esportaStipendi() {
     .toLocaleDateString('it-IT',{month:'long',year:'numeric'});
 
   const [{ data: dipendenti }, { data: presenze }, { data: accontiGrezzi }] = await Promise.all([
-    sb.from('presenze_profili').select('*').eq('ruolo','dipendente').eq('attivo',true).order('nome'),
+    sb.from('presenze_profili').select('*').eq('attivo',true).or('ruolo.eq.dipendente,percepisce_stipendio.eq.true').order('nome'),
     sb.from('presenze').select('*').gte('data',dal).lte('data',al).order('data'),
     sb.from('presenze_acconti').select('*').lte('data',al),
   ]);
@@ -15457,7 +15632,7 @@ async function caricaAccontiDipendenti() {
     const isTred = acc.causale === 'acconto_13';
     const oggiAcc = new Date(acc.data);
     const ratei = calcolaRatei13a14a(ME.data_assunzione, ME.paga_giornaliera, oggiAcc.getMonth()+1, oggiAcc.getFullYear());
-    const { data: storicoCausale } = await sb.from('presenze_acconti').select('importo,data').eq('dipendente_id', ME.id).eq('causale', acc.causale);
+    const { data: storicoCausale } = await sb.from('presenze_acconti').select('importo,data,periodo_anno_inizio,saldo_periodo').eq('dipendente_id', ME.id).eq('causale', acc.causale);
     const mat = maturato1314(ratei, isTred?'13':'14', storicoCausale||[]);
     const nomeMens = isTred ? 'tredicesima' : 'quattordicesima';
     const annoRif = mat.haArretrato ? (mat.arretrato.annoInizio+1) : (mat.annoInizio+1);
@@ -17640,12 +17815,36 @@ function calcolaRatei13a14a(dataAssunzione, pagaGiornaliera, meseCorrente, annoC
 // arretrato non pagato, va registrato/gestito a parte.
 // tipo: '13' oppure '14'. accontiCausale: acconti di quel dipendente con
 // quella causale (nessun filtro data, serve solo per il periodo corrente).
+// Assegna una riga di acconto_13/acconto_14 al periodo corretto. FIX bug
+// grave (segnalato: badge bloccato su "DA EROGARE" nonostante il
+// dipendente avesse confermato, e riga arretrato che non spariva mai —
+// stessa causa): prima si guardava SOLO la data del pagamento contro le
+// date calendariali del periodo, quindi un pagamento fatto anche solo
+// qualche settimana dopo la chiusura naturale del periodo (il caso
+// normale: si liquida quando il consulente conferma, non l'ultimo giorno
+// del periodo) cadeva FUORI dalla finestra e spariva dal calcolo per
+// sempre. Ora, se il pagamento porta un periodo_anno_inizio esplicito
+// (impostato da "💰 Liquida periodo", vedi apriLiquidaPeriodo1314), si usa
+// quello — indipendente da quando è stato dato davvero. Le righe vecchie
+// senza questo campo (pre-fix) restano lette con la vecchia regola data,
+// per compatibilità con lo storico già registrato.
+function _accontoPer1314(accontiCausale, annoInizio, inizioISO, fineISO) {
+  return (accontiCausale||[]).filter(a => a.periodo_anno_inizio != null
+    ? a.periodo_anno_inizio === annoInizio
+    : (a.data >= inizioISO && a.data <= fineISO));
+}
 function maturato1314(ratei, tipo, accontiCausale) {
   const corrente = tipo === '13'
     ? { ratei: ratei.ratei13, importo: ratei.importo13, inizioISO: ratei.inizio13ISO, fineISO: ratei.fine13ISO, annoInizio: ratei.annoInizio13 }
     : { ratei: ratei.ratei14, importo: ratei.importo14, inizioISO: ratei.inizio14ISO, fineISO: ratei.fine14ISO, annoInizio: ratei.annoInizio14 };
-  const erogatoCorrente = (accontiCausale||[]).filter(a => a.data >= corrente.inizioISO && a.data <= corrente.fineISO).reduce((s,a) => s + parseFloat(a.importo), 0);
-  const residuoCorrente = Math.max(0, corrente.importo - erogatoCorrente);
+  const righeCorrente = _accontoPer1314(accontiCausale, corrente.annoInizio, corrente.inizioISO, corrente.fineISO);
+  const erogatoCorrente = righeCorrente.reduce((s,a) => s + parseFloat(a.importo), 0);
+  // Se anche solo UNA riga di questo periodo porta la spunta "Considera
+  // saldata" (saldo_periodo), il periodo è chiuso a prescindere
+  // dall'importo effettivamente sommato — può essere di più o di meno del
+  // maturato consigliato, resta comunque saldato.
+  const saldataCorrente = righeCorrente.some(a => a.saldo_periodo);
+  const residuoCorrente = saldataCorrente ? 0 : Math.max(0, corrente.importo - erogatoCorrente);
 
   // Arretrato: SOLO il periodo IMMEDIATAMENTE precedente a quello corrente
   // (mai più indietro), e solo se risulta ancora non saldato. Limitato al
@@ -17662,10 +17861,10 @@ function maturato1314(ratei, tipo, accontiCausale) {
   // renderRigaMensAgg) invece che sommato in un unico numero — così le due
   // mensilità restano sempre distinguibili a schermo.
   const prec = tipo === '13' ? ratei.periodoPrec13 : ratei.periodoPrec14;
-  const erogatoPrec = (prec && prec.ratei > 0)
-    ? (accontiCausale||[]).filter(a => a.data >= prec.inizioISO && a.data <= prec.fineISO).reduce((s,a) => s + parseFloat(a.importo), 0)
-    : 0;
-  const residuoPrec = prec ? Math.max(0, prec.importo - erogatoPrec) : 0;
+  const righePrec = (prec && prec.ratei > 0) ? _accontoPer1314(accontiCausale, prec.annoInizio, prec.inizioISO, prec.fineISO) : [];
+  const erogatoPrec = righePrec.reduce((s,a) => s + parseFloat(a.importo), 0);
+  const saldataPrec = righePrec.some(a => a.saldo_periodo);
+  const residuoPrec = prec ? (saldataPrec ? 0 : Math.max(0, prec.importo - erogatoPrec)) : 0;
   const haArretrato = !!(prec && prec.ratei > 0 && residuoPrec > 0.01);
   const arretrato = haArretrato ? {
     ratei: prec.ratei, importo: prec.importo, erogato: erogatoPrec, residuo: residuoPrec,
@@ -17694,16 +17893,26 @@ function maturato1314(ratei, tipo, accontiCausale) {
 // (che non deve mai sparire finché non è saldato) e il periodo nuovo che ha
 // appena iniziato a maturare — così le due voci restano sempre distinguibili
 // e nessuna delle due si perde passando da un mese all'altro.
-function renderRigaMensAgg(icona, nomeBase, mat, fmtPeriodo, maturataCorrente) {
-  const riga = (label, periodoTxt, ratei, importo, erogato, residuo, isDovuta) => {
+function renderRigaMensAgg(icona, nomeBase, mat, fmtPeriodo, maturataCorrente, dipId, nomeOnclickDip, tipo) {
+  const riga = (label, periodoTxt, ratei, importo, erogato, residuo, isDovuta, annoInizioRiga) => {
     const badge = isDovuta === true
       ? (residuo > 0.01
         ? '<span style="font-size:10px;font-weight:700;background:rgba(43,74,203,.1);color:var(--accent);padding:2px 7px;border-radius:10px">DA EROGARE</span>'
         : '<span style="font-size:10px;font-weight:700;background:rgba(47,138,92,.12);color:var(--green);padding:2px 7px;border-radius:10px">✓ GIÀ EROGATA</span>')
       : `<span style="font-size:10px;color:var(--muted)">${ratei}/12 ratei</span>`;
+    // Tasto "Liquida periodo" per QUESTA riga specifica (arretrato o
+    // periodo in corso, mai i due insieme) — visibile solo se resta un
+    // residuo da chiudere. Apre la sheet Acconto in modalità dedicata
+    // (vedi apriLiquidaPeriodo1314): importo modificabile, spunta
+    // "Considera saldata" già attiva, notifica sempre "la
+    // tredicesima/quattordicesima", mai "acconto".
+    const btnLiquida = (dipId && residuo > 0.01)
+      ? '<button type="button" class="btn-sm" style="margin-top:6px;width:100%" onclick="apriLiquidaPeriodo1314(\''+dipId+'\',\''+nomeOnclickDip+'\',\''+tipo+'\','+annoInizioRiga+','+residuo.toFixed(2)+',\''+periodoTxt.replace(/'/g,"\\'")+'\')">💰 Liquida periodo — € '+residuo.toFixed(2)+'</button>'
+      : '';
     return '<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border)">'
       + '<div><span style="font-size:13px;font-weight:600">'+icona+' '+label+'</span>'
-      + '<div style="font-size:11px;color:var(--muted)">'+periodoTxt+' · '+ratei+'/12 ratei maturati</div></div>'
+      + '<div style="font-size:11px;color:var(--muted)">'+periodoTxt+' · '+ratei+'/12 ratei maturati</div>'
+      + btnLiquida + '</div>'
       + '<div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:3px">'
       + '<span style="font-size:14px;font-weight:800">€ '+importo.toFixed(2)+'</span>'
       + badge
@@ -17711,11 +17920,11 @@ function renderRigaMensAgg(icona, nomeBase, mat, fmtPeriodo, maturataCorrente) {
       + '</div></div>';
   };
   if (!mat.haArretrato) {
-    return riga(nomeBase, fmtPeriodo(mat.annoInizio), mat.ratei, mat.importo, mat.erogato, mat.residuo, maturataCorrente);
+    return riga(nomeBase, fmtPeriodo(mat.annoInizio), mat.ratei, mat.importo, mat.erogato, mat.residuo, maturataCorrente, mat.annoInizio);
   }
   const a = mat.arretrato;
-  return riga(nomeBase+' — non ancora pagata', fmtPeriodo(a.annoInizio), a.ratei, a.importo, a.erogato, a.residuo, true)
-       + riga(nomeBase+' — periodo in corso', fmtPeriodo(mat.annoInizio), mat.correnteRatei, mat.correnteImporto, mat.correnteErogato, mat.correnteResiduo, maturataCorrente);
+  return riga(nomeBase+' — non ancora pagata', fmtPeriodo(a.annoInizio), a.ratei, a.importo, a.erogato, a.residuo, true, a.annoInizio)
+       + riga(nomeBase+' — periodo in corso', fmtPeriodo(mat.annoInizio), mat.correnteRatei, mat.correnteImporto, mat.correnteErogato, mat.correnteResiduo, maturataCorrente, mat.annoInizio);
 }
 
 function contaRateiCCNL(dataInizio, dataFine) {
