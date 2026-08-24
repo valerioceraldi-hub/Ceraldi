@@ -1383,7 +1383,6 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
         <button class="btn-sm" style="flex:1;background:rgba(43,74,203,.08);color:var(--accent);border-color:rgba(43,74,203,.3)" onclick="apriControlloMensile()" title="Controlla in un colpo d'occhio chi ha ricevuto la busta paga e chi è stato liquidato questo mese">🔍 Controllo rapido mese</button>
         <button class="btn-sm" style="flex:1;background:rgba(47,138,92,.1);color:var(--green);border-color:rgba(47,138,92,.3)" onclick="esportaPresenzeExcel()" title="Un unico file Excel con timbrature, stipendi, acconti, restituzioni, assenze e ferie — di tutta l'azienda o di un solo dipendente">⬇ Esporta dati (Excel)</button>
       </div>
-      <button class="btn-sm" style="width:100%;margin-bottom:14px" onclick="chiudiArretrato1314Tutti()" title="Correzione una tantum: chiude in blocco l'arretrato 13ª/14ª già pagato in passato, senza nuovi movimenti né notifiche">🔗 Chiudi arretrati 13ª/14ª già saldati (tutti)</button>
       <div id="stipendi-list"></div>
     </div>
 
@@ -10579,7 +10578,7 @@ async function esportaStoricoDipendente() {
   const [{ data: d }, { data: presenze }, { data: acconti }, { data: restituzioni }, { data: assenze }, { data: liquidazioni }] = await Promise.all([
     sb.from('presenze_profili').select('nome,cognome,data_assunzione,paga_giornaliera').eq('id', dipId).single(),
     sb.from('presenze').select('data,tipo_timbratura,confermata_dip').eq('dipendente_id', dipId).order('data'),
-    sb.from('presenze_acconti').select('data,importo,causale,modalita,note,letto_dip').eq('dipendente_id', dipId).order('data'),
+    sb.from('presenze_acconti').select('data,importo,causale,modalita,note,letto_dip,periodo_anno_inizio,saldo_periodo').eq('dipendente_id', dipId).order('data'),
     sb.from('presenze_restituzioni').select('data,importo,modalita,note').eq('dipendente_id', dipId).order('data'),
     sb.from('presenze_assenze').select('tipo,data_inizio,data_fine,stato').eq('dipendente_id', dipId).order('data_inizio'),
     sb.from('presenze_liquidazioni').select('mese,anno,importo_netto,bonifico,contanti,causale,confermata_dip,creato_il').eq('dipendente_id', dipId).order('anno').order('mese'),
@@ -10602,8 +10601,13 @@ async function esportaStoricoDipendente() {
   (presenze||[]).forEach(p => F1.push([p.data, p.tipo_timbratura||'', p.confermata_dip===false?'No':'Sì']));
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(F1), 'Presenze');
 
-  const F2 = [['Data','Importo €','A cosa si riferisce','Modalità','Confermato dal dipendente','Note']];
-  (acconti||[]).forEach(a => F2.push([a.data, parseFloat(a.importo).toFixed(2), causaleLbl(a.causale), a.modalita||'', a.letto_dip?'Sì':'No', a.note||'']));
+  const F2 = [['Data','Importo €','A cosa si riferisce','Modalità','Confermato dal dipendente','Periodo saldato','Note']];
+  (acconti||[]).forEach(a => {
+    const periodoTxt = a.periodo_anno_inizio
+      ? (a.causale==='acconto_13' ? ('gen/'+a.periodo_anno_inizio+'–dic/'+a.periodo_anno_inizio) : ('lug/'+a.periodo_anno_inizio+'–giu/'+(a.periodo_anno_inizio+1))) + (a.saldo_periodo ? ' — saldato' : '')
+      : '';
+    F2.push([a.data, parseFloat(a.importo).toFixed(2), causaleLbl(a.causale), a.modalita||'', a.letto_dip?'Sì':'No', periodoTxt, a.note||'']);
+  });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(F2), 'Acconti');
 
   const F3 = [['Data','Importo €','Modalità','Note']];
@@ -11077,54 +11081,6 @@ function apriLiquidaPeriodo1314(dipId, nome, tipo, annoInizio, importoConsigliat
   if ($('acc-saldo-periodo-wrap')) $('acc-saldo-periodo-wrap').style.display = 'block';
   if ($('acc-saldo-periodo')) $('acc-saldo-periodo').checked = true;
   if ($('acc-saldo-periodo-lbl')) $('acc-saldo-periodo-lbl').textContent = periodoLbl ? (' — '+periodoLbl) : '';
-}
-
-// Correzione dati storici UNA TANTUM: chiude in blocco, per TUTTI i
-// dipendenti/admin, l'arretrato 13a/14a del periodo immediatamente
-// precedente a quello in corso — quello che l'app segnala "non ancora
-// pagata" ma che in realtà è stato saldato ben prima di "Liquida periodo"
-// (quindi mai registrato con periodo_anno_inizio/saldo_periodo). Nessun
-// nuovo movimento reale: inserisce un solo record marcatore a importo 0
-// per ciascuna persona con arretrato aperto — niente notifiche, niente
-// Prima Nota. Da lanciare una volta sola dopo il deploy di questo fix;
-// da quel momento in poi resta solo "💰 Liquida periodo" per i pagamenti
-// veri, futuri.
-async function chiudiArretrato1314Tutti() {
-  const { data: profili } = await sb.from('presenze_profili').select('id,nome,cognome,data_assunzione,paga_giornaliera,ruolo,percepisce_stipendio')
-    .eq('attivo',true).or('ruolo.eq.dipendente,percepisce_stipendio.eq.true');
-  if (!profili || !profili.length) { toast('Nessun profilo trovato'); return; }
-  const oggi = new Date();
-  const mc = oggi.getMonth()+1, ac = oggi.getFullYear();
-  const daChiudere = []; // { dipId, nome, tipo, annoInizio, periodoLbl }
-  for (const p of profili) {
-    const paga = parseFloat(p.paga_giornaliera) || 0;
-    if (!paga) continue; // niente 13a/14a senza paga giornaliera
-    const nome = p.nome+(p.cognome?' '+p.cognome:'');
-    const { data: acc13 } = await sb.from('presenze_acconti').select('importo,data,periodo_anno_inizio,saldo_periodo').eq('dipendente_id',p.id).eq('causale','acconto_13');
-    const { data: acc14 } = await sb.from('presenze_acconti').select('importo,data,periodo_anno_inizio,saldo_periodo').eq('dipendente_id',p.id).eq('causale','acconto_14');
-    const ratei = calcolaRatei13a14a(p.data_assunzione, paga, mc, ac);
-    const mat13 = maturato1314(ratei, '13', acc13||[]);
-    const mat14 = maturato1314(ratei, '14', acc14||[]);
-    if (mat13.haArretrato && mat13.arretrato.residuo > 0.01) daChiudere.push({ dipId:p.id, nome, tipo:'13', annoInizio: mat13.arretrato.annoInizio, periodoLbl: 'gen/'+mat13.arretrato.annoInizio+'–dic/'+mat13.arretrato.annoInizio });
-    if (mat14.haArretrato && mat14.arretrato.residuo > 0.01) daChiudere.push({ dipId:p.id, nome, tipo:'14', annoInizio: mat14.arretrato.annoInizio, periodoLbl: 'lug/'+mat14.arretrato.annoInizio+'–giu/'+(mat14.arretrato.annoInizio+1) });
-  }
-  if (!daChiudere.length) { toast('Nessun arretrato aperto trovato'); return; }
-  const elenco = daChiudere.map(x => '• '+x.nome+' — '+(x.tipo==='13'?'13ª':'14ª')+' '+x.periodoLbl).join('\n');
-  if (!confirm('Verranno chiusi come "già saldati in passato" '+daChiudere.length+' periodi arretrati:\n\n'+elenco+'\n\nNessun nuovo pagamento/notifica: solo correzione dello storico. Confermi?')) return;
-  toast('Chiudo gli arretrati…');
-  let ok = 0, ko = 0;
-  for (const x of daChiudere) {
-    const { error } = await sb.from('presenze_acconti').insert({
-      dipendente_id: x.dipId, importo: 0, data: todayISO(),
-      causale: x.tipo==='13'?'acconto_13':'acconto_14', modalita: 'contanti',
-      periodo_anno_inizio: x.annoInizio, saldo_periodo: true,
-      note: 'Correzione storica in blocco: periodo già pagato prima di questa registrazione (nessun movimento reale).',
-      registrato_da: ME.id, letto_dip: true,
-    });
-    if (error) ko++; else ok++;
-  }
-  toast('✓ Chiusi '+ok+' periodi'+(ko?(' — '+ko+' errori'):''));
-  if (typeof caricaStipendi === 'function' && $('st-mese-sel')) caricaStipendi().catch(()=>{});
 }
 
 // Pannello "da dove prendi i contanti" (cassetto/fondo) — visibile solo se
