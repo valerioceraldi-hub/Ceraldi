@@ -1012,7 +1012,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div id="app" style="display:none">
 
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.188</span></div>
+    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.189</span></div>
     <span class="topbar-badge" id="role-badge"></span>
     <button class="btn-topbar" onclick="ricaricaApp()" title="Ricarica la pagina (per essere sicuro di avere l'ultima versione)" style="padding:6px 10px">🔄</button>
     <button id="btn-promemoria" class="btn-topbar" onclick="apriPromemoria()" style="display:none;position:relative;padding:6px 10px">
@@ -10588,41 +10588,97 @@ async function esportaStoricoDipendente() {
   if (typeof XLSX === 'undefined') { toast('Libreria Excel non caricata, riprova'); return; }
   const dipId = _anagraficaId;
   if (!dipId) return;
-  toast('Preparo l\'export…');
+  toast('Preparo il report…');
   const [{ data: d }, { data: presenze }, { data: acconti }, { data: restituzioni }, { data: assenze }, { data: liquidazioni }, { data: storicoPaga }] = await Promise.all([
-    sb.from('presenze_profili').select('nome,cognome,data_assunzione,paga_giornaliera,tipo_contratto,ferie_annuali,ferie_godute_extra').eq('id', dipId).single(),
+    sb.from('presenze_profili').select('nome,cognome,data_assunzione,paga_giornaliera,tipo_contratto,ferie_annuali,ferie_godute_extra,ruolo').eq('id', dipId).single(),
     sb.from('presenze').select('data,tipo_timbratura,confermata_dip').eq('dipendente_id', dipId).order('data'),
     sb.from('presenze_acconti').select('data,importo,causale,modalita,note,letto_dip,periodo_anno_inizio,saldo_periodo,mese_riferimento,anno_riferimento').eq('dipendente_id', dipId).order('data'),
     sb.from('presenze_restituzioni').select('data,importo,modalita,note,mese_riferimento,anno_riferimento').eq('dipendente_id', dipId).order('data'),
     sb.from('presenze_assenze').select('tipo,data_inizio,data_fine,stato').eq('dipendente_id', dipId).order('data_inizio'),
-    sb.from('presenze_liquidazioni').select('mese,anno,importo_netto,bonifico,contanti,causale,confermata_dip,creato_il').eq('dipendente_id', dipId).order('anno').order('mese'),
+    sb.from('presenze_liquidazioni').select('mese,anno,importo_netto,bonifico,contanti,causale,confermata_dip,confermata_il,creato_il').eq('dipendente_id', dipId).order('anno').order('mese'),
     sb.from('presenze_storico_paga').select('paga_giornaliera,data_decorrenza').eq('dipendente_id', dipId).order('data_decorrenza'),
   ]);
   if (!d) { toast('Dipendente non trovato'); return; }
   const nome = d.nome+(d.cognome?' '+d.cognome:'');
   const causaleLbl = c => ({ stipendio:'Stipendio', acconto_stipendio:'Acconto stipendio', acconto_tfr:'Acconto TFR', acconto_13:'Acconto 13ª', acconto_14:'Acconto 14ª', ferie_non_godute:'Ferie non godute', straordinari:'Straordinari', altro:'Altro' }[c] || (c||'Stipendio'));
-  // Date SEMPRE in formato italiano leggibile (gg/mm/aaaa): l'ISO grezzo
-  // "2026-08-13" è illeggibile a colpo d'occhio e ordina male in Excel se
-  // interpretato come testo.
   const dIT = iso => iso ? (iso.slice(8,10)+'/'+iso.slice(5,7)+'/'+iso.slice(0,4)) : '';
+  const MESI = ['gen','feb','mar','apr','mag','giu','lug','ago','set','ott','nov','dic'];
   const meseLbl = (mm,aa) => new Date(aa, mm-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
   const periodo1314 = a => !a.periodo_anno_inizio ? ''
     : (a.causale==='acconto_13' ? ('gen–dic '+a.periodo_anno_inizio) : ('lug '+a.periodo_anno_inizio+' – giu '+(a.periodo_anno_inizio+1)))
       + (a.saldo_periodo ? ' (SALDATO)' : '');
-  // Le correzioni storiche valgono 0€: sono marcatori di "periodo chiuso",
-  // non movimenti di cassa. Vanno tenute fuori dai totali di denaro, o
-  // sporcano ogni somma con righe che non sono soldi.
   const isMarcatore = a => parseFloat(a.importo) === 0;
-  const num = v => Math.round((parseFloat(v)||0)*100)/100; // numero VERO, non stringa: così Excel somma
+  const num = v => Math.round((parseFloat(v)||0)*100)/100;
+
+  /* ═══════ STILE — palette Ceraldi, coerente su tutti i fogli ═══════ */
+  const BLU = '2B4ACB', BLU_CHIARO = 'EBEEFB', VERDE = '2F8A5C', VERDE_CHIARO = 'E9F5EE',
+        GRIGIO = '6B7280', GRIGIO_CHIARO = 'F4F5F7', ROSSO = 'C0392B', BORDO = 'D8DCE3';
+  const bordoSottile = { style:'thin', color:{rgb:BORDO} };
+  const bordi = { top:bordoSottile, bottom:bordoSottile, left:bordoSottile, right:bordoSottile };
+  const sTitolo = { font:{bold:true, sz:18, color:{rgb:'FFFFFF'}}, fill:{fgColor:{rgb:BLU}}, alignment:{vertical:'center', horizontal:'left', indent:1} };
+  const sSottotitolo = { font:{sz:11, color:{rgb:'FFFFFF'}, italic:true}, fill:{fgColor:{rgb:BLU}}, alignment:{vertical:'center', horizontal:'left', indent:1} };
+  const sSezione = { font:{bold:true, sz:12, color:{rgb:'FFFFFF'}}, fill:{fgColor:{rgb:GRIGIO}}, alignment:{vertical:'center', indent:1} };
+  const sHeaderTab = { font:{bold:true, sz:10, color:{rgb:'FFFFFF'}}, fill:{fgColor:{rgb:BLU}}, alignment:{vertical:'center', horizontal:'center', wrapText:true}, border:bordi };
+  const sLabel = { font:{sz:10, bold:true, color:{rgb:'374151'}}, alignment:{vertical:'center'} };
+  const sValore = { font:{sz:10}, alignment:{vertical:'center'}, border:bordi };
+  const sValoreAlt = { font:{sz:10}, fill:{fgColor:{rgb:GRIGIO_CHIARO}}, alignment:{vertical:'center'}, border:bordi };
+  const sNum = { font:{sz:10}, numFmt:'#,##0.00 "€"', alignment:{vertical:'center', horizontal:'right'}, border:bordi };
+  const sNumAlt = { font:{sz:10}, numFmt:'#,##0.00 "€"', fill:{fgColor:{rgb:GRIGIO_CHIARO}}, alignment:{vertical:'center', horizontal:'right'}, border:bordi };
+  const sNumNeg = { font:{sz:10, color:{rgb:ROSSO}}, numFmt:'#,##0.00 "€";[RED]-#,##0.00 "€"', alignment:{vertical:'center', horizontal:'right'}, border:bordi };
+  const sTotRiga = { font:{bold:true, sz:10}, fill:{fgColor:{rgb:BLU_CHIARO}}, numFmt:'#,##0.00 "€"', alignment:{vertical:'center', horizontal:'right'}, border:bordi };
+  const sTotLabel = { font:{bold:true, sz:10}, fill:{fgColor:{rgb:BLU_CHIARO}}, alignment:{vertical:'center'}, border:bordi };
+  const sKpiLabel = { font:{sz:9, color:{rgb:GRIGIO}}, alignment:{vertical:'center'} };
+  const sKpiValore = { font:{bold:true, sz:14, color:{rgb:BLU}}, alignment:{vertical:'center'} };
+  const sBadgeOk = { font:{bold:true, sz:10, color:{rgb:'FFFFFF'}}, fill:{fgColor:{rgb:VERDE}}, alignment:{vertical:'center', horizontal:'center'}, border:bordi };
+  const sBadgeOpen = { font:{bold:true, sz:10, color:{rgb:'FFFFFF'}}, fill:{fgColor:{rgb:GRIGIO}}, alignment:{vertical:'center', horizontal:'center'}, border:bordi };
+  const sNota = { font:{sz:9, italic:true, color:{rgb:GRIGIO}} };
+
+  const setCell = (ws, addr, v, s) => { ws[addr] = { v, t: typeof v === 'number' ? 'n' : 's', s }; };
+  const rangeAddr = (r0,c0,r1,c1) => XLSX.utils.encode_range({s:{r:r0,c:c0}, e:{r:r1,c:c1}});
 
   const wb = XLSX.utils.book_new();
-  const addSheet = (aoa, nomeFoglio, widths) => {
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    if (widths) ws['!cols'] = widths.map(w => ({ wch: w }));
-    XLSX.utils.book_append_sheet(wb, ws, nomeFoglio);
-  };
+  wb.Props = { Title: 'Storico completo — '+nome, Subject: 'Caffetteria Ceraldi — Ceraldi Presenze', Author: 'Ceraldi Presenze', Company: 'Ceraldi Group S.r.l.' };
 
-  /* ── FOGLIO 1: RIEPILOGO — i numeri che servono davvero, non solo l'anagrafica ── */
+  /* ══════════════════════ FOGLIO 1 — FRONTESPIZIO ══════════════════════ */
+  const ws0 = {};
+  ws0['!cols'] = [{wch:30},{wch:30},{wch:24},{wch:24}];
+  ws0['!rows'] = [{hpt:34},{hpt:16}];
+  ws0['!merges'] = [
+    {s:{r:0,c:0}, e:{r:0,c:3}}, {s:{r:1,c:0}, e:{r:1,c:3}},
+    {s:{r:3,c:0}, e:{r:3,c:3}}, {s:{r:12,c:0}, e:{r:12,c:3}},
+  ];
+  setCell(ws0,'A1','CAFFETTERIA CERALDI — STORICO COMPLETO DIPENDENTE', sTitolo);
+  setCell(ws0,'A2','Ceraldi Group S.r.l. · Piazza Carità 14, Napoli', sSottotitolo);
+  setCell(ws0,'A4','DATI GENERALI', sSezione);
+  const anagrafe = [
+    ['Nominativo', nome],
+    ['Ruolo', d.ruolo === 'admin' ? 'Amministratore / Socio' : 'Dipendente'],
+    ['Tipo contratto', d.tipo_contratto || '—'],
+    ['Data assunzione', d.data_assunzione ? dIT(d.data_assunzione) : '—'],
+    ['Paga giornaliera attuale', num(d.paga_giornaliera)],
+    ['Ferie annuali spettanti', (d.ferie_annuali||26)+' giorni/anno'],
+  ];
+  let rr = 4;
+  anagrafe.forEach(([l,v]) => {
+    setCell(ws0,'A'+(rr+1), l, sLabel);
+    if (typeof v === 'number') setCell(ws0,'B'+(rr+1), v, {...sValore, numFmt:'#,##0.00 "€"'});
+    else setCell(ws0,'B'+(rr+1), v, sValore);
+    rr++;
+  });
+  rr += 1;
+  setCell(ws0,'A'+(rr+1),'REPORT GENERATO IL', sSezione); setCell(ws0,'B'+(rr+1),'', sSezione); setCell(ws0,'C'+(rr+1),'', sSezione); setCell(ws0,'D'+(rr+1),'', sSezione);
+  rr += 1;
+  setCell(ws0,'A'+(rr+1), new Date().toLocaleDateString('it-IT',{day:'2-digit',month:'long',year:'numeric'})+' alle '+new Date().toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'}), sValore);
+  setCell(ws0,'B'+(rr+1),'', sValore); setCell(ws0,'C'+(rr+1),'', sValore); setCell(ws0,'D'+(rr+1),'', sValore);
+  rr += 2;
+  setCell(ws0,'A'+(rr+1),'INDICE DEL REPORT', sSezione); setCell(ws0,'B'+(rr+1),'', sSezione); setCell(ws0,'C'+(rr+1),'', sSezione); setCell(ws0,'D'+(rr+1),'', sSezione);
+  const indice = ['1. Frontespizio (questo foglio)','2. Riepilogo esecutivo','3. Presenze — sintesi mensile','4. Presenze — dettaglio giornaliero','5. Movimenti finanziari (registro cronologico)','6. 13ª · 14ª mensilità — dettaglio periodi','7. TFR — dettaglio maturazione mensile','8. Ferie e assenze','9. Liquidazioni mensili — dettaglio','10. Note e legenda'];
+  rr += 1;
+  indice.forEach(voce => { setCell(ws0,'A'+(rr+1), voce, sValore); ['B','C','D'].forEach(col=>setCell(ws0,col+(rr+1),'',sValore)); rr++; });
+  ws0['!ref'] = rangeAddr(0,0,rr+1,3);
+  XLSX.utils.book_append_sheet(wb, ws0, '1. Frontespizio');
+
+  /* ══════════════════════ FOGLIO 2 — RIEPILOGO ESECUTIVO ══════════════════════ */
   const giorniLavorati = new Set((presenze||[]).map(p=>p.data)).size;
   const totLiquidato = (liquidazioni||[]).reduce((s,l)=>s+num(l.importo_netto), 0);
   const accontiReali = (acconti||[]).filter(a=>!isMarcatore(a));
@@ -10631,104 +10687,156 @@ async function esportaStoricoDipendente() {
   accontiReali.forEach(a => { const k = causaleLbl(a.causale); perCausale[k] = (perCausale[k]||0) + num(a.importo); });
   const giorniAssenza = t => (assenze||[]).filter(a=>a.tipo===t && a.stato==='approvata')
     .reduce((s,a)=> s + (Math.round((new Date(a.data_fine)-new Date(a.data_inizio))/86400000)+1), 0);
+  const totaleNettoUscito = num(totLiquidato + accontiReali.reduce((s,a)=>s+num(a.importo),0) - totRestituito);
+  const primaData = (presenze&&presenze.length) ? presenze[0].data : null;
+  const ultimaData = (presenze&&presenze.length) ? presenze[presenze.length-1].data : null;
 
-  const F0 = [
-    ['STORICO COMPLETO — '+nome],
-    ['Esportato il', new Date().toLocaleDateString('it-IT')],
-    [],
-    ['ANAGRAFICA'],
-    ['Assunto il', d.data_assunzione ? dIT(d.data_assunzione) : '—'],
-    ['Tipo contratto', d.tipo_contratto || '—'],
-    ['Paga giornaliera attuale', num(d.paga_giornaliera)],
-    ['Ferie annuali spettanti (giorni)', d.ferie_annuali || 26],
-    [],
-    ['PRESENZE'],
-    ['Giorni lavorati totali (da sempre)', giorniLavorati],
-    ['Giorni di ferie approvate', giorniAssenza('ferie')],
-    ['Giorni di malattia approvati', giorniAssenza('malattia')],
-    [],
-    ['DENARO — TOTALI STORICI'],
-    ['Totale liquidato (stipendi mensili)', totLiquidato],
-  ];
-  Object.keys(perCausale).sort().forEach(k => F0.push(['Totale '+k.toLowerCase(), perCausale[k]]));
-  F0.push(['Totale restituito dal dipendente', totRestituito]);
-  F0.push(['TOTALE NETTO USCITO (liquidazioni + acconti − restituzioni)',
-    num(totLiquidato + accontiReali.reduce((s,a)=>s+num(a.importo),0) - totRestituito)]);
-  F0.push([]);
-  F0.push(['Nota: le righe a €0,00 con causale "Correzione storica" non sono movimenti di cassa —']);
-  F0.push(['servono solo a marcare come chiuso un periodo di 13ª/14ª pagato prima che l\'app lo registrasse.']);
-  addSheet(F0, 'Riepilogo', [52, 18]);
+  const ws1 = {};
+  ws1['!cols'] = [{wch:34},{wch:20},{wch:6},{wch:34},{wch:20}];
+  ws1['!merges'] = [{s:{r:0,c:0},e:{r:0,c:4}}, {s:{r:1,c:0},e:{r:1,c:4}}];
+  setCell(ws1,'A1','RIEPILOGO ESECUTIVO', sTitolo);
+  setCell(ws1,'A2', nome+' — periodo osservato: '+(primaData?dIT(primaData):'—')+' → '+(ultimaData?dIT(ultimaData):'oggi'), sSottotitolo);
+  let r1 = 3;
+  const kpi = (label, valore, riga, col) => {
+    const c0 = col, c1 = col; // 1 colonna
+    setCell(ws1, XLSX.utils.encode_cell({r:riga,c:c0}), label, sKpiLabel);
+    setCell(ws1, XLSX.utils.encode_cell({r:riga+1,c:c0}), valore, typeof valore==='number' ? {...sKpiValore, numFmt: Number.isInteger(valore)?'0':'#,##0.00 "€"'} : sKpiValore);
+  };
+  kpi('GIORNI LAVORATI (da sempre)', giorniLavorati, r1, 0);
+  kpi('GIORNI DI FERIE GODUTI', giorniAssenza('ferie'), r1, 1);
+  kpi('GIORNI DI MALATTIA', giorniAssenza('malattia'), r1, 3);
+  kpi('TOTALE LIQUIDATO (stipendi)', totLiquidato, r1+3, 0);
+  kpi('TOTALE ACCONTI EROGATI', accontiReali.reduce((s,a)=>s+num(a.importo),0), r1+3, 1);
+  kpi('TOTALE RESTITUITO', totRestituito, r1+3, 3);
+  r1 += 6;
+  setCell(ws1,'A'+(r1+1),'TOTALE NETTO USCITO PER QUESTA PERSONA', sTotLabel);
+  setCell(ws1,'B'+(r1+1), totaleNettoUscito, {...sTotRiga, font:{bold:true, sz:13}});
+  ['C','D','E'].forEach((col,i)=>setCell(ws1,col+(r1+1),'', i===2?sTotLabel:sTotRiga));
+  r1 += 3;
+  setCell(ws1,'A'+(r1+1),'DETTAGLIO ACCONTI PER TIPOLOGIA', sSezione);
+  ['B','C','D','E'].forEach(col=>setCell(ws1,col+(r1+1),'',sSezione));
+  r1 += 1;
+  setCell(ws1,'A'+(r1+1),'Tipologia', sHeaderTab); setCell(ws1,'B'+(r1+1),'Importo totale', sHeaderTab);
+  ['C','D','E'].forEach(col=>setCell(ws1,col+(r1+1),'',sHeaderTab));
+  r1 += 1;
+  let alt = false;
+  Object.keys(perCausale).sort().forEach(k => {
+    setCell(ws1,'A'+(r1+1), k, alt?sValoreAlt:sValore);
+    setCell(ws1,'B'+(r1+1), perCausale[k], alt?sNumAlt:sNum);
+    ['C','D','E'].forEach(col=>setCell(ws1,col+(r1+1),'', alt?sValoreAlt:sValore));
+    alt = !alt; r1++;
+  });
+  setCell(ws1,'A'+(r1+1),'Nota: le righe a 0 € marcate "Correzione storica" non sono movimenti di cassa — chiudono un periodo di 13ª/14ª pagato prima che l\'app lo registrasse.', sNota);
+  ws1['!ref'] = rangeAddr(0,0,r1+2,4);
+  XLSX.utils.book_append_sheet(wb, ws1, '2. Riepilogo esecutivo');
 
-  /* ── FOGLIO 2: MOVIMENTI — tutto il denaro in UN unico elenco cronologico,
-       con segno e saldo progressivo. È il foglio che prima mancava del tutto:
-       i soldi erano sparsi su 3 fogli separati, impossibile seguirli. ── */
+  /* ══════════════════════ FOGLIO 3 — PRESENZE PER MESE ══════════════════════ */
+  const perMese = {};
+  (presenze||[]).forEach(p => { const k = p.data.slice(0,7); (perMese[k] = perMese[k] || new Set()).add(p.data); });
+  const headerPresMese = ['Mese','Anno','Giorni lavorati','Paga giornaliera nel periodo','Lordo teorico del mese','Progressivo giorni','Progressivo lordo'];
+  const ws2 = {}; let r2 = 0;
+  ws2['!cols'] = [{wch:14},{wch:8},{wch:16},{wch:20},{wch:20},{wch:18},{wch:18}];
+  ws2['!merges'] = [{s:{r:0,c:0},e:{r:0,c:6}}];
+  setCell(ws2,'A1','PRESENZE — SINTESI MENSILE', sTitolo); for(let cc=1;cc<7;cc++) setCell(ws2,XLSX.utils.encode_cell({r:0,c:cc}),'',sTitolo);
+  r2 = 1;
+  headerPresMese.forEach((h,i)=> setCell(ws2, XLSX.utils.encode_cell({r:r2,c:i}), h, sHeaderTab));
+  r2++;
+  let totGg = 0, totLordo = 0, altM = false;
+  Object.keys(perMese).sort().forEach(k => {
+    const gg = perMese[k].size;
+    const aa = parseInt(k.slice(0,4)), mm = parseInt(k.slice(5,7));
+    const pagaM = (storicoPaga && storicoPaga.length) ? (_pagaApplicabile(storicoPaga, k+'-28') ?? num(d.paga_giornaliera)) : num(d.paga_giornaliera);
+    const lordo = num(gg * pagaM);
+    totGg += gg; totLordo = num(totLordo + lordo);
+    const st = altM ? sValoreAlt : sValore, sn = altM ? sNumAlt : sNum;
+    setCell(ws2, XLSX.utils.encode_cell({r:r2,c:0}), MESI[mm-1].toUpperCase(), st);
+    setCell(ws2, XLSX.utils.encode_cell({r:r2,c:1}), aa, st);
+    setCell(ws2, XLSX.utils.encode_cell({r:r2,c:2}), gg, st);
+    setCell(ws2, XLSX.utils.encode_cell({r:r2,c:3}), pagaM, sn);
+    setCell(ws2, XLSX.utils.encode_cell({r:r2,c:4}), lordo, sn);
+    setCell(ws2, XLSX.utils.encode_cell({r:r2,c:5}), totGg, st);
+    setCell(ws2, XLSX.utils.encode_cell({r:r2,c:6}), totLordo, sn);
+    altM = !altM; r2++;
+  });
+  setCell(ws2, XLSX.utils.encode_cell({r:r2,c:0}),'TOTALE', sTotLabel);
+  setCell(ws2, XLSX.utils.encode_cell({r:r2,c:1}),'', sTotLabel);
+  setCell(ws2, XLSX.utils.encode_cell({r:r2,c:2}), totGg, sTotRiga);
+  setCell(ws2, XLSX.utils.encode_cell({r:r2,c:3}),'', sTotLabel);
+  setCell(ws2, XLSX.utils.encode_cell({r:r2,c:4}), totLordo, sTotRiga);
+  setCell(ws2, XLSX.utils.encode_cell({r:r2,c:5}),'', sTotLabel);
+  setCell(ws2, XLSX.utils.encode_cell({r:r2,c:6}),'', sTotLabel);
+  ws2['!ref'] = rangeAddr(0,0,r2,6);
+  ws2['!freeze'] = { xSplit:0, ySplit:2 };
+  XLSX.utils.book_append_sheet(wb, ws2, '3. Presenze mensili');
+
+  /* ══════════════════════ FOGLIO 4 — PRESENZE GIORNALIERE ══════════════════════ */
+  const ws3 = {}; let r3 = 0;
+  ws3['!cols'] = [{wch:12},{wch:14},{wch:22},{wch:22}];
+  ws3['!merges'] = [{s:{r:0,c:0},e:{r:0,c:3}}];
+  setCell(ws3,'A1','PRESENZE — DETTAGLIO GIORNALIERO', sTitolo); for(let cc=1;cc<4;cc++) setCell(ws3,XLSX.utils.encode_cell({r:0,c:cc}),'',sTitolo);
+  r3 = 1;
+  ['Data','Giorno della settimana','Tipo timbratura','Confermata dal dipendente'].forEach((h,i)=>setCell(ws3,XLSX.utils.encode_cell({r:r3,c:i}),h,sHeaderTab));
+  r3++;
+  let altP = false;
+  (presenze||[]).forEach(p => {
+    const st = altP?sValoreAlt:sValore;
+    setCell(ws3, XLSX.utils.encode_cell({r:r3,c:0}), dIT(p.data), st);
+    setCell(ws3, XLSX.utils.encode_cell({r:r3,c:1}), new Date(p.data+'T00:00:00').toLocaleDateString('it-IT',{weekday:'long'}), st);
+    setCell(ws3, XLSX.utils.encode_cell({r:r3,c:2}), p.tipo_timbratura||'', st);
+    setCell(ws3, XLSX.utils.encode_cell({r:r3,c:3}), p.confermata_dip===false?'No':'Sì', st);
+    altP = !altP; r3++;
+  });
+  ws3['!ref'] = rangeAddr(0,0,Math.max(r3-1,2),3);
+  ws3['!freeze'] = { xSplit:0, ySplit:2 };
+  XLSX.utils.book_append_sheet(wb, ws3, '4. Presenze dettaglio');
+
+  /* ══════════════════════ FOGLIO 5 — MOVIMENTI FINANZIARI ══════════════════════ */
   const mov = [];
   (liquidazioni||[]).forEach(l => {
     const dataRif = l.creato_il ? l.creato_il.slice(0,10) : (l.anno+'-'+String(l.mese).padStart(2,'0')+'-28');
     mov.push({ data: dataRif, tipo: 'Liquidazione stipendio', competenza: meseLbl(l.mese, l.anno),
-      importo: num(l.importo_netto), modalita: [l.bonifico>0?'bonifico €'+num(l.bonifico):null, l.contanti>0?'contanti €'+num(l.contanti):null].filter(Boolean).join(' + '),
+      importo: num(l.importo_netto), modalita: [l.bonifico>0?'bonifico':null, l.contanti>0?'contanti':null].filter(Boolean).join(' + '),
       conf: l.confermata_dip?'Sì':'No', note: '' });
   });
   (acconti||[]).forEach(a => {
-    if (isMarcatore(a)) {
-      mov.push({ data: a.data, tipo: 'Correzione storica (non è denaro)', competenza: periodo1314(a),
-        importo: 0, modalita: '', conf: '', note: a.note||'' });
-      return;
-    }
+    if (isMarcatore(a)) { mov.push({ data: a.data, tipo:'Correzione storica (non è denaro)', competenza: periodo1314(a), importo:0, modalita:'', conf:'', note:a.note||'' }); return; }
     const comp = periodo1314(a) || (a.mese_riferimento && a.anno_riferimento ? meseLbl(a.mese_riferimento, a.anno_riferimento) : '');
-    mov.push({ data: a.data, tipo: causaleLbl(a.causale), competenza: comp,
-      importo: num(a.importo), modalita: a.modalita||'', conf: a.letto_dip?'Sì':'No', note: a.note||'' });
+    mov.push({ data: a.data, tipo: causaleLbl(a.causale), competenza: comp, importo: num(a.importo), modalita: a.modalita||'', conf: a.letto_dip?'Sì':'No', note: a.note||'' });
   });
   (restituzioni||[]).forEach(r => {
-    mov.push({ data: r.data, tipo: 'Restituzione dal dipendente', competenza: (r.mese_riferimento && r.anno_riferimento) ? meseLbl(r.mese_riferimento, r.anno_riferimento) : '',
-      importo: -num(r.importo), modalita: r.modalita||'', conf: '', note: r.note||'' });
+    mov.push({ data: r.data, tipo:'Restituzione dal dipendente', competenza: (r.mese_riferimento && r.anno_riferimento) ? meseLbl(r.mese_riferimento, r.anno_riferimento) : '', importo: -num(r.importo), modalita: r.modalita||'', conf:'', note: r.note||'' });
   });
-  mov.sort((a,b) => a.data === b.data ? 0 : (a.data < b.data ? -1 : 1));
-  const F1 = [['Data','Movimento','Competenza / periodo','Importo €','Saldo progressivo €','Modalità','Confermato dal dipendente','Note']];
-  let saldo = 0;
-  mov.forEach(x => { saldo = num(saldo + x.importo); F1.push([dIT(x.data), x.tipo, x.competenza, x.importo, saldo, x.modalita, x.conf, x.note]); });
-  F1.push([]);
-  F1.push(['', 'TOTALE NETTO USCITO', '', num(saldo), '', '', '', '']);
-  addSheet(F1, 'Movimenti (tutto)', [12, 26, 24, 12, 18, 22, 14, 60]);
-
-  /* ── FOGLIO 3: PRESENZE PER MESE — prima c'era solo l'elenco giorno per
-       giorno (centinaia/migliaia di righe): illeggibile per capire un mese. ── */
-  const perMese = {};
-  (presenze||[]).forEach(p => { const k = p.data.slice(0,7); (perMese[k] = perMese[k] || new Set()).add(p.data); });
-  const F2 = [['Mese','Giorni lavorati','Paga giornaliera del periodo €','Lordo teorico del mese €']];
-  let totGg = 0, totLordo = 0;
-  Object.keys(perMese).sort().forEach(k => {
-    const gg = perMese[k].size;
-    const pagaM = (typeof _pagaApplicabile === 'function' && storicoPaga && storicoPaga.length)
-      ? (_pagaApplicabile(storicoPaga, k+'-28') ?? num(d.paga_giornaliera)) : num(d.paga_giornaliera);
-    const lordo = num(gg * pagaM);
-    totGg += gg; totLordo = num(totLordo + lordo);
-    F2.push([meseLbl(parseInt(k.slice(5,7)), parseInt(k.slice(0,4))), gg, num(pagaM), lordo]);
+  mov.sort((a,b) => a.data===b.data?0:(a.data<b.data?-1:1));
+  const ws4 = {}; let r4 = 0;
+  ws4['!cols'] = [{wch:12},{wch:26},{wch:24},{wch:14},{wch:16},{wch:20},{wch:12},{wch:50}];
+  ws4['!merges'] = [{s:{r:0,c:0},e:{r:0,c:7}}];
+  setCell(ws4,'A1','MOVIMENTI FINANZIARI — REGISTRO CRONOLOGICO', sTitolo); for(let cc=1;cc<8;cc++) setCell(ws4,XLSX.utils.encode_cell({r:0,c:cc}),'',sTitolo);
+  r4 = 1;
+  ['Data','Movimento','Competenza / periodo','Importo','Saldo progressivo','Modalità','Confermato','Note'].forEach((h,i)=>setCell(ws4,XLSX.utils.encode_cell({r:r4,c:i}),h,sHeaderTab));
+  r4++;
+  let saldo = 0, altMv = false;
+  mov.forEach(x => {
+    saldo = num(saldo + x.importo);
+    const st = altMv?sValoreAlt:sValore, sn = x.importo<0 ? sNumNeg : (altMv?sNumAlt:sNum);
+    setCell(ws4, XLSX.utils.encode_cell({r:r4,c:0}), dIT(x.data), st);
+    setCell(ws4, XLSX.utils.encode_cell({r:r4,c:1}), x.tipo, st);
+    setCell(ws4, XLSX.utils.encode_cell({r:r4,c:2}), x.competenza, st);
+    setCell(ws4, XLSX.utils.encode_cell({r:r4,c:3}), x.importo, sn);
+    setCell(ws4, XLSX.utils.encode_cell({r:r4,c:4}), saldo, altMv?sNumAlt:sNum);
+    setCell(ws4, XLSX.utils.encode_cell({r:r4,c:5}), x.modalita, st);
+    setCell(ws4, XLSX.utils.encode_cell({r:r4,c:6}), x.conf, st);
+    setCell(ws4, XLSX.utils.encode_cell({r:r4,c:7}), x.note, st);
+    altMv = !altMv; r4++;
   });
-  F2.push([]);
-  F2.push(['TOTALE', totGg, '', totLordo]);
-  addSheet(F2, 'Presenze per mese', [22, 16, 28, 24]);
+  setCell(ws4, XLSX.utils.encode_cell({r:r4,c:0}),'TOTALE NETTO USCITO', sTotLabel);
+  for(let cc=1;cc<3;cc++) setCell(ws4, XLSX.utils.encode_cell({r:r4,c:cc}),'', sTotLabel);
+  setCell(ws4, XLSX.utils.encode_cell({r:r4,c:3}), saldo, sTotRiga);
+  for(let cc=4;cc<8;cc++) setCell(ws4, XLSX.utils.encode_cell({r:r4,c:cc}),'', sTotLabel);
+  ws4['!ref'] = rangeAddr(0,0,r4,7);
+  ws4['!freeze'] = { xSplit:0, ySplit:2 };
+  XLSX.utils.book_append_sheet(wb, ws4, '5. Movimenti finanziari');
 
-  /* ── FOGLIO 4: dettaglio giorno per giorno (resta disponibile, ma non è più
-       l'unico modo di leggere le presenze) ── */
-  const F3 = [['Data','Giorno','Tipo timbratura','Confermata dal dipendente']];
-  (presenze||[]).forEach(p => F3.push([dIT(p.data), new Date(p.data+'T00:00:00').toLocaleDateString('it-IT',{weekday:'long'}), p.tipo_timbratura||'', p.confermata_dip===false?'No':'Sì']));
-  addSheet(F3, 'Presenze (dettaglio)', [12, 14, 20, 24]);
-
-  /* ── FOGLIO 5: ferie e assenze, con i giorni già calcolati ── */
-  const F4 = [['Tipo','Dal','Al','Giorni','Stato']];
-  (assenze||[]).forEach(a => {
-    const giorni = Math.round((new Date(a.data_fine)-new Date(a.data_inizio))/86400000)+1;
-    F4.push([a.tipo||'', dIT(a.data_inizio), dIT(a.data_fine), giorni, a.stato||'']);
-  });
-  F4.push([]);
-  F4.push(['Ferie approvate (totale giorni)', '', '', giorniAssenza('ferie'), '']);
-  F4.push(['Malattia approvata (totale giorni)', '', '', giorniAssenza('malattia'), '']);
-  addSheet(F4, 'Ferie e assenze', [16, 12, 12, 10, 14]);
-
-  /* ── FOGLIO 6: stato 13ª/14ª per periodo — a colpo d'occhio quali periodi
-       sono chiusi e quali no, invece di doverlo dedurre dai movimenti ── */
-  const F5 = [['Mensilità','Periodo','Versato €','Stato','Data registrazione','Note']];
+  /* ══════════════════════ FOGLIO 6 — 13ª/14ª DETTAGLIO PERIODI ══════════════════════ */
   const perPeriodo = {};
   (acconti||[]).filter(a => a.causale==='acconto_13' || a.causale==='acconto_14').forEach(a => {
     const k = a.causale+'|'+(a.periodo_anno_inizio != null ? a.periodo_anno_inizio : ('data:'+a.data.slice(0,4)));
@@ -10738,19 +10846,188 @@ async function esportaStoricoDipendente() {
     perPeriodo[k].date.push(dIT(a.data));
     if (a.note) perPeriodo[k].note.push(a.note);
   });
-  Object.values(perPeriodo).sort((x,y) => (x.anno||0)-(y.anno||0)).forEach(p => {
-    const periodoTxt = p.anno == null ? '(periodo non specificato)'
-      : (p.causale==='acconto_13' ? ('gen–dic '+p.anno) : ('lug '+p.anno+' – giu '+(p.anno+1)));
-    F5.push([p.causale==='acconto_13'?'13ª':'14ª', periodoTxt, p.versato,
-      p.saldato ? 'SALDATO' : 'aperto / parziale', p.date.join(', '), p.note.join(' | ')]);
-  });
-  const totTfr = (acconti||[]).filter(a=>a.causale==='acconto_tfr').reduce((s,a)=>s+num(a.importo),0);
-  F5.push([]);
-  F5.push(['TFR', 'Acconti TFR erogati (totale)', totTfr, '', '', '']);
-  addSheet(F5, '13ª 14ª e TFR', [12, 26, 14, 20, 26, 50]);
+  const ratei1314 = calcolaRatei13a14a(d.data_assunzione, num(d.paga_giornaliera), new Date().getMonth()+1, new Date().getFullYear());
+  const mat13Now = maturato1314(ratei1314, '13', (acconti||[]).filter(a=>a.causale==='acconto_13'));
+  const mat14Now = maturato1314(ratei1314, '14', (acconti||[]).filter(a=>a.causale==='acconto_14'));
 
-  XLSX.writeFile(wb, 'storico_'+nome.replace(/\s+/g,'_')+'.xlsx');
-  toast('✓ Storico esportato');
+  const ws5 = {}; let r5 = 0;
+  ws5['!cols'] = [{wch:10},{wch:24},{wch:16},{wch:14},{wch:22},{wch:24},{wch:50}];
+  ws5['!merges'] = [{s:{r:0,c:0},e:{r:0,c:6}}];
+  setCell(ws5,'A1','13ª · 14ª MENSILITÀ — DETTAGLIO PER PERIODO', sTitolo); for(let cc=1;cc<7;cc++) setCell(ws5,XLSX.utils.encode_cell({r:0,c:cc}),'',sTitolo);
+  r5 = 1;
+  ['Mensilità','Periodo di competenza','Versato','Stato','Data/e registrazione','Ratei/12','Note'].forEach((h,i)=>setCell(ws5,XLSX.utils.encode_cell({r:r5,c:i}),h,sHeaderTab));
+  r5++;
+  let altPer = false;
+  Object.values(perPeriodo).sort((x,y)=>(x.anno||0)-(y.anno||0)).forEach(p => {
+    const periodoTxt = p.anno == null ? '(periodo non specificato)' : (p.causale==='acconto_13' ? ('gen–dic '+p.anno) : ('lug '+p.anno+' – giu '+(p.anno+1)));
+    const st = altPer?sValoreAlt:sValore, sn = altPer?sNumAlt:sNum;
+    setCell(ws5, XLSX.utils.encode_cell({r:r5,c:0}), p.causale==='acconto_13'?'13ª':'14ª', st);
+    setCell(ws5, XLSX.utils.encode_cell({r:r5,c:1}), periodoTxt, st);
+    setCell(ws5, XLSX.utils.encode_cell({r:r5,c:2}), p.versato, sn);
+    setCell(ws5, XLSX.utils.encode_cell({r:r5,c:3}), p.saldato?'SALDATO':'APERTO / PARZIALE', p.saldato?sBadgeOk:sBadgeOpen);
+    setCell(ws5, XLSX.utils.encode_cell({r:r5,c:4}), p.date.join(', '), st);
+    setCell(ws5, XLSX.utils.encode_cell({r:r5,c:5}), '', st);
+    setCell(ws5, XLSX.utils.encode_cell({r:r5,c:6}), p.note.join(' | '), st);
+    altPer = !altPer; r5++;
+  });
+  r5++;
+  setCell(ws5, XLSX.utils.encode_cell({r:r5,c:0}),'SITUAZIONE ATTUALE (alla data del report)', sSezione);
+  for(let cc=1;cc<7;cc++) setCell(ws5, XLSX.utils.encode_cell({r:r5,c:cc}),'', sSezione);
+  r5++;
+  const rigaSitAttuale = (lbl, mat) => {
+    setCell(ws5, XLSX.utils.encode_cell({r:r5,c:0}), lbl, sLabel);
+    setCell(ws5, XLSX.utils.encode_cell({r:r5,c:1}), 'Maturato: '+mat.importo.toFixed(2)+' € · Residuo: '+mat.residuo.toFixed(2)+' €'+(mat.haArretrato?' (incl. arretrato non saldato)':''), sValore);
+    for(let cc=2;cc<7;cc++) setCell(ws5, XLSX.utils.encode_cell({r:r5,c:cc}),'', sValore);
+    r5++;
+  };
+  rigaSitAttuale('13ª mensilità', mat13Now);
+  rigaSitAttuale('14ª mensilità', mat14Now);
+  ws5['!ref'] = rangeAddr(0,0,r5,6);
+  XLSX.utils.book_append_sheet(wb, ws5, '6. 13ª-14ª periodi');
+
+  /* ══════════════════════ FOGLIO 7 — TFR DETTAGLIO MENSILE ══════════════════════ */
+  const perMeseSetTfr = {};
+  (presenze||[]).filter(p=>!d.data_assunzione || p.data>=d.data_assunzione).forEach(p => { const k=p.data.slice(0,7); (perMeseSetTfr[k]=perMeseSetTfr[k]||new Set()).add(p.data); });
+  const storicoEffTfr = (storicoPaga&&storicoPaga.length) ? storicoPaga : [{ paga_giornaliera: num(d.paga_giornaliera), data_decorrenza: d.data_assunzione }];
+  const ws6 = {}; let r6 = 0;
+  ws6['!cols'] = [{wch:14},{wch:8},{wch:14},{wch:18},{wch:20},{wch:20},{wch:20}];
+  ws6['!merges'] = [{s:{r:0,c:0},e:{r:0,c:6}}];
+  setCell(ws6,'A1','TFR — DETTAGLIO MATURAZIONE MENSILE', sTitolo); for(let cc=1;cc<7;cc++) setCell(ws6,XLSX.utils.encode_cell({r:0,c:cc}),'',sTitolo);
+  r6 = 1;
+  ['Mese','Anno','Giorni lavorati','Paga giornaliera','Retribuzione lorda mese','TFR maturato nel mese','TFR progressivo'].forEach((h,i)=>setCell(ws6,XLSX.utils.encode_cell({r:r6,c:i}),h,sHeaderTab));
+  r6++;
+  let tfrProg = 0, altT = false;
+  Object.keys(perMeseSetTfr).sort().forEach(meseChiave => {
+    const giorni = perMeseSetTfr[meseChiave].size;
+    const pagaM = _pagaApplicabile(storicoEffTfr, meseChiave+'-28') ?? storicoEffTfr[0].paga_giornaliera;
+    if (!pagaM) return;
+    const retribM = num(giorni*pagaM);
+    const tfrMese = num(retribM/13.5 - retribM*0.005);
+    tfrProg = num(tfrProg + tfrMese);
+    const aa = parseInt(meseChiave.slice(0,4)), mm = parseInt(meseChiave.slice(5,7));
+    const st = altT?sValoreAlt:sValore, sn = altT?sNumAlt:sNum;
+    setCell(ws6, XLSX.utils.encode_cell({r:r6,c:0}), MESI[mm-1].toUpperCase(), st);
+    setCell(ws6, XLSX.utils.encode_cell({r:r6,c:1}), aa, st);
+    setCell(ws6, XLSX.utils.encode_cell({r:r6,c:2}), giorni, st);
+    setCell(ws6, XLSX.utils.encode_cell({r:r6,c:3}), num(pagaM), sn);
+    setCell(ws6, XLSX.utils.encode_cell({r:r6,c:4}), retribM, sn);
+    setCell(ws6, XLSX.utils.encode_cell({r:r6,c:5}), tfrMese, sn);
+    setCell(ws6, XLSX.utils.encode_cell({r:r6,c:6}), tfrProg, sn);
+    altT = !altT; r6++;
+  });
+  const erogatoTfr = (acconti||[]).filter(a=>a.causale==='acconto_tfr').reduce((s,a)=>s+num(a.importo),0);
+  setCell(ws6, XLSX.utils.encode_cell({r:r6,c:0}),'TFR LORDO MATURATO (totale)', sTotLabel);
+  for(let cc=1;cc<5;cc++) setCell(ws6, XLSX.utils.encode_cell({r:r6,c:cc}),'', sTotLabel);
+  setCell(ws6, XLSX.utils.encode_cell({r:r6,c:5}), tfrProg, sTotRiga);
+  setCell(ws6, XLSX.utils.encode_cell({r:r6,c:6}),'', sTotLabel);
+  r6++;
+  setCell(ws6, XLSX.utils.encode_cell({r:r6,c:0}),'Acconti TFR già erogati', sLabel);
+  for(let cc=1;cc<5;cc++) setCell(ws6, XLSX.utils.encode_cell({r:r6,c:cc}),'', sValore);
+  setCell(ws6, XLSX.utils.encode_cell({r:r6,c:5}), erogatoTfr, sNumNeg);
+  setCell(ws6, XLSX.utils.encode_cell({r:r6,c:6}),'', sValore);
+  r6++;
+  setCell(ws6, XLSX.utils.encode_cell({r:r6,c:0}),'RESIDUO TFR DA ACCANTONARE', sTotLabel);
+  for(let cc=1;cc<5;cc++) setCell(ws6, XLSX.utils.encode_cell({r:r6,c:cc}),'', sTotLabel);
+  setCell(ws6, XLSX.utils.encode_cell({r:r6,c:5}), Math.max(0,num(tfrProg-erogatoTfr)), sTotRiga);
+  setCell(ws6, XLSX.utils.encode_cell({r:r6,c:6}),'', sTotLabel);
+  ws6['!ref'] = rangeAddr(0,0,r6,6);
+  ws6['!freeze'] = { xSplit:0, ySplit:2 };
+  XLSX.utils.book_append_sheet(wb, ws6, '7. TFR mensile');
+
+  /* ══════════════════════ FOGLIO 8 — FERIE E ASSENZE ══════════════════════ */
+  const ws7 = {}; let r7 = 0;
+  ws7['!cols'] = [{wch:16},{wch:14},{wch:14},{wch:10},{wch:16}];
+  ws7['!merges'] = [{s:{r:0,c:0},e:{r:0,c:4}}];
+  setCell(ws7,'A1','FERIE E ASSENZE', sTitolo); for(let cc=1;cc<5;cc++) setCell(ws7,XLSX.utils.encode_cell({r:0,c:cc}),'',sTitolo);
+  r7 = 1;
+  ['Tipo','Dal','Al','Giorni','Stato'].forEach((h,i)=>setCell(ws7,XLSX.utils.encode_cell({r:r7,c:i}),h,sHeaderTab));
+  r7++;
+  let altA = false;
+  (assenze||[]).forEach(a => {
+    const giorni = Math.round((new Date(a.data_fine)-new Date(a.data_inizio))/86400000)+1;
+    const st = altA?sValoreAlt:sValore;
+    setCell(ws7, XLSX.utils.encode_cell({r:r7,c:0}), (a.tipo||'').toUpperCase(), st);
+    setCell(ws7, XLSX.utils.encode_cell({r:r7,c:1}), dIT(a.data_inizio), st);
+    setCell(ws7, XLSX.utils.encode_cell({r:r7,c:2}), dIT(a.data_fine), st);
+    setCell(ws7, XLSX.utils.encode_cell({r:r7,c:3}), giorni, st);
+    setCell(ws7, XLSX.utils.encode_cell({r:r7,c:4}), (a.stato||'').toUpperCase(), a.stato==='approvata'?sBadgeOk:sBadgeOpen);
+    altA = !altA; r7++;
+  });
+  setCell(ws7, XLSX.utils.encode_cell({r:r7,c:0}),'Totale giorni ferie approvate', sTotLabel);
+  setCell(ws7, XLSX.utils.encode_cell({r:r7,c:1}),'', sTotLabel); setCell(ws7, XLSX.utils.encode_cell({r:r7,c:2}),'', sTotLabel);
+  setCell(ws7, XLSX.utils.encode_cell({r:r7,c:3}), giorniAssenza('ferie'), {...sTotRiga, numFmt:'0'});
+  setCell(ws7, XLSX.utils.encode_cell({r:r7,c:4}),'', sTotLabel); r7++;
+  setCell(ws7, XLSX.utils.encode_cell({r:r7,c:0}),'Totale giorni malattia approvati', sTotLabel);
+  setCell(ws7, XLSX.utils.encode_cell({r:r7,c:1}),'', sTotLabel); setCell(ws7, XLSX.utils.encode_cell({r:r7,c:2}),'', sTotLabel);
+  setCell(ws7, XLSX.utils.encode_cell({r:r7,c:3}), giorniAssenza('malattia'), {...sTotRiga, numFmt:'0'});
+  setCell(ws7, XLSX.utils.encode_cell({r:r7,c:4}),'', sTotLabel);
+  ws7['!ref'] = rangeAddr(0,0,r7,4);
+  XLSX.utils.book_append_sheet(wb, ws7, '8. Ferie e assenze');
+
+  /* ══════════════════════ FOGLIO 9 — LIQUIDAZIONI MENSILI ══════════════════════ */
+  const ws8 = {}; let r8 = 0;
+  ws8['!cols'] = [{wch:14},{wch:16},{wch:14},{wch:14},{wch:18},{wch:16},{wch:16}];
+  ws8['!merges'] = [{s:{r:0,c:0},e:{r:0,c:6}}];
+  setCell(ws8,'A1','LIQUIDAZIONI MENSILI — DETTAGLIO', sTitolo); for(let cc=1;cc<7;cc++) setCell(ws8,XLSX.utils.encode_cell({r:0,c:cc}),'',sTitolo);
+  r8 = 1;
+  ['Mese','Anno','Netto liquidato','Di cui bonifico','Di cui contanti','Confermata dip.','Data registrazione'].forEach((h,i)=>setCell(ws8,XLSX.utils.encode_cell({r:r8,c:i}),h,sHeaderTab));
+  r8++;
+  let totNetto=0, totBon=0, totCont=0, altL = false;
+  (liquidazioni||[]).forEach(l => {
+    const st = altL?sValoreAlt:sValore, sn = altL?sNumAlt:sNum;
+    totNetto = num(totNetto+num(l.importo_netto)); totBon = num(totBon+num(l.bonifico)); totCont = num(totCont+num(l.contanti));
+    setCell(ws8, XLSX.utils.encode_cell({r:r8,c:0}), MESI[l.mese-1].toUpperCase(), st);
+    setCell(ws8, XLSX.utils.encode_cell({r:r8,c:1}), l.anno, st);
+    setCell(ws8, XLSX.utils.encode_cell({r:r8,c:2}), num(l.importo_netto), sn);
+    setCell(ws8, XLSX.utils.encode_cell({r:r8,c:3}), num(l.bonifico), sn);
+    setCell(ws8, XLSX.utils.encode_cell({r:r8,c:4}), num(l.contanti), sn);
+    setCell(ws8, XLSX.utils.encode_cell({r:r8,c:5}), l.confermata_dip?'Sì':'No', l.confermata_dip?sBadgeOk:sBadgeOpen);
+    setCell(ws8, XLSX.utils.encode_cell({r:r8,c:6}), l.creato_il ? dIT(l.creato_il.slice(0,10)) : '', st);
+    altL = !altL; r8++;
+  });
+  setCell(ws8, XLSX.utils.encode_cell({r:r8,c:0}),'TOTALE', sTotLabel);
+  setCell(ws8, XLSX.utils.encode_cell({r:r8,c:1}),'', sTotLabel);
+  setCell(ws8, XLSX.utils.encode_cell({r:r8,c:2}), totNetto, sTotRiga);
+  setCell(ws8, XLSX.utils.encode_cell({r:r8,c:3}), totBon, sTotRiga);
+  setCell(ws8, XLSX.utils.encode_cell({r:r8,c:4}), totCont, sTotRiga);
+  setCell(ws8, XLSX.utils.encode_cell({r:r8,c:5}),'', sTotLabel);
+  setCell(ws8, XLSX.utils.encode_cell({r:r8,c:6}),'', sTotLabel);
+  ws8['!ref'] = rangeAddr(0,0,r8,6);
+  ws8['!freeze'] = { xSplit:0, ySplit:2 };
+  XLSX.utils.book_append_sheet(wb, ws8, '9. Liquidazioni');
+
+  /* ══════════════════════ FOGLIO 10 — NOTE E LEGENDA ══════════════════════ */
+  const ws9 = {}; let r9 = 0;
+  ws9['!cols'] = [{wch:34},{wch:70}];
+  ws9['!merges'] = [{s:{r:0,c:0},e:{r:0,c:1}}];
+  setCell(ws9,'A1','NOTE E LEGENDA', sTitolo); setCell(ws9,'B1','',sTitolo);
+  r9 = 1;
+  const legenda = [
+    ['Acconto', 'Somma anticipata al dipendente su una competenza non ancora liquidata per intero.'],
+    ['Restituzione', 'Somma restituita dal dipendente all\'azienda (es. correzione di un acconto in eccesso).'],
+    ['Correzione storica', 'Riga a 0 € che marca un periodo di 13ª/14ª come già saldato prima che venisse tracciato in app — non rappresenta un movimento di denaro reale.'],
+    ['Periodo di competenza (13ª/14ª)', '13ª: gennaio–dicembre dello stesso anno. 14ª: luglio–giugno dell\'anno successivo (CCNL artt. 183-184).'],
+    ['SALDATO', 'Il periodo risulta interamente coperto — o per importo versato, o per correzione storica esplicita.'],
+    ['APERTO / PARZIALE', 'Il periodo ha ancora un residuo da erogare.'],
+    ['TFR', 'Trattamento di Fine Rapporto — stima ricostruita dalle presenze registrate in app (retribuzione mensile / 13,5 − 0,5%), non sostituisce il calcolo del consulente del lavoro.'],
+    ['Saldo progressivo', 'Nel foglio "Movimenti finanziari", somma cumulata di tutti gli importi in ordine cronologico — utile per verificare il totale netto uscito in qualsiasi momento dello storico.'],
+  ];
+  ['Voce', 'Significato'].forEach((h,i)=>setCell(ws9,XLSX.utils.encode_cell({r:r9,c:i}),h,sHeaderTab));
+  r9++;
+  let altN=false;
+  legenda.forEach(([voce, sig]) => {
+    setCell(ws9, XLSX.utils.encode_cell({r:r9,c:0}), voce, {...(altN?sValoreAlt:sValore), font:{bold:true, sz:10}});
+    setCell(ws9, XLSX.utils.encode_cell({r:r9,c:1}), sig, {...(altN?sValoreAlt:sValore), alignment:{wrapText:true, vertical:'center'}});
+    altN=!altN; r9++;
+  });
+  r9 += 1;
+  setCell(ws9, XLSX.utils.encode_cell({r:r9,c:0}), 'Questo report è generato automaticamente da Ceraldi Presenze a partire dai dati registrati in app. È uno strumento operativo di supporto: per liquidazioni, buste paga e adempimenti fiscali fa sempre fede la documentazione del consulente del lavoro.', sNota);
+  setCell(ws9, XLSX.utils.encode_cell({r:r9,c:1}), '', sNota);
+  ws9['!ref'] = rangeAddr(0,0,r9,1);
+  XLSX.utils.book_append_sheet(wb, ws9, '10. Note e legenda');
+
+  XLSX.writeFile(wb, 'Storico_'+nome.replace(/\s+/g,'_')+'_'+todayISO()+'.xlsx');
+  toast('✓ Report esportato');
 }
 
 /* ── CERTIFICAZIONE CONTATTI ────────────────────────── */
