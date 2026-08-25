@@ -1012,7 +1012,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div id="app" style="display:none">
 
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.189</span></div>
+    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.190</span></div>
     <span class="topbar-badge" id="role-badge"></span>
     <button class="btn-topbar" onclick="ricaricaApp()" title="Ricarica la pagina (per essere sicuro di avere l'ultima versione)" style="padding:6px 10px">🔄</button>
     <button id="btn-promemoria" class="btn-topbar" onclick="apriPromemoria()" style="display:none;position:relative;padding:6px 10px">
@@ -10672,7 +10672,7 @@ async function esportaStoricoDipendente() {
   setCell(ws0,'B'+(rr+1),'', sValore); setCell(ws0,'C'+(rr+1),'', sValore); setCell(ws0,'D'+(rr+1),'', sValore);
   rr += 2;
   setCell(ws0,'A'+(rr+1),'INDICE DEL REPORT', sSezione); setCell(ws0,'B'+(rr+1),'', sSezione); setCell(ws0,'C'+(rr+1),'', sSezione); setCell(ws0,'D'+(rr+1),'', sSezione);
-  const indice = ['1. Frontespizio (questo foglio)','2. Riepilogo esecutivo','3. Presenze — sintesi mensile','4. Presenze — dettaglio giornaliero','5. Movimenti finanziari (registro cronologico)','6. 13ª · 14ª mensilità — dettaglio periodi','7. TFR — dettaglio maturazione mensile','8. Ferie e assenze','9. Liquidazioni mensili — dettaglio','10. Note e legenda'];
+  const indice = ['1. Frontespizio (questo foglio)','2. Riepilogo esecutivo','3. Presenze — sintesi mensile','3bis. Riconciliazione mensile (controllo di integrità)','4. Presenze — dettaglio giornaliero','5. Movimenti finanziari (registro cronologico)','6. 13ª · 14ª mensilità — dettaglio periodi','7. TFR — dettaglio maturazione mensile','8. Ferie e assenze','9. Liquidazioni mensili — dettaglio','10. Note e legenda'];
   rr += 1;
   indice.forEach(voce => { setCell(ws0,'A'+(rr+1), voce, sValore); ['B','C','D'].forEach(col=>setCell(ws0,col+(rr+1),'',sValore)); rr++; });
   ws0['!ref'] = rangeAddr(0,0,rr+1,3);
@@ -10683,11 +10683,24 @@ async function esportaStoricoDipendente() {
   const totLiquidato = (liquidazioni||[]).reduce((s,l)=>s+num(l.importo_netto), 0);
   const accontiReali = (acconti||[]).filter(a=>!isMarcatore(a));
   const totRestituito = (restituzioni||[]).reduce((s,r)=>s+num(r.importo), 0);
-  const perCausale = {};
-  accontiReali.forEach(a => { const k = causaleLbl(a.causale); perCausale[k] = (perCausale[k]||0) + num(a.importo); });
   const giorniAssenza = t => (assenze||[]).filter(a=>a.tipo===t && a.stato==='approvata')
     .reduce((s,a)=> s + (Math.round((new Date(a.data_fine)-new Date(a.data_inizio))/86400000)+1), 0);
-  const totaleNettoUscito = num(totLiquidato + accontiReali.reduce((s,a)=>s+num(a.importo),0) - totRestituito);
+  // FIX (segnalato): "Totale liquidato" prendeva SOLO le liquidazioni
+  // mensili (presenze_liquidazioni), lasciando fuori gli acconti causale
+  // stipendio/acconto_stipendio — che sono anch'essi soldi di stipendio
+  // vero, dati in più tranche nello stesso mese invece che in un'unica
+  // liquidazione finale. Il risultato era un numero che sembrava dire
+  // "questa persona ha ricevuto solo una parte dello stipendio dovuto",
+  // quando in realtà il totale tornava perfettamente — era solo diviso su
+  // due registrazioni diverse. Ora lo stipendio ordinario è UN unico
+  // totale, mensilità aggiuntive (13ª/14ª/TFR) restano categorie separate.
+  const causaleStipendio = c => c === 'stipendio' || c === 'acconto_stipendio' || !c;
+  const totAccontiStipendio = accontiReali.filter(a=>causaleStipendio(a.causale)).reduce((s,a)=>s+num(a.importo),0);
+  const totStipendioOrdinario = num(totLiquidato + totAccontiStipendio);
+  const tot1314 = accontiReali.filter(a=>a.causale==='acconto_13'||a.causale==='acconto_14').reduce((s,a)=>s+num(a.importo),0);
+  const totTfrErogato = accontiReali.filter(a=>a.causale==='acconto_tfr').reduce((s,a)=>s+num(a.importo),0);
+  const totAltroErogato = accontiReali.filter(a=>!causaleStipendio(a.causale) && a.causale!=='acconto_13' && a.causale!=='acconto_14' && a.causale!=='acconto_tfr').reduce((s,a)=>s+num(a.importo),0);
+  const totaleNettoUscito = num(totStipendioOrdinario + tot1314 + totTfrErogato + totAltroErogato - totRestituito);
   const primaData = (presenze&&presenze.length) ? presenze[0].data : null;
   const ultimaData = (presenze&&presenze.length) ? presenze[presenze.length-1].data : null;
 
@@ -10705,28 +10718,36 @@ async function esportaStoricoDipendente() {
   kpi('GIORNI LAVORATI (da sempre)', giorniLavorati, r1, 0);
   kpi('GIORNI DI FERIE GODUTI', giorniAssenza('ferie'), r1, 1);
   kpi('GIORNI DI MALATTIA', giorniAssenza('malattia'), r1, 3);
-  kpi('TOTALE LIQUIDATO (stipendi)', totLiquidato, r1+3, 0);
-  kpi('TOTALE ACCONTI EROGATI', accontiReali.reduce((s,a)=>s+num(a.importo),0), r1+3, 1);
+  kpi('STIPENDIO ORDINARIO TOTALE (liquidazioni + acconti)', totStipendioOrdinario, r1+3, 0);
+  kpi('13ª/14ª MENSILITÀ EROGATE', tot1314, r1+3, 1);
   kpi('TOTALE RESTITUITO', totRestituito, r1+3, 3);
   r1 += 6;
   setCell(ws1,'A'+(r1+1),'TOTALE NETTO USCITO PER QUESTA PERSONA', sTotLabel);
   setCell(ws1,'B'+(r1+1), totaleNettoUscito, {...sTotRiga, font:{bold:true, sz:13}});
   ['C','D','E'].forEach((col,i)=>setCell(ws1,col+(r1+1),'', i===2?sTotLabel:sTotRiga));
   r1 += 3;
-  setCell(ws1,'A'+(r1+1),'DETTAGLIO ACCONTI PER TIPOLOGIA', sSezione);
+  setCell(ws1,'A'+(r1+1),'RIPARTIZIONE PER CATEGORIA (non sommare di nuovo — è già il totale sopra)', sSezione);
   ['B','C','D','E'].forEach(col=>setCell(ws1,col+(r1+1),'',sSezione));
   r1 += 1;
-  setCell(ws1,'A'+(r1+1),'Tipologia', sHeaderTab); setCell(ws1,'B'+(r1+1),'Importo totale', sHeaderTab);
+  setCell(ws1,'A'+(r1+1),'Categoria', sHeaderTab); setCell(ws1,'B'+(r1+1),'Importo totale', sHeaderTab);
   ['C','D','E'].forEach(col=>setCell(ws1,col+(r1+1),'',sHeaderTab));
   r1 += 1;
+  const categorie = [
+    ['Stipendio ordinario (liquidazioni + acconti stipendio)', totStipendioOrdinario],
+    ['13ª / 14ª mensilità erogate', tot1314],
+    ['TFR erogato in acconto', totTfrErogato],
+  ];
+  if (totAltroErogato > 0.01) categorie.push(['Altro (ferie non godute liquidate, straordinari, ecc.)', totAltroErogato]);
+  categorie.push(['Restituito dal dipendente', -totRestituito]);
   let alt = false;
-  Object.keys(perCausale).sort().forEach(k => {
+  categorie.forEach(([k,v]) => {
     setCell(ws1,'A'+(r1+1), k, alt?sValoreAlt:sValore);
-    setCell(ws1,'B'+(r1+1), perCausale[k], alt?sNumAlt:sNum);
+    setCell(ws1,'B'+(r1+1), v, v<0 ? sNumNeg : (alt?sNumAlt:sNum));
     ['C','D','E'].forEach(col=>setCell(ws1,col+(r1+1),'', alt?sValoreAlt:sValore));
     alt = !alt; r1++;
   });
-  setCell(ws1,'A'+(r1+1),'Nota: le righe a 0 € marcate "Correzione storica" non sono movimenti di cassa — chiudono un periodo di 13ª/14ª pagato prima che l\'app lo registrasse.', sNota);
+  r1 += 1;
+  setCell(ws1,'A'+(r1+1),'Nota: lo "Stipendio ordinario" somma la liquidazione mensile finale e gli eventuali acconti dati durante lo stesso mese — sono la stessa competenza pagata in più tranche, non due cose diverse. Verifica riga per riga nel foglio "3bis. Riconciliazione mensile".', sNota);
   ws1['!ref'] = rangeAddr(0,0,r1+2,4);
   XLSX.utils.book_append_sheet(wb, ws1, '2. Riepilogo esecutivo');
 
@@ -10768,6 +10789,61 @@ async function esportaStoricoDipendente() {
   ws2['!ref'] = rangeAddr(0,0,r2,6);
   ws2['!freeze'] = { xSplit:0, ySplit:2 };
   XLSX.utils.book_append_sheet(wb, ws2, '3. Presenze mensili');
+
+  /* ══════ FOGLIO 3bis — RICONCILIAZIONE MENSILE (controllo di integrità) ══════
+     Risponde esattamente al problema segnalato: un mese può essere stato
+     pagato per intero ma con l'importo diviso fra uno o più acconti
+     stipendio e la liquidazione finale — guardando solo "il liquidato" si
+     rischia di pensare che manchi del denaro che in realtà è già stato
+     dato. Qui si mette ogni mese a confronto: quanto risulta lordo, quanto
+     è stato versato in TOTALE fra le due forme, e se il conto torna. */
+  const meseChiaveOf = (mm,aa) => aa+'-'+String(mm).padStart(2,'0');
+  const mesiRiconc = new Set();
+  Object.keys(perMese).forEach(k => mesiRiconc.add(k));
+  (liquidazioni||[]).forEach(l => mesiRiconc.add(meseChiaveOf(l.mese, l.anno)));
+  accontiReali.filter(a=>causaleStipendio(a.causale)).forEach(a => {
+    if (a.mese_riferimento && a.anno_riferimento) mesiRiconc.add(meseChiaveOf(a.mese_riferimento, a.anno_riferimento));
+    else mesiRiconc.add(a.data.slice(0,7));
+  });
+  const ws2b = {}; let r2b = 0;
+  ws2b['!cols'] = [{wch:14},{wch:20},{wch:16},{wch:18},{wch:18},{wch:16},{wch:16},{wch:50}];
+  ws2b['!merges'] = [{s:{r:0,c:0},e:{r:0,c:7}}];
+  setCell(ws2b,'A1','RICONCILIAZIONE MENSILE — CONTROLLO DI INTEGRITÀ', sTitolo); for(let cc=1;cc<8;cc++) setCell(ws2b,XLSX.utils.encode_cell({r:0,c:cc}),'',sTitolo);
+  r2b = 1;
+  setCell(ws2b,XLSX.utils.encode_cell({r:r2b,c:0}),'Per ogni mese: lordo teorico dalle presenze, confrontato con TUTTO ciò che è stato versato per quella competenza (acconti stipendio + liquidazione finale, sommati insieme). "OK" quando il conto torna.', sNota);
+  for(let cc=1;cc<8;cc++) setCell(ws2b,XLSX.utils.encode_cell({r:r2b,c:cc}),'',sNota);
+  r2b++;
+  ['Mese','Giorni lavorati','Lordo teorico (giorni×paga)','Versato in acconti stipendio','Versato in liquidazione','Totale versato','Esito','Dettaglio'].forEach((h,i)=>setCell(ws2b,XLSX.utils.encode_cell({r:r2b,c:i}),h,sHeaderTab));
+  r2b++;
+  let altR = false;
+  Array.from(mesiRiconc).sort().forEach(k => {
+    const aa = parseInt(k.slice(0,4)), mm = parseInt(k.slice(5,7));
+    const gg = perMese[k] ? perMese[k].size : 0;
+    const pagaM = (storicoPaga && storicoPaga.length) ? (_pagaApplicabile(storicoPaga, k+'-28') ?? num(d.paga_giornaliera)) : num(d.paga_giornaliera);
+    const lordoM = num(gg * pagaM);
+    const accM = accontiReali.filter(a=>causaleStipendio(a.causale) && (
+        (a.mese_riferimento && a.anno_riferimento) ? (a.mese_riferimento===mm && a.anno_riferimento===aa) : (a.data.slice(0,7)===k)
+      )).reduce((s,a)=>s+num(a.importo),0);
+    const liqM = (liquidazioni||[]).filter(l=>l.mese===mm && l.anno===aa).reduce((s,l)=>s+num(l.importo_netto),0);
+    const totVersato = num(accM + liqM);
+    const diff = num(totVersato - lordoM);
+    const esito = Math.abs(diff) < 1 ? 'OK — combacia' : (diff < 0 ? 'residuo aperto € '+Math.abs(diff).toFixed(2) : 'versato in più € '+diff.toFixed(2));
+    const st = altR?sValoreAlt:sValore, sn = altR?sNumAlt:sNum;
+    setCell(ws2b, XLSX.utils.encode_cell({r:r2b,c:0}), MESI[mm-1].toUpperCase()+' '+aa, st);
+    setCell(ws2b, XLSX.utils.encode_cell({r:r2b,c:1}), gg, st);
+    setCell(ws2b, XLSX.utils.encode_cell({r:r2b,c:2}), lordoM, sn);
+    setCell(ws2b, XLSX.utils.encode_cell({r:r2b,c:3}), accM, sn);
+    setCell(ws2b, XLSX.utils.encode_cell({r:r2b,c:4}), liqM, sn);
+    setCell(ws2b, XLSX.utils.encode_cell({r:r2b,c:5}), totVersato, sn);
+    setCell(ws2b, XLSX.utils.encode_cell({r:r2b,c:6}), Math.abs(diff)<1?'OK':'DA VERIFICARE', Math.abs(diff)<1?sBadgeOk:sBadgeOpen);
+    setCell(ws2b, XLSX.utils.encode_cell({r:r2b,c:7}), esito, st);
+    altR = !altR; r2b++;
+  });
+  setCell(ws2b,XLSX.utils.encode_cell({r:r2b,c:0}),'Nota: il lordo teorico è giorni × paga giornaliera e non include eventuali festività non lavorate pagate comunque — piccoli scostamenti dovuti a quello sono normali, non un errore.', sNota);
+  for(let cc=1;cc<8;cc++) setCell(ws2b,XLSX.utils.encode_cell({r:r2b,c:cc}),'',sNota);
+  ws2b['!ref'] = rangeAddr(0,0,r2b+1,7);
+  ws2b['!freeze'] = { xSplit:0, ySplit:3 };
+  XLSX.utils.book_append_sheet(wb, ws2b, '3bis. Riconciliazione');
 
   /* ══════════════════════ FOGLIO 4 — PRESENZE GIORNALIERE ══════════════════════ */
   const ws3 = {}; let r3 = 0;
@@ -11011,6 +11087,8 @@ async function esportaStoricoDipendente() {
     ['APERTO / PARZIALE', 'Il periodo ha ancora un residuo da erogare.'],
     ['TFR', 'Trattamento di Fine Rapporto — stima ricostruita dalle presenze registrate in app (retribuzione mensile / 13,5 − 0,5%), non sostituisce il calcolo del consulente del lavoro.'],
     ['Saldo progressivo', 'Nel foglio "Movimenti finanziari", somma cumulata di tutti gli importi in ordine cronologico — utile per verificare il totale netto uscito in qualsiasi momento dello storico.'],
+    ['Stipendio ordinario (categoria)', 'Somma di liquidazioni mensili + acconti causale stipendio/acconto stipendio. Sono la stessa competenza pagata in una o più tranche — non due voci diverse da sommare separatamente.'],
+    ['Riconciliazione mensile', 'Foglio "3bis": per ogni mese confronta il lordo teorico con quanto risulta versato in totale (acconti + liquidazione). "OK" quando il conto torna; altrimenti segnala lo scostamento.'],
   ];
   ['Voce', 'Significato'].forEach((h,i)=>setCell(ws9,XLSX.utils.encode_cell({r:r9,c:i}),h,sHeaderTab));
   r9++;
@@ -12590,6 +12668,14 @@ async function caricaStipendi() {
           ${rests.length ? 'Restituito: <span style="color:var(--green);font-weight:600">+ € '+totRestMese.toFixed(2)+'</span>' : ''}
           <span style="color:var(--accent);cursor:pointer;margin-left:6px" onclick="const d=this.parentElement.nextElementSibling;d.style.display=d.style.display==='none'?'block':'none';this.textContent=d.style.display==='none'?'▾ dettaglio':'▴ nascondi'">▾ dettaglio</span>
         </div>
+        <!-- FIX (segnalato): quando lo stipendio del mese arriva in due
+             pezzi — un acconto durante il mese + il saldo finale con
+             Liquida — le due righe sopra, lette separatamente, davano
+             l'impressione che il dipendente avesse ricevuto solo il saldo
+             finale, non la somma delle due. Questa riga mostra subito il
+             totale versato per lo stipendio di questo mese, sommando le due
+             voci, senza dover fare il conto a mente. -->
+        ${(accsStipendio.length && liqRiga) ? '<div style="font-size:11px;font-weight:700;color:var(--text);margin:-4px 0 8px">Totale versato per lo stipendio di questo mese: € '+(totAcc + parseFloat(liquidatiMap[d.id].bonifico||0)+parseFloat(liquidatiMap[d.id].contanti||0)).toFixed(2)+'</div>' : ''}
         <div style="display:none">
           ${(accs.length || liqRiga) ? '<div style="border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:10px"><div style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Pagamenti effettuati</div>'+accHtml+'<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;padding:6px 0 0;color:var(--red)"><span>Totale acconti</span><span>- € '+totAcc.toFixed(2)+'</span></div>'+(liqRiga?'<div style="font-size:10px;color:var(--muted);margin-top:2px">Il saldo/acconto stipendio evidenziato sopra non è incluso in questo totale — è un pagamento a parte, non un anticipo.</div>':'')+'</div>' : ''}
           ${rests.length ? '<div style="border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:10px"><div style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Restituzioni ricevute</div>'+restHtml+'<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;padding:6px 0 0;color:var(--green)"><span>Totale restituito</span><span>+ € '+totRestMese.toFixed(2)+'</span></div></div>' : ''}
