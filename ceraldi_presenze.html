@@ -1012,7 +1012,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div id="app" style="display:none">
 
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.187</span></div>
+    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.188</span></div>
     <span class="topbar-badge" id="role-badge"></span>
     <button class="btn-topbar" onclick="ricaricaApp()" title="Ricarica la pagina (per essere sicuro di avere l'ultima versione)" style="padding:6px 10px">🔄</button>
     <button id="btn-promemoria" class="btn-topbar" onclick="apriPromemoria()" style="display:none;position:relative;padding:6px 10px">
@@ -10452,8 +10452,19 @@ async function apriLiquidazioneCompleta() {
   const erogatoTfr = (accontiTutti||[]).filter(a=>a.causale==='acconto_tfr').reduce((s,a)=>s+parseFloat(a.importo),0);
   const tfrResiduo = Math.max(0, tfrTotale - erogatoTfr);
 
-  // ── Acconti erogati totali (informativo — già scorporati singolarmente sopra, non si sottraggono di nuovo) ──
-  const accontiTotaliStorico = (accontiTutti||[]).reduce((s,a)=>s+parseFloat(a.importo),0);
+  // ── Acconti erogati per categoria (informativo — già scorporati singolarmente
+  //    sopra, non si sottraggono di nuovo). Spacchettati per tipo: un unico
+  //    totale indistinto che somma stipendio + TFR + 13a + 14a non dice nulla
+  //    di utile a chi legge. Le righe a 0€ (marcatori "periodo saldato") sono
+  //    escluse: non sono denaro, sporcherebbero il totale.
+  const accontiPerCausale = {};
+  (accontiTutti||[]).forEach(a => {
+    const imp = parseFloat(a.importo) || 0;
+    if (imp === 0) return;
+    const k = ({ stipendio:'Stipendio', acconto_stipendio:'Acconto stipendio', acconto_tfr:'Acconto TFR', acconto_13:'Acconto 13ª', acconto_14:'Acconto 14ª', ferie_non_godute:'Ferie non godute', straordinari:'Straordinari', altro:'Altro' }[a.causale] || 'Altro');
+    accontiPerCausale[k] = (accontiPerCausale[k] || 0) + imp;
+  });
+  const accontiTotaliStorico = Object.values(accontiPerCausale).reduce((s,v)=>s+v, 0);
 
   const totaleFinale = stipendioInCorso + arretratoTotale + mat13.residuo + mat14.residuo + ferieValore + tfrResiduo;
 
@@ -10461,7 +10472,7 @@ async function apriLiquidazioneCompleta() {
   _liqcUltimoCalcolo = {
     nome, dataAssunzione: d.data_assunzione, giorniLavoratiTotali, paga,
     stipendioInCorso, meseCorrenteGiaLiquidato, arretratoDettaglio, arretratoTotale,
-    mat13, mat14, ferieCalc, ferieValore, tfrTotale, erogatoTfr, tfrResiduo, accontiTotaliStorico, totaleFinale,
+    mat13, mat14, ferieCalc, ferieValore, tfrTotale, erogatoTfr, tfrResiduo, accontiTotaliStorico, accontiPerCausale, totaleFinale,
   };
 
   const riga = (l,v,opts) => '<div style="display:flex;justify-content:space-between;align-items:center;padding:'+(opts&&opts.big?'9px':'6px')+' 0'+(opts&&opts.border?';border-top:1px solid var(--border)':'')+'"><span style="font-size:'+(opts&&opts.big?'14px':'13px')+';font-weight:'+(opts&&opts.big?'800':'600')+'">'+l+'</span><span style="font-size:'+(opts&&opts.big?'16px':'13px')+';font-weight:'+(opts&&opts.big?'800':'700')+';color:'+(v<0?'var(--red)':'var(--text)')+'">€ '+v.toFixed(2)+'</span></div>';
@@ -10504,8 +10515,9 @@ async function apriLiquidazioneCompleta() {
   if (accontiTotaliStorico > 0.01) {
     html += '<div class="card" style="padding:14px;margin-bottom:12px">'
       + '<div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">📋 Acconti erogati (storico, informativo)</div>'
-      + riga('Totale acconti erogati di ogni tipo, da sempre', accontiTotaliStorico)
-      + '<div style="font-size:10px;color:var(--muted);margin-top:4px">Già scorporati singolarmente nelle voci sopra — questa riga è solo un riepilogo, non va sottratta di nuovo dal totale.</div>'
+      + Object.keys(accontiPerCausale).sort().map(k => riga(k, accontiPerCausale[k])).join('')
+      + riga('Totale erogato in acconti, da sempre', accontiTotaliStorico, {border:true})
+      + '<div style="font-size:10px;color:var(--muted);margin-top:4px">Già scorporati singolarmente nelle voci sopra — questo riquadro è solo un riepilogo, non va sottratto di nuovo dal totale.</div>'
       + '</div>';
   }
 
@@ -10543,7 +10555,9 @@ function esportaLiquidazioneCompleta() {
     + rigaDoc('TFR lordo stimato (maturato)', c.tfrTotale)
     + (c.erogatoTfr > 0.01 ? rigaDoc('Acconti TFR già erogati', -c.erogatoTfr) : '')
     + rigaDoc('Residuo TFR da accantonare', c.tfrResiduo)
-    + (c.accontiTotaliStorico > 0.01 ? ('<h2>Acconti erogati (storico)</h2>' + rigaDoc('Totale acconti erogati di ogni tipo, da sempre (già scorporati sopra)', c.accontiTotaliStorico)) : '')
+    + (c.accontiTotaliStorico > 0.01 ? ('<h2>Acconti erogati (storico)</h2>'
+        + Object.keys(c.accontiPerCausale||{}).sort().map(k => rigaDoc(k, c.accontiPerCausale[k])).join('')
+        + rigaDoc('Totale erogato in acconti, da sempre (già scorporato sopra)', c.accontiTotaliStorico)) : '')
     + '<div class="box" style="margin-top:16pt;font-size:13pt"><b>TOTALE DA LIQUIDARE: € '+c.totaleFinale.toFixed(2)+'</b></div>'
     + '<p class="nota">Ricostruita dallo storico di presenze, acconti e liquidazioni registrati in app. È una stima operativa: verificare sempre col consulente del lavoro prima di una liquidazione reale.</p>';
   try {
@@ -10575,55 +10589,165 @@ async function esportaStoricoDipendente() {
   const dipId = _anagraficaId;
   if (!dipId) return;
   toast('Preparo l\'export…');
-  const [{ data: d }, { data: presenze }, { data: acconti }, { data: restituzioni }, { data: assenze }, { data: liquidazioni }] = await Promise.all([
-    sb.from('presenze_profili').select('nome,cognome,data_assunzione,paga_giornaliera').eq('id', dipId).single(),
+  const [{ data: d }, { data: presenze }, { data: acconti }, { data: restituzioni }, { data: assenze }, { data: liquidazioni }, { data: storicoPaga }] = await Promise.all([
+    sb.from('presenze_profili').select('nome,cognome,data_assunzione,paga_giornaliera,tipo_contratto,ferie_annuali,ferie_godute_extra').eq('id', dipId).single(),
     sb.from('presenze').select('data,tipo_timbratura,confermata_dip').eq('dipendente_id', dipId).order('data'),
-    sb.from('presenze_acconti').select('data,importo,causale,modalita,note,letto_dip,periodo_anno_inizio,saldo_periodo').eq('dipendente_id', dipId).order('data'),
-    sb.from('presenze_restituzioni').select('data,importo,modalita,note').eq('dipendente_id', dipId).order('data'),
+    sb.from('presenze_acconti').select('data,importo,causale,modalita,note,letto_dip,periodo_anno_inizio,saldo_periodo,mese_riferimento,anno_riferimento').eq('dipendente_id', dipId).order('data'),
+    sb.from('presenze_restituzioni').select('data,importo,modalita,note,mese_riferimento,anno_riferimento').eq('dipendente_id', dipId).order('data'),
     sb.from('presenze_assenze').select('tipo,data_inizio,data_fine,stato').eq('dipendente_id', dipId).order('data_inizio'),
     sb.from('presenze_liquidazioni').select('mese,anno,importo_netto,bonifico,contanti,causale,confermata_dip,creato_il').eq('dipendente_id', dipId).order('anno').order('mese'),
+    sb.from('presenze_storico_paga').select('paga_giornaliera,data_decorrenza').eq('dipendente_id', dipId).order('data_decorrenza'),
   ]);
   if (!d) { toast('Dipendente non trovato'); return; }
   const nome = d.nome+(d.cognome?' '+d.cognome:'');
   const causaleLbl = c => ({ stipendio:'Stipendio', acconto_stipendio:'Acconto stipendio', acconto_tfr:'Acconto TFR', acconto_13:'Acconto 13ª', acconto_14:'Acconto 14ª', ferie_non_godute:'Ferie non godute', straordinari:'Straordinari', altro:'Altro' }[c] || (c||'Stipendio'));
+  // Date SEMPRE in formato italiano leggibile (gg/mm/aaaa): l'ISO grezzo
+  // "2026-08-13" è illeggibile a colpo d'occhio e ordina male in Excel se
+  // interpretato come testo.
+  const dIT = iso => iso ? (iso.slice(8,10)+'/'+iso.slice(5,7)+'/'+iso.slice(0,4)) : '';
+  const meseLbl = (mm,aa) => new Date(aa, mm-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
+  const periodo1314 = a => !a.periodo_anno_inizio ? ''
+    : (a.causale==='acconto_13' ? ('gen–dic '+a.periodo_anno_inizio) : ('lug '+a.periodo_anno_inizio+' – giu '+(a.periodo_anno_inizio+1)))
+      + (a.saldo_periodo ? ' (SALDATO)' : '');
+  // Le correzioni storiche valgono 0€: sono marcatori di "periodo chiuso",
+  // non movimenti di cassa. Vanno tenute fuori dai totali di denaro, o
+  // sporcano ogni somma con righe che non sono soldi.
+  const isMarcatore = a => parseFloat(a.importo) === 0;
+  const num = v => Math.round((parseFloat(v)||0)*100)/100; // numero VERO, non stringa: così Excel somma
 
   const wb = XLSX.utils.book_new();
+  const addSheet = (aoa, nomeFoglio, widths) => {
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    if (widths) ws['!cols'] = widths.map(w => ({ wch: w }));
+    XLSX.utils.book_append_sheet(wb, ws, nomeFoglio);
+  };
+
+  /* ── FOGLIO 1: RIEPILOGO — i numeri che servono davvero, non solo l'anagrafica ── */
+  const giorniLavorati = new Set((presenze||[]).map(p=>p.data)).size;
+  const totLiquidato = (liquidazioni||[]).reduce((s,l)=>s+num(l.importo_netto), 0);
+  const accontiReali = (acconti||[]).filter(a=>!isMarcatore(a));
+  const totRestituito = (restituzioni||[]).reduce((s,r)=>s+num(r.importo), 0);
+  const perCausale = {};
+  accontiReali.forEach(a => { const k = causaleLbl(a.causale); perCausale[k] = (perCausale[k]||0) + num(a.importo); });
+  const giorniAssenza = t => (assenze||[]).filter(a=>a.tipo===t && a.stato==='approvata')
+    .reduce((s,a)=> s + (Math.round((new Date(a.data_fine)-new Date(a.data_inizio))/86400000)+1), 0);
 
   const F0 = [
-    ['Storico completo — '+nome],
-    ['Assunto il', d.data_assunzione ? new Date(d.data_assunzione).toLocaleDateString('it-IT') : ''],
-    ['Paga giornaliera attuale', parseFloat(d.paga_giornaliera||0).toFixed(2)],
+    ['STORICO COMPLETO — '+nome],
     ['Esportato il', new Date().toLocaleDateString('it-IT')],
+    [],
+    ['ANAGRAFICA'],
+    ['Assunto il', d.data_assunzione ? dIT(d.data_assunzione) : '—'],
+    ['Tipo contratto', d.tipo_contratto || '—'],
+    ['Paga giornaliera attuale', num(d.paga_giornaliera)],
+    ['Ferie annuali spettanti (giorni)', d.ferie_annuali || 26],
+    [],
+    ['PRESENZE'],
+    ['Giorni lavorati totali (da sempre)', giorniLavorati],
+    ['Giorni di ferie approvate', giorniAssenza('ferie')],
+    ['Giorni di malattia approvati', giorniAssenza('malattia')],
+    [],
+    ['DENARO — TOTALI STORICI'],
+    ['Totale liquidato (stipendi mensili)', totLiquidato],
   ];
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(F0), 'Riepilogo');
+  Object.keys(perCausale).sort().forEach(k => F0.push(['Totale '+k.toLowerCase(), perCausale[k]]));
+  F0.push(['Totale restituito dal dipendente', totRestituito]);
+  F0.push(['TOTALE NETTO USCITO (liquidazioni + acconti − restituzioni)',
+    num(totLiquidato + accontiReali.reduce((s,a)=>s+num(a.importo),0) - totRestituito)]);
+  F0.push([]);
+  F0.push(['Nota: le righe a €0,00 con causale "Correzione storica" non sono movimenti di cassa —']);
+  F0.push(['servono solo a marcare come chiuso un periodo di 13ª/14ª pagato prima che l\'app lo registrasse.']);
+  addSheet(F0, 'Riepilogo', [52, 18]);
 
-  const F1 = [['Data','Tipo timbratura','Confermata dal dipendente']];
-  (presenze||[]).forEach(p => F1.push([p.data, p.tipo_timbratura||'', p.confermata_dip===false?'No':'Sì']));
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(F1), 'Presenze');
-
-  const F2 = [['Data','Importo €','A cosa si riferisce','Modalità','Confermato dal dipendente','Periodo saldato','Note']];
-  (acconti||[]).forEach(a => {
-    const periodoTxt = a.periodo_anno_inizio
-      ? (a.causale==='acconto_13' ? ('gen/'+a.periodo_anno_inizio+'–dic/'+a.periodo_anno_inizio) : ('lug/'+a.periodo_anno_inizio+'–giu/'+(a.periodo_anno_inizio+1))) + (a.saldo_periodo ? ' — saldato' : '')
-      : '';
-    F2.push([a.data, parseFloat(a.importo).toFixed(2), causaleLbl(a.causale), a.modalita||'', a.letto_dip?'Sì':'No', periodoTxt, a.note||'']);
+  /* ── FOGLIO 2: MOVIMENTI — tutto il denaro in UN unico elenco cronologico,
+       con segno e saldo progressivo. È il foglio che prima mancava del tutto:
+       i soldi erano sparsi su 3 fogli separati, impossibile seguirli. ── */
+  const mov = [];
+  (liquidazioni||[]).forEach(l => {
+    const dataRif = l.creato_il ? l.creato_il.slice(0,10) : (l.anno+'-'+String(l.mese).padStart(2,'0')+'-28');
+    mov.push({ data: dataRif, tipo: 'Liquidazione stipendio', competenza: meseLbl(l.mese, l.anno),
+      importo: num(l.importo_netto), modalita: [l.bonifico>0?'bonifico €'+num(l.bonifico):null, l.contanti>0?'contanti €'+num(l.contanti):null].filter(Boolean).join(' + '),
+      conf: l.confermata_dip?'Sì':'No', note: '' });
   });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(F2), 'Acconti');
+  (acconti||[]).forEach(a => {
+    if (isMarcatore(a)) {
+      mov.push({ data: a.data, tipo: 'Correzione storica (non è denaro)', competenza: periodo1314(a),
+        importo: 0, modalita: '', conf: '', note: a.note||'' });
+      return;
+    }
+    const comp = periodo1314(a) || (a.mese_riferimento && a.anno_riferimento ? meseLbl(a.mese_riferimento, a.anno_riferimento) : '');
+    mov.push({ data: a.data, tipo: causaleLbl(a.causale), competenza: comp,
+      importo: num(a.importo), modalita: a.modalita||'', conf: a.letto_dip?'Sì':'No', note: a.note||'' });
+  });
+  (restituzioni||[]).forEach(r => {
+    mov.push({ data: r.data, tipo: 'Restituzione dal dipendente', competenza: (r.mese_riferimento && r.anno_riferimento) ? meseLbl(r.mese_riferimento, r.anno_riferimento) : '',
+      importo: -num(r.importo), modalita: r.modalita||'', conf: '', note: r.note||'' });
+  });
+  mov.sort((a,b) => a.data === b.data ? 0 : (a.data < b.data ? -1 : 1));
+  const F1 = [['Data','Movimento','Competenza / periodo','Importo €','Saldo progressivo €','Modalità','Confermato dal dipendente','Note']];
+  let saldo = 0;
+  mov.forEach(x => { saldo = num(saldo + x.importo); F1.push([dIT(x.data), x.tipo, x.competenza, x.importo, saldo, x.modalita, x.conf, x.note]); });
+  F1.push([]);
+  F1.push(['', 'TOTALE NETTO USCITO', '', num(saldo), '', '', '', '']);
+  addSheet(F1, 'Movimenti (tutto)', [12, 26, 24, 12, 18, 22, 14, 60]);
 
-  const F3 = [['Data','Importo €','Modalità','Note']];
-  (restituzioni||[]).forEach(r => F3.push([r.data, parseFloat(r.importo).toFixed(2), r.modalita||'', r.note||'']));
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(F3), 'Restituzioni');
+  /* ── FOGLIO 3: PRESENZE PER MESE — prima c'era solo l'elenco giorno per
+       giorno (centinaia/migliaia di righe): illeggibile per capire un mese. ── */
+  const perMese = {};
+  (presenze||[]).forEach(p => { const k = p.data.slice(0,7); (perMese[k] = perMese[k] || new Set()).add(p.data); });
+  const F2 = [['Mese','Giorni lavorati','Paga giornaliera del periodo €','Lordo teorico del mese €']];
+  let totGg = 0, totLordo = 0;
+  Object.keys(perMese).sort().forEach(k => {
+    const gg = perMese[k].size;
+    const pagaM = (typeof _pagaApplicabile === 'function' && storicoPaga && storicoPaga.length)
+      ? (_pagaApplicabile(storicoPaga, k+'-28') ?? num(d.paga_giornaliera)) : num(d.paga_giornaliera);
+    const lordo = num(gg * pagaM);
+    totGg += gg; totLordo = num(totLordo + lordo);
+    F2.push([meseLbl(parseInt(k.slice(5,7)), parseInt(k.slice(0,4))), gg, num(pagaM), lordo]);
+  });
+  F2.push([]);
+  F2.push(['TOTALE', totGg, '', totLordo]);
+  addSheet(F2, 'Presenze per mese', [22, 16, 28, 24]);
 
+  /* ── FOGLIO 4: dettaglio giorno per giorno (resta disponibile, ma non è più
+       l'unico modo di leggere le presenze) ── */
+  const F3 = [['Data','Giorno','Tipo timbratura','Confermata dal dipendente']];
+  (presenze||[]).forEach(p => F3.push([dIT(p.data), new Date(p.data+'T00:00:00').toLocaleDateString('it-IT',{weekday:'long'}), p.tipo_timbratura||'', p.confermata_dip===false?'No':'Sì']));
+  addSheet(F3, 'Presenze (dettaglio)', [12, 14, 20, 24]);
+
+  /* ── FOGLIO 5: ferie e assenze, con i giorni già calcolati ── */
   const F4 = [['Tipo','Dal','Al','Giorni','Stato']];
   (assenze||[]).forEach(a => {
     const giorni = Math.round((new Date(a.data_fine)-new Date(a.data_inizio))/86400000)+1;
-    F4.push([a.tipo||'', a.data_inizio, a.data_fine, giorni, a.stato||'']);
+    F4.push([a.tipo||'', dIT(a.data_inizio), dIT(a.data_fine), giorni, a.stato||'']);
   });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(F4), 'Ferie e malattie');
+  F4.push([]);
+  F4.push(['Ferie approvate (totale giorni)', '', '', giorniAssenza('ferie'), '']);
+  F4.push(['Malattia approvata (totale giorni)', '', '', giorniAssenza('malattia'), '']);
+  addSheet(F4, 'Ferie e assenze', [16, 12, 12, 10, 14]);
 
-  const F5 = [['Mese','Anno','Netto €','Bonifico €','Contanti €','Tipo','Confermata dal dipendente','Registrata il']];
-  (liquidazioni||[]).forEach(l => F5.push([l.mese, l.anno, parseFloat(l.importo_netto||0).toFixed(2), parseFloat(l.bonifico||0).toFixed(2), parseFloat(l.contanti||0).toFixed(2), causaleLbl(l.causale), l.confermata_dip?'Sì':'No', l.creato_il ? l.creato_il.slice(0,10) : '']));
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(F5), 'Liquidazioni');
+  /* ── FOGLIO 6: stato 13ª/14ª per periodo — a colpo d'occhio quali periodi
+       sono chiusi e quali no, invece di doverlo dedurre dai movimenti ── */
+  const F5 = [['Mensilità','Periodo','Versato €','Stato','Data registrazione','Note']];
+  const perPeriodo = {};
+  (acconti||[]).filter(a => a.causale==='acconto_13' || a.causale==='acconto_14').forEach(a => {
+    const k = a.causale+'|'+(a.periodo_anno_inizio != null ? a.periodo_anno_inizio : ('data:'+a.data.slice(0,4)));
+    if (!perPeriodo[k]) perPeriodo[k] = { causale: a.causale, anno: a.periodo_anno_inizio, versato: 0, saldato: false, date: [], note: [] };
+    perPeriodo[k].versato = num(perPeriodo[k].versato + num(a.importo));
+    if (a.saldo_periodo) perPeriodo[k].saldato = true;
+    perPeriodo[k].date.push(dIT(a.data));
+    if (a.note) perPeriodo[k].note.push(a.note);
+  });
+  Object.values(perPeriodo).sort((x,y) => (x.anno||0)-(y.anno||0)).forEach(p => {
+    const periodoTxt = p.anno == null ? '(periodo non specificato)'
+      : (p.causale==='acconto_13' ? ('gen–dic '+p.anno) : ('lug '+p.anno+' – giu '+(p.anno+1)));
+    F5.push([p.causale==='acconto_13'?'13ª':'14ª', periodoTxt, p.versato,
+      p.saldato ? 'SALDATO' : 'aperto / parziale', p.date.join(', '), p.note.join(' | ')]);
+  });
+  const totTfr = (acconti||[]).filter(a=>a.causale==='acconto_tfr').reduce((s,a)=>s+num(a.importo),0);
+  F5.push([]);
+  F5.push(['TFR', 'Acconti TFR erogati (totale)', totTfr, '', '', '']);
+  addSheet(F5, '13ª 14ª e TFR', [12, 26, 14, 20, 26, 50]);
 
   XLSX.writeFile(wb, 'storico_'+nome.replace(/\s+/g,'_')+'.xlsx');
   toast('✓ Storico esportato');
