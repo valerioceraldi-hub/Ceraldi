@@ -2636,8 +2636,14 @@ function gb(p){
   // Check manual override first (ora colonna del prodotto, sincronizzata su Cloud)
   var ov=p.best_override;
   if(ov&&p.prices[ov]!==undefined&&validNames[ov.toLowerCase()])return{name:ov,price:p.prices[ov]};
-  // Then check product's own best field (solo se ancora un fornitore valido)
-  var bn=p.best||'';if(bn&&p.prices[bn]!==undefined&&validNames[bn.toLowerCase()])return{name:bn,price:p.prices[bn]};
+  // FIX (25/08, Valerio: "mi da fine fornitore scelto quello che ha il prezzo
+  // più alto"): il campo p.best era una cache calcolata al momento
+  // dell'ultimo aggiornamento prezzo e non veniva ricontrollata contro i
+  // prezzi attuali — se un altro fornitore scendeva sotto quel prezzo dopo,
+  // p.best restava quello vecchio e veniva usato ciecamente. Ora si calcola
+  // SEMPRE il prezzo più basso live dai prezzi correnti; il pin manuale
+  // (best_override, sopra) resta l'unico modo per forzare un fornitore.
+  var bn='';
   // Calculate best price respecting supplier priority order
   var bv=Infinity,ks=Object.keys(p.prices);
   // Escludi chiavi orfane: nomi che non corrispondono più a nessun fornitore attuale
@@ -3305,6 +3311,13 @@ function renderSflSection(container){
 
 function renderCart(){
   var B=document.getElementById('cart-body');
+  // FIX (25/08, Valerio: "cambio fornitore e devi scorrere e non capisci
+  // niente"): ogni cambio fornitore ricostruisce tutta la lista (necessario,
+  // perché il prodotto passa al gruppo del nuovo fornitore), ma prima non si
+  // salvava la posizione di scroll: si tornava sempre in cima e bisognava
+  // ritrovare il prodotto scorrendo a mano. Ora la posizione viene salvata
+  // prima del rebuild e ripristinata subito dopo.
+  var _scrollY=B.scrollTop;
   B.innerHTML='';
   // Aggiorna il tasto 🕐 nell'header del carrello
   var sflBtn=document.getElementById('cart-sfl-btn');
@@ -3478,6 +3491,16 @@ function renderCart(){
             S.orderSupOverride[pid]=sname;
             if(S.cart[pid])delete S.cart[pid]._freeSupplier;
             scartov();
+            // FIX (25/08, Valerio: "il fornitore torna a quello originario
+            // dopo qualche secondo"): questa modifica veniva salvata solo in
+            // localStorage, MAI ripianificata su Drive. Il poll ogni 30s
+            // trovava quindi ancora il vecchio backup su Drive e lo
+            // considerava "più recente" (bug di temporizzazione separato,
+            // corretto qui sotto in gdSaveNow), sovrascrivendo silenziosamente
+            // il fornitore appena scelto. Ora ogni cambio fornitore
+            // riprogramma anche il backup su Drive, come già fa aggiungere
+            // un prodotto al carrello.
+            if(typeof saveAutoBackup==='function')saveAutoBackup();
             renderCart();
           };})(e.pid,s2.name);
           pills.appendChild(pill);
@@ -3495,7 +3518,7 @@ function renderCart(){
           var w=document.createElement('div');w.id='free-sup-wrap-'+pid;w.style.cssText='margin-top:4px';
           var inp=document.createElement('input');inp.type='text';inp.className='free-sup-inp';
           inp.placeholder='Nome fornitore libero...';inp.value=S.cart[pid]&&S.cart[pid]._freeSupplier||'';
-          inp.oninput=function(){if(S.cart[pid]){S.cart[pid]._freeSupplier=this.value.trim();S.orderSupOverride[pid]=this.value.trim();scartov();}};
+          inp.oninput=function(){if(S.cart[pid]){S.cart[pid]._freeSupplier=this.value.trim();S.orderSupOverride[pid]=this.value.trim();scartov();if(typeof saveAutoBackup==='function')saveAutoBackup();}};
           inp.onblur=function(){renderCart();};
           w.appendChild(inp);cp.insertAdjacentElement('afterend',w);setTimeout(function(){inp.focus();},50);
         };})(e.pid,freePill,pills);
@@ -3572,6 +3595,7 @@ function renderCart(){
     sr.appendChild(pdfb);ob.appendChild(sr);obDiv.appendChild(ob);
   });
   B.appendChild(obDiv);
+  B.scrollTop=_scrollY;
 }
 
 function buildMsg(sn){
@@ -9216,11 +9240,22 @@ function gdSaveNow(){
   gdEnsureToken(function(ok){
     if(!ok){GD.syncing=false;if(dot)dot.style.opacity='0';if(txt)txt.textContent='☁️ Drive connesso';return;}
     gdEnsureFolder(function(fid){
-      var data=JSON.stringify(buildBackupData(),null,2);
+      var backupData=buildBackupData();
+      var data=JSON.stringify(backupData,null,2);
       var blob=new Blob([data],{type:'application/json'});
       var done=function(){
         var now=new Date().toISOString();
         GD.syncing=false;localStorage.setItem('gd_last_sync',now);
+        // FIX (25/08, Valerio: fornitore che torna indietro da solo): buildBackupData()
+        // timbra il json con l'ora di QUANDO viene caricato (qui, fino a 10s dopo
+        // l'ultima saveAutoBackup() per via del debounce), ma 'ceraldi_autobackup_date'
+        // locale restava fermo all'ora della saveAutoBackup(). Il poll ogni 30s
+        // trovava quindi quasi SEMPRE driveDate > localDate+5000, anche senza nessuna
+        // modifica reale nel frattempo, e riapplicava il backup su Drive sopra allo
+        // stato locale — cancellando modifiche fatte nel frattempo (es. cambio
+        // fornitore) mai ripianificate su Drive. Ora la data locale viene allineata
+        // a quella effettivamente caricata, cosi il confronto riflette solo modifiche vere.
+        localStorage.setItem('ceraldi_autobackup_date',backupData.date);
         if(dot)dot.style.opacity='0';
         if(txt)txt.textContent='☁️ Drive connesso';
         gdUpdateSyncTime(now);
