@@ -3238,6 +3238,14 @@ function saveForLater(pid){
   if(!S.cart[pid])return;
   if(!S.savedForLater)S.savedForLater={};
   S.savedForLater[pid]=JSON.parse(JSON.stringify(S.cart[pid]));
+  // FIX (26/08, Valerio: "tolgo Ferrarelle da Europa, la metto su Siro, salvo
+  // per dopo, ripristino e torna a Europa"): il fornitore scelto per QUESTO
+  // ordine vive in S.orderSupOverride, una mappa separata dall'oggetto
+  // carrello — veniva cancellata qui sotto e MAI portata dentro il record
+  // salvato, quindi al ripristino il prodotto ripartiva sempre dal
+  // fornitore più economico calcolato automaticamente (gb()). Ora la
+  // scelta viene salvata dentro il record e rimessa al ripristino.
+  if(S.orderSupOverride[pid]!==undefined)S.savedForLater[pid]._savedSupOverride=S.orderSupOverride[pid];
   delete S.cart[pid];
   delete S.orderSupOverride[pid];
   ssfl();updateBadge();
@@ -3252,8 +3260,13 @@ function restoreFromSfl(pid){
   pid=parseInt(pid,10);
   if(!S.savedForLater||!S.savedForLater[pid])return;
   S.cart[pid]=JSON.parse(JSON.stringify(S.savedForLater[pid]));
+  // Rimette il fornitore che era stato scelto prima di salvare per dopo (v. saveForLater)
+  if(S.cart[pid]._savedSupOverride!==undefined){
+    S.orderSupOverride[pid]=S.cart[pid]._savedSupOverride;
+    delete S.cart[pid]._savedSupOverride;
+  }
   delete S.savedForLater[pid];
-  ssfl();updateBadge();updateSavedNavBadge();
+  ssfl();scartov();updateBadge();updateSavedNavBadge();
   document.querySelectorAll('[data-pid="'+pid+'"]').forEach(function(el){
     if(el.classList.contains('pcard'))el.classList.add('in-cart');
   });
@@ -3283,9 +3296,16 @@ function renderSflSection(container){
     Object.keys(S.savedForLater).forEach(function(pid){
       pid=parseInt(pid,10);
       if(S.cart[pid]){S.cart[pid].qty+=S.savedForLater[pid].qty;}
-      else{S.cart[pid]=JSON.parse(JSON.stringify(S.savedForLater[pid]));}
+      else{
+        S.cart[pid]=JSON.parse(JSON.stringify(S.savedForLater[pid]));
+        // Stessa correzione di restoreFromSfl: rimette il fornitore salvato
+        if(S.cart[pid]._savedSupOverride!==undefined){
+          S.orderSupOverride[pid]=S.cart[pid]._savedSupOverride;
+          delete S.cart[pid]._savedSupOverride;
+        }
+      }
     });
-    S.savedForLater={};ssfl();updateBadge();updateSavedNavBadge();
+    S.savedForLater={};ssfl();scartov();updateBadge();updateSavedNavBadge();
     renderCart();toast('↩ Tutti rimessi nel carrello',2000);
   };
   lbl.appendChild(restAllBtn);
@@ -3544,6 +3564,10 @@ function renderCart(){
       // Mantieni la chiave originale (può essere stringa o numero), niente parseInt
       if(!S.cart[pid])return;
       S.savedForLater[pid]=JSON.parse(JSON.stringify(S.cart[pid]));
+      // Stessa correzione di saveForLater: porta con sé il fornitore scelto
+      // per questo ordine, altrimenti "Salva tutto" lo cancellava per OGNI
+      // prodotto in un colpo solo (S.orderSupOverride={} qui sotto).
+      if(S.orderSupOverride[pid]!==undefined)S.savedForLater[pid]._savedSupOverride=S.orderSupOverride[pid];
       moved++;
       document.querySelectorAll('[data-pid="'+pid+'"]').forEach(function(el){
         if(el.classList.contains('pcard'))el.classList.remove('in-cart');
@@ -3586,10 +3610,23 @@ function renderCart(){
     pdfb.style.background='var(--gold)';
     pdfb.textContent='📄 Invia ordine';
     pdfb.onclick=(function(s){return function(){
-      showOrderPreview(s,function(){
-        buildOrderPDF(s);
-        saveHist(s,'w');
-        clearCartForSupplier(s);
+      // FIX (26/08, Valerio: "invio ordine a Europa, i prodotti tornano a
+      // Emilio Cristiani"): buildOrderPDF/saveHist/clearCartForSupplier
+      // ricalcolavano CIASCUNO il raggruppamento da capo al momento
+      // dell'invio vero e proprio (dopo che l'utente ha guardato
+      // l'anteprima e confermato) invece di usare gli stessi identici
+      // prodotti mostrati nell'anteprima. Se nel frattempo il fornitore di
+      // un prodotto veniva anche solo momentaneamente ripristinato (es. dal
+      // sync Drive), il ricalcolo non lo trovava più nel gruppo giusto:
+      // veniva "inviato" un elenco diverso da quello confermato, e i
+      // prodotti restavano nel carrello sotto il vecchio fornitore. Ora
+      // l'anteprima congela l'elenco esatto al momento dell'apertura e lo
+      // passa a tutta la catena, cosi quello che vedi e conferma è
+      // ESATTAMENTE quello che viene inviato, storicizzato e rimosso.
+      showOrderPreview(s,function(confirmedEntries){
+        buildOrderPDF(s,confirmedEntries);
+        saveHist(s,'w',confirmedEntries);
+        clearCartForSupplier(s,confirmedEntries);
       });
     };})(sup);
     sr.appendChild(pdfb);ob.appendChild(sr);obDiv.appendChild(ob);
@@ -3625,9 +3662,11 @@ function buildMsgH(r){
   lines.push('');lines.push('Grazie per la disponibilità e buona giornata!');lines.push('Caffetteria Ceraldi');
   return lines.join('\n');
 }
-function clearCartForSupplier(sn){
-  var groups=groupBySup();
-  var items=groups[sn]||[];
+function clearCartForSupplier(sn,entries){
+  // Se arriva uno snapshot già confermato (dall'anteprima ordine), usa
+  // quello — è l'elenco esatto che l'utente ha visto e confermato. Solo
+  // se manca (altri eventuali chiamanti) si ricalcola da capo.
+  var items=entries||(groupBySup()[sn]||[]);
   items.forEach(function(e){delete S.cart[e.pid];delete S.orderSupOverride[e.pid];if(S.cartNotes)delete S.cartNotes[e.pid];});scartnotes();
   updateBadge();
   // Backup immediato su Drive dopo OGNI invio ordine, anche se il carrello
@@ -3649,8 +3688,9 @@ function clearCartForSupplier(sn){
     renderCart();
   }
 }
-function saveHist(sn,ch){
-  var g=groupBySup(),e2=g[sn]||[];if(!e2.length)return;
+function saveHist(sn,ch,entries){
+  var e2=entries||(groupBySup()[sn]||[]);
+  if(!e2.length)return;
   var ne=document.getElementById('note');
   var items=e2.map(function(e){var price=gp(e.item.product,sn)||0;return{name:e.item.product.name,conf:e.item.product.conf,qty:e.item.qty,price:price,note:e.note||''};});
   var total=items.reduce(function(s,it){return s+it.price*it.qty;},0);
@@ -5334,7 +5374,7 @@ function showOrderPreview(supName, onConfirm) {
   var sendBtn = document.createElement('button');
   sendBtn.style.cssText = 'flex:2;padding:12px;border-radius:11px;border:none;background:var(--gold);color:#fff;font-size:14px;font-weight:700;cursor:pointer';
   sendBtn.textContent = 'Conferma e invia';
-  sendBtn.onclick = function() { document.body.removeChild(overlay); onConfirm(); };
+  sendBtn.onclick = function() { document.body.removeChild(overlay); onConfirm(entries); };
 
   foot.appendChild(cancelBtn); foot.appendChild(sendBtn);
   sheet.appendChild(handle); sheet.appendChild(hdr); sheet.appendChild(body); sheet.appendChild(foot);
@@ -5873,10 +5913,7 @@ function buildPDFHtml(supName, entries, note, total){
   var d=new Date().toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'});
   var rows='';
   entries.forEach(function(e){
-    var activeSup=S.orderSupOverride[e.pid]||supName;
-    var price=(e.item.price!=null)?e.item.price:(gp(e.item.product,activeSup)||0);
-    var sub=Math.round(price*e.item.qty*100)/100;
-    var bg=rows.split('<tr').length%2===0?'#f9f6f2':'#fff';
+    var activeSup=e.supOverride||supName;
     rows+='<tr style="background:'+bg+'">'
       +'<td style="padding:9px 12px;border-bottom:1px solid #eee;font-size:12px">'+e.item.product.name+(e.note?'<div style="font-size:10.5px;color:#c8873a;font-style:italic;font-weight:600;margin-top:3px">\ud83d\udcdd '+e.note+'</div>':'')+'</td>'
       +'<td style="padding:9px 12px;border-bottom:1px solid #eee;font-size:12px;text-align:center;color:#666">'+e.item.product.conf+'</td>'
@@ -5976,15 +6013,14 @@ function _ensureJsPDF(cb){
   tryNext(0);
 }
 
-function buildOrderPDF(supName){
-  var groups=groupBySup();
-  var entries=groups[supName]||[];
+function buildOrderPDF(supName,snapshotEntries){
+  var entries=snapshotEntries||(groupBySup()[supName]||[]);
   if(!entries.length){toast('Nessun prodotto per '+supName);return;}
   var noteEl=document.getElementById('note');
   var note=noteEl?noteEl.value.trim():'';
   var total=0;
   entries.forEach(function(e){
-    var activeSup=S.orderSupOverride[e.pid]||supName;
+    var activeSup=e.supOverride||supName;
     var price=gp(e.item.product,activeSup)||0;
     total+=Math.round(price*e.item.qty*100)/100;
   });
@@ -6046,10 +6082,7 @@ function _sharePDF(supName,entries,note,total,jsPDF){
     entries.forEach(function(e,idx){
       var thisRowH=rowH+(e.note?noteRowH:0);
       if(y+thisRowH>ph-20){doc.addPage();y=margin;}
-      var activeSup=S.orderSupOverride&&S.orderSupOverride[e.pid]||supName;
-      var price=(e.item.price!=null)?e.item.price:(gp(e.item.product,activeSup)||0);
-      var sub=Math.round(price*e.item.qty*100)/100;
-      doc.setFillColor(idx%2===0?255:249,idx%2===0?255:246,idx%2===0?255:242);
+      var activeSup=e.supOverride||supName;
       doc.rect(margin,y,cw,thisRowH,'F');
       doc.setDrawColor(238,238,238);doc.setLineWidth(0.2);doc.line(margin,y+thisRowH,margin+cw,y+thisRowH);
       doc.setFont('helvetica','normal');doc.setFontSize(8);doc.setTextColor(40,40,40);
@@ -6142,7 +6175,7 @@ function _showPDFPreviewInApp(supName,entries,note,total){
   }
   var tbl=document.createElement('div');tbl.style.cssText='background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:14px';
   entries.forEach(function(e,idx){
-    var activeSup=S.orderSupOverride&&S.orderSupOverride[e.pid]||supName;
+    var activeSup=e.supOverride||supName;
     var price=(e.item.price!=null)?e.item.price:(gp(e.item.product,activeSup)||0);
     var sub=Math.round(price*e.item.qty*100)/100;
     var row=document.createElement('div');
@@ -6176,6 +6209,8 @@ function _showPDFPreviewInApp(supName,entries,note,total){
       var pid=e.pid;
       if(S.cart[pid]){
         S.savedForLater[pid]=JSON.parse(JSON.stringify(S.cart[pid]));
+        // Stessa correzione di saveForLater: preserva il fornitore scelto
+        if(S.orderSupOverride[pid]!==undefined)S.savedForLater[pid]._savedSupOverride=S.orderSupOverride[pid];
         delete S.cart[pid];
         delete S.orderSupOverride[pid];
         moved++;
