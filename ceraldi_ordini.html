@@ -3635,18 +3635,30 @@ function renderCart(){
   B.scrollTop=_scrollY;
 }
 
-function buildMsg(sn){
-  var g=groupBySup(),e2=g[sn]||[];if(!e2.length)return'';
+function buildMsg(sn,snapshotEntries,snapshotTotal){
+  // FIX (26/08, Valerio: "è cambiata la schermata, non mi permette di
+  // condividere l'ordine"): quando jsPDF non riesce a caricarsi (CDN lento
+  // o bloccato) si arriva alla schermata di riserva con tasto "Condividi
+  // testo". A quel punto l'ordine è GIA' stato registrato e il carrello
+  // GIA' svuotato (clearCartForSupplier gira subito dopo l'anteprima,
+  // prima ancora che il PDF finisca di generarsi). buildMsg ricalcolava il
+  // messaggio dal carrello LIVE — ormai vuoto — e restituiva una stringa
+  // vuota: "Condividi" sembrava non fare nulla. Ora usa l'elenco già
+  // congelato al momento dell'invio, se disponibile.
+  var e2=snapshotEntries;
+  if(!e2){var g=groupBySup();e2=g[sn]||[];}
+  if(!e2.length)return'';
   var ne=document.getElementById('note');var note=ne?ne.value.trim():'';
   var today=new Date().toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'});
   var lines=['Buongiorno *'+sn+'*,','vi inviamo l\'ordine di Caffetteria Ceraldi del '+today+'.','','*PRODOTTI RICHIESTI:*'],total=0;
   e2.forEach(function(e){
-    var price=gp(e.item.product,S.orderSupOverride[e.pid]||sn)||0;var sub=Math.round(price*e.item.qty*100)/100;
+    var price=(e.item.price!=null)?e.item.price:(gp(e.item.product,e.supOverride||sn)||0);
+    var sub=Math.round(price*e.item.qty*100)/100;
     lines.push('• '+e.item.product.name+' ('+e.item.product.conf+') x'+e.item.qty+' = EUR '+sub.toFixed(2));
     if(e.note)lines.push('   📝 _'+e.note+'_');
     total+=sub;
   });
-  lines.push('------------------');lines.push('*Totale: EUR '+total.toFixed(2)+'*');
+  lines.push('------------------');lines.push('*Totale: EUR '+(snapshotTotal!=null?snapshotTotal:total).toFixed(2)+'*');
   if(note){lines.push('');lines.push('*📝 NOTA PER L\'INTERO ORDINE:*');lines.push(note);}
   lines.push('');lines.push('Grazie per la disponibilità e buona giornata!');lines.push('Caffetteria Ceraldi');
   return lines.join('\n');
@@ -6234,7 +6246,7 @@ function _showPDFPreviewInApp(supName,entries,note,total){
         return;
       }
       // Ultimo fallback: condividi testo
-      var msg=buildMsg(supName);
+      var msg=buildMsg(supName,entries,total);
       if(navigator.share){navigator.share({title:'Ordine Caffetteria Ceraldi \u2014 '+supName,text:msg}).catch(function(){});}
       else{var ta=document.createElement('textarea');ta.value=msg;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);toast('Testo copiato ✓');}
     });
