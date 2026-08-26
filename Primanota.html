@@ -3194,13 +3194,36 @@ function _apriRiconciliaGruppo(idsFatture){
   hh += '<div style="font-size:13px;color:var(--ink3);margin-bottom:4px">'+sel.length+' fatture selezionate — totale <b>'+fmt(totaleFatture)+'</b></div>';
   hh += '<div style="font-size:12px;color:var(--ink3);margin-bottom:14px">Seleziona uno o più movimenti bancari liberi la cui somma corrisponda a questo totale.</div>';
   hh += '<div id="_gruppoTotaleBox" style="background:var(--surface2);border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:14px;font-weight:700;text-align:center">Selezionati: '+fmt(0)+' / '+fmt(totaleFatture)+'</div>';
+  // FIX 26/08 (Valerio: serve una barra di ricerca — data, causale, numero
+  // assegno, importo — e i movimenti divisi per tipo, non tutti etichettati
+  // "Bonifico" a prescindere da cosa sono davvero).
+  hh += '<input type="text" id="_gruppoSearch" oninput="_gruppoFiltra()" placeholder="Cerca per data, importo, causale, n. assegno..." style="width:100%;padding:11px 14px;border:1.5px solid var(--sep);border-radius:99px;font-family:inherit;font-size:14px;background:var(--surface2);color:var(--ink);box-sizing:border-box;margin-bottom:12px">';
   hh += '<div id="_gruppoLista">';
-  liberi.forEach(m=>{
-    const eAssegno = /assegno/i.test(m.sottotipo||'')||/assegno/i.test(m.tipo||'');
-    hh += '<label style="display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid var(--sep)">';
-    hh += '<input type="checkbox" data-imp="'+Math.abs(m.importo)+'" data-id="'+m.id+'" onchange="_gruppoRicalcola('+totaleFatture+')" style="width:20px;height:20px;flex-shrink:0">';
-    hh += '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">'+fmt(Math.abs(m.importo))+' — '+(eAssegno?'Assegno':'Bonifico')+'</div><div style="font-size:11px;color:var(--ink3)">'+esc(m.data||'')+' · '+esc((m.descrizione||'').slice(0,50))+'</div></div>';
-    hh += '</label>';
+  function _tipoMovGruppo(m){
+    var d = (m.descrizione||'').toLowerCase();
+    if(/vostro assegno|prelievo assegno/.test(d)) return 'Assegno';
+    if(/sdd\s+core|sdd\s+b2b/.test(d)) return 'SDD';
+    if(/vers(amento)?\.?\s*contanti/.test(d)) return 'Versamento';
+    if(/vs\.disp\.|favore/.test(d) || m.sottotipo==='Bonifico') return 'Bonifico';
+    return 'Altro';
+  }
+  var _gruppiTipo = {Assegno:[], SDD:[], Bonifico:[], Versamento:[], Altro:[]};
+  liberi.forEach(function(m){ _gruppiTipo[_tipoMovGruppo(m)].push(m); });
+  var _iconeTipo = {Assegno:'📝', SDD:'🔄', Bonifico:'🏦', Versamento:'💵', Altro:'📦'};
+  ['Assegno','SDD','Bonifico','Versamento','Altro'].forEach(function(tipo){
+    var lista = _gruppiTipo[tipo];
+    if(!lista.length) return;
+    hh += '<div class="_gruppoSez" style="font-size:11px;font-weight:700;color:var(--ink3);text-transform:uppercase;letter-spacing:.5px;margin:10px 0 6px;padding-top:8px;border-top:1px solid var(--sep)">'+_iconeTipo[tipo]+' '+tipo+' ('+lista.length+')</div>';
+    lista.forEach(function(m){
+      var numAss = '';
+      var mAss = (m.descrizione||'').match(/assegno\s+n\.?\s*(\d+)/i);
+      if(mAss) numAss = mAss[1];
+      var chiaveRicerca = (m.data+' '+fmt(Math.abs(m.importo))+' '+(m.descrizione||'')+' '+numAss).toLowerCase();
+      hh += '<label class="_gruppoRiga" data-search="'+esc(chiaveRicerca)+'" style="display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid var(--sep)">';
+      hh += '<input type="checkbox" data-imp="'+Math.abs(m.importo)+'" data-id="'+m.id+'" onchange="_gruppoRicalcola('+totaleFatture+')" style="width:20px;height:20px;flex-shrink:0">';
+      hh += '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">'+fmt(Math.abs(m.importo))+' — '+tipo+(numAss?' N°'+esc(numAss):'')+'</div><div style="font-size:11px;color:var(--ink3)">'+esc(m.data||'')+' · '+esc((m.descrizione||'').slice(0,60))+'</div></div>';
+      hh += '</label>';
+    });
   });
   hh += '</div>';
   hh += '<button id="_gruppoConfermaBtn" disabled onclick="_confermaRiconciliaGruppo()" style="width:100%;margin-top:16px;padding:12px;border:none;border-radius:10px;background:var(--sep);color:#fff;font-family:inherit;font-size:14px;font-weight:700;cursor:not-allowed">Seleziona movimenti che sommano al totale</button>';
@@ -3213,6 +3236,24 @@ function _apriRiconciliaGruppo(idsFatture){
   window._gruppoTotaleFatture = totaleFatture;
 }
 
+function _gruppoFiltra(){
+  var q = (document.getElementById('_gruppoSearch').value||'').toLowerCase().trim();
+  var righe = document.querySelectorAll('#_gruppoLista label._gruppoRiga');
+  var sezioni = document.querySelectorAll('#_gruppoLista ._gruppoSez');
+  righe.forEach(function(r){
+    var match = !q || (r.dataset.search||'').indexOf(q) !== -1;
+    r.style.display = match ? 'flex' : 'none';
+  });
+  // Nasconde anche l'intestazione di una sezione se tutte le sue righe sono filtrate via
+  sezioni.forEach(function(sez){
+    var next = sez.nextElementSibling, visibile = false;
+    while(next && !next.classList.contains('_gruppoSez')){
+      if(next.style.display !== 'none'){ visibile = true; break; }
+      next = next.nextElementSibling;
+    }
+    sez.style.display = visibile ? '' : 'none';
+  });
+}
 function _gruppoRicalcola(totaleFatture){
   const checked = document.querySelectorAll('#_gruppoLista input[type=checkbox]:checked');
   let somma = 0;
@@ -15354,7 +15395,16 @@ function renderRiconciliazione(){
   // Livello 5: nessun match → da classificare manualmente
 
   // Categorie che non possono MAI essere fatture fornitori
-  var _escludiMatch = /commissioni?\s*(numia|pagobancomat|internazionale|01\/|12\/|carta)|^commissioni$|comm\.sdd|comm\.bon|telematico\s+sct|ns\s+rif\.|rif\.[a-z0-9]+\s+comm|rif\.[a-z0-9]+\s+perc|spese\s+e\s+comm|imp\.bollo|rilascio\s+carnet|interessi\s+e\s+comp|^competenze$|mutuo\s+n\.|i24\s+agenzia|agenzia\s+entrate|pag\.to\s+telematico|boll\.cbill|spesa\s+con\s+carta\s+di\s+credito|numia-|sdd\s+core:\s+49rj2252|paypal\s+europe|worldpay|ceraldi\s+valerio|valerio\s+ceraldi|ceraldi\s+vincenzo|vincenzo\s+ceraldi|ceraldi\s+michele|michele\s+ceraldi|pocci\s+salvatore|salvatore\s+pocci|murolo\s+mario|mario\s+murolo|parisi\s+antonio|antonio\s+parisi|capezzuto\s+alessandro|alessandro\s+capezzuto|taiano\s+luigi|luigi\s+taiano|moscato\s+emanuele|emanuele\s+moscato|guarino\s+giuliano|giuliano\s+guarino|lesina\s+angela|angela\s+lesina|russo\s+carmine|carmine\s+russo|vespa\s+vincenzo|vincenzo\s+vespa|carotenuto\s+antonella|antonella\s+carotenuto|sankapala|fattura\s+numia|^saldo\s+(iniziale|finale)|riassunto\s+scalare|add\.spe/i;
+  // FIX 26/08 (Valerio, caso reale: SDD American Express da €0,22 proposto
+  // come possibile pagamento di "Ceramiche Mara" — importi completamente
+  // diversi, 0,22€ contro una fattura da 0,00€, e nessuna relazione tra
+  // American Express e quel fornitore). Questa è una TERZA copia dello
+  // stesso filtro di esclusione già corretto altrove (_escludiClassifica) —
+  // ma quella copia serve solo a nascondere le righe da "Da classificare",
+  // NON impedisce a questo motore di provare comunque un abbinamento e
+  // proporlo in "Da confermare". Allineata con le stesse aggiunte fatte
+  // nelle altre due copie (American Express, bonifici di stipendio).
+  var _escludiMatch = /commissioni?\s*(numia|pagobancomat|internazionale|01\/|12\/|carta)|^commissioni$|comm\.sdd|comm\.bon|telematico\s+sct|ns\s+rif\.|rif\.[a-z0-9]+\s+comm|rif\.[a-z0-9]+\s+perc|spese\s+e\s+comm|imp\.bollo|rilascio\s+carnet|interessi\s+e\s+comp|^competenze$|mutuo\s+n\.|i24\s+agenzia|agenzia\s+entrate|pag\.to\s+telematico|boll\.cbill|spesa\s+con\s+carta\s+di\s+credito|numia-|sdd\s+core:\s+49rj2252|paypal\s+europe|worldpay|american\s+express|ceraldi\s+valerio|valerio\s+ceraldi|ceraldi\s+vincenzo|vincenzo\s+ceraldi|ceraldi\s+michele|michele\s+ceraldi|pocci\s+salvatore|salvatore\s+pocci|murolo\s+mario|mario\s+murolo|parisi\s+antonio|antonio\s+parisi|capezzuto\s+alessandro|alessandro\s+capezzuto|taiano\s+luigi|luigi\s+taiano|moscato\s+emanuele|emanuele\s+moscato|guarino\s+giuliano|giuliano\s+guarino|lesina\s+angela|angela\s+lesina|russo\s+carmine|carmine\s+russo|vespa\s+vincenzo|vincenzo\s+vespa|carotenuto\s+antonella|antonella\s+carotenuto|sankapala|fattura\s+numia|^saldo\s+(iniziale|finale)|riassunto\s+scalare|add\.spe/i;
 
   // Apprendimento: legge le associazioni confermate in passato da localStorage
   var _appreso = {};
@@ -16261,7 +16311,7 @@ function renderRiconciliazione(){
 
     htmlConferma += '<div style="background:var(--surface);border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow);border-left:3px solid #FFB800">';
     htmlConferma += '<div style="font-size:13px;font-weight:700;color:#b36a00;margin-bottom:4px">❓ Da confermare ('+daConfermare.length+')</div>';
-    htmlConferma += '<div style="font-size:11px;color:var(--ink3);margin-bottom:10px">Solo movimenti con importo identico alla fattura</div>';
+    htmlConferma += '<div style="font-size:11px;color:var(--ink3);margin-bottom:10px">Suggerimenti automatici — mai confermati da soli. Alcuni sono a importo identico, altri solo probabili (stesso periodo/nome): controlla sempre l\'importo mostrato prima di confermare.</div>';
     window._pagDaConfermare = daConfermare;
 
     function _renderGruppo(gruppo, titolo, icona){
@@ -16276,7 +16326,9 @@ function renderRiconciliazione(){
         hh += '<div style="font-size:11px;color:var(--ink3);margin-bottom:4px">'+m.data+' · <b>'+fmt(Math.abs(m.importo))+'</b>'
           +' <span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:99px;background:'+((m.banca||'BPM')==='SumUp'?'#0066cc':'var(--red)')+';color:#fff">'+esc(m.banca||'BPM')+'</span></div>';
         hh += '<div style="font-size:11px;font-weight:500;line-height:1.4;margin-bottom:6px;word-break:break-word;white-space:pre-wrap;color:var(--ink)">'+esc(m.descrizione||'')+'</div>';
-        hh += '<div style="font-size:11px;color:var(--blue);margin-bottom:8px">↓ <b>'+esc(f.fornitore||'')+'</b> N°'+esc(f.numero||'')+' del '+f.data+' ('+fmt(f.importo||0)+')</div>';
+        var _diffCF = Math.abs(Math.abs(m.importo)-(f.importo||0));
+        hh += '<div style="font-size:11px;color:var(--blue);margin-bottom:4px">↓ <b>'+esc(f.fornitore||'')+'</b> N°'+esc(f.numero||'')+' del '+f.data+' ('+fmt(f.importo||0)+')</div>';
+        if(_diffCF>0.50) hh += '<div style="font-size:11px;font-weight:700;color:var(--red);margin-bottom:8px">⚠️ Importo diverso: banca '+fmt(Math.abs(m.importo))+' vs fattura '+fmt(f.importo||0)+' — differenza '+fmt(_diffCF)+'</div>';
         if(d.avviso) hh += '<div style="font-size:11px;color:#b36a00;background:#fff8ec;border:1px solid rgba(179,106,0,.25);border-radius:6px;padding:6px 8px;margin-bottom:8px">'+esc(d.avviso)+'</div>';
         hh += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
         hh += '<button onclick="_confermaPagamento('+idx+',true)" style="flex:1;min-width:70px;padding:7px 8px;border:1px solid var(--green);border-radius:6px;background:var(--green-light);color:#1a7a3a;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">✓ Stessa</button>';
@@ -17451,6 +17503,24 @@ function _cfAbbina(movIdx, fattId, isParziale){
   }
   if(!confirm(conf)) return;
   if(_pagGiaAssegnato){ f.pagamentoOrigine='manuale'; f.pagamentoImpostatoIl=new Date().toISOString(); } // scelta esplicita confermata ora, non più toccabile dal motore automatico
+  // FIX 26/08 (caso reale Eureka N°56/D): quando questo STESSO movimento era
+  // già agganciato a UN'ALTRA fattura (es. corretto un abbinamento sbagliato
+  // fatto in automatico su due fatture identiche per importo), la vecchia
+  // fattura restava con riconciliata=true e il riferimento al movimento
+  // salvato per sempre, anche se il movimento ora punta altrove — sembrava
+  // "riconciliata con estratto conto" ma restava "da pagare" per sempre,
+  // un'incoerenza silenziosa. Qui si pulisce la fattura precedente, ma SOLO
+  // se il suo riferimento punta davvero a questo movimento (mai toccare un
+  // abbinamento di gruppo — più fatture pagate da un solo movimento — che
+  // usa di proposito lo stesso movId su più fatture).
+  if(m.fatturaId && String(m.fatturaId)!==String(f.id)){
+    var fVecchia = fatture.find(function(x){ return String(x.id)===String(m.fatturaId); });
+    if(fVecchia && fVecchia.riconciliazione && fVecchia.riconciliazione.movId===m.id){
+      fVecchia.riconciliata = false;
+      fVecchia.riconciliazione = null;
+      if(typeof dbUpdate==='function') dbUpdate(fVecchia);
+    }
+  }
   if(movAltrove){
     movAltrove.abbinata=false; movAltrove.fatturaId=null; movAltrove.fatturaLabel='';
     salvaMovimentoBanca(movAltrove).catch(function(e){console.warn('salvaMovimentoBanca:',e);});
@@ -17834,6 +17904,18 @@ function _confermaPagamento(idx, conferma){
   var _chiaveDesc = (d.mov.descrizione||'').toLowerCase().replace(/\s+/g,'').slice(0,40);
 
   if(conferma){
+    // Stesso fix del caso Eureka in _cfAbbina: se questo movimento era già
+    // agganciato a un'ALTRA fattura, quella vecchia va ripulita (solo se
+    // punta davvero a questo movimento), altrimenti resta "riconciliata"
+    // per sempre pur non essendo più davvero collegata a nulla.
+    if(d.mov.fatturaId && String(d.mov.fatturaId)!==String(d.fatt.id)){
+      var _fVecchiaCf = fatture.find(function(x){ return String(x.id)===String(d.mov.fatturaId); });
+      if(_fVecchiaCf && _fVecchiaCf.riconciliazione && _fVecchiaCf.riconciliazione.movId===d.mov.id){
+        _fVecchiaCf.riconciliata = false;
+        _fVecchiaCf.riconciliazione = null;
+        if(typeof dbUpdate==='function') dbUpdate(_fVecchiaCf);
+      }
+    }
     d.mov.abbinata     = true;
     d.mov.fatturaId    = d.fatt.id;
     d.mov.fatturaLabel = (d.fatt.fornitore||'') + ' N°' + (d.fatt.numero||'');
