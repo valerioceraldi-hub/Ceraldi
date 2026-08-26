@@ -760,6 +760,7 @@ function renderCatalog(){
   if(!list.length){ M.innerHTML='<div class="empty"><div class="empty-icon">&#128269;</div><div>Nessun prodotto trovato</div></div>'; return; }
   list.forEach(function(p){
     var key='p'+p.id; var inL=!!lista[key];
+    var sm=_liScortaMin(p.id);
     var freq=FREQ['p'+p.id]||0;
     var card=document.createElement('div'); card.className='pcard'+(inL?' sel':'');
     var info=document.createElement('div'); info.style.cssText='flex:1;min-width:0';
@@ -768,17 +769,60 @@ function renderCatalog(){
     var freqBadge=freq>=3?'<span class="freq-badge">★'+freq+'</span>':'';
     info.innerHTML='<div class="pname">'+nm+freqBadge+'</div>'+(p.conf?'<div class="pconf">'+p.conf+'</div>':'');
     card.appendChild(info);
-    if(inL){
-      var okBtn=document.createElement('button');okBtn.className='padd on';okBtn.innerHTML='&#10003;';
-      okBtn.title='Nella lista — apri "Lista" per la giacenza';
-      okBtn.onclick=function(e){e.stopPropagation();};
-      card.appendChild(okBtn);
+    var giacInp=null;
+    if(sm!=null){
+      // Prodotto con scorta minima impostata (Ordini → Magazzino): niente
+      // tasto "+", si scrive direttamente la giacenza — scrivere aggiunge/
+      // aggiorna da solo, cancellare il numero toglie il prodotto dalla
+      // lista. Veloce apposta: nessun tap intermedio, nessun re-render
+      // della lista ad ogni cifra (romperebbe la tastiera su mobile).
+      var giacWrap=document.createElement('div');giacWrap.style.cssText='display:flex;flex-direction:column;align-items:center;gap:2px;flex-shrink:0';
+      giacInp=document.createElement('input');giacInp.type='number';giacInp.min='0';giacInp.placeholder='Giac.';
+      giacInp.setAttribute('inputmode','numeric');
+      giacInp.value=(inL&&lista[key].giacenza!=null)?lista[key].giacenza:'';
+      giacInp.style.cssText='width:58px;text-align:center;background:var(--surface);border:1.5px solid '+(inL?'var(--accent)':'var(--border)')+';border-radius:9px;padding:7px 2px;font-size:15px;color:var(--text);outline:none';
+      var calcLbl=document.createElement('div');calcLbl.style.cssText='font-size:9px;font-weight:700;white-space:nowrap;min-height:11px';
+      function updCalc(){
+        var v=giacInp.value;
+        if(v===''){calcLbl.textContent='';return;}
+        var g=parseInt(v,10),d=sm-g;
+        calcLbl.textContent=d>0?('\u{1F6D2}'+d):'\u2713 ok';
+        calcLbl.style.color=d>0?'var(--red)':'var(--green)';
+      }
+      giacInp.onclick=function(e){e.stopPropagation();};
+      giacInp.oninput=function(){
+        var v=this.value;
+        if(v===''){
+          if(lista[key]){delete lista[key];saveLista();updBadge();}
+          this.style.borderColor='var(--border)';card.classList.remove('sel');
+        } else {
+          var g=parseInt(v,10);
+          if(lista[key])lista[key].giacenza=g;
+          else lista[key]={name:p.name,conf:p.conf||'',qty:1,custom:false,id:p.id,giacenza:g};
+          saveLista();updBadge();
+          this.style.borderColor='var(--accent)';card.classList.add('sel');
+        }
+        updCalc();
+        if(document.getElementById('ov-lista').classList.contains('on'))renderLista();
+      };
+      updCalc();
+      giacWrap.appendChild(giacInp);giacWrap.appendChild(calcLbl);
+      card.appendChild(giacWrap);
+    } else if(inL){
+      var qr=document.createElement('div'); qr.className='qty-row';
+      var qm=document.createElement('button');qm.className='qbtn';qm.textContent='\u2212';
+      qm.onclick=function(e){e.stopPropagation();chgQty(key,-1);};
+      var qv=document.createElement('span');qv.className='qval';qv.textContent=lista[key].qty;
+      var qp=document.createElement('button');qp.className='qbtn';qp.textContent='+';
+      qp.onclick=function(e){e.stopPropagation();chgQty(key,1);};
+      qr.appendChild(qm);qr.appendChild(qv);qr.appendChild(qp);
+      card.appendChild(qr);
     } else {
       var ab=document.createElement('button');ab.className='padd';ab.innerHTML='&#43;';
       ab.onclick=function(e){e.stopPropagation();addItem(p,key);};
       card.appendChild(ab);
     }
-    card.onclick=function(){addItem(p,key);};
+    card.onclick=function(){ if(sm==null){addItem(p,key);} else if(giacInp){giacInp.focus();} };
     M.appendChild(card);
   });
 }
