@@ -764,115 +764,88 @@ function renderCatalog(){
     var key='p'+p.id; var inL=!!lista[key];
     var sm=_liScortaMin(p.id);
     var freq=FREQ['p'+p.id]||0;
-    var card=document.createElement('div'); card.className='pcard'+(inL?' sel':'');
+    var card=document.createElement('div'); card.className='pcard tracked'+(inL?' sel':'');
     var info=document.createElement('div'); info.style.cssText='flex:1;min-width:0';
     var nm=p.name;
     if(q){ var qi=norm(nm).indexOf(qn); if(qi>=0) nm=nm.slice(0,qi)+'<mark>'+nm.slice(qi,qi+q.length)+'</mark>'+nm.slice(qi+q.length); }
     var freqBadge=freq>=3?'<span class="freq-badge">★'+freq+'</span>':'';
     info.innerHTML='<div class="pname">'+nm+freqBadge+'</div>'+(p.conf?'<div class="pconf">'+p.conf+'</div>':'');
     card.appendChild(info);
-    var giacInp=null;
-    if(sm!=null){
-      // Prodotto con scorta minima impostata (Ordini → Magazzino): niente
-      // tasto "+", si scrive direttamente la giacenza — scrivere aggiunge/
-      // aggiorna da solo, cancellare il numero toglie il prodotto dalla
-      // lista. Veloce apposta: nessun tap intermedio, nessun re-render
-      // della lista ad ogni cifra (romperebbe la tastiera su mobile).
-      // FIX (26/08, Valerio: "non è chiaro, deve essere più chiaro, diretto
-      // e obbligatorio"): prima era un campetto minuscolo con solo
-      // "Giac." come indizio, facile da scambiare per un pulsante rotto.
-      // Ora c'è un'etichetta "GIACENZA" sempre visibile sopra il campo
-      // (stessa dicitura usata in Ordini → Magazzino, per coerenza), il
-      // campo è più largo e con sfondo colorato per farlo riconoscere
-      // subito come l'unico modo per ordinare questo prodotto.
-      card.classList.add('tracked');
-      var giacWrap=document.createElement('div');giacWrap.style.cssText='display:flex;flex-direction:column;align-items:center;gap:3px;flex-shrink:0';
-      var giacLbl=document.createElement('div');giacLbl.style.cssText='font-size:8.5px;font-weight:800;letter-spacing:.4px;color:var(--accent);text-transform:uppercase';
-      giacLbl.textContent='Giacenza';giacWrap.appendChild(giacLbl);
-      giacInp=document.createElement('input');giacInp.type='number';giacInp.min='0';giacInp.placeholder='0';
-      giacInp.setAttribute('inputmode','numeric');
-      giacInp.value=(inL&&lista[key].giacenza!=null)?lista[key].giacenza:'';
-      giacInp.style.cssText='width:64px;text-align:center;background:rgba(0,122,255,.08);border:1.5px solid '+(inL?'var(--accent)':'rgba(0,122,255,.3)')+';border-radius:9px;padding:8px 2px;font-size:16px;font-weight:700;color:var(--text);outline:none';
-      var calcLbl=document.createElement('div');calcLbl.style.cssText='font-size:9.5px;font-weight:700;white-space:nowrap;min-height:12px';
-      function updCalc(){
-        var v=giacInp.value;
-        if(v===''){calcLbl.textContent='obbligatoria';calcLbl.style.color='var(--red)';return;}
-        var g=parseInt(v,10),d=sm-g;
-        calcLbl.textContent=d>0?('\u{1F6D2} ordina '+d):'\u2713 scorta ok';
-        calcLbl.style.color=d>0?'var(--red)':'var(--green)';
-      }
-      giacInp.onclick=function(e){e.stopPropagation();};
-      giacInp.oninput=function(){
-        var v=this.value;
-        if(v===''){
-          if(lista[key]){delete lista[key];saveLista();updBadge();}
-          this.style.borderColor='rgba(0,122,255,.3)';card.classList.remove('sel');
-        } else {
-          var g=parseInt(v,10);
-          if(lista[key])lista[key].giacenza=g;
-          else lista[key]={name:p.name,conf:p.conf||'',qty:1,custom:false,id:p.id,giacenza:g};
-          saveLista();updBadge();
-          this.style.borderColor='var(--accent)';card.classList.add('sel');
-        }
-        updCalc();
-        if(document.getElementById('ov-lista').classList.contains('on'))renderLista();
-      };
-      updCalc();
-      giacWrap.appendChild(giacInp);giacWrap.appendChild(calcLbl);
-      card.appendChild(giacWrap);
-    } else if(inL){
-      var qr=document.createElement('div'); qr.className='qty-row';
-      var qm=document.createElement('button');qm.className='qbtn';qm.textContent='\u2212';
-      qm.onclick=function(e){e.stopPropagation();chgQty(key,-1);};
-      var qv=document.createElement('span');qv.className='qval';qv.textContent=lista[key].qty;
-      var qp=document.createElement('button');qp.className='qbtn';qp.textContent='+';
-      qp.onclick=function(e){e.stopPropagation();chgQty(key,1);};
-      qr.appendChild(qm);qr.appendChild(qv);qr.appendChild(qp);
-      card.appendChild(qr);
-    } else {
-      var ab=document.createElement('button');ab.className='padd';ab.innerHTML='&#43;';
-      ab.onclick=function(e){e.stopPropagation();addItem(p,key);};
-      card.appendChild(ab);
+    // GIACENZA UNIVERSALE (26/08, Valerio: "tutti i prodotti devono avere
+    // già la finestra giacenza e il dipendente inserisce il numero") — ogni
+    // prodotto del catalogo mostra sempre questo campo, non solo quelli con
+    // scorta minima già impostata: così lo storico di giacenza si costruisce
+    // da solo ordine dopo ordine, senza bisogno di un inventario oggi.
+    // Scrivere aggiunge/aggiorna da solo, cancellare il numero toglie il
+    // prodotto dalla lista. Nessun re-render della lista ad ogni cifra
+    // (romperebbe la tastiera su mobile).
+    var giacWrap=document.createElement('div');giacWrap.style.cssText='display:flex;flex-direction:column;align-items:center;gap:3px;flex-shrink:0';
+    var giacLbl=document.createElement('div');giacLbl.style.cssText='font-size:8.5px;font-weight:800;letter-spacing:.4px;color:var(--accent);text-transform:uppercase';
+    giacLbl.textContent='Giacenza';giacWrap.appendChild(giacLbl);
+    var giacInp=document.createElement('input');giacInp.type='number';giacInp.min='0';giacInp.placeholder='0';
+    giacInp.setAttribute('inputmode','numeric');
+    giacInp.value=(inL&&lista[key].giacenza!=null)?lista[key].giacenza:'';
+    giacInp.style.cssText='width:64px;text-align:center;background:rgba(0,122,255,.08);border:1.5px solid '+(inL?'var(--accent)':'rgba(0,122,255,.3)')+';border-radius:9px;padding:8px 2px;font-size:16px;font-weight:700;color:var(--text);outline:none';
+    var calcLbl=document.createElement('div');calcLbl.style.cssText='font-size:9.5px;font-weight:700;white-space:nowrap;min-height:12px';
+    function updCalc(){
+      var v=giacInp.value;
+      if(v===''){calcLbl.textContent='obbligatoria';calcLbl.style.color='var(--red)';return;}
+      if(sm==null){calcLbl.textContent='\u26A0\uFE0F invio a Valerio';calcLbl.style.color='var(--gold,#c8873a)';return;}
+      var g=parseInt(v,10),d=sm-g;
+      calcLbl.textContent=d>0?('\u{1F6D2} ordina '+d):'\u2713 scorta ok';
+      calcLbl.style.color=d>0?'var(--red)':'var(--green)';
     }
-    card.onclick=function(){ if(sm==null){addItem(p,key);} else if(giacInp){giacInp.focus();} };
+    giacInp.onclick=function(e){e.stopPropagation();};
+    giacInp.oninput=function(){
+      var v=this.value;
+      if(v===''){
+        if(lista[key]){delete lista[key];saveLista();updBadge();}
+        this.style.borderColor='rgba(0,122,255,.3)';card.classList.remove('sel');
+      } else {
+        var g=parseInt(v,10);
+        if(lista[key])lista[key].giacenza=g;
+        else lista[key]={name:p.name,conf:p.conf||'',qty:1,custom:false,id:p.id,giacenza:g};
+        saveLista();updBadge();
+        this.style.borderColor='var(--accent)';card.classList.add('sel');
+      }
+      updCalc();
+      if(document.getElementById('ov-lista').classList.contains('on'))renderLista();
+    };
+    updCalc();
+    giacWrap.appendChild(giacInp);giacWrap.appendChild(calcLbl);
+    card.appendChild(giacWrap);
+    card.onclick=function(){giacInp.focus();};
     M.appendChild(card);
   });
-}
-function addItem(p,key){
-  if(lista[key]){removeItem(key);return;}
-  // giacenza:null — per i prodotti con scorta minima impostata (vedi
-  // _liScortaMin), la quantità da ordinare NON si sceglie qui: si calcola
-  // nella sheet "Lista" da quanto il dipendente inserisce come giacenza al
-  // momento dell'inventario di quell'ordine (Valerio, 26/08).
-  lista[key]={name:p.name,conf:p.conf||'',qty:1,custom:false,id:p.id,giacenza:null};
-  saveLista();updBadge();
-  var s=document.getElementById('srch');
-  if(s.value.trim()){s.value='';document.getElementById('srch-x').style.display='none';}
-  renderCatalog();toast('Aggiunto \u2713');
 }
 function removeItem(key){
   delete lista[key]; saveLista();updBadge();renderCatalog();
   if(document.getElementById('ov-lista').classList.contains('on')) renderLista();
 }
-// ── GIACENZA → QUANTITÀ AUTOMATICA (26/08, Valerio: "il dipendente deve
-// solo inserire i prodotti da ordinare e SOLO per quei prodotti arriva la
-// richiesta, con la quantità determinata automaticamente da quanto ha
-// inserito come giacenza al momento dell'inventario di quell'ordine") —
-// per i prodotti con scorta minima impostata da Valerio in Ceraldi Ordini
-// (catalogo_ceraldi.scorta_min), il dipendente NON sceglie la quantità:
-// la sheet "Lista" chiede la giacenza attuale e calcola da sola quanto
-// ordinare (scorta_min - giacenza). Se il prodotto non ha scorta minima
-// impostata, resta il vecchio flusso a quantità manuale (+/-).
+// ── GIACENZA UNIVERSALE (26/08, Valerio: "tutti i prodotti devono avere
+// già la finestra giacenza e il dipendente inserisce il numero" + "se quel
+// prodotto non ha ancora un numero in scorta minima non bloccare l'ordine
+// ma inviamelo lo stesso facendomelo notare così io inserisco la
+// quantità") — ogni prodotto del catalogo ha SEMPRE il campo giacenza
+// (costruisce da solo lo storico giacenza ordine dopo ordine, senza dover
+// fare un inventario completo adesso). La scorta minima la imposta Valerio
+// da Ordini → Magazzino, quando vuole:
+// - se è impostata: la quantità da ordinare si calcola da sola
+//   (scorta_min - giacenza), incluso nella richiesta solo se positiva;
+// - se NON è impostata: il prodotto viene comunque inviato (mai bloccato),
+//   con una quantità segnaposto e un avviso chiaro per Valerio, che deciderà
+//   lui la quantità reale in Ordini.
 function _liScortaMin(id){
   var p=CATALOG.find(function(x){return String(x.id)===String(id);});
   return p&&p.scorta_min!=null?p.scorta_min:null;
 }
+// Ritorna {qty, needsScortaMin} — qty null finché la giacenza non è inserita.
 function _liQtyDaOrdinare(item){
+  if(item.giacenza==null)return null;
   var sm=_liScortaMin(item.id);
-  if(sm==null)return item.qty; // fallback manuale, prodotto senza scorta minima
-  if(item.giacenza==null)return null; // giacenza non ancora inserita
+  if(sm==null)return {qty:1,needsScortaMin:true};
   var d=sm-item.giacenza;
-  return d>0?d:0;
+  return {qty:d>0?d:0,needsScortaMin:false};
 }
 function chgQty(key,d){
   if(!lista[key])return;
@@ -896,8 +869,10 @@ function renderLista(){
     info.innerHTML='<div class="li-name">'+it.name+'</div>'+(it.conf?'<div class="li-conf">'+it.conf+'</div>':'');
     row.appendChild(info);
 
-    if(sm!=null){
-      // Prodotto tracciato: chiedi la giacenza, calcola da sola quanto ordinare
+    if(!it.custom){
+      // Prodotto di catalogo: giacenza sempre richiesta, quantità calcolata
+      // in automatico se c'è una scorta minima, altrimenti la richiesta
+      // parte comunque e sarà Valerio a decidere la quantità (26/08).
       var giacWrap=document.createElement('div');giacWrap.style.cssText='display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex-shrink:0';
       var giacLbl=document.createElement('div');giacLbl.style.cssText='font-size:8.5px;font-weight:800;letter-spacing:.4px;color:var(--accent);text-transform:uppercase';
       giacLbl.textContent='Giacenza';giacWrap.appendChild(giacLbl);
@@ -907,10 +882,11 @@ function renderLista(){
       giacInp.style.cssText='width:78px;text-align:center;background:rgba(0,122,255,.08);border:1.5px solid '+(it.giacenza!=null?'var(--accent)':'rgba(0,122,255,.3)')+';border-radius:8px;padding:7px 4px;font-size:15px;font-weight:700;color:var(--text);outline:none';
       var calcLbl=document.createElement('div');calcLbl.style.cssText='font-size:10px;font-weight:700;white-space:nowrap';
       function updCalc(){
-        var q=_liQtyDaOrdinare(it);
-        if(q==null){calcLbl.textContent='obbligatoria';calcLbl.style.color='var(--red)';return;}
-        calcLbl.textContent=q>0?('\u{1F6D2} ordina '+q):'\u2713 scorta ok';
-        calcLbl.style.color=q>0?'var(--red)':'var(--green)';
+        var r=_liQtyDaOrdinare(it);
+        if(r==null){calcLbl.textContent='obbligatoria';calcLbl.style.color='var(--red)';return;}
+        if(r.needsScortaMin){calcLbl.textContent='\u26A0\uFE0F invio a Valerio';calcLbl.style.color='var(--gold,#c8873a)';return;}
+        calcLbl.textContent=r.qty>0?('\u{1F6D2} ordina '+r.qty):'\u2713 scorta ok';
+        calcLbl.style.color=r.qty>0?'var(--red)':'var(--green)';
       }
       giacInp.oninput=function(){
         it.giacenza=this.value===''?null:parseInt(this.value,10);
@@ -972,12 +948,12 @@ function inviaOrdini(){
   var nota=document.getElementById('note-inp').value.trim();
   var keys=Object.keys(lista);
   if(!keys.length){toast('Lista vuota');return;}
-  // Prodotti con scorta minima impostata ma giacenza non ancora inserita:
-  // blocca l'invio, altrimenti non sapremmo quanto ordinare (Valerio,
-  // 26/08: la quantità va determinata SOLO dalla giacenza inserita adesso).
-  var mancanti=keys.filter(function(k){
-    return _liScortaMin(lista[k].id)!=null && lista[k].giacenza==null;
-  });
+  // Giacenza obbligatoria per OGNI prodotto di catalogo (non custom), a
+  // prescindere dalla scorta minima — costruisce da sola lo storico
+  // giacenza ordine dopo ordine (Valerio, 26/08). La scorta minima invece
+  // NON blocca mai l'invio se manca: la richiesta parte comunque e Valerio
+  // la nota e decide lui la quantità.
+  var mancanti=keys.filter(function(k){return !lista[k].custom && lista[k].giacenza==null;});
   if(mancanti.length){
     toast('Inserisci la giacenza per: '+mancanti.map(function(k){return lista[k].name;}).slice(0,3).join(', ')+(mancanti.length>3?'...':''),3500);
     openLista();
@@ -988,16 +964,20 @@ function inviaOrdini(){
   var daSalvareGiacenza=[]; // {id,giacenza} — da scrivere su Supabase (stessa colonna letta da Ceraldi Ordini → Magazzino)
   keys.forEach(function(k){
     var it=lista[k];
-    var sm=_liScortaMin(it.id);
-    if(sm!=null){
+    if(!it.custom){
       daSalvareGiacenza.push({id:it.id,giacenza:it.giacenza});
-      var q=_liQtyDaOrdinare(it);
-      // Passiamo anche giacenza e scorta minima usate per il calcolo (non
-      // solo la qty finale): così in Ordini, Valerio vede da dove viene
-      // quel numero e può correggerlo se non è d'accordo (26/08).
-      if(q>0)itemsArr.push({name:it.name,conf:it.conf,qty:q,custom:!!it.custom,id:it.id,giacenza:it.giacenza,scortaMin:sm});
-      // se q===0 la scorta è già sufficiente: NON entra nella richiesta,
-      // ma la giacenza contata va comunque salvata (sopra)
+      var r=_liQtyDaOrdinare(it);
+      // Passiamo sempre giacenza (e scorta minima se c'è) oltre alla qty:
+      // così in Ordini Valerio vede da dove viene il numero, e se manca la
+      // scorta minima lo vede segnalato invece che silenziosamente ignorato.
+      if(r.needsScortaMin){
+        itemsArr.push({name:it.name,conf:it.conf,qty:r.qty,custom:false,id:it.id,giacenza:it.giacenza,needsScortaMin:true});
+      } else if(r.qty>0){
+        itemsArr.push({name:it.name,conf:it.conf,qty:r.qty,custom:false,id:it.id,giacenza:it.giacenza,scortaMin:_liScortaMin(it.id)});
+      }
+      // se r.qty===0 (con scorta minima impostata) la scorta è già
+      // sufficiente: NON entra nella richiesta, ma la giacenza contata va
+      // comunque salvata (sopra)
     } else {
       itemsArr.push({name:it.name,conf:it.conf,qty:it.qty,custom:!!it.custom,id:it.id});
     }

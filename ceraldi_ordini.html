@@ -3654,6 +3654,16 @@ function renderCart(){
         giacDiv.style.cssText='font-size:9px;color:var(--muted);margin-top:2px';
         giacDiv.innerHTML='📦 giacenza: <b style="color:var(--text)">'+e.item._giacenza+'</b> · scorta minima: <b style="color:var(--text)">'+e.item._scortaMin+'</b>';
         inf.appendChild(giacDiv);
+      } else if(e.item._needsScortaMin){
+        // Prodotto senza scorta minima impostata: Richieste non ha potuto
+        // calcolare la quantità e l'ha inviata comunque (invece di
+        // bloccare l'ordine) — segnala qui che la quantità è indicativa,
+        // così Valerio la corregge e magari ne approfitta per impostare
+        // la scorta minima da Magazzino (26/08).
+        var needSmDiv=document.createElement('div');
+        needSmDiv.style.cssText='font-size:9px;color:var(--gold);margin-top:2px;font-weight:700';
+        needSmDiv.innerHTML='⚠️ senza scorta minima — giacenza contata: <b style="color:var(--text)">'+e.item._giacenza+'</b>, verifica la quantità';
+        inf.appendChild(needSmDiv);
       }
       // Prodotto provvisorio (non a listino): badge + scorciatoie per sistemarlo
       if(e.item.product._unlisted){
@@ -8407,8 +8417,8 @@ function importaRichiesta(jsonText, onDone){
     }
   richItems.forEach(function(ri,idx){
     var row=document.createElement('div');
-    // Prodotti custom con match automatico: bordo arancione (richiede conferma)
-    var needsConfirm=ri.item.custom&&!!ri.match;
+    // Prodotti custom con match automatico, o senza scorta minima impostata: bordo arancione (richiede attenzione)
+    var needsConfirm=(ri.item.custom&&!!ri.match)||ri.item.needsScortaMin;
     row.style.cssText='background:var(--card);border:1.5px solid '+(needsConfirm?'var(--gold)':ri.match?'var(--border)':'rgba(224,49,49,.3)')+';border-radius:11px;padding:10px 12px;margin-bottom:7px';
     var matched=!!ri.match;
     var header=document.createElement('div');
@@ -8441,6 +8451,15 @@ function importaRichiesta(jsonText, onDone){
       giacInfo.style.cssText='font-size:10px;color:var(--muted);margin-top:2px';
       giacInfo.innerHTML='📦 giacenza contata: <b style="color:var(--text)">'+ri.item.giacenza+'</b> · scorta minima: <b style="color:var(--text)">'+ri.item.scortaMin+'</b>';
       nml.appendChild(giacInfo);
+    } else if(ri.item.needsScortaMin){
+      // Prodotto senza scorta minima impostata: Richieste non ha potuto
+      // calcolare la quantità, ma invia comunque la richiesta invece di
+      // bloccarla (Valerio, 26/08: "non bloccare l'ordine ma inviamelo lo
+      // stesso facendomelo notare così io inserisco la quantità").
+      var needSmInfo=document.createElement('div');
+      needSmInfo.style.cssText='font-size:10px;color:var(--gold);margin-top:2px;font-weight:700';
+      needSmInfo.innerHTML='⚠️ Nessuna scorta minima impostata — giacenza contata: <b style="color:var(--text)">'+ri.item.giacenza+'</b>. Decidi tu la quantità qui sotto.';
+      nml.appendChild(needSmInfo);
     }
     var ql=document.createElement('span');ql.style.cssText='font-size:11px;color:var(--muted)';ql.textContent='Qtà:';
     var qm=document.createElement('button');qm.className='qty-btn';qm.textContent='−';
@@ -8508,7 +8527,7 @@ function importaRichiesta(jsonText, onDone){
         if(S.cart[pid]._sources.indexOf(_dipNome)<0)S.cart[pid]._sources.push(_dipNome);
         merged++;
       } else {
-        S.cart[pid]={product:ri.match,qty:ri.qty,_sources:[_dipNome],_needsReview:!!ri.needsReview,_reqName:ri.item.name+(ri.item.conf?' ('+ri.item.conf+')':''),_giacenza:ri.item.giacenza,_scortaMin:ri.item.scortaMin};
+        S.cart[pid]={product:ri.match,qty:ri.qty,_sources:[_dipNome],_needsReview:!!ri.needsReview,_reqName:ri.item.name+(ri.item.conf?' ('+ri.item.conf+')':''),_giacenza:ri.item.giacenza,_scortaMin:ri.item.scortaMin,_needsScortaMin:!!ri.item.needsScortaMin};
         added++;
       }
     });
