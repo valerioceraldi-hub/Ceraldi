@@ -2344,7 +2344,12 @@ async function _arricchisciConFlagAllegati(rows){
     // senza, le fatture oltre la millesima perdevano il flag e il bottone "Doc.".
     const [fotoIds, allegIds] = await Promise.all([
       sbFetchAll('fatture?select=id&foto=not.is.null&order=id.asc').catch(()=>[]),
-      sbFetchAll('fatture?select=id&fattura_allegata=not.is.null&order=id.asc').catch(()=>[])
+      // FIX 26/08 (Valerio, caso reale Rondinella "q"): "not.is.null" su
+      // Postgres è vero anche per una stringa VUOTA (non solo per un XML
+      // vero) — un campo salvato come '' passava per "ha allegato". Escluso
+      // esplicitamente il caso stringa vuota con un secondo filtro, così il
+      // flag riflette solo un contenuto reale.
+      sbFetchAll("fatture?select=id&fattura_allegata=not.is.null&fattura_allegata=neq.&order=id.asc").catch(()=>[])
     ]);
     const setFoto = new Set((fotoIds||[]).map(r=>String(r.id)));
     const setAlleg = new Set((allegIds||[]).map(r=>String(r.id)));
@@ -7768,7 +7773,7 @@ async function _eseguiEsportazioneAvanzata(){
       var r = _fatturaPagatoResiduo(f);
       var oggi = new Date().toISOString().slice(0,10);
       var ritardo = (f.stato!=='pagata' && f.scadenza && f.scadenza<oggi) ? _giorniTra(f.scadenza,oggi) : '';
-      var hasDoc = (f.fatturaAllegata&&f.fatturaAllegata.length>0)||(f.xmlGithubPath&&f.xmlGithubPath.length>0)||(f.source==='aruba');
+      var hasDoc = (f.fatturaAllegata&&f.fatturaAllegata.length>0)||(f.xmlGithubPath&&f.xmlGithubPath.length>0)||(f.source==='aruba')||f.hasAllegata;
       return [f.data||'', f.fornitore||'', f.numero||'', f.numDdt||'', r.tot, f.totaleImponibile||'', f.totaleImposta||'',
         _metodoLabel(f), f.stato||'', r.pagato, r.residuo, r.pct+'%', f.dataPagamento||'', f.scadenza||'', ritardo,
         _riferimentoBanca(f), hasDoc?'Sì':'No'];
@@ -12215,7 +12220,7 @@ function renderChiusuraMese(){
     totTot += (f.importo||0);
 
     // "Ha XML" = ha il file XML collegato (xmlGithubPath o fatturaAllegata)
-    const hasXml = !!(f.xmlGithubPath || (f.fatturaAllegata && f.fatturaAllegata !== '__github__' && f.fatturaAllegata.length > 100));
+    const hasXml = !!(f.xmlGithubPath || (f.fatturaAllegata && f.fatturaAllegata !== '__github__' && f.fatturaAllegata.length > 100) || f.hasAllegata);
     // "Ha breakdown IVA" = è stato ricalcolato con dati XML
     const hasIva = !!(f.ivaBreakdown && Object.keys(f.ivaBreakdown).length);
 
@@ -13032,11 +13037,27 @@ function verificaFattureSenzaXml(){
   if(giorniAllaFine > 5) return; // avvisa solo negli ultimi 5 giorni
 
   const mese = oggi.toISOString().slice(0,7);
+  // FIX 26/08 (Valerio: "51 fatture senza XML" quando in realtà quasi tutte
+  // ce l'hanno): due errori distinti in questo controllo.
+  // 1) f.fatturaAllegata è il CONTENUTO pesante dell'allegato — la lista
+  //    fatture in memoria è caricata "slim" (SLIM_COLS_FATTURE) apposta
+  //    SENZA questo campo per non appesantire ogni avvio con allegati da
+  //    centinaia di KB: risultava quindi sempre vuoto anche per fatture con
+  //    XML vero e regolarmente importato. Il segnale giusto, già usato
+  //    altrove nel codice per lo stesso motivo, è il flag leggero
+  //    f.hasAllegata (booleano, calcolato lato database, sempre presente
+  //    anche nel caricamento slim).
+  // 2) f.source!=='pec' escludeva solo le fatture PEC dal conteggio "manuali"
+  //    — ma l'import XML reale usa source:'xml_import' (non 'pec'), quindi
+  //    veniva comunque contato come "manuale senza XML" anche quando aveva
+  //    l'XML vero. Esclusi ora anche 'xml_import' e 'aruba'.
   const senzaXml = fatture.filter(f =>
     f.tipo !== 'ddt' &&
     f.data && f.data.startsWith(mese) &&
-    f.source !== 'pec' && // solo manuali
+    f.source !== 'pec' && f.source !== 'xml_import' && f.source !== 'aruba' &&
     !f.xmlGithubPath &&
+    !f.fatturaAllegataName &&
+    !f.hasAllegata &&
     !(f.fatturaAllegata && f.fatturaAllegata !== '__github__' && f.fatturaAllegata.length > 100)
   );
   if(!senzaXml.length) return;
@@ -16199,7 +16220,7 @@ function renderRiconciliazione(){
       gruppo.forEach(function(d){
         var idx = daConfermare.indexOf(d);
         var m = d.mov, f = d.fatt;
-        var hasDoc = (f.fatturaAllegata&&f.fatturaAllegata.length>0)||(f.xmlGithubPath&&f.xmlGithubPath.length>0)||(f.source==='aruba');
+        var hasDoc = (f.fatturaAllegata&&f.fatturaAllegata.length>0)||(f.xmlGithubPath&&f.xmlGithubPath.length>0)||(f.source==='aruba')||f.hasAllegata;
         hh += '<div style="padding:10px 0;border-top:1px solid var(--sep)">';
         hh += '<div style="font-size:11px;color:var(--ink3);margin-bottom:4px">'+m.data+' · <b>'+fmt(Math.abs(m.importo))+'</b>'
           +' <span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:99px;background:'+((m.banca||'BPM')==='SumUp'?'#0066cc':'var(--red)')+';color:#fff">'+esc(m.banca||'BPM')+'</span></div>';
