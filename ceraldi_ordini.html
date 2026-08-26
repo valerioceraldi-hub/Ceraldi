@@ -613,6 +613,23 @@ document.addEventListener('touchend',function(e){
 var BP=[];
 var ORIGINAL_BP=[];
 // ── SUPABASE CONFIG ──────────────────────────────────────────
+// ── DIAGNOSTICA ERRORI GLOBALI (26/08, Valerio: "premo su sync e va in
+// crash su Safari, problema noto da tempo") — finora un errore imprevisto
+// durante la sync (o altrove) non lasciava traccia visibile: su Safari iOS
+// un errore non gestito può far sembrare che l'app "vada in crash" quando
+// in realtà si è solo bloccata silenziosamente. Questi due listener non
+// cambiano alcun comportamento, mostrano solo un toast con l'errore vero
+// così la prossima volta che succede sappiamo ESATTAMENTE cosa cercare
+// invece di indovinare.
+window.addEventListener('error',function(e){
+  console.error('[Errore globale]',e.message,e.filename+':'+e.lineno);
+  try{toast('⚠️ Errore: '+String(e.message||'sconosciuto').slice(0,70));}catch(_){}
+});
+window.addEventListener('unhandledrejection',function(e){
+  var msg=(e.reason&&e.reason.message)?e.reason.message:String(e.reason);
+  console.error('[Promise non gestita]',msg);
+  try{toast('⚠️ Errore: '+msg.slice(0,70));}catch(_){}
+});
 var SUPABASE_URL="https://qaqqptpprmfjlolordaq.supabase.co";
 var SUPABASE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFhcXFwdHBwcm1mamxvbG9yZGFxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4NDQ3MDgsImV4cCI6MjA5MTQyMDcwOH0.kTnxsNY3tua_ya4LCB8-vkVdQ1QBPGtLL7Gfg121d1o";
 
@@ -2548,8 +2565,10 @@ async function saveCatalogToSupabase(items){
   return ok;
 }
 
+var _syncInFlight=false; // vedi nota sotto
 function forceSyncWithSupabase(){
   var btn=document.getElementById('topbar-sync-btn');
+  if(_syncInFlight){toast('⇅ Sync già in corso, attendi...');return;}
   if(btn&&btn.disabled)return; // evita doppio tap
   toast('⇅ Sync in corso...');
   if(btn){btn.disabled=true;btn.style.opacity='0.4';btn.style.animation='spin 1s linear infinite';}
@@ -2564,10 +2583,23 @@ function forceSyncWithSupabase(){
       // tutto: se qualcosa lancia un errore PRIMA di entrare nella Promise
       // (es. un elemento DOM mancante), il bottone non resta bloccato per
       // sempre come poteva succedere prima.
+      // FIX (26/08, Valerio: problema ancora presente — "va in crash"):
+      // Promise.race NON annulla la sync reale quando scade il timeout, le
+      // continua a girare in background. Se nel frattempo l'utente ritocca
+      // "sync" perché l'icona si è sbloccata, partiva UNA SECONDA sync
+      // sovrapposta alla prima (stesse fetch, stessa scrittura di
+      // localStorage in parallelo) — sospetta causa reale del blocco.
+      // _syncInFlight resta true finché la sync VERA non è davvero finita,
+      // anche se il messaggio di timeout è già apparso prima.
+      _syncInFlight=true;
+      var realSync=_doSync();
+      realSync.then(function(){_syncInFlight=false;},function(){_syncInFlight=false;});
       var timeoutP=new Promise(function(_,rej){setTimeout(function(){rej(new Error('Rete troppo lenta, riprova — verifica la connessione'));},15000);});
-      Promise.race([_doSync(),timeoutP]).then(function(){
+      Promise.race([realSync,timeoutP]).then(function(){
         buildCats();renderCatalog();
         if(document.getElementById('pg-settings'))renderSettings();
+        var magPg=document.getElementById('pg-magazzino');
+        if(magPg&&magPg.classList.contains('on'))renderMagazzinoPage();
         toast('✅ Sync: '+BP.length+' prodotti, '+S.suppliers.length+' fornitori');
       }).catch(function(e){
         toast('⚠ '+e.message.slice(0,50));
@@ -2575,6 +2607,7 @@ function forceSyncWithSupabase(){
         if(btn){btn.disabled=false;btn.style.opacity='1';btn.style.animation='';}
       });
     }catch(eSync){
+      _syncInFlight=false;
       toast('⚠ Errore: '+eSync.message.slice(0,50));
       if(btn){btn.disabled=false;btn.style.opacity='1';btn.style.animation='';}
     }
@@ -9705,7 +9738,7 @@ function gdLoadScript(cb){
 /* ── FINE GOOGLE DRIVE ───────────────────────────────────────── */
 
 // ── AVVIO: carica Cloud poi inizializza tutto ─────────────
-var BUILD_VERSION='57 (Valerio: "la sezione fornitori non mi piace, sembra dozzinale" + "la priorità deve riferirsi solo ai fornitori dello stesso settore" + "fallo stile iOS") — sezione Fornitori riscritta: (1) FUNZIONALE — i fornitori sono ora raggruppati per settore merceologico (Bar/Pasticceria/Cucina/Carta + "Senza settore"), e le frecce ▲▼ di priorità spostano il fornitore solo rispetto agli altri dello stesso gruppo, non più rispetto a tutti i fornitori mescolati; (2) GRAFICO — badge "Fornitore preferito" pieno e box bordati sostituiti da un elenco in stile iOS (gruppi con righe separate da un filo sottile, pallina numerata invece del badge colorato, azioni testuali "Vedi scheda ›"/"Elimina" invece di bottoni pieni); (3) colore accent dell\'intera app allineato al blu di sistema iOS (#007AFF). Meccanismo di salvataggio (blur → saveSettings, con gestione rinomina) invariato.';
+var BUILD_VERSION='58 (Valerio: "non sincronizza e se premo su sync va in crash su Safari, problema noto da tempo") — aggiunta diagnostica errori globali (window.onerror/unhandledrejection: mostra un toast con l\'errore vero invece di bloccarsi in silenzio) per capire finalmente cosa causa il crash quando succederà di nuovo; corretta una probabile causa concreta: il bottone di sync non impediva una SECONDA sync sovrapposta se ritoccato dopo che il timeout visivo di 15s scadeva mentre la sync reale girava ancora in background (ora un flag resta attivo finché la sync vera non è davvero finita); il Magazzino ora si aggiorna anche lui dopo una sync riuscita, se è la pagina aperta al momento (prima restava con dati vecchi finché non si cambiava pagina).';
 // BUG CORRETTO (09/08, segnalato da Valerio: "mi dice di aggiornare ma è già
 // l'ultima, e con l'avviso non riesco a fare l'ordine") — il controllo
 // confrontava l'INTERO testo descrittivo di BUILD_VERSION, carattere per
