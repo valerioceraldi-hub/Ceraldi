@@ -2988,12 +2988,87 @@ function _renderSelToolbar(){
       <div style="font-size:15px;font-weight:700">${count} selezionate</div>
       <div style="font-size:11px;opacity:.85">${fmt(totale)} totale</div>
     </div>
-    <button onclick="_bulkAzione('paga')" title="Segna pagate" style="background:rgba(255,255,255,.2);border:none;color:#fff;border-radius:8px;padding:8px 10px;font-size:16px;cursor:pointer;line-height:1">✓</button>
+    <button onclick="_bulkAzione('paga')" title="Segna pagate insieme (stesso pagamento)" style="background:rgba(255,255,255,.2);border:none;color:#fff;border-radius:8px;padding:8px 10px;font-size:16px;cursor:pointer;line-height:1">✓</button>
     <button onclick="_bulkAzione('cambiaMetodo')" title="Cambia metodo" style="background:rgba(255,255,255,.2);border:none;color:#fff;border-radius:8px;padding:8px 10px;font-size:16px;cursor:pointer;line-height:1">💳</button>
     <button onclick="_bulkAzione('riconciliaGruppo')" title="Riconcilia con banca" style="background:rgba(255,255,255,.2);border:none;color:#fff;border-radius:8px;padding:8px 10px;font-size:16px;cursor:pointer;line-height:1">🔗</button>
     <button onclick="_bulkAzione('esporta')" title="Esporta" style="background:rgba(255,255,255,.2);border:none;color:#fff;border-radius:8px;padding:8px 10px;font-size:16px;cursor:pointer;line-height:1">📤</button>
     <button onclick="_bulkAzione('elimina')" title="Elimina" style="background:rgba(255,255,255,.2);border:none;color:#fff;border-radius:8px;padding:8px 10px;font-size:16px;cursor:pointer;line-height:1">🗑</button>
   `;
+}
+
+// FIX 27/08 (richiesto da Valerio): segnare MANUALMENTE più fatture come
+// pagate insieme con UN SOLO pagamento (assegno/bonifico/carta/contanti),
+// scrivendo UNA VOLTA SOLA il metodo e l'eventuale riferimento condiviso
+// (numero assegno o riferimento bonifico) su tutta la selezione, invece di
+// aprire ogni fattura una per una. Lo stesso riferimento scritto su tutte è
+// anche il segnale che poi permette a _trovaGruppoPagatoManualmente di
+// riconoscerle come gruppo quando arriva l'estratto conto — vedi sopra.
+function _apriSegnaPagateInsieme(ids){
+  const sel = ids.map(id=>fatture.find(f=>f.id===id)).filter(Boolean);
+  if(!sel.length) return;
+  const count = sel.length;
+  const totale = sel.reduce((s,f)=>s+(f.importo||0),0);
+  const fornitoriDiversi = new Set(sel.map(f=>(f.fornitore||'').trim().toLowerCase())).size > 1;
+  let html = '<div style="text-align:left">';
+  html += '<div style="margin-bottom:10px;font-size:13px">'+count+' fatture selezionate — totale <b>'+fmt(totale)+'</b></div>';
+  if(fornitoriDiversi) html += '<div style="font-size:12px;color:var(--red);background:var(--red-light);border-radius:8px;padding:8px;margin-bottom:10px">⚠️ Fornitori diversi nella selezione — verifica che sia voluto prima di confermare.</div>';
+  html += '<label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px">Metodo di pagamento (unico per tutte)</label>';
+  html += '<select id="_sgMetodo" onchange="_sgAggiornaCampoRif()" style="width:100%;padding:9px;border:1.5px solid var(--sep);border-radius:8px;margin-bottom:10px;font-family:inherit;font-size:14px">'
+    +'<option value="assegno">📝 Assegno</option>'
+    +'<option value="bonifico">🏦 Bonifico</option>'
+    +'<option value="carta">💳 Carta</option>'
+    +'<option value="contanti">💵 Contanti</option></select>';
+  html += '<div id="_sgRifWrap"><label id="_sgRifLabel" style="display:block;font-size:12px;font-weight:600;margin-bottom:4px">N° Assegno (uguale su tutte)</label>'
+    +'<input type="text" id="_sgRif" placeholder="Es. 0208771000" style="width:100%;padding:9px;border:1.5px solid var(--sep);border-radius:8px;margin-bottom:10px;font-family:inherit;font-size:14px;box-sizing:border-box"></div>';
+  html += '<label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px">Data pagamento</label>';
+  html += '<input type="date" id="_sgData" value="'+new Date().toISOString().slice(0,10)+'" style="width:100%;padding:9px;border:1.5px solid var(--sep);border-radius:8px;font-family:inherit;font-size:14px;box-sizing:border-box">';
+  html += '<div style="font-size:11px;color:var(--ink3);margin-top:8px;line-height:1.4">Scrivendo lo stesso numero/riferimento su tutte, quando arriva l\'estratto conto il sistema le riconosce come pagate insieme.</div>';
+  html += '</div>';
+  window._sgIds = ids;
+  openMo('Segna pagate insieme', html, _confermaSegnaPagateInsieme, 'riconcilia', {okLabel:'✓ Segna pagate'});
+  setTimeout(_sgAggiornaCampoRif, 50);
+}
+
+function _sgAggiornaCampoRif(){
+  const metodo = gv('_sgMetodo');
+  const wrap = document.getElementById('_sgRifWrap');
+  const lbl = document.getElementById('_sgRifLabel');
+  if(!wrap || !lbl) return;
+  if(metodo==='assegno'){ wrap.style.display='block'; lbl.textContent='N° Assegno (uguale su tutte)'; }
+  else if(metodo==='bonifico'){ wrap.style.display='block'; lbl.textContent='Riferimento bonifico (uguale su tutte)'; }
+  else { wrap.style.display='none'; }
+}
+
+async function _confermaSegnaPagateInsieme(){
+  const ids = window._sgIds||[];
+  const sel = ids.map(id=>fatture.find(f=>f.id===id)).filter(Boolean);
+  const count = sel.length;
+  const metodo = gv('_sgMetodo') || 'contanti';
+  const riferimento = (gv('_sgRif')||'').trim();
+  const dataPag = gv('_sgData') || new Date().toISOString().slice(0,10);
+  closeMo();
+  let okCount = 0, failCount = 0;
+  for(const f of sel){
+    const idx = fatture.findIndex(x=>x.id===f.id);
+    if(idx<0) continue;
+    fatture[idx].stato = 'pagata';
+    fatture[idx].pagamento = metodo;
+    fatture[idx].pagamentoOrigine = 'manuale';
+    fatture[idx].pagamentoImpostatoIl = new Date().toISOString();
+    fatture[idx].dataPag = dataPag;
+    fatture[idx].dataPagamento = dataPag;
+    if(fatture[idx].parzPagato) fatture[idx].parzPagato = 0;
+    if(metodo==='assegno' && riferimento) fatture[idx].assegno = riferimento;
+    if(metodo==='bonifico' && riferimento) fatture[idx].bonRif = riferimento;
+    const esito = await dbUpdate(fatture[idx]);
+    if(esito) okCount++; else failCount++;
+  }
+  save(fatture);
+  _uscitaSelezione();
+  aggiornaAlertBanner();
+  toast(failCount>0
+    ? `⚠️ ${okCount} segnate come pagate, ${failCount} non salvate (riprova)`
+    : `✓ ${count} fatture segnate pagate insieme`+(riferimento?` (rif. ${riferimento})`:''));
 }
 
 async function _bulkAzione(action){
@@ -3017,44 +3092,7 @@ async function _bulkAzione(action){
   }
 
   if(action === 'paga'){
-    // Per ogni fattura usa il default fornitore o contanti; per assegno chiede dati uno alla volta
-    const sel = ids.map(id=>fatture.find(f=>f.id===id)).filter(Boolean);
-    const conAssegno = sel.filter(f=>{
-      const def = (typeof getPagDefault==='function'?getPagDefault(f.fornitore):null)||{};
-      return (def.pagamento||'contanti')==='assegno';
-    });
-    if(conAssegno.length){
-      toast(`⚠️ ${conAssegno.length} fattura/e con default assegno: usa "Paga ora" singolarmente`);
-      return;
-    }
-    openMo('Segna pagate', `Segnare ${count} fattur${count>1?'e come pagate':'a come pagata'} oggi?`, async ()=>{
-      closeMo();
-      const oggiStr = new Date().toISOString().slice(0,10);
-      let okCount = 0, failCount = 0;
-      for(const f of sel){
-        const idx = fatture.findIndex(x=>x.id===f.id);
-        if(idx<0) continue;
-        const def = (typeof getPagDefault==='function'?getPagDefault(f.fornitore):null)||{};
-        const metodo = def.pagamento || 'contanti';
-        fatture[idx].stato = 'pagata';
-        fatture[idx].pagamento = metodo;
-        fatture[idx].dataPag = oggiStr;
-        if(fatture[idx].parzPagato) fatture[idx].parzPagato = 0;
-        // dbUpdate ora restituisce davvero l'esito (null se fallita, la riga se
-        // ok) — prima questo try/catch non serviva a nulla: dbUpdate non
-        // lanciava mai un'eccezione, mostrava solo un suo toast interno e non
-        // c'era modo di sapere QUANTE delle fatture selezionate erano andate
-        // storte in un'operazione di gruppo.
-        const esito = await dbUpdate(fatture[idx]);
-        if(esito) okCount++; else failCount++;
-      }
-      save(fatture);
-      _uscitaSelezione();
-      aggiornaAlertBanner();
-      toast(failCount>0
-        ? `⚠️ ${okCount} segnate come pagate, ${failCount} non salvate (riprova)`
-        : `✓ ${count} segnate come pagate`);
-    }, 'user');
+    _apriSegnaPagateInsieme(ids);
     return;
   }
 
@@ -4724,7 +4762,9 @@ function renderLista(){
     var ncBadge=isNotaCredito?'<span style="display:inline-flex;align-items:center;gap:3px;background:var(--red-light);color:var(--red);border-radius:6px;padding:2px 7px;font-size:11px;font-weight:700;margin-right:2px">📋 N/C</span>':isNotaDebito?'<span style="display:inline-flex;align-items:center;gap:3px;background:#FFF4E0;color:#b36a00;border-radius:6px;padding:2px 7px;font-size:11px;font-weight:700;margin-right:2px">📋 N/D</span>':isAutofattura?'<span style="display:inline-flex;align-items:center;gap:3px;background:#F0F0FF;color:#5856d6;border-radius:6px;padding:2px 7px;font-size:11px;font-weight:700;margin-right:2px">🔄 Auto</span>':isFattDiff?'<span style="display:inline-flex;align-items:center;gap:3px;background:#EAF4FF;color:var(--blue);border-radius:6px;padding:2px 7px;font-size:11px;font-weight:700;margin-right:2px">📦 Differita</span>':'';
     const ddtBadge=isDdt?`<span class="ddt-badge ${ddtOpen?'ddt-open':''}">&#128230; ${ddtOpen?'DDT ⚠️ fattura mancante':'DDT ↔ Fatt. '+esc(f.fattNum)}</span> `:'';
     // badge collegamento fattura→DDT
-    const fattDdtBadge=(!isDdt && f.numDdt)?`<span style="display:inline-flex;align-items:center;gap:3px;background:#EAF4FF;color:var(--blue);border-radius:6px;padding:2px 7px;font-size:11px;font-weight:600;margin-right:4px">&#128279; DDT ${esc(f.numDdt)}</span>`:'';
+    const _ddtCollegati=(!isDdt && typeof _ddtPerFattura==='function')?_ddtPerFattura(f):[];
+    const _ddtNumeriStr=_ddtCollegati.length ? _ddtCollegati.map(function(d){return d.numero||'';}).filter(Boolean).join(', ') : (f.numDdt||'');
+    const fattDdtBadge=(!isDdt && _ddtNumeriStr)?`<span style="display:inline-flex;align-items:center;gap:3px;background:#EAF4FF;color:var(--blue);border-radius:6px;padding:2px 7px;font-size:11px;font-weight:600;margin-right:4px">&#128279; DDT ${esc(_ddtNumeriStr)}</span>`:'';
     const rateInfo=nRate>0?`<span style="font-size:11px;color:var(--blue);margin-left:4px">+${nRate} rata${nRate>1?'e':''}</span>`:'';
     // stato badge
     const statoMap={pagata:'stato-ok',da_pagare:'stato-da',parziale:'stato-parz'};
@@ -4840,7 +4880,7 @@ function renderLista(){
     const origineBadge=`<span title="${origineTitle}" style="font-size:11px;opacity:.6;margin-left:3px">${origineIco}</span>`;
     // Badge DDT compatti
     const ddtBadgeNew=isDdt?`<span style="background:${ddtOpen?'var(--red-light)':'#EAF4FF'};color:${ddtOpen?'var(--red)':'var(--blue)'};border-radius:5px;padding:1px 6px;font-size:10px;font-weight:700">📦 DDT${ddtOpen?' ⚠️':' ↔'+esc(f.fattNum)}</span>`:'';
-    const fattDdtBadgeNew=(!isDdt&&f.numDdt)?`<span style="background:#EAF4FF;color:var(--blue);border-radius:5px;padding:1px 6px;font-size:10px;font-weight:700">🔗 ${esc(f.numDdt)}</span>`:'';
+    const fattDdtBadgeNew=(!isDdt&&_ddtNumeriStr)?`<span style="background:#EAF4FF;color:var(--blue);border-radius:5px;padding:1px 6px;font-size:10px;font-weight:700">🔗 ${esc(_ddtNumeriStr)}</span>`:'';
     // Bottoni azione: sempre 3 fissi + extra se disponibili
     const hasFattAllegata=(f.fatturaAllegata&&f.fatturaAllegata.length>0)||(f.xmlGithubPath&&f.xmlGithubPath.length>0)||(f.source==='aruba')||f.hasAllegata;
     const extraBtns=[];
@@ -4853,6 +4893,13 @@ function renderLista(){
     // concetto di "più movimenti bancari insieme" non si applica.
     if((st==='da_pagare'||st==='parziale') && (f.pagamento==='assegno'||f.pagamento==='bonifico')){
       extraBtns.push(`<button class="fi-act-btn" onclick="event.stopPropagation();_apriCercaRateFattura('${f.id}')">🧮 Rate</button>`);
+    }
+    // Ricerca combinazioni DDT→fattura (27/08, richiesto da Valerio): una
+    // fattura che arriva a fine mese e copre più DDT già inseriti in Prima
+    // Nota — stesso principio della ricerca "Rate" sopra, ma sui DDT dello
+    // stesso fornitore invece che sui movimenti bancari.
+    if(!isDdt && !isNotaCredito){
+      extraBtns.push(`<button class="fi-act-btn" onclick="event.stopPropagation();_apriCercaDdtFattura('${f.id}')">🧮 DDT</button>`);
     }
     // Quick-pay: bottone verde visibile solo se "Da pagare" o "Parziale" — MAI per note di credito
     const quickPayBtn = (!isNotaCredito && (st==='da_pagare' || st==='parziale'))
@@ -5661,6 +5708,21 @@ function _assegniPerFattura(fatturaId){
   });
   return nums;
 }
+// FIX 27/08 (richiesto da Valerio, stesso pattern del bug assegni/riconciliazione):
+// f.numDdt è anche questo un campo SINGOLO — se si agganciano più DDT alla
+// stessa fattura uno alla volta (_agganciaDiretto), resta visibile solo
+// l'ultimo agganciato. Il puntatore AFFIDABILE è quello inverso, sul DDT
+// stesso (ddt.fattNum), scritto SEMPRE ad ogni aggancio — qui si ricostruisce
+// l'elenco completo leggendo tutti i DDT che puntano a questa fattura.
+function _ddtPerFattura(fattura){
+  if(!fattura || !fattura.numero) return [];
+  var numTarget = String(fattura.numero).trim();
+  var fornTarget = String(fattura.fornitore||'').trim().toLowerCase();
+  return (fatture||[]).filter(function(d){
+    return d.tipo==='ddt' && String(d.fattNum||'').trim()===numTarget
+      && String(d.fornitore||'').trim().toLowerCase()===fornTarget;
+  }).sort(function(a,b){ return (a.data||'').localeCompare(b.data||''); });
+}
 
 // BUG CORRETTO (08/08): questa era rimasta l'unica copia non ancora sistemata
 // dell'id numerico per gli incassi SumUp — le due Edge Function erano già
@@ -5918,7 +5980,7 @@ async function _agganciaDiretto(ddtId, numFattura){
   // Aggiorna anche la fattura con il numDdt
   const ddt = fatture[idx];
   const fatt = fatture.find(f=>f.tipo==='fattura' && (f.numero||'')===(numFattura||'') && f.fornitore===ddt.fornitore);
-  if(fatt && !fatt.numDdt){
+  if(fatt){
     const idxF = fatture.findIndex(x=>x.id===fatt.id);
     fatture[idxF].numDdt = ddt.numero||'';
     dbUpdate(fatture[idxF]);
@@ -7399,9 +7461,127 @@ async function _confermaRateFattura(fatturaId, comboIdx){
   toast('✓ Fattura segnata pagata con '+combo.movimenti.length+' movimenti', {forza:true});
 }
 
+// ═══ RICERCA COMBINAZIONI DDT → FATTURA (27/08, richiesto da Valerio) ═══
+// Stesso principio di _trovaMovimentiPerFattura/_apriCercaRateFattura sopra,
+// ma sui DDT non ancora agganciati dello stesso fornitore invece che sui
+// movimenti bancari: quando arriva una fattura che copre più DDT inseriti
+// prima in Prima Nota, cerca da sola quale combinazione di DDT aperti somma
+// esattamente all'importo della fattura.
+function _trovaCombinazioniDdtPerFattura(fatturaId){
+  const f = (fatture||[]).find(function(x){ return String(x.id)===String(fatturaId); });
+  if(!f) return {errore:'Fattura non trovata'};
+  if(f.tipo!=='fattura') return {errore:'Solo le fatture possono essere agganciate a dei DDT'};
+  const impF = f.importo||0;
+  if(impF<=0.01) return {errore:'Questa fattura non ha un importo valido'};
+  const fornTarget = String(f.fornitore||'').trim().toLowerCase();
+  if(!fornTarget) return {errore:'Fattura senza fornitore'};
+  const candidati = (fatture||[]).filter(function(d){
+    if(d.tipo!=='ddt' || d.fattNum) return false; // solo DDT ancora non agganciati
+    return String(d.fornitore||'').trim().toLowerCase()===fornTarget;
+  });
+  if(candidati.length < 1) return {errore:'Nessun DDT di questo fornitore ancora da agganciare'};
+  if(candidati.length > 35) return {errore:'', troppiCandidati:true, candidatiUsati:candidati.length};
+  const targetCents = Math.round(impF*100);
+  const cents = candidati.map(function(d){ return Math.round((d.importo||0)*100); });
+  const n = cents.length;
+  const suffixReach = new Array(n+1);
+  suffixReach[n] = new Set([0]);
+  for(let i=n-1;i>=0;i--){
+    const prev = suffixReach[i+1];
+    const cur = new Set(prev);
+    for(const s of prev) cur.add(s+cents[i]);
+    suffixReach[i] = cur;
+  }
+  const soluzioni = [];
+  if(suffixReach[0].has(targetCents)){
+    const MAX_SOLUZIONI = 5;
+    let passi = 0;
+    const MAX_PASSI = 2000000;
+    (function backtrack(idx, rimanente, scelti){
+      passi++;
+      if(passi > MAX_PASSI || soluzioni.length >= MAX_SOLUZIONI) return;
+      if(rimanente === 0 && scelti.length > 0){ soluzioni.push(scelti.slice()); return; }
+      if(idx >= n) return;
+      if(!suffixReach[idx].has(rimanente)) return;
+      scelti.push(idx);
+      backtrack(idx+1, rimanente-cents[idx], scelti);
+      scelti.pop();
+      backtrack(idx+1, rimanente, scelti);
+    })(0, targetCents, []);
+  }
+  const combinazioni = soluzioni.map(function(sol){
+    return { ddt: sol.map(function(i){ return candidati[i]; }), somma: sol.reduce(function(s,i){ return s+(candidati[i].importo||0); },0) };
+  });
+  return {combinazioni:combinazioni, candidatiUsati:candidati.length};
+}
+
+function _apriCercaDdtFattura(fatturaId){
+  const f = (fatture||[]).find(function(x){ return String(x.id)===String(fatturaId); });
+  if(!f) return;
+  toast('🧮 Ricerca DDT corrispondenti…', 2000);
+  setTimeout(function(){
+    const esito = _trovaCombinazioniDdtPerFattura(fatturaId);
+    if(esito.errore){ alert(esito.errore); return; }
+    if(esito.troppiCandidati){
+      alert('Troppi DDT da controllare ('+esito.candidatiUsati+') per una ricerca sicura in automatico.');
+      return;
+    }
+    if(!esito.combinazioni.length){
+      alert('Nessuna combinazione di DDT di "'+(f.fornitore||'')+'" corrisponde esattamente all\'importo di questa fattura ('+fmt(f.importo||0)+'), su '+esito.candidatiUsati+' DDT ancora da agganciare controllati.');
+      return;
+    }
+    const existing = document.getElementById('_ddtCercaOv');
+    if(existing) existing.remove();
+    const ov = document.createElement('div');
+    ov.id = '_ddtCercaOv';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:900;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px)';
+    let hh = '<div style="background:var(--bg);border-radius:20px 20px 0 0;width:100%;max-width:500px;max-height:80vh;overflow-y:auto;padding:20px">';
+    hh += '<div style="font-size:17px;font-weight:700;margin-bottom:4px">DDT corrispondenti trovati</div>';
+    hh += '<div style="font-size:13px;color:var(--ink3);margin-bottom:16px">'+esc(f.fornitore||'')+' N°'+esc(f.numero||'')+' — importo '+fmt(f.importo||0)+'</div>';
+    esito.combinazioni.forEach(function(combo, idx){
+      hh += '<div style="background:var(--surface2);border-radius:12px;padding:12px;margin-bottom:10px">';
+      hh += '<div style="font-size:12px;font-weight:700;color:var(--ink3);margin-bottom:8px">Combinazione '+(idx+1)+' — '+combo.ddt.length+' DDT, totale '+fmt(combo.somma)+'</div>';
+      combo.ddt.forEach(function(d){
+        hh += '<div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--sep)">'+esc(d.data||'')+' — DDT N°'+esc(d.numero||'')+' — '+fmt(d.importo||0)+'</div>';
+      });
+      hh += '<button onclick="_confermaDdtFattura(\''+fatturaId+'\','+idx+')" style="width:100%;margin-top:10px;padding:10px;border:none;border-radius:8px;background:var(--green);color:#fff;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer">✓ Aggancia questi DDT</button>';
+      hh += '</div>';
+    });
+    hh += '<button onclick="document.getElementById(\'_ddtCercaOv\').remove()" style="width:100%;padding:10px;border:1px solid var(--sep);border-radius:8px;background:var(--surface);color:var(--ink3);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">Annulla</button>';
+    hh += '</div>';
+    ov.innerHTML = hh;
+    ov.onclick = function(e){ if(e.target===ov) ov.remove(); };
+    document.body.appendChild(ov);
+    window._ddtCombinazioni = esito.combinazioni;
+  }, 50);
+}
+
+async function _confermaDdtFattura(fatturaId, comboIdx){
+  const f = (fatture||[]).find(function(x){ return String(x.id)===String(fatturaId); });
+  const combo = (window._ddtCombinazioni||[])[comboIdx];
+  if(!f || !combo) return;
+  const ov = document.getElementById('_ddtCercaOv');
+  if(ov) ov.remove();
+  for(const d of combo.ddt){
+    const idxD = fatture.findIndex(function(x){ return x.id===d.id; });
+    if(idxD<0) continue;
+    fatture[idxD].fattNum = f.numero||'';
+    if(typeof dbUpdate==='function') await dbUpdate(fatture[idxD]);
+  }
+  // Riferimento singolo di comodo (compatibilità con i consumatori che
+  // leggono ancora f.numDdt) — l'elenco completo si vede sempre con
+  // _ddtPerFattura, che legge il puntatore affidabile su ogni DDT.
+  const idxF = fatture.findIndex(function(x){ return x.id===f.id; });
+  if(idxF>=0){
+    fatture[idxF].numDdt = combo.ddt[combo.ddt.length-1].numero||'';
+    if(typeof dbUpdate==='function') await dbUpdate(fatture[idxF]);
+  }
+  if(typeof renderLista==='function') renderLista();
+  toast('✓ '+combo.ddt.length+' DDT agganciati a questa fattura', {forza:true});
+}
+
 async function applicaPagDefaultFornitore(forn){
   const def = getPagDefault(forn);
-  if(!def){ toast('⚠️ Nessun default per '+forn); return; }
   const defObj = typeof def==='string' ? {pagamento:def, stato:'da_pagare'} : def;
   const pagIco = {contanti:'💵',bonifico:'🏦',assegno:'📝',carta:'💳'};
   const statoLbl = {pagata:'✅ Pagata', da_pagare:'🔴 Da pagare', parziale:'🟡 Parziale'};
@@ -15526,6 +15706,101 @@ function renderRiconciliazione(){
     if(!_orfaniMap[key]) _orfaniMap[key] = f;
   });
 
+  // ═══ FIX 27/08 (richiesto da Valerio, poi corretto su suo avviso): "se pago
+  // 2+ fatture con un unico assegno/bonifico e le segno pagate a mano, quando
+  // arriva l'estratto lo capisce da solo?" — la PRIMA versione di questo fix
+  // cercava combinazioni "alla cieca" (somma di importi) anche tra le fatture
+  // già segnate pagate a mano: Valerio ha giustamente fatto notare che questo
+  // rischia confusione — con più fatture pagate separatamente allo stesso
+  // fornitore, una somma può tornare per puro caso. Corretto: per le fatture
+  // GIÀ segnate pagate a mano si cercano SOLO gruppi che Valerio ha davvero
+  // dichiarato come pagati insieme — stesso numero assegno (f.assegno) o
+  // stesso riferimento bonifico (f.bonRif/f.bonCaus), campi che già compila
+  // lui stesso quando segna una fattura pagata, scrivendo lo STESSO valore su
+  // tutte quelle coperte da un unico pagamento. Nessuna somma "a caso": solo
+  // fatti già dichiarati. La ricerca per SOMMA (combinatoria) resta invece
+  // invariata per le fatture ancora "da pagare"/"parziale" (mai toccate da
+  // questo fix, comportamento preesistente del bottone "🧮 Cerca combinazioni").
+  function _trovaGruppoPagatoManualmente(imp, isAssegnoM, isBonificoM){
+    var candidati = (fatture||[]).filter(function(f){
+      return f.tipo==='fattura' && f.stato==='pagata' && !f.riconciliata
+        && f.pagamentoOrigine==='manuale'
+        && ((isAssegnoM && f.pagamento==='assegno') || (isBonificoM && f.pagamento==='bonifico'));
+    });
+    var gruppi = {};
+    candidati.forEach(function(f){
+      var chiave = null;
+      if(isAssegnoM && f.assegno) chiave = 'ass:'+String(f.assegno).replace(/\D/g,'');
+      else if(isBonificoM && f.bonRif) chiave = 'bonrif:'+String(f.bonRif).trim().toLowerCase();
+      else if(isBonificoM && f.bonCaus) chiave = 'boncaus:'+String(f.bonCaus).trim().toLowerCase();
+      if(!chiave) return;
+      if(!gruppi[chiave]) gruppi[chiave] = [];
+      gruppi[chiave].push(f);
+    });
+    var risultati = [];
+    Object.keys(gruppi).forEach(function(k){
+      var arr = gruppi[k];
+      if(arr.length < 2) return; // un solo riferimento non è un "gruppo": già gestito dal match singolo normale sopra
+      var somma = arr.reduce(function(s,f){ return s+(f.importo||0); }, 0);
+      if(Math.abs(somma-imp) <= 0.01) risultati.push({fatture:arr, somma:somma});
+    });
+    return risultati;
+  }
+
+  function _provaComboAutomatica(m, imp, chiaveDescMov, isAssegnoM, isBonificoM){
+    var _fonteDichiarata = true;
+    var trovati = _trovaGruppoPagatoManualmente(imp, isAssegnoM, isBonificoM);
+    var combo = null;
+    if(trovati.length===1){
+      combo = trovati[0];
+    } else if(trovati.length===0){
+      // Nessun gruppo esplicitamente dichiarato: come già faceva il bottone
+      // manuale "🧮 Cerca combinazioni", prova comunque la ricerca per SOMMA,
+      // ma SOLO tra le fatture ancora aperte (mai su quelle già pagate a
+      // mano — vedi nota sopra): serve un fornitore plausibile per non
+      // cercare su tutta l'anagrafica alla cieca.
+      var fornitoriGuess = null;
+      if(isAssegnoM){
+        var db = cacheGet(KDP, {});
+        fornitoriGuess = Object.keys(db).filter(function(k){
+          var v = db[k]; var pag = typeof v==='string' ? v : (v&&v.pagamento);
+          return pag==='assegno';
+        });
+      } else if(isBonificoM){
+        var _mFavAuto = (m.descrizione||'').match(/favore\s+([a-zà-ù'.\s]+?)(?:\s+notprovide|\s+not\s+provid|\s+add\.tot|\s*$)/i);
+        if(_mFavAuto){
+          var _benefAuto = _mFavAuto[1].trim();
+          var _candFornAuto = [...new Set((fatture||[])
+            .filter(function(f){ return f.fornitore && (f.stato==='da_pagare'||f.stato==='parziale'); })
+            .map(function(f){ return f.fornitore.trim(); }))]
+            .filter(function(fn){
+              var _tok = function(s){ return (s||'').toLowerCase().replace(/[^a-zà-ù\s]/gi,'').split(/\s+/).filter(function(w){ return w.length>=3; }); };
+              var _tB = _tok(_benefAuto), _tF = _tok(fn);
+              return _tB.some(function(w){ return _tF.indexOf(w)>=0; });
+            });
+          fornitoriGuess = _candFornAuto;
+        }
+      }
+      if(!fornitoriGuess || !fornitoriGuess.length) return false;
+      var esito = _trovaCombinazioniEsatte(imp, fornitoriGuess, m.data);
+      if(!esito.combinazioni || esito.combinazioni.length!==1) return false; // 0 = niente, >1 = ambiguo: lascia decidere a mano col bottone "🔗"/"🧮"
+      combo = esito.combinazioni[0];
+      _fonteDichiarata = false;
+    } else {
+      return false; // più di un gruppo dichiarato somma a questo importo: ambiguo, lascia decidere a mano
+    }
+    if(!combo || combo.fatture.length < 2) return false; // singola fattura: già gestito dal ramo normale sopra
+    var giaRifiutata = combo.fatture.some(function(f){ return _rifiutatiSet.has(chiaveDescMov+'|'+f.id) || fattIdUsate.has(f.id); });
+    if(giaRifiutata) return false;
+    var _elenco = combo.fatture.map(function(f){ return (f.fornitore||'')+' N°'+(f.numero||'')+' ('+fmt(f.importo||0)+')'; }).join(', ');
+    daConfermare.push({mov:m, fatt:null, fatture:combo.fatture, score: _fonteDichiarata?85:60, isCombo:true,
+      isAssegno:isAssegnoM, isBonifico:isBonificoM, numAssStr:'',
+      avviso: _fonteDichiarata
+        ? '🧩 '+combo.fatture.length+' fatture segnate pagate con lo stesso riferimento, somma esatta: '+_elenco
+        : '🧩 Nessuna fattura singola corrisponde, ma la SOMMA di '+combo.fatture.length+' fatture APERTE sì: '+_elenco+' — probabile pagamento unico di più fatture insieme.'});
+    return true;
+  }
+
   pagamentiFatture.forEach(function(m){
     var imp    = Math.abs(m.importo);
     var dLow   = (m.descrizione||'').toLowerCase();
@@ -15948,11 +16223,11 @@ function renderRiconciliazione(){
               ? '⚠️ Importo identico a '+_assegnoCandidati.length+' fatture diverse (stesso numero/importo in anagrafica?) — verifica bene quale prima di confermare.'
               : '📝 Assegno — importo identico, ma nessun nome fornitore leggibile nel testo bancario: verifica manualmente prima di confermare.'});
         });
+      } else if(_provaComboAutomatica(m, imp, _chiaveDesc, true, false)){
+        // trovata una combinazione di più fatture, già messa in "da confermare"
       } else {
         nonAbbinati.push(m);
       }
-
-    } else if(isPaypal){
       // FIX 25/08 (Valerio: "Gli addebiti PayPal non mostrano il destinatario
       // della fattura"). Un addebito SDD PayPal riporta in causale solo
       // "PayPal Europe S.a.r.l. et Cie S.C.A" — cioè PayPal stesso, MAI il
@@ -15983,6 +16258,8 @@ function renderRiconciliazione(){
         nonAbbinati.push(m);
       }
 
+    } else if(_provaComboAutomatica(m, imp, _chiaveDesc, false, isBonifico)){
+      // trovata una combinazione di più fatture, già messa in "da confermare"
     } else {
       nonAbbinati.push(m);
     }
@@ -16402,7 +16679,25 @@ function renderRiconciliazione(){
       hh += '<div style="font-size:11px;font-weight:700;color:var(--ink3);text-transform:uppercase;letter-spacing:.5px;margin:10px 0 6px;padding-top:8px;border-top:1px solid var(--sep)">'+icona+' '+titolo+' ('+gruppo.length+')</div>';
       gruppo.forEach(function(d){
         var idx = daConfermare.indexOf(d);
-        var m = d.mov, f = d.fatt;
+        var m = d.mov;
+        // FIX 27/08: voce "combo" — una sola fattura non basta, ma la SOMMA
+        // di più fatture (già segnate pagate a mano o ancora aperte) sì.
+        if(d.isCombo){
+          hh += '<div style="padding:10px 0;border-top:1px solid var(--sep)">';
+          hh += '<div style="font-size:11px;color:var(--ink3);margin-bottom:4px">'+m.data+' · <b>'+fmt(Math.abs(m.importo))+'</b>'
+            +' <span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:99px;background:'+((m.banca||'BPM')==='SumUp'?'#0066cc':'var(--red)')+';color:#fff">'+esc(m.banca||'BPM')+'</span></div>';
+          hh += '<div style="font-size:11px;font-weight:500;line-height:1.4;margin-bottom:6px;word-break:break-word;white-space:pre-wrap;color:var(--ink)">'+esc(m.descrizione||'')+'</div>';
+          if(d.avviso) hh += '<div style="font-size:11px;color:#b36a00;background:#fff8ec;border:1px solid rgba(179,106,0,.25);border-radius:6px;padding:6px 8px;margin-bottom:8px">'+esc(d.avviso)+'</div>';
+          (d.fatture||[]).forEach(function(fc){
+            hh += '<div style="font-size:11px;color:var(--blue);margin-bottom:2px">↓ <b>'+esc(fc.fornitore||'')+'</b> N°'+esc(fc.numero||'')+' del '+fc.data+' ('+fmt(fc.importo||0)+')'+(fc.stato==='pagata'?' <span style="color:#1a7a3a">· già segnata pagata</span>':'')+'</div>';
+          });
+          hh += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">';
+          hh += '<button onclick="_confermaComboPagamento('+idx+',true)" style="flex:1;min-width:70px;padding:7px 8px;border:1px solid var(--green);border-radius:6px;background:var(--green-light);color:#1a7a3a;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">✓ Aggancia a tutte</button>';
+          hh += '<button onclick="_confermaComboPagamento('+idx+',false)" style="flex:1;min-width:70px;padding:7px 8px;border:1px solid var(--red);border-radius:6px;background:var(--red-light);color:var(--red);font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">✗ Non corretto</button>';
+          hh += '</div></div>';
+          return;
+        }
+        var f = d.fatt;
         var hasDoc = (f.fatturaAllegata&&f.fatturaAllegata.length>0)||(f.xmlGithubPath&&f.xmlGithubPath.length>0)||(f.source==='aruba')||f.hasAllegata;
         hh += '<div style="padding:10px 0;border-top:1px solid var(--sep)">';
         hh += '<div style="font-size:11px;color:var(--ink3);margin-bottom:4px">'+m.data+' · <b>'+fmt(Math.abs(m.importo))+'</b>'
@@ -18054,6 +18349,36 @@ function _confermaPagamento(idx, conferma){
   var _sy = window.pageYOffset || document.documentElement.scrollTop || 0;
   renderRiconciliazione();
   setTimeout(function(){ window.scrollTo(0, _sy); }, 30);
+}
+
+// FIX 27/08: conferma/rifiuto di una voce "combo" (più fatture, un solo
+// movimento) proposta da _provaComboAutomatica. Mai applicata da sola prima
+// di questo tocco esplicito — stessa cautela di _confermaPagamento.
+async function _confermaComboPagamento(idx, conferma){
+  var d = (window._pagDaConfermare||[])[idx];
+  if(!d || !d.isCombo) return;
+  var _chiaveDescCombo = (d.mov.descrizione||'').toLowerCase().replace(/\s+/g,'').slice(0,40);
+  if(conferma){
+    if(typeof _applicaGruppoRiconciliazione==='function'){
+      await _applicaGruppoRiconciliazione(d.fatture, [d.mov], {ridisegnaBanca:true});
+    }
+    toast('✓ Movimento agganciato a '+d.fatture.length+' fatture insieme', {forza:true});
+  } else {
+    // Salva rifiuto per ciascuna fattura del combo, stessa chiave usata dal
+    // resto del motore (_rifiutatiSet), così questa combinazione specifica
+    // non viene riproposta al prossimo giro.
+    try{
+      var rif = [];
+      try{ rif = JSON.parse(localStorage.getItem('ceraldi_recon_rifiutati')||'[]'); }catch(e){}
+      d.fatture.forEach(function(f){ rif.push(_chiaveDescCombo+'|'+f.id); });
+      localStorage.setItem('ceraldi_recon_rifiutati', JSON.stringify(rif.slice(-500)));
+    }catch(e){}
+    toast('✗ Combinazione scartata — non verrà riproposta per questo movimento');
+  }
+  if(window._pagDaConfermare) window._pagDaConfermare.splice(idx, 1);
+  var _syC = window.pageYOffset || document.documentElement.scrollTop || 0;
+  renderRiconciliazione();
+  setTimeout(function(){ window.scrollTo(0, _syC); }, 30);
 }
 
 // Apre un selettore per cambiare a mano l'abbinamento automatico — utile quando ci
