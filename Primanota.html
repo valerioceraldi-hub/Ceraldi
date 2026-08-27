@@ -4708,7 +4708,9 @@ function renderLista(){
     const df=f.data?new Date(f.data).toLocaleDateString('it-IT',{day:'2-digit',month:'short',year:'numeric'}):'—';
     const pag1={contanti:'Contanti',bonifico:'Bonifico',assegno:'Assegno',carta:'Carta'}[f.pagamento]||f.pagamento||'—';
     const nRate=(f.rate||[]).length;
-    const extra=f.pagamento==='assegno'&&f.assegno?` · Ass. ${esc(f.assegno)}`:
+    const _assegniF=(f.pagamento==='assegno'&&typeof _assegniPerFattura==='function')?_assegniPerFattura(f.id):[];
+    const extra=f.pagamento==='assegno'&&_assegniF.length>1?` · Ass. ${_assegniF.map(esc).join(', ')}`:
+                f.pagamento==='assegno'&&f.assegno?` · Ass. ${esc(f.assegno)}`:
                 f.pagamento==='bonifico'&&f.bonIban?` · IBAN ${esc(f.bonIban.slice(0,10))}…`:'';
     const ic={'contanti':'ic-c','bonifico':'ic-b','assegno':'ic-a','carta':'ic-b'}[f.pagamento]||'';
     const isDdt=f.tipo==='ddt';
@@ -4779,7 +4781,25 @@ function renderLista(){
     // strutturato (f.riconciliazione), le note restano libere per l'utente.
     var noteVisibile = f.note || '';
     var riconciliazioneBox = '';
-    if(f.riconciliata && f.riconciliazione && f.riconciliazione.data){
+    // FIX 27/08: quando alla fattura sono abbinati PIÙ movimenti bancari
+    // reali (pagamento a rate/più assegni), mostra lo storico intero invece
+    // del solo ultimo evento — vedi _movimentiPerFattura più sopra.
+    var _movsF = (typeof _movimentiPerFattura==='function') ? _movimentiPerFattura(f.id) : [];
+    if(_movsF.length > 1){
+      var _totMovsF = _movsF.reduce(function(s,m){ return s+Math.abs(m.importo||0); },0);
+      var _righeMovsF = _movsF.map(function(m){
+        var _dm = m.data ? new Date(m.data+'T12:00:00').toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'}) : '—';
+        var _numAss = _estraiNumeroAssegnoDaDescrizione(m.descrizione);
+        return `<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:3px 0;border-top:1px solid #d6e9f7">
+          <span>${_dm}${_numAss?' · N° '+esc(_numAss):''}</span><span style="font-weight:700">${fmt(Math.abs(m.importo||0))}</span>
+        </div>`;
+      }).join('');
+      riconciliazioneBox += `<div style="margin-top:6px;padding:9px 11px;background:#eaf4ff;border:1.5px solid #b3d7f5;border-radius:10px">
+        <div style="font-size:11px;font-weight:700;color:#0066cc;margin-bottom:2px">🏦 Riconciliata con estratto conto · ${_movsF.length} movimenti</div>
+        <div style="font-size:13px;color:var(--ink);font-weight:600">Totale ${fmt(_totMovsF)}</div>
+        ${_righeMovsF}
+      </div>`;
+    } else if(f.riconciliata && f.riconciliazione && f.riconciliazione.data){
       var _rd = new Date(f.riconciliazione.data+'T12:00:00').toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'});
       var _bancaRic = f.riconciliazione.banca || 'BPM';
       var _bancaColore = _bancaRic==='SumUp' ? '#0066cc' : (_bancaRic==='Nexi' ? '#7b2ff7' : 'var(--red)');
@@ -5616,6 +5636,31 @@ function _estraiNumeroAssegnoDaDescrizione(descrizione){
   var m = /assegno\s+n\.?\s*(\d+)/i.exec(descrizione||'');
   return m ? m[1] : null;
 }
+// FIX 27/08 (segnalato da Valerio, caso reale DI MASSA N°20 — 12.000€ pagati
+// con 4 assegni): f.riconciliazione è un oggetto SINGOLO, sovrascritto a ogni
+// nuovo abbinamento — quindi una fattura pagata con più assegni/movimenti
+// diversi mostrava sempre e solo l'ultimo evento (o il primo, per f.assegno,
+// mai aggiornato dopo il primo). Verificato sui dati reali: ogni movimento
+// abbinato scrive correttamente m.fatturaId sull'invoice giusta (in TUTTI i
+// flussi: singolo, multi-fattura, "🧮 Rate", gruppo) — quello è già oggi
+// l'unica fonte di verità completa. Invece di tenere in sync più copie
+// (rischio di dimenticarne una, come già successo), lo storico si ricostruisce
+// qui a runtime direttamente da _bancaMovimenti.
+function _movimentiPerFattura(fatturaId){
+  return (_bancaMovimenti||[]).filter(function(m){
+    return m && m.fatturaId && String(m.fatturaId)===String(fatturaId);
+  }).sort(function(a,b){ return (a.data||'').localeCompare(b.data||''); });
+}
+// Tutti i numeri assegno distinti trovati tra i movimenti collegati a una
+// fattura, in ordine cronologico di pagamento.
+function _assegniPerFattura(fatturaId){
+  var nums = [];
+  _movimentiPerFattura(fatturaId).forEach(function(m){
+    var n = _estraiNumeroAssegnoDaDescrizione(m.descrizione);
+    if(n && nums.indexOf(n)===-1) nums.push(n);
+  });
+  return nums;
+}
 
 // BUG CORRETTO (08/08): questa era rimasta l'unica copia non ancora sistemata
 // dell'id numerico per gli incassi SumUp — le due Edge Function erano già
@@ -5783,7 +5828,18 @@ function openEdit(id){
   sv('eImp2',f.importo?String(f.importo).replace('.',','):'');
   var _datiRicEl = document.getElementById('eDatiRiconciliazione');
   if(_datiRicEl){
-    if(f.riconciliazione && f.riconciliazione.data){
+    var _movsFEdit = (typeof _movimentiPerFattura==='function') ? _movimentiPerFattura(f.id) : [];
+    if(_movsFEdit.length > 1){
+      // FIX 27/08: più movimenti collegati alla stessa fattura → storico intero
+      var _totMovsFEdit = _movsFEdit.reduce(function(s,m){ return s+Math.abs(m.importo||0); },0);
+      _datiRicEl.style.display = 'block';
+      _datiRicEl.innerHTML = '<b>'+_movsFEdit.length+' movimenti · totale '+fmt(_totMovsFEdit)+'</b>'
+        + _movsFEdit.map(function(m){
+            var _dm = m.data ? new Date(m.data+'T12:00:00').toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'}) : '—';
+            var _numAss = _estraiNumeroAssegnoDaDescrizione(m.descrizione);
+            return '<div style="margin-top:2px;color:var(--ink3)">'+_dm+(_numAss?' · N° '+esc(_numAss):'')+' · '+fmt(Math.abs(m.importo||0))+'</div>';
+          }).join('');
+    } else if(f.riconciliazione && f.riconciliazione.data){
       var _rdEdit = new Date(f.riconciliazione.data+'T12:00:00').toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'});
       var _bancaEdit = f.riconciliazione.banca || 'BPM';
       var _bancaEditColore = _bancaEdit==='SumUp' ? '#0066cc' : (_bancaEdit==='Nexi' ? '#7b2ff7' : 'var(--red)');
@@ -7732,16 +7788,14 @@ function _expContiene(testo, filtro){
 // quanto resta da pagare, e con quale grado di dettaglio è davvero
 // ricostruibile per ciascun metodo.
 //
-// LIMITE REALE DEL MODELLO DATI (dichiarato esplicitamente nel foglio
-// "ℹ️ Note metodologiche" dell'export, non nascosto): il campo
-// f.riconciliazione salva SOLO L'ULTIMO movimento bancario agganciato a
-// una fattura, non uno storico di ogni versamento parziale — quindi per
-// un pagamento a rate su più bonifici/assegni/carta, qui si vede sempre e
-// solo l'ultimo evento noto, mai l'intera sequenza. Fa eccezione il
-// CONTANTE: la Prima Nota registra ogni singolo movimento senza mai
-// sovrascriverlo, quindi SOLO per i pagamenti in contanti l'export
-// ricostruisce lo storico completo di tutti i versamenti parziali nel
-// tempo (foglio "💵 Pagamenti — Contanti").
+// LIMITE STORICO, RISOLTO IL 27/08 (era dichiarato esplicitamente nel foglio
+// "ℹ️ Note metodologiche" dell'export): il campo f.riconciliazione salva
+// SOLO L'ULTIMO movimento bancario agganciato a una fattura, non uno storico
+// di ogni versamento parziale. Da oggi _riferimentoBanca(f) non legge più
+// solo quel campo: se ci sono più movimenti bancari reali collegati alla
+// stessa fattura (fatturaId), li ricostruisce ed elenca TUTTI (vedi
+// _movimentiPerFattura), per BONIFICO/ASSEGNO/CARTA esattamente come già
+// avveniva da sempre per il CONTANTE via Prima Nota.
 // ═══════════════════════════════════════════════════════════════════
 
 function _fatturaPagatoResiduo(f){
@@ -7760,6 +7814,15 @@ function _metodoLabel(f){
   return 'Non specificato';
 }
 function _riferimentoBanca(f){
+  // FIX 27/08: se ci sono più movimenti reali collegati (rate/più assegni),
+  // elenca tutti — non solo l'ultimo evento salvato in f.riconciliazione.
+  var _movsF = (typeof _movimentiPerFattura==='function') ? _movimentiPerFattura(f.id) : [];
+  if(_movsF.length > 1){
+    return _movsF.map(function(m){
+      var _numAss = _estraiNumeroAssegnoDaDescrizione(m.descrizione);
+      return (m.data||'')+(_numAss?' N°'+_numAss:'')+' '+fmt(Math.abs(m.importo||0));
+    }).join(' + ');
+  }
   var r = f.riconciliazione;
   if(!r) return '';
   return (r.descrizione||'')+' — '+(r.data||'')+(r.banca?' ('+r.banca+')':'')+(r.parziale?' [parziale: '+fmt(r.importo||0)+']':' ['+fmt(r.importo||0)+']');
@@ -7854,7 +7917,7 @@ async function _eseguiEsportazioneAvanzata(){
     righe.push([]);
     righe.push(['ℹ️ NOTE METODOLOGICHE']);
     righe.push(['— Per i pagamenti in CONTANTI lo storico di ogni singolo versamento parziale è completo (fonte: Prima Nota, che non sovrascrive mai). Vedi foglio "Pagamenti - Contanti".']);
-    righe.push(['— Per BONIFICO, ASSEGNO e CARTA il sistema conserva solo l\'ULTIMO movimento bancario agganciato a ciascuna fattura: se una fattura è stata pagata con più versamenti nel tempo su questi metodi, qui si vede solo l\'evento più recente noto, non l\'intera sequenza.']);
+    righe.push(['— Per BONIFICO, ASSEGNO e CARTA (fix 27/08) la colonna "Riferimento movimento bancario" elenca TUTTI i movimenti realmente abbinati a ciascuna fattura, non solo l\'ultimo — ricostruito dai movimenti bancari collegati (fatturaId), stessa fonte usata dal Registro.']);
     fogli.push({nome:'Riepilogo esecutivo', righe:righe});
   })();
 
@@ -7903,7 +7966,9 @@ async function _eseguiEsportazioneAvanzata(){
     var head = ['Data fattura','Fornitore','Numero fattura','Importo totale','Pagato','Residuo','Stato','Numero assegno','Intestatario','Banca assegno','Data incasso','Riferimento movimento bancario'];
     var body = sub.sort(function(a,b){return (a.dataPagamento||a.data||'').localeCompare(b.dataPagamento||b.data||'');}).map(function(f){
       var r = _fatturaPagatoResiduo(f);
-      return [f.data||'', f.fornitore||'', f.numero||'', r.tot, r.pagato, r.residuo, f.stato||'', f.assegno||'', f.assInt||'', f.assBanca||'', f.dataPagamento||'', _riferimentoBanca(f)];
+      var _assegniExp = (typeof _assegniPerFattura==='function') ? _assegniPerFattura(f.id) : [];
+      var _assegnoCol = _assegniExp.length>1 ? _assegniExp.join(', ') : (f.assegno||'');
+      return [f.data||'', f.fornitore||'', f.numero||'', r.tot, r.pagato, r.residuo, f.stato||'', _assegnoCol, f.assInt||'', f.assBanca||'', f.dataPagamento||'', _riferimentoBanca(f)];
     });
     fogli.push({nome:'Pagamenti - Assegni', righe:[head, ...body]});
   })();
@@ -9212,7 +9277,9 @@ function condividiRegistrazione(id){
   testo+=`\n*Stato:* ${stato}`;
   if(f.scadenza) testo+=`\n*Scadenza:* ${new Date(f.scadenza).toLocaleDateString('it-IT')}`;
   if(f.bonIban) testo+=`\n*IBAN:* ${f.bonIban}`;
-  if(f.assegno) testo+=`\n*N° Assegno:* ${f.assegno}`;
+  var _assegniShare=(typeof _assegniPerFattura==='function')?_assegniPerFattura(f.id):[];
+  if(_assegniShare.length>1) testo+=`\n*N° Assegni:* ${_assegniShare.join(', ')}`;
+  else if(f.assegno) testo+=`\n*N° Assegno:* ${f.assegno}`;
   if(f.note) testo+=`\n*Note:* ${f.note}`;
   testo+=`\n\n_Inviato da Caffetteria Ceraldi — Gestione Fatture_`;
 
@@ -15723,6 +15790,13 @@ function renderRiconciliazione(){
     // finora nessun avviso specifico segnalava il disallineamento tra i due numeri.
     function _assegnoNumeroDiscrepante(f, numAss){
       if(!f || !f.assegno || !numAss) return null;
+      // FIX 27/08: una fattura pagata a rate ha legittimamente PIÙ assegni
+      // collegati nel tempo — confronta col numero nuovo contro TUTTI quelli
+      // già abbinati (movimenti reali), non solo il primo mai scritto su
+      // f.assegno, altrimenti la 2ª/3ª/4ª rata avvisava sempre "diverso"
+      // anche quando era semplicemente l'assegno successivo della stessa rateizzazione.
+      var _giaCollegati = (typeof _assegniPerFattura==='function') ? _assegniPerFattura(f.id) : [];
+      if(_giaCollegati.some(function(n){ return numAss.endsWith(String(n).slice(-6)); })) return null;
       var assClean = String(f.assegno).replace(/\D/g,'');
       if(!assClean) return null;
       if(numAss.endsWith(assClean.slice(-6))) return null;
