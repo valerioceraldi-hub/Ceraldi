@@ -272,17 +272,9 @@ input[type="search"],input[type="text"],input[type="number"],input[type="time"],
     <button id="topbar-sync-btn" title="Risincronizza tutto dal Cloud" style="background:none;border:none;font-size:19px;cursor:pointer;padding:4px 6px;flex-shrink:0;line-height:1">&#128260;</button>
     <button id="cart-btn">&#128722; <span id="cart-badge">0</span></button>
   </div>
-  <!-- Drive: singola striscia compatta. Il JS attiva drive-banner (disconnesso) o drive-status (connesso). Solo uno dei due è visibile alla volta. -->
-  <div id="drive-banner" style="display:none;background:rgba(26,115,232,.08);border-bottom:1px solid rgba(26,115,232,.18);padding:6px 14px;align-items:center;gap:8px;flex-shrink:0;font-size:11px;font-weight:600;color:#1a73e8">
-    <span style="flex:1">☁️ Drive non connesso</span>
-    <button id="drive-auth-btn" style="background:#1a73e8;color:#fff;border:none;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:700;cursor:pointer">Connetti</button>
-    <button id="drive-banner-cls" style="background:none;border:none;color:rgba(26,115,232,.55);font-size:14px;cursor:pointer;padding:0 2px;line-height:1">✕</button>
-  </div>
-  <div id="drive-status" style="display:none;background:rgba(26,115,232,.08);border-bottom:1px solid rgba(26,115,232,.18);padding:6px 14px;font-size:11px;font-weight:600;color:#1a73e8;flex-shrink:0;align-items:center;gap:6px">
-    <span id="drive-status-txt">☁️ Drive connesso</span>
-    <span id="drive-sync-time" style="margin-left:auto;font-size:10px;font-weight:500;color:rgba(26,115,232,.6);opacity:0;transition:opacity .5s"></span>
-    <span id="drive-sync-dot" style="opacity:0;transition:opacity .3s;font-size:11px">⟳</span>
-  </div>
+  <!-- Stato sincronizzazione (26/08: rimosso Google Drive — vedi Impostazioni
+       → Backup & sincronizzazione per i dettagli). Sync silenziosa su
+       Supabase, nessuna autorizzazione da dare mai. -->
   <div id="search-bar">
     <input type="text" id="srch" placeholder="Cerca prodotto..." autocomplete="off" autocorrect="off" spellcheck="false">
     <button id="srch-clear">&#10005;</button>
@@ -929,118 +921,81 @@ function idbClearListino(){
     r.onblocked=function(){resolve(false);}; // rete di sicurezza: non deve mai restare appeso
   });
 }
-// ── BACKUP CLOUD DEL LISTINO LOCALE — su Google Drive, non su Cloud ──
-// Riusa lo stesso collegamento Drive già usato per gli altri backup, ma con
-// un file SEPARATO e proprio: non entra mai nel salvataggio periodico dello
-// stato (preferiti/carrello/ecc), quindi non lo appesantisce. Scrive in
-// background dopo un import (la ricerca è già pronta in locale) e legge
-// solo se l'utente chiede un ripristino, o in automatico all'avvio SOLO
-// se il listino locale risulta vuoto (es. dopo aver cancellato la cache).
-function _listinoDriveUpload(rowsOverride){
-  if(!GD.token)return Promise.resolve(false); // Drive non collegato: il listino resta comunque valido in locale
-  return new Promise(function(resolveOuter){
-    gdEnsureToken(function(ok){
-      if(!ok){resolveOuter(false);return;}
-      gdEnsureFolder(function(fid){
-        if(!fid){resolveOuter(false);return;}
-        (rowsOverride?Promise.resolve(rowsOverride):idbGetListino()).then(function(rows){
-          var data=JSON.stringify({version:1,date:new Date().toISOString(),rows:rows});
-          var blob=new Blob([data],{type:'application/json'});
-          var done=function(){console.log('[Listino Drive] backup completato: '+rows.length+' righe totali');resolveOuter(true);};
-          var q=encodeURIComponent("name='"+GD.LISTINO_FILE_NAME+"' and '"+fid+"' in parents and trashed=false");
-          fetch('https://www.googleapis.com/drive/v3/files?q='+q+'&fields=files(id)',{headers:{Authorization:'Bearer '+GD.token}})
-          .then(function(r){return r.json();})
-          .then(function(d){
-            var existingId=(d.files&&d.files.length)?d.files[0].id:null;
-            if(existingId){
-              fetch('https://www.googleapis.com/upload/drive/v3/files/'+existingId+'?uploadType=media',{method:'PATCH',headers:{Authorization:'Bearer '+GD.token,'Content-Type':'application/json'},body:blob})
-              .then(function(r){if(r.ok)done();else resolveOuter(false);});
-            } else {
-              _listinoDriveCreateFile(fid,blob,done);
-            }
-          }).catch(function(e){console.warn('[Listino Drive] backup fallito (resta comunque il locale):',e.message);resolveOuter(false);});
-        });
-      });
-    });
+// ── BACKUP CLOUD DEL LISTINO LOCALE — su Supabase (26/08: rimosso Google
+// Drive, vedi nota grande più sotto vicino a "STATO CONDIVISO") ──
+// Tabella dedicata ceraldi_listino_locale, separata dal catalogo e dallo
+// stato condiviso: scrive in background dopo un import (la ricerca è già
+// pronta in locale) e legge solo se l'utente chiede un ripristino, o in
+// automatico all'avvio SOLO se il listino locale risulta vuoto.
+function _listinoCloudUpload(rowsOverride,sourceOverride){
+  return (rowsOverride?Promise.resolve(rowsOverride):idbGetListino()).then(function(rows){
+    // Se sourceOverride è passato (caso comune: un solo listino appena
+    // importato), tutte le righe appartengono a QUELLA sorgente — non hanno
+    // ancora il campo .source valorizzato a questo punto della chiamata,
+    // quindi non vanno raggruppate ma trattate come un unico blocco.
+    var groups;
+    if(sourceOverride){
+      groups={};groups[sourceOverride]=rows;
+    } else {
+      groups={};
+      rows.forEach(function(r){var s=r.source||'(senza nome)';(groups[s]=groups[s]||[]).push(r);});
+    }
+    return Promise.all(Object.keys(groups).map(function(src){
+      var rowsForSrc=groups[src]||[];
+      return fetch(SUPABASE_URL+'/rest/v1/ceraldi_listino_locale?source=eq.'+encodeURIComponent(src),
+        {method:'DELETE',headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}})
+      .then(function(){
+        if(!rowsForSrc.length)return true;
+        var payload=rowsForSrc.map(function(r){return{source:src,name:r.name||'',conf:r.conf||'',cat:r.cat||'',prices:r.prices||{}};});
+        return fetch(SUPABASE_URL+'/rest/v1/ceraldi_listino_locale',
+          {method:'POST',headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN,'Content-Type':'application/json','Prefer':'return=minimal'},
+           body:JSON.stringify(payload)})
+        .then(function(r){return r.ok;});
+      }).catch(function(e){console.warn('[Listino Cloud] upload fallito (resta comunque il locale):',e.message);return false;});
+    })).then(function(results){return results.every(Boolean);});
   });
 }
-function _listinoDriveCreateFile(fid,blob,done){
-  var boundary='cb'+Date.now();
-  var meta=JSON.stringify({name:GD.LISTINO_FILE_NAME,parents:fid?[fid]:[]});
-  var reader=new FileReader();
-  reader.onload=function(e){
-    var full='--'+boundary+'\r\nContent-Type: application/json\r\n\r\n'+meta+'\r\n--'+boundary+'\r\nContent-Type: application/json\r\n\r\n'+e.target.result+'\r\n--'+boundary+'--';
-    fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',{method:'POST',headers:{Authorization:'Bearer '+GD.token,'Content-Type':'multipart/related; boundary='+boundary},body:full})
-    .then(function(r){return r.json();}).then(function(){done();}).catch(function(){});
-  };
-  reader.readAsText(blob);
+// Scarica TUTTO il listino locale salvato su Supabase (tutte le sorgenti insieme).
+function _listinoCloudDownloadAll(){
+  return fetch(SUPABASE_URL+'/rest/v1/ceraldi_listino_locale?select=name,conf,cat,prices,source',
+    {headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}})
+  .then(function(r){if(!r.ok)return null;return r.json();})
+  .catch(function(){return null;});
 }
-// Scarica il file di backup completo da Drive (tutte le sorgenti insieme).
-// Ritorna null se Drive non è collegato o il file non esiste ancora.
-function _listinoDriveDownload(){
-  return new Promise(function(resolve){
-    if(!GD.token){resolve(null);return;}
-    gdEnsureToken(function(ok){
-      if(!ok){resolve(null);return;}
-      gdEnsureFolder(function(fid){
-        if(!fid){resolve(null);return;}
-        var q=encodeURIComponent("name='"+GD.LISTINO_FILE_NAME+"' and '"+fid+"' in parents and trashed=false");
-        fetch('https://www.googleapis.com/drive/v3/files?q='+q+'&fields=files(id)',{headers:{Authorization:'Bearer '+GD.token}})
-        .then(function(r){return r.json();})
-        .then(function(d){
-          var fileId=d.files&&d.files.length?d.files[0].id:null;
-          if(!fileId){resolve(null);return;}
-          return fetch('https://www.googleapis.com/drive/v3/files/'+fileId+'?alt=media',{headers:{Authorization:'Bearer '+GD.token}});
-        })
-        .then(function(r){if(!r||!r.ok){resolve(null);return;}return r.json();})
-        .then(function(data){resolve(data&&data.rows?data.rows:null);})
-        .catch(function(){resolve(null);});
-      });
-    });
-  });
-}
-// Alla firma storica (rows,source) — carica sempre l'INTERO listino locale
-// aggiornato su Drive come singolo file, non solo la sorgente appena importata.
-function _listinoCloudUpload(rows,source){_listinoDriveUpload();}
-// Elenco delle sorgenti presenti nel backup Drive, con conteggio
+// Elenco delle sorgenti presenti nel backup Cloud, con conteggio
 async function listinoCloudSources(){
-  var rows=await _listinoDriveDownload();
+  var rows=await _listinoCloudDownloadAll();
   if(!rows)return[];
   var byS={};rows.forEach(function(x){var s=x.source||'(senza nome)';byS[s]=(byS[s]||0)+1;});
   return Object.keys(byS).sort().map(function(s){return{source:s,count:byS[s]};});
 }
-// Ripristina in locale (IndexedDB) un listino salvato nel backup Drive —
+// Ripristina in locale (IndexedDB) un listino salvato nel backup Cloud —
 // usato quando lo storico/cache del dispositivo è stato cancellato.
 async function listinoCloudRestore(source){
-  var rows=await _listinoDriveDownload();
-  if(!rows){toast('Nessun backup Drive trovato — controlla la connessione a Google Drive');return false;}
+  var rows=await _listinoCloudDownloadAll();
+  if(!rows){toast('Nessun backup Cloud trovato — controlla la connessione');return false;}
   var mine=rows.filter(function(r){return(r.source||'(senza nome)')===source;});
-  if(!mine.length){toast('Nessun dato trovato nel backup Drive per "'+source+'"');return false;}
-  await idbSetListino(mine,source,{skipCloudSync:true}); // già nel backup Drive: non re-inviare
-  toast('Ripristinato "'+source+'" da Google Drive: '+mine.length+' prodotti');
+  if(!mine.length){toast('Nessun dato trovato nel backup Cloud per "'+source+'"');return false;}
+  await idbSetListino(mine,source,{skipCloudSync:true}); // già nel backup Cloud: non re-inviare
+  toast('Ripristinato "'+source+'" dal Cloud: '+mine.length+' prodotti');
   return true;
 }
-// Elimina una sorgente SOLO dal backup cloud (usata per i listini presenti
-// nel cloud ma non su questo dispositivo — es. un import sbagliato che non
-// vuoi più tenere in giro, senza doverlo prima ripristinare in locale).
+// Elimina una sorgente SOLO dal backup cloud
 async function listinoCloudDeleteSource(source){
-  var rows=await _listinoDriveDownload();
-  if(!rows){toast('Nessun backup Drive trovato');return false;}
-  var remaining=rows.filter(function(r){return(r.source||'(senza nome)')!==source;});
-  var ok=await _listinoDriveUpload(remaining);
-  if(ok)toast('"'+source+'" rimosso anche dal backup cloud');
-  else toast('Errore rimozione dal backup cloud');
-  return ok;
+  try{
+    var r=await fetch(SUPABASE_URL+'/rest/v1/ceraldi_listino_locale?source=eq.'+encodeURIComponent(source),
+      {method:'DELETE',headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}});
+    if(r.ok){toast('"'+source+'" rimosso anche dal backup cloud');return true;}
+    toast('Errore rimozione dal backup cloud');return false;
+  }catch(e){toast('Errore rimozione dal backup cloud');return false;}
 }
-// Se il listino locale risulta vuoto (es. cache/cronologia cancellata) ma
-// Drive è collegato, prova a ripristinarlo tutto in automatico all'avvio.
-// Se invece è già presente in locale, non fa assolutamente nulla — come
-// richiesto: nessuna chiamata di rete inutile ad ogni apertura dell'app.
-async function _listinoRestoreFromDriveIfEmpty(){
+// Se il listino locale risulta vuoto (es. cache/cronologia cancellata), prova
+// a ripristinarlo tutto in automatico all'avvio dal Cloud.
+async function _listinoRestoreFromCloudIfEmpty(){
   try{
     var localCount=await idbListinoCount();
     if(localCount>0)return;
-    var rows=await _listinoDriveDownload();
+    var rows=await _listinoCloudDownloadAll();
     if(!rows||!rows.length)return;
     var bySource={};
     rows.forEach(function(r){var s=r.source||'(senza nome)';(bySource[s]=bySource[s]||[]).push(r);});
@@ -1048,14 +1003,12 @@ async function _listinoRestoreFromDriveIfEmpty(){
     var sb=document.getElementById('listino-search-box');if(sb)sb.style.display='block';
     var mb=document.getElementById('listino-main-banner');if(mb)mb.style.display='block';
     idbListinoCount().then(function(tot){var lbl=document.getElementById('listino-count-lbl');if(lbl)lbl.textContent='('+tot+' prod. tot.)';});
-    toast('☁️ Listino locale ripristinato da Google Drive ('+rows.length+' prodotti)');
-    // Se il pannello ⚙️ Gestisci è già aperto, aggiornalo subito: altrimenti
-    // il tasto "Ripristina" sembra sparire da solo senza spiegazione, quando
-    // in realtà il ripristino automatico l'ha già completato per te.
+    toast('☁️ Listino locale ripristinato dal Cloud ('+rows.length+' prodotti)');
     var mgmtBox=document.getElementById('listino-manage-box');
     if(mgmtBox&&mgmtBox.style.display!=='none')renderListinoManage();
-  }catch(e){console.warn('[Listino Drive] ripristino automatico fallito:',e.message);}
+  }catch(e){console.warn('[Listino Cloud] ripristino automatico fallito:',e.message);}
 }
+
 
 // ── GESTIONE MULTI-LISTINO: mostra ogni fornitore/sorgente separatamente ──
 function toggleListinoManage(){
@@ -1095,7 +1048,7 @@ function renderListinoManage(){
           delB.disabled=true;delB.textContent='...';
           idbClearListinoSource(source).then(function(){
             toast('Listino "'+source+'" cancellato');
-            return _listinoDriveUpload(); // aspetta che il cloud sia davvero sincronizzato prima di ridisegnare
+            return listinoCloudDeleteSource(source); // aspetta che il cloud sia davvero sincronizzato prima di ridisegnare
           }).then(function(){
             renderListinoManage();
             idbListinoCount().then(function(tot){
@@ -1205,7 +1158,7 @@ function renderMissingPricesList(box,source,result){
     addAllBtn.onclick=async function(){
       addAllBtn.disabled=true;addAllBtn.textContent='Aggiungo...';
       for(var i=0;i<exact.length;i++){await applyMissingPriceMatch(exact[i]);}
-      _listinoDriveUpload();
+      _listinoCloudUpload();
       toast(exact.length+' prezzi aggiunti');
       openMissingPricesReview(source);
     };
@@ -1229,7 +1182,7 @@ function renderMissingPricesList(box,source,result){
     addBtn.onclick=function(){
       addBtn.disabled=true;addBtn.textContent='...';
       applyMissingPriceMatch(c).then(function(){
-        _listinoDriveUpload();
+        _listinoCloudUpload();
         toast('Prezzo aggiunto a '+c.product.name);
         row.innerHTML='<div style="font-size:12px;color:var(--green);font-weight:700">✓ Aggiunto a "'+h(c.product.name)+'"</div>';
         row.style.background='rgba(58,125,92,.08)';
@@ -3965,17 +3918,14 @@ function clearCartForSupplier(sn,entries){
   var items=entries||(groupBySup()[sn]||[]);
   items.forEach(function(e){delete S.cart[e.pid];delete S.orderSupOverride[e.pid];if(S.cartNotes)delete S.cartNotes[e.pid];});scartnotes();
   updateBadge();
-  // Backup immediato su Drive dopo OGNI invio ordine, anche se il carrello
+  // Backup immediato su Cloud dopo OGNI invio ordine, anche se il carrello
   // non è ancora completamente vuoto: senza questo, il poll periodico da
-  // Drive (ogni 30s / al ritorno in foreground) può sovrascrivere il
+  // Cloud (ogni 30s / al ritorno in foreground) può sovrascrivere il
   // carrello appena aggiornato con uno snapshot precedente, facendo
   // ricomparire i prodotti già ordinati associati al fornitore di partenza.
   saveAutoBackup();
-  if(GD.token){
-    if(GD.syncTimer)clearTimeout(GD.syncTimer);
-    GD.syncTimer=null;
-    setTimeout(gdSaveNow,1500);
-  }
+  if(_statoSyncTimer){clearTimeout(_statoSyncTimer);_statoSyncTimer=null;}
+  setTimeout(saveStatoCondiviso,1500);
   // If cart is now empty, close the modal too
   if(!Object.keys(S.cart).length){
     closeOverlay('cart-overlay');
@@ -4473,17 +4423,20 @@ function renderSettings(){
   var _lastBkD=getLastBackupDate();
   var bakBody=mkSecCollapsible('Backup & sincronizzazione',_lastBkD?'✓ '+_lastBkD:'mai');
   var bakCard=document.createElement('div');bakCard.className='set-card';bakBody.appendChild(bakCard);
-  // Google Drive row
+  // Stato condiviso su Supabase (26/08: sostituisce Google Drive — niente
+  // più autorizzazioni da dare: carrello, preferiti, note, tema e listino
+  // locale si sincronizzano da soli tra i dispositivi che usi).
   var gdRow=document.createElement('div');gdRow.style.cssText='display:flex;align-items:center;gap:10px;padding-bottom:12px;border-bottom:1px solid var(--border);margin-bottom:12px';
   var gdIcon=document.createElement('span');gdIcon.textContent='☁️';gdIcon.style.fontSize='22px';
   var gdInfo=document.createElement('div');gdInfo.style.flex='1';
-  gdInfo.innerHTML='<div style="font-size:13px;font-weight:700;color:var(--text)">Google Drive</div>'
-    +'<div id="drive-settings-status" style="font-size:11px;font-weight:600;margin-top:2px"></div>';
-  var gdBtn=document.createElement('button');gdBtn.id='drive-settings-btn';
-  gdBtn.style.cssText='padding:8px 14px;border-radius:9px;font-size:12px;font-weight:700;cursor:pointer;flex-shrink:0';
+  gdInfo.innerHTML='<div style="font-size:13px;font-weight:700;color:var(--text)">Sincronizzazione tra dispositivi</div>'
+    +'<div id="stato-sync-info" style="font-size:11px;font-weight:600;margin-top:2px"></div>';
+  var gdBtn=document.createElement('button');gdBtn.id='stato-sync-btn';
+  gdBtn.style.cssText='padding:8px 14px;border-radius:9px;font-size:12px;font-weight:700;cursor:pointer;flex-shrink:0;background:rgba(0,122,255,.1);color:var(--accent);border:1.5px solid rgba(0,122,255,.25)';
+  gdBtn.textContent='Sincronizza ora';gdBtn.onclick=function(){saveStatoCondiviso();loadStatoCondiviso();};
   gdRow.appendChild(gdIcon);gdRow.appendChild(gdInfo);gdRow.appendChild(gdBtn);
   bakCard.appendChild(gdRow);
-  updateDriveSettingsUI();
+  updateStatoSettingsUI();
   // Backup locale
   var backInfo=document.createElement('div');backInfo.id='backup-info';
   backInfo.style.cssText='font-size:11px;font-weight:600;color:'+(_lastBkD?'var(--green)':'var(--muted)')+';margin-bottom:10px';
@@ -5241,7 +5194,7 @@ function openCatalogMergePicker(afterEl,lrow,onMerged){
             if(onMerged)onMerged(p);
           };
           if(lrow._idbKey!=null){
-            idbDeleteListinoRow(lrow._idbKey).then(function(){_listinoDriveUpload();afterDelete();});
+            idbDeleteListinoRow(lrow._idbKey).then(function(){_listinoCloudUpload();afterDelete();});
           } else afterDelete();
         }).catch(function(e){toast('Errore: '+e.message);row.style.opacity='1';row.style.pointerEvents='';});
       };
@@ -9461,324 +9414,111 @@ document.getElementById('supdetail-cls').addEventListener('click',function(){clo
 // Polyfill findIndex for older browsers
 if(!Array.prototype.findIndex){Array.prototype.findIndex=function(fn){for(var i=0;i<this.length;i++)if(fn(this[i],i,this))return i;return -1;};}
 
-/* ── GOOGLE DRIVE BACKUP ─────────────────────────────────────── */
-var GD={
-  CLIENT_ID:'833511475184-s51mdckdgfgk7jg259t15igo022ccrg9.apps.googleusercontent.com',
-  SCOPE:'https://www.googleapis.com/auth/drive.file',
-  FILE_NAME:'CeraldiOrdini_backup.json',
-  LISTINO_FILE_NAME:'CeraldiOrdini_listino_locale.json',
-  FOLDER_NAME:'Ceraldi',
-  token:null,fileId:null,folderId:null,syncTimer:null,syncing:false
-};
-function gdInit(){
- try{
-  try{var t=JSON.parse(localStorage.getItem('gd_token')||'null');if(t&&t.expires>Date.now())GD.token=t.access_token;}catch(e){}
-  GD.fileId=localStorage.getItem('gd_file_id')||null;
-  GD.folderId=localStorage.getItem('gd_folder_id')||null;
-  var everConnected=localStorage.getItem('gd_ever_connected')==='1';
-  if(GD.token){
-    // Token ancora valido
-    gdShowConnected();
-    setTimeout(gdLoadOnStartup,400); // sync all'apertura
-    setTimeout(_listinoRestoreFromDriveIfEmpty,600); // solo se il listino locale è vuoto
-  } else if(everConnected){
-    // Token scaduto ma già autorizzato in passato
-    // Mostra "Drive autorizzato" senza banner, rinnova subito
-    var st=document.getElementById('drive-status');
-    if(st){st.style.display='flex';var tx=document.getElementById('drive-status-txt');if(tx)tx.textContent='☁️ Drive autorizzato';}
-    // Rinnova silenziosamente — prompt:none non mostra nessun popup.
-    // Tutto avvolto in try/catch: un rinnovo automatico non deve MAI poter
-    // interrompere il caricamento del resto dell'app, qualunque cosa succeda.
-    try{
-      google.accounts.oauth2.initTokenClient({
-        client_id:GD.CLIENT_ID,scope:GD.SCOPE,prompt:'none',
-        callback:function(resp){
-          try{
-            if(resp.error||!resp.access_token){
-              // Rinnovo silenzioso fallito (sessione Google scaduta sul dispositivo)
-              // NON mostrare popup automatico — mostra solo un toast discreto
-              var st2=document.getElementById('drive-status');
-              if(st2){st2.style.display='flex';var tx2=document.getElementById('drive-status-txt');if(tx2)tx2.textContent='☁️ Drive — riconnetti nelle impostazioni';}
-              console.log('GD silent renew failed — user must reconnect manually');
-              return;
-            }
-            GD.token=resp.access_token;
-            try{localStorage.setItem('gd_token',JSON.stringify({access_token:resp.access_token,expires:Date.now()+(resp.expires_in||3599)*1000}));}catch(e){}
-            gdShowConnected();
-            // Sync all'apertura (token rinnovato) — scaglionato per non
-            // sovrapporsi ad altre chiamate di avvio nello stesso istante
-            setTimeout(gdLoadOnStartup,300);
-            setTimeout(_listinoRestoreFromDriveIfEmpty,900);
-          }catch(e2){console.warn('[GD] errore nel callback di rinnovo:',e2.message);}
-        }
-      }).requestAccessToken();
-    }catch(e){console.warn('[GD] rinnovo automatico non avviato:',e.message);}
-  } else {
-    // Mai connesso — mostra banner dopo 3s
-    setTimeout(function(){
-      if(!GD.token&&localStorage.getItem('gd_banner_dismissed')!=='1'){
-        var b=document.getElementById('drive-banner');if(b)b.style.display='flex';
-      }
-    },3000);
-  }
- }catch(eOuter){console.warn('[GD] gdInit errore imprevisto (non blocca il resto dell\'app):',eOuter.message);}
+/* ── STATO CONDIVISO (Supabase) ──────────────────────────────────
+   26/08, Valerio: "ad ogni avvio c'è sempre da dare autorizzazione a
+   Google Drive, diventa scomodo". Causa reale: i token di Google durano
+   ~1 ora e Safari iOS blocca il rinnovo silenzioso (blocca gli iframe di
+   terze parti) — senza un server che tenga un refresh token, non c'è modo
+   di evitare le richieste ripetute di autorizzazione.
+   Verificato insieme cosa restava SOLO su Drive (fornitori/storico/
+   catalogo erano già su Supabase da tempo): carrello, preferiti, note,
+   ordini ricorrenti, promemoria, tema, e il listino locale importato.
+   Deciso: tolto Google Drive del tutto, questi dati condivisi tra
+   dispositivi (Valerio: "condividi") ora vivono su Supabase, tabella
+   ceraldi_stato_condiviso — una riga sola, senza nessuna autorizzazione
+   da dare mai. Il listino locale ha la sua tabella dedicata (vedi sopra,
+   ceraldi_listino_locale) già aggiornata di conseguenza. */
+var _statoSyncTimer=null;
+var _statoSyncing=false;
+function scheduleStatoSync(){
+  if(_statoSyncTimer)clearTimeout(_statoSyncTimer);
+  _statoSyncTimer=setTimeout(saveStatoCondiviso,10000);
 }
-function gdUpdateSyncTime(date){
-  var el=document.getElementById('drive-sync-time');
-  if(!el)return;
-  var d=date||localStorage.getItem('gd_last_sync');
-  if(!d){el.style.opacity='0';return;}
-  var t=new Date(d);
-  var now=new Date();
-  var diffMin=Math.round((now-t)/60000);
-  var label;
-  if(diffMin<1)label='ora';
-  else if(diffMin<60)label=diffMin+'min fa';
-  else label=t.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});
-  el.textContent='↺ '+label;
-  el.style.opacity='1';
-}
-// Aggiorna etichetta ogni 60s (cambia "ora" → "1min fa" → "2min fa" ecc.)
-setInterval(function(){
-  if(GD.token)gdUpdateSyncTime();
-},60000);
-function gdShowConnected(){
-  var b=document.getElementById('drive-banner');if(b)b.style.display='none';
-  var s=document.getElementById('drive-status');if(s)s.style.display='flex';
-  gdUpdateSyncTime();
-  updateDriveSettingsUI();
-  gdStartPolling();
-}
-function updateDriveSettingsUI(){
-  var sd=document.getElementById('drive-settings-status');
-  var btn=document.getElementById('drive-settings-btn');
-  if(!sd||!btn)return;
-  if(GD.token){
-    var lastD=localStorage.getItem('gd_last_sync');
-    sd.innerHTML='<span style="color:var(--green)">✓ Connesso</span>'+(lastD?'<span style="color:var(--muted);font-size:10px;margin-left:6px"> Sync: '+new Date(lastD).toLocaleString('it-IT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})+'</span>':'');
-    btn.style.cssText='width:100%;padding:10px;border-radius:9px;font-size:13px;font-weight:700;cursor:pointer;background:rgba(192,57,43,.1);color:var(--red);border:1.5px solid rgba(192,57,43,.2)';
-    btn.textContent='Disconnetti Drive';btn.onclick=gdDisconnect;
-    var syncBtn=document.getElementById('drive-sync-now-btn');
-    if(!syncBtn){syncBtn=document.createElement('button');syncBtn.id='drive-sync-now-btn';syncBtn.style.cssText='width:100%;margin-top:8px;padding:10px;border-radius:9px;border:none;background:rgba(26,115,232,.1);color:#1a73e8;font-size:12px;font-weight:700;cursor:pointer';syncBtn.textContent='☁️ Sincronizza ora';syncBtn.onclick=function(){gdSaveNow();};btn.parentNode.insertBefore(syncBtn,btn.nextSibling);}
-  } else {
-    sd.innerHTML='<span style="color:var(--muted)">Non connesso</span>';
-    btn.style.cssText='width:100%;padding:10px;border-radius:9px;font-size:13px;font-weight:700;cursor:pointer;background:#1a73e8;color:#fff;border:none';
-    btn.textContent='Connetti Google Drive';btn.onclick=function(){gdLoadScript(gdLogin);};
-    var old=document.getElementById('drive-sync-now-btn');if(old)old.remove();
-  }
-}
-function gdLogin(){
-  if(typeof google==='undefined'||!google.accounts){gdLoadScript(gdLogin);return;}
-  google.accounts.oauth2.initTokenClient({
-    client_id:GD.CLIENT_ID,scope:GD.SCOPE,
-    callback:function(resp){
-      if(resp.error){toast('Accesso Google negato');return;}
-      GD.token=resp.access_token;
-      try{localStorage.setItem('gd_token',JSON.stringify({access_token:resp.access_token,expires:Date.now()+(resp.expires_in||3599)*1000}));localStorage.setItem('gd_ever_connected','1');}catch(e){}
-      gdShowConnected();toast('✓ Google Drive connesso');
-      gdEnsureFolder(function(){gdSaveNow();});
+function saveStatoCondiviso(){
+  if(_statoSyncing)return;
+  _statoSyncing=true;
+  var backupData=buildBackupData();
+  var nowIso=new Date().toISOString();
+  fetch(SUPABASE_URL+'/rest/v1/ceraldi_stato_condiviso',
+    {method:'POST',
+     headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=minimal'},
+     body:JSON.stringify({id:'main',data:backupData,updated_at:nowIso})})
+  .then(function(r){
+    _statoSyncing=false;
+    if(r.ok){
+      localStorage.setItem('ceraldi_autobackup_date',backupData.date);
+      localStorage.setItem('stato_last_sync',nowIso);
+      updateStatoSettingsUI();
     }
-  }).requestAccessToken();
+  }).catch(function(e){_statoSyncing=false;console.warn('[Stato condiviso] salvataggio fallito:',e.message);});
 }
-function gdDisconnect(){
-  GD.token=null;GD.fileId=null;GD.folderId=null;
-  gdStopPolling();
-  try{localStorage.removeItem('gd_token');localStorage.removeItem('gd_file_id');localStorage.removeItem('gd_folder_id');localStorage.removeItem('gd_last_sync');localStorage.removeItem('gd_ever_connected');}catch(e){}
-  var s=document.getElementById('drive-status');if(s)s.style.display='none';
-  var b=document.getElementById('drive-banner');if(b)b.style.display='flex';
-  toast('Drive disconnesso');updateDriveSettingsUI();
-}
-function gdEnsureToken(cb){
-  if(!GD.token){cb(false);return;}
-  var t=null;try{t=JSON.parse(localStorage.getItem('gd_token')||'null');}catch(e){}
-  if(t&&t.expires>Date.now()+60000){cb(true);return;}
-  if(typeof google==='undefined'||!google.accounts){cb(false);return;}
-  google.accounts.oauth2.initTokenClient({
-    client_id:GD.CLIENT_ID,scope:GD.SCOPE,prompt:'none',
-    callback:function(resp){
-      if(resp.error){GD.token=null;cb(false);return;}
-      GD.token=resp.access_token;
-      try{localStorage.setItem('gd_token',JSON.stringify({access_token:resp.access_token,expires:Date.now()+(resp.expires_in||3599)*1000}));}catch(e){}
-      cb(true);
+function loadStatoCondiviso(){
+  fetch(SUPABASE_URL+'/rest/v1/ceraldi_stato_condiviso?id=eq.main&select=data,updated_at',
+    {headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}})
+  .then(function(r){if(!r.ok)return null;return r.json();})
+  .then(function(rows){
+    if(!rows||!rows.length)return;
+    var data=rows[0].data;
+    if(!data||!Object.keys(data).length)return;
+    var remoteDate=new Date(data.date||rows[0].updated_at||0).getTime();
+    var localDate=new Date(localStorage.getItem('ceraldi_autobackup_date')||0).getTime();
+    if(remoteDate>localDate+5000){
+      try{
+        // Fornitori, storico e catalogo NON vengono applicati da qui: sono
+        // su Cloud, fonte di verità condivisa tra dispositivi da tempo.
+        if(data.defaults)S.defaults=data.defaults;
+        if(data.favorites)S.favorites=data.favorites;
+        if(data.custom)S.custom=data.custom;
+        if(data.reminder!==undefined)S.reminder=data.reminder;
+        if(data.dark!==undefined)S.dark=data.dark;
+        if(data.savedForLater)S.savedForLater=data.savedForLater;
+        if(data.cartNotes)S.cartNotes=data.cartNotes;
+        if(data.cart)S.cart=data.cart;
+        if(data.orderSupOverride)S.orderSupOverride=data.orderSupOverride;
+        ss();sh();sd();sr2();sf2();sk();ssfl();scartnotes();scart();scartov();
+        try{localStorage.setItem('cc',JSON.stringify(S.custom));}catch(e){}
+        S.products=BP.concat(S.custom);
+        localStorage.setItem('ceraldi_autobackup_date',data.date);
+        localStorage.setItem('ceraldi_autobackup',JSON.stringify(data));
+        localStorage.setItem('stato_last_sync',rows[0].updated_at);
+        document.body.classList.toggle('dark',S.dark);
+        buildCats();renderCatalog();updateBadge();updateSavedNavBadge();
+        updateStatoSettingsUI();
+      }catch(e){console.warn('[Stato condiviso] applicazione fallita:',e.message);}
     }
-  }).requestAccessToken();
+  }).catch(function(e){console.warn('[Stato condiviso] caricamento fallito:',e.message);});
 }
-function gdEnsureFolder(cb){
-  if(GD.folderId){cb(GD.folderId);return;}
-  gdEnsureToken(function(ok){
-    if(!ok){cb(null);return;}
-    fetch("https://www.googleapis.com/drive/v3/files?q=name%3D'Ceraldi'+and+mimeType%3D'application%2Fvnd.google-apps.folder'+and+trashed%3Dfalse&fields=files(id)",{headers:{Authorization:'Bearer '+GD.token}})
-    .then(function(r){return r.json();}).then(function(d){
-      if(d.files&&d.files.length){GD.folderId=d.files[0].id;localStorage.setItem('gd_folder_id',GD.folderId);cb(GD.folderId);}
-      else{fetch('https://www.googleapis.com/drive/v3/files',{method:'POST',headers:{Authorization:'Bearer '+GD.token,'Content-Type':'application/json'},body:JSON.stringify({name:'Ceraldi',mimeType:'application/vnd.google-apps.folder'})}).then(function(r){return r.json();}).then(function(f){GD.folderId=f.id;localStorage.setItem('gd_folder_id',GD.folderId);cb(GD.folderId);}).catch(function(){cb(null);});}
-    }).catch(function(){cb(null);});
-  });
-}
-function gdSaveNow(){
-  if(GD.syncing||!GD.token)return;
-  GD.syncing=true;
-  var dot=document.getElementById('drive-sync-dot');var txt=document.getElementById('drive-status-txt');
-  if(dot)dot.style.opacity='1';if(txt)txt.textContent='☁️ Sincronizzazione...';
-  gdEnsureToken(function(ok){
-    if(!ok){GD.syncing=false;if(dot)dot.style.opacity='0';if(txt)txt.textContent='☁️ Drive connesso';return;}
-    gdEnsureFolder(function(fid){
-      var backupData=buildBackupData();
-      var data=JSON.stringify(backupData,null,2);
-      var blob=new Blob([data],{type:'application/json'});
-      var done=function(){
-        var now=new Date().toISOString();
-        GD.syncing=false;localStorage.setItem('gd_last_sync',now);
-        // FIX (25/08, Valerio: fornitore che torna indietro da solo): buildBackupData()
-        // timbra il json con l'ora di QUANDO viene caricato (qui, fino a 10s dopo
-        // l'ultima saveAutoBackup() per via del debounce), ma 'ceraldi_autobackup_date'
-        // locale restava fermo all'ora della saveAutoBackup(). Il poll ogni 30s
-        // trovava quindi quasi SEMPRE driveDate > localDate+5000, anche senza nessuna
-        // modifica reale nel frattempo, e riapplicava il backup su Drive sopra allo
-        // stato locale — cancellando modifiche fatte nel frattempo (es. cambio
-        // fornitore) mai ripianificate su Drive. Ora la data locale viene allineata
-        // a quella effettivamente caricata, cosi il confronto riflette solo modifiche vere.
-        localStorage.setItem('ceraldi_autobackup_date',backupData.date);
-        if(dot)dot.style.opacity='0';
-        if(txt)txt.textContent='☁️ Drive connesso';
-        gdUpdateSyncTime(now);
-        updateDriveSettingsUI();
-      };
-      // Cerca sempre il file per nome nella cartella — così PWA e URL trovano lo stesso file
-      var q=encodeURIComponent("name='"+GD.FILE_NAME+"' and '"+fid+"' in parents and trashed=false");
-      fetch('https://www.googleapis.com/drive/v3/files?q='+q+'&fields=files(id)',{headers:{Authorization:'Bearer '+GD.token}})
-      .then(function(r){return r.json();})
-      .then(function(d){
-        var existingId=(d.files&&d.files.length)?d.files[0].id:null;
-        if(existingId){
-          GD.fileId=existingId;localStorage.setItem('gd_file_id',existingId);
-          fetch('https://www.googleapis.com/upload/drive/v3/files/'+existingId+'?uploadType=media',{method:'PATCH',headers:{Authorization:'Bearer '+GD.token,'Content-Type':'application/json'},body:blob})
-          .then(function(r){if(r.ok){done();}else{GD.syncing=false;}}).catch(function(){GD.syncing=false;});
-        } else {
-          gdCreateFile(fid,blob,done);
-        }
-      }).catch(function(){GD.syncing=false;});
-    });
-  });
-}
-function gdCreateFile(fid,blob,done){
-  var boundary='cb'+Date.now();
-  var meta=JSON.stringify({name:GD.FILE_NAME,parents:fid?[fid]:[]});
-  var reader=new FileReader();
-  reader.onload=function(e){
-    var full='--'+boundary+'\r\nContent-Type: application/json\r\n\r\n'+meta+'\r\n--'+boundary+'\r\nContent-Type: application/json\r\n\r\n'+e.target.result+'\r\n--'+boundary+'--';
-    fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',{method:'POST',headers:{Authorization:'Bearer '+GD.token,'Content-Type':'multipart/related; boundary='+boundary},body:full})
-    .then(function(r){return r.json();}).then(function(f){if(f.id){GD.fileId=f.id;localStorage.setItem('gd_file_id',GD.fileId);}done();}).catch(function(){GD.syncing=false;});
-  };
-  reader.readAsText(blob);
-}
-function gdScheduleSync(){
-  if(!GD.token)return;
-  if(GD.syncTimer)clearTimeout(GD.syncTimer);
-  GD.syncTimer=setTimeout(gdSaveNow,10000);
-}
-// Timer periodico ogni 3 minuti — import silenzioso se Drive ha dati più recenti
-var _gdPollTimer=null;
-var _gdLastPoll=0;
-function gdStartPolling(){
-  if(_gdPollTimer)clearInterval(_gdPollTimer);
-  _gdPollTimer=setInterval(function(){
-    if(!GD.token)return;
-    gdLoadOnStartup();
-    _gdLastPoll=Date.now();
-  },30*1000); // 30 secondi
-  // visibilitychange: scatta appena la PWA torna in primo piano
-  // (iOS sospende i timer in background — questo compensa)
-  if(!gdStartPolling._visAdded){
-    gdStartPolling._visAdded=true;
-    document.addEventListener('visibilitychange',function(){
-      if(document.visibilityState==='visible'&&GD.token){
-        // Sincronizza se sono passati più di 15s dall'ultimo poll
-        if(Date.now()-_gdLastPoll>15000){
-          gdLoadOnStartup();
-          _gdLastPoll=Date.now();
-        }
-      }
-    });
-  }
-}
-function gdStopPolling(){
-  if(_gdPollTimer){clearInterval(_gdPollTimer);_gdPollTimer=null;}
-}
-function gdLoadOnStartup(){
-  if(!GD.token)return;
-  gdEnsureToken(function(ok){
-    if(!ok)return;
-    // Trova il file per nome — funziona sia da PWA che da URL (localStorage separati)
-    gdEnsureFolder(function(fid){
-      if(!fid)return;
-      var q=encodeURIComponent("name='CeraldiOrdini_backup.json' and '"+fid+"' in parents and trashed=false");
-      fetch('https://www.googleapis.com/drive/v3/files?q='+q+'&fields=files(id)',{headers:{Authorization:'Bearer '+GD.token}})
-      .then(function(r){return r.json();})
-      .then(function(d){
-        var fileId=d.files&&d.files.length?d.files[0].id:null;
-        if(!fileId)return null;
-        GD.fileId=fileId;localStorage.setItem('gd_file_id',fileId);
-        return fetch('https://www.googleapis.com/drive/v3/files/'+fileId+'?alt=media',{headers:{Authorization:'Bearer '+GD.token}});
-      })
-      .then(function(r){if(!r||!r.ok)return null;return r.json();})
-      .then(function(data){
-        if(!data)return;
-        var driveDate=new Date(data.date||0).getTime();
-        var localDate=new Date(localStorage.getItem('ceraldi_autobackup_date')||0).getTime();
-        if(driveDate>localDate+5000){
-          try{
-            // Fornitori, storico e catalogo NON vengono più applicati da qui:
-            // sono su Cloud, fonte di verità condivisa tra dispositivi.
-            if(data.defaults)S.defaults=data.defaults;
-            if(data.favorites)S.favorites=data.favorites;
-            if(data.custom)S.custom=data.custom;
-            if(data.reminder!==undefined)S.reminder=data.reminder;
-            if(data.dark!==undefined)S.dark=data.dark;
-            if(data.savedForLater)S.savedForLater=data.savedForLater;
-            if(data.cartNotes)S.cartNotes=data.cartNotes;
-            if(data.cart)S.cart=data.cart;
-            if(data.orderSupOverride)S.orderSupOverride=data.orderSupOverride;
-            ss();sh();sd();sr2();sf2();sk();ssfl();scartnotes();scart();scartov();
-            try{localStorage.setItem('cc',JSON.stringify(S.custom));}catch(e){}
-            S.products=BP.concat(S.custom);
-            localStorage.setItem('ceraldi_autobackup_date',data.date);
-            localStorage.setItem('ceraldi_autobackup',JSON.stringify(data));
-            localStorage.setItem('gd_last_sync',data.date);
-            document.body.classList.toggle('dark',S.dark);
-            buildCats();renderCatalog();updateBadge();updateSavedNavBadge();
-            gdUpdateSyncTime(data.date); // aggiorna orario nella barra, niente toast
-          }catch(e){
-            toast('☁️ Backup Drive disponibile — importa da Impostazioni');
-            localStorage.setItem('gd_latest_remote',JSON.stringify(data));
-          }
-        }
-      }).catch(function(){});
-    });
-  });
-}
-// Hook: salva su Drive dopo ogni ordine — aggancia saveAutoBackup senza ridefinire sh/ss/sd
+// Hook: salva su Cloud dopo ogni ordine — aggancia saveAutoBackup senza ridefinire sh/ss/sd
 var _origSaveAutoBackup=saveAutoBackup;
-saveAutoBackup=function(){_origSaveAutoBackup();gdScheduleSync();};
-// Banner controls
-(function(){
-  var ab=document.getElementById('drive-auth-btn');if(ab)ab.onclick=function(){gdLoadScript(gdLogin);};
-  var bc=document.getElementById('drive-banner-cls');if(bc)bc.onclick=function(){var b=document.getElementById('drive-banner');if(b)b.style.display='none';localStorage.setItem('gd_banner_dismissed','1');};
-  if(localStorage.getItem('gd_banner_dismissed')==='1'){var b=document.getElementById('drive-banner');if(b)b.style.display='none';}
-  // Se già connesso o autorizzato in passato, carica script Google subito e rinnova
-  var everConn=localStorage.getItem('gd_ever_connected')==='1';
-  if(everConn){setTimeout(function(){gdLoadScript(gdInit);},500);}
-})();
-function gdLoadScript(cb){
-  if(typeof google!=='undefined'&&google.accounts){cb();return;}
-  var s=document.createElement('script');s.src='https://accounts.google.com/gsi/client';
-  s.onload=function(){var i=0;var iv=setInterval(function(){if(typeof google!=='undefined'&&google.accounts){clearInterval(iv);cb();}else if(++i>20){clearInterval(iv);toast('Errore Google — riprova');}},200);};
-  s.onerror=function(){toast('Impossibile caricare Google');};
-  document.head.appendChild(s);
+saveAutoBackup=function(){_origSaveAutoBackup();scheduleStatoSync();};
+// Polling ogni 30s (come prima con Drive) — nessun token da controllare,
+// funziona sempre, senza nessuna autorizzazione.
+var _statoPollTimer=null;
+var _statoLastPoll=0;
+function statoStartPolling(){
+  if(_statoPollTimer)clearInterval(_statoPollTimer);
+  _statoPollTimer=setInterval(function(){loadStatoCondiviso();_statoLastPoll=Date.now();},30*1000);
+  if(!statoStartPolling._visAdded){
+    statoStartPolling._visAdded=true;
+    document.addEventListener('visibilitychange',function(){
+      if(document.visibilityState==='visible'&&Date.now()-_statoLastPoll>15000){
+        loadStatoCondiviso();_statoLastPoll=Date.now();
+      }
+    });
+  }
 }
-/* ── FINE GOOGLE DRIVE ───────────────────────────────────────── */
+function updateStatoSettingsUI(){
+  var el=document.getElementById('stato-sync-info');
+  if(!el)return;
+  var d=localStorage.getItem('stato_last_sync');
+  el.innerHTML=d
+    ?'<span style="color:var(--green)">✓ Sincronizzato</span><span style="color:var(--muted);font-size:10px;margin-left:6px">'+new Date(d).toLocaleString('it-IT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})+'</span>'
+    :'<span style="color:var(--muted)">In attesa del primo salvataggio…</span>';
+}
+/* ── FINE STATO CONDIVISO ─────────────────────────────────────── */
 
 // ── AVVIO: carica Cloud poi inizializza tutto ─────────────
-var BUILD_VERSION='58 (Valerio: "non sincronizza e se premo su sync va in crash su Safari, problema noto da tempo") — aggiunta diagnostica errori globali (window.onerror/unhandledrejection: mostra un toast con l\'errore vero invece di bloccarsi in silenzio) per capire finalmente cosa causa il crash quando succederà di nuovo; corretta una probabile causa concreta: il bottone di sync non impediva una SECONDA sync sovrapposta se ritoccato dopo che il timeout visivo di 15s scadeva mentre la sync reale girava ancora in background (ora un flag resta attivo finché la sync vera non è davvero finita); il Magazzino ora si aggiorna anche lui dopo una sync riuscita, se è la pagina aperta al momento (prima restava con dati vecchi finché non si cambiava pagina).';
+var BUILD_VERSION='59 (Valerio: "ad ogni avvio c\'è sempre da dare autorizzazione a Google Drive, diventa scomodo") — rimosso Google Drive del tutto: i token OAuth duravano ~1 ora e Safari iOS blocca il rinnovo silenzioso, costringendo a riautorizzare di continuo, senza soluzione possibile senza un server dedicato. Verificato insieme cosa viveva ancora solo su Drive (fornitori/storico/catalogo erano già su Supabase da tempo): carrello, preferiti, note, ordini ricorrenti, promemoria, tema, e il listino locale importato. Spostati tutti su Supabase, condivisi tra i dispositivi (Valerio: "condividi") — due nuove tabelle, ceraldi_stato_condiviso e ceraldi_listino_locale. Nessuna autorizzazione da dare mai più; sync automatica ogni 30s in background, più immediata dopo ogni ordine inviato o import listino.';
 // BUG CORRETTO (09/08, segnalato da Valerio: "mi dice di aggiornare ma è già
 // l'ultima, e con l'avviso non riesco a fare l'ordine") — il controllo
 // confrontava l'INTERO testo descrittivo di BUILD_VERSION, carattere per
@@ -9906,6 +9646,11 @@ async function _bootApp(){
   _migrateLocalDefaultsToSupabase();
   updateBadge();
   updateSavedNavBadge();
+  // Carica lo stato condiviso (carrello/preferiti/note/tema/listino locale)
+  // da Supabase — sostituisce Google Drive, nessuna autorizzazione da dare.
+  loadStatoCondiviso();
+  statoStartPolling();
+  _listinoRestoreFromCloudIfEmpty();
   // Carica prezzi aggiornati in background (non blocca il render)
   loadPrezziFromSupabase().then(function(){
     _renderCatalogPreserveScroll();
