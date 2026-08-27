@@ -2438,7 +2438,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
       <div class="msg" id="fa-msg"></div>
     </div>
     <div class="sheet-foot">
-      <button class="btn-primary" onclick="salvaFerieAdmin()">&#x2713; Invia al dipendente</button>
+      <button class="btn-primary" id="fa-btn-invia" onclick="salvaFerieAdmin()">&#x2713; Invia al dipendente</button>
     </div>
   </div>
 </div>
@@ -15941,7 +15941,14 @@ function selezionaTuttiFaDip(sel) {
   document.querySelectorAll('.fa-dip-cb').forEach(cb => { cb.checked = sel; });
 }
 
+let _inviandoFerieAdmin = false;
+
 async function salvaFerieAdmin() {
+  // Blocco anti-doppio-tap: se l'invio precedente è ancora in corso
+  // (rete lenta, dipendenti multipli) un secondo tocco sul pulsante non
+  // deve avviare un secondo giro di inserimenti/notifiche.
+  if (_inviandoFerieAdmin) return;
+
   const dipIds = [...document.querySelectorAll('.fa-dip-cb:checked')].map(cb => cb.value);
   const tipo  = $('fa-tipo').value;
   const dal   = $('fa-dal').value;
@@ -15950,6 +15957,11 @@ async function salvaFerieAdmin() {
   if (!dipIds.length) { showMsg('fa-msg','Seleziona almeno un dipendente','err'); return; }
   if (!dal || !al)  { showMsg('fa-msg','Inserisci le date','err'); return; }
   if (al < dal)     { showMsg('fa-msg','La data fine deve essere dopo la data inizio','err'); return; }
+
+  _inviandoFerieAdmin = true;
+  const btnInvia = $('fa-btn-invia');
+  const btnLblOriginale = btnInvia ? btnInvia.innerHTML : null;
+  if (btnInvia) { btnInvia.disabled = true; btnInvia.innerHTML = 'Invio in corso…'; }
 
   const gg = Math.round((new Date(al)-new Date(dal))/86400000)+1;
   const tipoIcon = { ferie:'🌴', malattia:'🤒', altro:'📋' };
@@ -15960,9 +15972,23 @@ async function salvaFerieAdmin() {
   // Un'assegnazione per dipendente selezionato — ognuno riceve la propria
   // notifica e dovrà confermarla singolarmente, esattamente come se fosse
   // stata fatta una per una, solo tutte insieme in un solo tocco.
-  let riusciti = 0, falliti = [];
+  let riusciti = 0, falliti = [], saltati = 0;
+  try {
   for (const dipId of dipIds) {
     try {
+      // Evita di creare una seconda richiesta identica ancora da
+      // confermare per lo stesso dipendente (stesso tipo/periodo): capita
+      // se questa funzione viene invocata due volte per errore (es. un
+      // problema di rete che fa ripartire l'invio) — qui saltiamo senza
+      // inserire né notificare di nuovo.
+      const { data: giaPresente } = await sb.from('presenze_assenze')
+        .select('id')
+        .eq('dipendente_id', dipId).eq('tipo', tipo)
+        .eq('data_inizio', dal).eq('data_fine', al)
+        .eq('stato', 'admin_inviata')
+        .limit(1);
+      if (giaPresente && giaPresente.length) { saltati++; continue; }
+
       const { data: prof } = await sb.from('presenze_profili').select('nome,cognome').eq('id',dipId).single();
       const nomeDip = prof ? prof.nome+(prof.cognome?' '+prof.cognome:'') : '';
       const { error } = await sb.from('presenze_assenze').insert({
@@ -15993,8 +16019,12 @@ async function salvaFerieAdmin() {
     }
   }
 
-  if (riusciti > 0) {
-    toast('\u2713 '+tipo.charAt(0).toUpperCase()+tipo.slice(1)+' inviate a '+riusciti+' dipendent'+(riusciti===1?'e':'i')+(falliti.length?' ('+falliti.length+' non riusciti)':''));
+  if (riusciti > 0 || saltati > 0) {
+    const extra = [
+      falliti.length ? falliti.length+' non riusciti' : '',
+      saltati ? saltati+' già inviate in precedenza (saltate, nessun doppione creato)' : ''
+    ].filter(Boolean).join(' — ');
+    toast('\u2713 '+tipo.charAt(0).toUpperCase()+tipo.slice(1)+' inviate a '+riusciti+' dipendent'+(riusciti===1?'e':'i')+(extra?' ('+extra+')':''));
   } else {
     showMsg('fa-msg','Nessuna assegnazione riuscita — riprova','err');
     return;
@@ -16002,6 +16032,10 @@ async function salvaFerieAdmin() {
   closeSheet('sh-ferieAdmin');
   await caricaAssenzeAdmin();
   await aggiornaNavBadge();
+  } finally {
+    _inviandoFerieAdmin = false;
+    if (btnInvia) { btnInvia.disabled = false; btnInvia.innerHTML = btnLblOriginale; }
+  }
 }
 
 /* ── CONFERMA LIQUIDAZIONE (dipendente) ─────────────── */
