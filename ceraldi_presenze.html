@@ -1012,7 +1012,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div id="app" style="display:none">
 
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.190</span></div>
+    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.193</span></div>
     <span class="topbar-badge" id="role-badge"></span>
     <button class="btn-topbar" onclick="ricaricaApp()" title="Ricarica la pagina (per essere sicuro di avere l'ultima versione)" style="padding:6px 10px">🔄</button>
     <button id="btn-promemoria" class="btn-topbar" onclick="apriPromemoria()" style="display:none;position:relative;padding:6px 10px">
@@ -1383,6 +1383,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
         <button class="btn-sm" style="flex:1;background:rgba(43,74,203,.08);color:var(--accent);border-color:rgba(43,74,203,.3)" onclick="apriControlloMensile()" title="Controlla in un colpo d'occhio chi ha ricevuto la busta paga e chi è stato liquidato questo mese">🔍 Controllo rapido mese</button>
         <button class="btn-sm" style="flex:1;background:rgba(47,138,92,.1);color:var(--green);border-color:rgba(47,138,92,.3)" onclick="esportaPresenzeExcel()" title="Un unico file Excel con timbrature, stipendi, acconti, restituzioni, assenze e ferie — di tutta l'azienda o di un solo dipendente">⬇ Esporta dati (Excel)</button>
       </div>
+      <button class="btn-secondary" style="width:100%;margin-bottom:14px" onclick="apriRiconciliazioneBonifici()">🏦 Riconciliazione bonifici stipendi</button>
       <div id="stipendi-list"></div>
     </div>
 
@@ -1749,6 +1750,18 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 </div>
 
 <!-- ── SHEET: storico paga giornaliera / registrazione aumenti ── -->
+<!-- ── SHEET: riconciliazione stipendi via bonifico (28/08) ── -->
+<div class="overlay" id="sh-riconcBonifici">
+  <div class="sheet" style="max-height:88vh">
+    <div class="sheet-handle"></div>
+    <div class="sheet-hdr"><span class="sheet-title">🏦 Riconciliazione bonifici</span><button class="sheet-cls" onclick="closeSheet('sh-riconcBonifici')">✕</button></div>
+    <div class="sheet-body">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:14px">Confronto tra l'estratto conto e il netto delle buste paga caricate.</div>
+      <div id="rb-lista"><div style="text-align:center;color:var(--muted);padding:20px">Analisi in corso…</div></div>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="sh-storicoPaga">
   <div class="sheet">
     <div class="sheet-handle"></div>
@@ -2875,10 +2888,278 @@ async function presenzeEliminaPrimaNota(origineEsterna){
   }
 }
 
+/* ══════════════════════════════════════════════════════════════════
+   PAGA FISSA GIORNALIERA — Valerio e Vincenzo Ceraldi (28/08, richiesto
+   esplicitamente da Valerio; corretto lo stesso giorno su suo avviso —
+   la scelta cassetto/fondo NON vive più qui, vive in Ceraldi Fatture).
+   1) presenzeAutoSemprePresenti(): silenziosa, nessuna UI — chi ha
+      sempre_presente=true su presenze_profili viene marcato presente
+      OGGI con una vera riga su `presenze` (non un caso speciale sparso
+      nelle tante query "presenti oggi"/costo mese/ecc. — così ogni
+      report esistente li vede già correttamente senza toccare altro).
+      tipo_timbratura='auto_sempre_presente' + confermata_dip=true
+      passano già il filtro .or('tipo_timbratura.neq.manuale_dip,
+      confermata_dip.eq.true') usato ovunque, senza bisogno di modificarlo.
+   2) presenzeRegistraPagaFissaGiornaliera(): scrive SUBITO al mattino
+      (a ogni apertura app admin, nessun orario) il movimento da 150€ in
+      Prima Nota per ciascuno — ma con fonte=null (in sospeso): non
+      sappiamo ancora se cassetto o fondo. È Ceraldi Fatture, non questa
+      app, a mostrare la scelta cassetto/fondo (e l'avviso se non risposta
+      entro le 20) e a impostare fonte in un secondo momento con un PATCH
+      mirato — vedi Primanota.html, _pnRigaMovimentoHtml/
+      pnScegliFontePresenze. Scrittura idempotente sulla stessa
+      origine_esterna, come già fa presenzeScriviPrimaNota per gli acconti.
+   La riconciliazione con gli stipendi "veri" (quelli via presenze_acconti)
+   è un discorso separato, da fare in un secondo momento.
+   ══════════════════════════════════════════════════════════════════ */
+async function presenzeAutoSemprePresenti(){
+  try {
+    const oggi = todayISO();
+    const { data: sempre } = await sb.from('presenze_profili')
+      .select('id,nome,cognome').eq('sempre_presente', true).eq('attivo', true);
+    if (!sempre || !sempre.length) return;
+    const { data: giaPresenti } = await sb.from('presenze')
+      .select('dipendente_id').eq('data', oggi).in('dipendente_id', sempre.map(d=>d.id));
+    const giaSet = new Set((giaPresenti||[]).map(p=>p.dipendente_id));
+    const daInserire = sempre.filter(d => !giaSet.has(d.id));
+    if (!daInserire.length) return;
+    await sb.from('presenze').insert(daInserire.map(d => ({
+      dipendente_id: d.id,
+      nome_dipendente: d.nome + (d.cognome ? ' ' + d.cognome : ''),
+      data: oggi,
+      ts_entrata: new Date().toISOString(),
+      tipo_timbratura: 'auto_sempre_presente',
+      confermata_dip: true
+    })));
+  } catch (e) {
+    console.warn('presenzeAutoSemprePresenti:', e.message || e);
+  }
+}
 
-/* ======================================================================
-   REGISTRAZIONE DA LINK INVITO
-   ====================================================================== */
+async function presenzeRegistraPagaFissaGiornaliera(){
+  try {
+    const oggi = todayISO();
+    const { data: sempre } = await sb.from('presenze_profili')
+      .select('id,nome,cognome,paga_giornaliera').eq('sempre_presente', true).eq('attivo', true);
+    const conPaga = (sempre||[]).filter(d => parseFloat(d.paga_giornaliera) > 0);
+    if (!conPaga.length) return;
+    const chiavi = conPaga.map(d => 'presenze_paga_fissa_' + d.id + '_' + oggi);
+    const { data: giaEsistenti } = await sb.from('prima_nota_movimenti')
+      .select('origine_esterna').in('origine_esterna', chiavi).is('deleted_at', null);
+    const esistentiSet = new Set((giaEsistenti||[]).map(r=>r.origine_esterna));
+    const daScrivere = conPaga.filter(d => !esistentiSet.has('presenze_paga_fissa_' + d.id + '_' + oggi));
+    if (!daScrivere.length) return;
+    await sb.from('prima_nota_movimenti').insert(daScrivere.map(d => ({
+      data: oggi,
+      categoria: 'stipendio',
+      importo: parseFloat(d.paga_giornaliera),
+      fonte: null, // in sospeso — la scelta si fa da Ceraldi Fatture
+      descrizione: 'Paga giornaliera fissa — ' + d.nome + (d.cognome ? ' ' + d.cognome : ''),
+      origine_esterna: 'presenze_paga_fissa_' + d.id + '_' + oggi
+    })));
+  } catch (e) {
+    console.warn('presenzeRegistraPagaFissaGiornaliera:', e.message || e);
+  }
+}
+
+
+/* ══════════════════════════════════════════════════════════════════
+   RICONCILIAZIONE STIPENDI VIA BONIFICO (28/08, richiesto da Valerio)
+   Confronta i bonifici in banca (movimenti_banca, stessa tabella già
+   condivisa con Ceraldi Fatture) con il netto della busta paga caricata
+   (presenze_documenti.netto_busta, categoria='busta_paga') per ogni
+   dipendente/mese. Vive qui in Presenze (non in Fatture) — decisione presa
+   con Valerio per non avere due motori paralleli sullo stesso dato.
+
+   MATCHING: nome del dipendente nella descrizione del movimento (tokenizzato,
+   tollerante ad accenti/maiuscole/ordine) + importo che deve tornare col
+   netto busta. Se il bonifico risulta "BENEFICIARI VARI" (distinta cumulativa,
+   nessun nome individuale) ma l'importo combacia esattamente col netto atteso
+   di un dipendente, viene proposto come possibile match — MAI applicato da
+   solo, richiede sempre conferma esplicita (richiesto da Valerio).
+   La causale viene sempre letta insieme al resto della descrizione: capita
+   che anche una riga "BENEFICIARI VARI" contenga comunque il nome nella
+   causale (es. "...DISTINTA - ADD.TOT - Ceraldi Vincenzo stip luglio 2026"),
+   quindi il match per nome cerca in TUTTO il testo, non solo dopo "FAVORE".
+
+   FINESTRA MESE: dal 1° del mese fino al 25 del mese successivo (richiesto
+   esplicitamente da Valerio: il bonifico di un mese può arrivare fino al 25
+   di quello dopo).
+
+   STATI per un cedolino dopo aver sommato i bonifici trovati nella finestra:
+   - saldato:   somma bonifici ≈ netto busta (tolleranza 0,50€)
+   - aperto:    somma bonifici < netto busta — manca ancora un saldo
+   - eccedenza: somma bonifici > netto busta — l'eccedenza va proposta come
+                acconto SUL MESE SUCCESSIVO, marcato modalita='bonifico' su
+                presenze_acconti (mai confuso con un acconto in contanti).
+   ══════════════════════════════════════════════════════════════════ */
+
+function _rsbTokenizza(s){
+  return String(s||'')
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^a-z\s]/g,' ')
+    .split(/\s+/).filter(w => w.length >= 3);
+}
+
+function _rsbNomeMatchaDescrizione(descrizione, nomeCompleto){
+  const tokDesc = _rsbTokenizza(descrizione);
+  const tokNome = _rsbTokenizza(nomeCompleto);
+  if (!tokNome.length) return false;
+  return tokNome.every(t => tokDesc.includes(t));
+}
+
+function _rsbEBeneficiariVari(descrizione){
+  return /beneficiari\s+vari/i.test(descrizione || '');
+}
+
+function _rsbECommissione(descrizione){
+  return /comm\.?\s*su\s*bonifici|\badd\.spe\b/i.test(descrizione || '');
+}
+
+// Finestra di ricerca per il cedolino di un mese: dal 1 del mese fino al 25
+// del mese successivo.
+function _rsbFinestraMese(mese, anno){
+  const dal = anno + '-' + String(mese).padStart(2,'0') + '-01';
+  const meseSucc = mese === 12 ? 1 : mese + 1;
+  const annoSucc = mese === 12 ? anno + 1 : anno;
+  const al = annoSucc + '-' + String(meseSucc).padStart(2,'0') + '-25';
+  return { dal, al };
+}
+
+// Calcola (senza scrivere nulla) i match proposti per ogni cedolino caricato
+// di ogni dipendente pagato con IBAN. Ritorna un array di risultati, uno per
+// coppia dipendente/mese che ha almeno un movimento candidato.
+async function presenzeCalcolaRiconciliazioneBonifici(){
+  const risultati = [];
+  try {
+    const { data: dips } = await sb.from('presenze_profili')
+      .select('id,nome,cognome,iban').eq('ruolo','dipendente').eq('attivo',true).not('iban','is',null);
+    if (!dips || !dips.length) return risultati;
+    const dipIds = dips.map(d => d.id);
+
+    const { data: cedolini } = await sb.from('presenze_documenti')
+      .select('dipendente_id,mese,anno,netto_busta').eq('categoria','busta_paga')
+      .not('netto_busta','is',null).in('dipendente_id', dipIds);
+    if (!cedolini || !cedolini.length) return risultati;
+
+    // Periodo complessivo da coprire: dal mese più vecchio al 25 del mese
+    // successivo al più recente, per non scaricare tutto movimenti_banca.
+    let meseMin = null, meseMax = null;
+    cedolini.forEach(c => {
+      const chiave = c.anno*100 + c.mese;
+      if (meseMin === null || chiave < meseMin.chiave) meseMin = {chiave, mese:c.mese, anno:c.anno};
+      if (meseMax === null || chiave > meseMax.chiave) meseMax = {chiave, mese:c.mese, anno:c.anno};
+    });
+    const finMin = _rsbFinestraMese(meseMin.mese, meseMin.anno);
+    const finMax = _rsbFinestraMese(meseMax.mese, meseMax.anno);
+
+    const [{ data: movs }, { data: giaAssegnati }] = await Promise.all([
+      sb.from('movimenti_banca').select('id,data,importo,descrizione,tipo')
+        .eq('tipo','uscita').gte('data', finMin.dal).lte('data', finMax.al),
+      sb.from('presenze_bonifici_stipendio').select('movimento_banca_id')
+    ]);
+    const assegnatiSet = new Set((giaAssegnati||[]).map(r => r.movimento_banca_id));
+    const movsUtili = (movs||[]).filter(m => !_rsbECommissione(m.descrizione) && !assegnatiSet.has(m.id));
+
+    const dipMap = {}; dips.forEach(d => { dipMap[d.id] = d; });
+
+    cedolini.forEach(c => {
+      const dip = dipMap[c.dipendente_id];
+      if (!dip) return;
+      const nomeCompleto = dip.nome + ' ' + (dip.cognome || '');
+      const fin = _rsbFinestraMese(c.mese, c.anno);
+      const inFinestra = m => m.data >= fin.dal && m.data <= fin.al;
+
+      const candNome = movsUtili.filter(m => inFinestra(m) && _rsbNomeMatchaDescrizione(m.descrizione, nomeCompleto));
+      const sommaNome = candNome.reduce((s,m) => s + Math.abs(m.importo), 0);
+      const netto = parseFloat(c.netto_busta);
+      const restante = Math.round((netto - sommaNome) * 100) / 100;
+
+      // Se dopo il match per nome resta un importo scoperto, cerca UN
+      // movimento "beneficiari vari" (senza nome individuabile) il cui
+      // importo combaci col restante — proposta debole, sempre da confermare.
+      let extra = [];
+      if (Math.abs(restante) > 0.5) {
+        extra = movsUtili.filter(m =>
+          inFinestra(m) && _rsbEBeneficiariVari(m.descrizione) &&
+          !candNome.includes(m) && Math.abs(Math.abs(m.importo) - restante) <= 0.5
+        ).slice(0, 1); // una sola proposta, non ambigua
+      }
+
+      const tutti = candNome.concat(extra);
+      if (!tutti.length) return; // nessun candidato per questo cedolino, niente da proporre
+
+      const somma = tutti.reduce((s,m) => s + Math.abs(m.importo), 0);
+      const diff = Math.round((somma - netto) * 100) / 100;
+      const stato = Math.abs(diff) <= 0.5 ? 'saldato' : (diff < 0 ? 'aperto' : 'eccedenza');
+
+      risultati.push({
+        dipId: c.dipendente_id, nome: nomeCompleto, mese: c.mese, anno: c.anno,
+        netto, somma, diff, stato,
+        movimenti: tutti.map(m => ({
+          id: m.id, data: m.data, importo: Math.abs(m.importo), descrizione: m.descrizione,
+          certo: candNome.includes(m) // true = trovato per nome, false = beneficiari-vari da confermare
+        }))
+      });
+    });
+  } catch (e) {
+    console.warn('presenzeCalcolaRiconciliazioneBonifici:', e.message || e);
+  }
+  return risultati;
+}
+
+// Scrive in presenze_bonifici_stipendio i movimenti indicati (di norma solo
+// quelli con certo=true, salvo conferma esplicita anche per gli altri).
+// Se lo stato è 'eccedenza' e confermaEccedenza=true, propone/crea anche
+// l'acconto sul mese successivo con modalita='bonifico'.
+async function presenzeConfermaMatchStipendio(risultato, movimenti, opts){
+  opts = opts || {};
+  if (!movimenti || !movimenti.length) return;
+  for (const m of movimenti) {
+    try {
+      await sb.from('presenze_bonifici_stipendio').insert({
+        dipendente_id: risultato.dipId,
+        movimento_banca_id: m.id,
+        mese_riferimento: risultato.mese,
+        anno_riferimento: risultato.anno,
+        importo: m.importo,
+        confermato: true,
+        descrizione_movimento: m.descrizione,
+        data_movimento: m.data
+      });
+    } catch (e) { console.warn('presenzeConfermaMatchStipendio insert:', e.message || e); }
+  }
+  if (opts.registraEccedenzaAcconto && risultato.stato === 'eccedenza' && risultato.diff > 0.5) {
+    const meseSucc = risultato.mese === 12 ? 1 : risultato.mese + 1;
+    const annoSucc = risultato.mese === 12 ? risultato.anno + 1 : risultato.anno;
+    // FIX 28/08 (richiesto da Valerio): l'eccedenza non è sempre un acconto
+    // sullo stipendio del mese dopo — a volte il bonifico paga ANCHE
+    // un'altra competenza scritta sul cedolino ma che l'app non legge (ferie,
+    // 13a/14a, TFR...). causale e mese/anno di riferimento sono quindi
+    // scelte esplicite (con un default ragionevole), non più fisse.
+    const causaleScelta = opts.causaleEccedenza || 'acconto_stipendio';
+    const meseScelto = opts.meseRifEccedenza || meseSucc;
+    const annoScelto = opts.annoRifEccedenza || annoSucc;
+    try {
+      await sb.from('presenze_acconti').insert({
+        dipendente_id: risultato.dipId,
+        importo: risultato.diff,
+        data: todayISO(),
+        causale: causaleScelta,
+        modalita: 'bonifico', // MAI 'contanti': è un'eccedenza di un bonifico già ricevuto, non contante dato a mano
+        mese_riferimento: meseScelto,
+        anno_riferimento: annoScelto,
+        note: 'Eccedenza bonifico ' + String(risultato.mese).padStart(2,'0') + '/' + risultato.anno
+          + ' (netto ' + risultato.netto.toFixed(2) + '€, ricevuto ' + risultato.somma.toFixed(2) + '€) — acconto via bonifico, non contanti'
+          + (causaleLbl ? '. Competenza: ' + causaleLbl(causaleScelta) : ''),
+        registrato_da: ME ? ME.id : null
+      });
+    } catch (e) { console.warn('presenzeConfermaMatchStipendio acconto:', e.message || e); }
+  }
+}
+
+
 
 let _regToken     = null;
 let _regInvitoId  = null;
@@ -8633,6 +8914,12 @@ async function initAdmin() {
   setTimeout(inviaRiepilogoPromemoriaTelegram, 2500);
   setTimeout(() => caricaAssenzaDaApprovare(), 1200); // controlla richieste ferie/assenza da approvare
   setTimeout(() => caricaCambioTurnoDaApprovareAdmin(), 3200); // controlla cambi turno da approvare
+  // Paga fissa giornaliera Ceraldi (28/08, corretto lo stesso giorno su
+  // avviso di Valerio): qui si scrive solo — presenza automatica silenziosa
+  // + il movimento in Prima Nota (fonte in sospeso). La scelta cassetto/
+  // fondo e l'avviso dopo le 20 vivono in Ceraldi Fatture, non qui.
+  presenzeAutoSemprePresenti();
+  presenzeRegistraPagaFissaGiornaliera();
 }
 
 async function controllaBuonCompleanno() {
@@ -12019,6 +12306,115 @@ async function apriControlloMensile() {
       + '</div></div>';
   }
   $('cm-body').innerHTML = html;
+}
+
+// ── Riconciliazione bonifici stipendi (28/08) — UI di revisione ──
+let _rbRisultati = [];
+const MESI_LBL = ['','Gen','Feb','Mar','Apr','Mag','Giu','Lug','Ago','Set','Ott','Nov','Dic'];
+
+async function apriRiconciliazioneBonifici(){
+  openSheet('sh-riconcBonifici');
+  $('rb-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Analisi in corso…</div>';
+  _rbRisultati = await presenzeCalcolaRiconciliazioneBonifici();
+  rbRenderLista();
+}
+
+function rbRenderLista(){
+  const el = $('rb-lista');
+  if (!_rbRisultati.length) {
+    el.innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Nessun bonifico da riconciliare al momento — tutto già confermato o nessun candidato trovato nell\'estratto conto.</div>';
+    return;
+  }
+  const badgeStato = { saldato:'✅ Saldato', aperto:'⚠️ Manca ancora', eccedenza:'🔵 Eccedenza' };
+  const colStato = { saldato:'#1a7a3a', aperto:'#b36a00', eccedenza:'#2b4acb' };
+  el.innerHTML = _rbRisultati.map((r,idx) => {
+    const tuttiCerti = r.movimenti.every(m => m.certo);
+    const righeMov = r.movimenti.map((m,mi) => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid var(--border);font-size:12px">
+        <div><div>${m.data} — € ${m.importo.toFixed(2)}</div><div style="color:var(--muted);font-size:10.5px;word-break:break-word">${esc(m.descrizione)}</div></div>
+        ${m.certo ? '<span style="font-size:10px;color:#1a7a3a;font-weight:700;white-space:nowrap;margin-left:8px">✓ per nome</span>'
+                   : `<button class="btn-sm" style="white-space:nowrap;margin-left:8px" onclick="rbConfermaSingolo(${idx},${mi})">Conferma</button>`}
+      </div>`).join('');
+    let azione = '';
+    if (tuttiCerti) {
+      if (r.stato === 'eccedenza') {
+        const meseSuccDef = r.mese === 12 ? 1 : r.mese + 1;
+        const annoSuccDef = r.mese === 12 ? r.anno + 1 : r.anno;
+        const meseRifDef = annoSuccDef + '-' + String(meseSuccDef).padStart(2,'0');
+        // FIX 28/08 (richiesto da Valerio): l'eccedenza può riferirsi a
+        // un'altra competenza scritta sul cedolino ma non letta dall'app
+        // (ferie, 13a/14a, TFR...) — quindi si sceglie qui, non è più
+        // automaticamente "acconto stipendio del mese dopo".
+        azione = `
+          <div style="margin-top:10px;background:var(--surface);border-radius:8px;padding:10px">
+            <div style="font-size:11px;color:var(--muted);margin-bottom:6px">A quale competenza appartiene l'eccedenza di € ${r.diff.toFixed(2)}?</div>
+            <select id="rb-causale-${idx}" class="field-inp" style="margin-bottom:8px">
+              ${Object.keys(CAUSALI).filter(c=>c!=='stipendio').map(c=>`<option value="${c}"${c==='acconto_stipendio'?' selected':''}>${CAUSALI[c]}</option>`).join('')}
+            </select>
+            <div class="field-lbl" style="margin-top:0;font-size:10px">Mese di riferimento (default: mese successivo)</div>
+            <input type="month" id="rb-meserif-${idx}" class="field-inp last" value="${meseRifDef}" style="margin-bottom:8px">
+            <button class="btn-green-solid" style="width:100%" onclick="rbConfermaEccedenza(${idx})">✓ Conferma e registra</button>
+          </div>`;
+      } else {
+        azione = `<button class="btn-green-solid" style="width:100%;margin-top:10px" onclick="rbConfermaTutto(${idx},false)">✓ Conferma</button>`;
+      }
+    } else {
+      azione = `<div style="font-size:11px;color:var(--muted);margin-top:8px">Conferma i singoli movimenti "beneficiari vari" sopra per completare.</div>`;
+    }
+    return `<div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="font-weight:700;font-size:14px">${esc(r.nome)}</div>
+        <div style="font-size:11px;font-weight:700;color:${colStato[r.stato]}">${badgeStato[r.stato]}</div>
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-top:2px">${MESI_LBL[r.mese]} ${r.anno} — cedolino € ${r.netto.toFixed(2)}, trovato € ${r.somma.toFixed(2)}${r.stato!=='saldato' ? ' (' + (r.diff>0?'+':'') + r.diff.toFixed(2) + '€)' : ''}</div>
+      ${righeMov}
+      ${azione}
+    </div>`;
+  }).join('');
+}
+
+async function rbConfermaTutto(idx, registraEccedenza){
+  const r = _rbRisultati[idx];
+  if (!r) return;
+  await presenzeConfermaMatchStipendio(r, r.movimenti, { registraEccedenzaAcconto: registraEccedenza });
+  toast('✓ Riconciliato: ' + r.nome + ' — ' + MESI_LBL[r.mese] + ' ' + r.anno);
+  _rbRisultati.splice(idx, 1);
+  rbRenderLista();
+}
+
+// FIX 28/08 (richiesto da Valerio): conferma di un'eccedenza scegliendo a
+// mano la competenza (causale) e il mese di riferimento, invece del default
+// fisso "acconto stipendio mese successivo" — copre il caso in cui il
+// bonifico paga anche un'altra voce del cedolino (ferie, 13a/14a, TFR) che
+// l'app non legge da sola.
+async function rbConfermaEccedenza(idx){
+  const r = _rbRisultati[idx];
+  if (!r) return;
+  const causale = $('rb-causale-' + idx) ? $('rb-causale-' + idx).value : 'acconto_stipendio';
+  const meseRifVal = $('rb-meserif-' + idx) ? $('rb-meserif-' + idx).value : '';
+  let meseScelto = null, annoScelto = null;
+  if (meseRifVal) { const [y,m] = meseRifVal.split('-'); annoScelto = parseInt(y); meseScelto = parseInt(m); }
+  await presenzeConfermaMatchStipendio(r, r.movimenti, {
+    registraEccedenzaAcconto: true,
+    causaleEccedenza: causale,
+    meseRifEccedenza: meseScelto,
+    annoRifEccedenza: annoScelto
+  });
+  toast('✓ Riconciliato: ' + r.nome + ' — eccedenza assegnata a ' + causaleLbl(causale));
+  _rbRisultati.splice(idx, 1);
+  rbRenderLista();
+}
+
+async function rbConfermaSingolo(idx, movIdx){
+  const r = _rbRisultati[idx];
+  if (!r) return;
+  const m = r.movimenti[movIdx];
+  if (!m) return;
+  await presenzeConfermaMatchStipendio(r, [m]);
+  toast('✓ Movimento confermato per ' + r.nome);
+  // Ricalcola da capo questo risultato (potrebbe restare un altro pezzo da confermare)
+  _rbRisultati = await presenzeCalcolaRiconciliazioneBonifici();
+  rbRenderLista();
 }
 
 async function caricaStipendi() {
