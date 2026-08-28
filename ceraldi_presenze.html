@@ -1012,7 +1012,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div id="app" style="display:none">
 
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.193</span></div>
+    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.194</span></div>
     <span class="topbar-badge" id="role-badge"></span>
     <button class="btn-topbar" onclick="ricaricaApp()" title="Ricarica la pagina (per essere sicuro di avere l'ultima versione)" style="padding:6px 10px">🔄</button>
     <button id="btn-promemoria" class="btn-topbar" onclick="apriPromemoria()" style="display:none;position:relative;padding:6px 10px">
@@ -3017,13 +3017,19 @@ function _rsbECommissione(descrizione){
   return /comm\.?\s*su\s*bonifici|\badd\.spe\b/i.test(descrizione || '');
 }
 
-// Finestra di ricerca per il cedolino di un mese: dal 1 del mese fino al 25
-// del mese successivo.
+// Finestra di ricerca per il cedolino di un mese: SOLO il mese successivo,
+// dal 1 al 25 (FIX 28/08, segnalato da Valerio con un caso reale: lo
+// stipendio di un mese è erogato SEMPRE a partire dal 1° del mese dopo, mai
+// dentro il mese stesso — un bonifico datato ancora nel mese M non può
+// riferirsi al cedolino di M, appartiene invece al cedolino di M-1. La
+// finestra vecchia partiva dal 1° di M stesso ed è per questo che un
+// bonifico di inizio mese veniva sommato per errore al cedolino sbagliato,
+// facendo risultare un'eccedenza che in realtà non c'era.
 function _rsbFinestraMese(mese, anno){
-  const dal = anno + '-' + String(mese).padStart(2,'0') + '-01';
   const meseSucc = mese === 12 ? 1 : mese + 1;
   const annoSucc = mese === 12 ? anno + 1 : anno;
-  const al = annoSucc + '-' + String(meseSucc).padStart(2,'0') + '-25';
+  const dal = annoSucc + '-' + String(meseSucc).padStart(2,'0') + '-01';
+  const al  = annoSucc + '-' + String(meseSucc).padStart(2,'0') + '-25';
   return { dal, al };
 }
 
@@ -12438,7 +12444,7 @@ async function caricaStipendi() {
   // Ora si recuperano TUTTI gli acconti fino a fine mese selezionato, e si
   // segna quali mesi risultano già liquidati (quindi già "chiusi"), per
   // riportare in avanti solo quelli davvero ancora in sospeso.
-  const [{ data: dipendenti }, { data: presenze }, { data: accontiTutti }, { data: restituzioniTutte }, { data: ferieAnno }, { data: liquidazTutte }, { data: presenzePrecedenti }, { data: cedoliniMese }, { data: acconti1314Storico }] = await Promise.all([
+  const [{ data: dipendenti }, { data: presenze }, { data: accontiTutti }, { data: restituzioniTutte }, { data: ferieAnno }, { data: liquidazTutte }, { data: presenzePrecedenti }, { data: cedoliniMese }, { data: acconti1314Storico }, { data: bonificiRiconciliatiMese }] = await Promise.all([
     sb.from('presenze_profili').select('*').eq('attivo',true).or('ruolo.eq.dipendente,percepisce_stipendio.eq.true').order('nome'),
     sb.from('presenze').select('*').gte('data',dal).lte('data',al),
     sb.from('presenze_acconti').select('id,dipendente_id,importo,data,note,letto_dip,causale,saldato,mese_riferimento,anno_riferimento,periodo_anno_inizio,saldo_periodo').lte('data',al),
@@ -12474,8 +12480,7 @@ async function caricaStipendi() {
     // netto valorizzato: se manca l'importo va segnalato, non fatto
     // sparire in silenzio (altrimenti sembra che il cedolino non esista).
     sb.from('presenze_documenti').select('dipendente_id,netto_busta')
-      .eq('categoria','busta_paga').eq('mese',parseInt(m)).eq('anno',parseInt(y)),
-    // FIX BUG GRAVE: gli acconti/correzioni 13a/14a usavano finora
+      .eq('categoria','busta_paga').eq('mese',parseInt(m)).eq('anno',parseInt(y)),    // FIX BUG GRAVE: gli acconti/correzioni 13a/14a usavano finora
     // accontiTutti, che è filtrato con .lte('data',al) — cioè escluso di
     // netto qualunque riga datata DOPO il mese che si sta guardando in
     // questo momento. Un pagamento reale (Liquida periodo) o una
@@ -12487,9 +12492,22 @@ async function caricaStipendi() {
     // acconto_14, senza alcun limite di data.
     sb.from('presenze_acconti').select('dipendente_id,importo,data,causale,periodo_anno_inizio,saldo_periodo')
       .in('causale',['acconto_13','acconto_14']),
+    // Riconciliazione bonifici (28/08, richiesto da Valerio): quali
+    // dipendenti hanno già un bonifico confermato per QUESTO mese/anno di
+    // riferimento — da mostrare nella scheda insieme al totale del cedolino,
+    // senza dover aprire "Riconciliazione bonifici" a parte per saperlo.
+    DB.safe(() => sb.from('presenze_bonifici_stipendio')
+      .select('dipendente_id,importo,data_movimento,descrizione_movimento')
+      .eq('mese_riferimento',parseInt(m)).eq('anno_riferimento',parseInt(y)), null),
   ]);
   const cedoliniMeseMap = {};
   (cedoliniMese||[]).forEach(c => { cedoliniMeseMap[c.dipendente_id] = c.netto_busta != null ? parseFloat(c.netto_busta) : null; });
+  const bonificiRiconciliatiMap = {};
+  (bonificiRiconciliatiMese||[]).forEach(b => {
+    if (!bonificiRiconciliatiMap[b.dipendente_id]) bonificiRiconciliatiMap[b.dipendente_id] = { somma:0, movimenti:[] };
+    bonificiRiconciliatiMap[b.dipendente_id].somma += parseFloat(b.importo)||0;
+    bonificiRiconciliatiMap[b.dipendente_id].movimenti.push({ data:b.data_movimento, importo:parseFloat(b.importo)||0, descrizione:b.descrizione_movimento });
+  });
   // Insieme "dipendente-mese-anno già liquidati" — serve per l'arretrato:
   // un mese passato che compare qui è già stato saldato, non va incluso.
   const meseLiquidatoSet = new Set((liquidazTutte||[]).map(l => l.dipendente_id+'-'+l.mese+'-'+l.anno));
@@ -13042,6 +13060,26 @@ async function caricaStipendi() {
           </div>
         </div>`;
         })()}
+        <!-- Cedolino caricato + riconciliazione bancaria (28/08, richiesto
+             da Valerio): sempre visibili qui, senza dover aprire
+             "Riconciliazione bonifici" a parte per saperlo. -->
+        ${(cedoliniMeseMap[d.id] != null || bonificiRiconciliatiMap[d.id]) ? (() => {
+          const cedNetto = cedoliniMeseMap[d.id];
+          const bon = bonificiRiconciliatiMap[d.id];
+          let rigaCed = cedNetto != null
+            ? `<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0"><span style="color:var(--muted)">📄 Totale cedolino</span><span style="font-weight:700">€ ${cedNetto.toFixed(2)}</span></div>`
+            : '';
+          let rigaBon = '';
+          if (bon) {
+            const diffBon = cedNetto != null ? Math.round((bon.somma - cedNetto)*100)/100 : null;
+            const statoBon = diffBon == null ? '' : (Math.abs(diffBon) <= 0.5 ? ' <span style="color:var(--green);font-weight:700">✓ combacia</span>' : (diffBon > 0 ? ` <span style="color:var(--accent);font-weight:700">+€${diffBon.toFixed(2)}</span>` : ` <span style="color:#d97706;font-weight:700">manca €${Math.abs(diffBon).toFixed(2)}</span>`));
+            rigaBon = `<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-top:1px solid var(--border)"><span style="color:var(--muted)">🏦 Riconciliato con bonifico</span><span style="font-weight:700">€ ${bon.somma.toFixed(2)}${statoBon}</span></div>`
+              + bon.movimenti.map(mv => `<div style="font-size:10.5px;color:var(--muted);padding-left:4px">${mv.data} — € ${mv.importo.toFixed(2)}</div>`).join('');
+          } else if (cedNetto != null) {
+            rigaBon = `<div style="font-size:11px;color:var(--muted);padding:3px 0;border-top:1px solid var(--border)">🏦 Nessun bonifico ancora riconciliato per questo mese</div>`;
+          }
+          return `<div style="background:var(--bg);border-radius:12px;padding:10px 12px;margin-bottom:10px">${rigaCed}${rigaBon}</div>`;
+        })() : ''}
         <!-- Arretrato mesi precedenti non liquidati: SEPARATO dal "Da
              pagare" del mese in corso (che resta isolato e leggibile),
              mostrato qui in modo discreto mese per mese — liquidando un
