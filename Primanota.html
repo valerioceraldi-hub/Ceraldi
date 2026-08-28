@@ -5693,6 +5693,32 @@ function _estraiNumeroAssegnoDaDescrizione(descrizione){
 // l'unica fonte di verità completa. Invece di tenere in sync più copie
 // (rischio di dimenticarne una, come già successo), lo storico si ricostruisce
 // qui a runtime direttamente da _bancaMovimenti.
+// FIX 27/08 (richiesto da Valerio): il totale Numia giornaliero della
+// chiusura ora arriva dall'estratto conto bancario (che importa quando
+// vuole, anche settimanalmente) invece che dal solo CSV mensile ufficiale
+// Numia (che scarica una volta al mese). Le righe banca Numia riportano
+// SEMPRE nella descrizione la vera data di vendita — "NUMIA-INTER DEL
+// 14/08/26 PDV..." — anche se l'accredito arriva 2-3 giorni dopo, quindi si
+// può ricostruire il giorno esatto indipendentemente da quando è arrivato
+// in banca. Verificato sui dati reali: il pattern regge su tutte le varianti
+// (INTER/AMEX/BNCMT/PGBNT), gli storni (es. "DOPPIO ACCREDITO") hanno
+// importo negativo e si sottraggono correttamente sommando senza abs(), le
+// commissioni ("SPESE - COMMISSIONI MM/AA NUMIA...") e le fatture Numia
+// ("FATTURA NUMIA N. ... DEL AAAA-MM-GG") hanno un formato data diverso e
+// non vengono mai intercettate per errore. Il CSV mensile ufficiale Numia
+// resta come verifica del mese intero, non più come fonte del dato giornaliero.
+function _dataVenditaNumiaDaDescrizione(descrizione){
+  var m = /numia[a-z-]*\s+del\s+(\d{2})\/(\d{2})\/(\d{2})\b/i.exec(descrizione||'');
+  if(!m) return null;
+  return '20'+m[3]+'-'+m[2]+'-'+m[1];
+}
+function _numiaPerGiornoDaBanca(dataVendita){
+  var movs = (_bancaMovimenti||[]).filter(function(m){
+    return _dataVenditaNumiaDaDescrizione(m.descrizione)===dataVendita;
+  });
+  return { movimenti: movs, totale: movs.reduce(function(s,m){ return s+(m.importo||0); }, 0) };
+}
+
 function _movimentiPerFattura(fatturaId){
   return (_bancaMovimenti||[]).filter(function(m){
     return m && m.fatturaId && String(m.fatturaId)===String(fatturaId);
@@ -11397,6 +11423,21 @@ async function caricaChiusuraGiorno(){
     const el=document.getElementById(id); if(el) el.value='';
   });
 
+  // FIX 27/08 (richiesto da Valerio: "doppio passaggio inutile" + "Numia
+  // dall'estratto conto banca invece che dal CSV mensile"): il totale Numia
+  // ora è per PRIMO quello ricostruito dall'estratto conto (importato anche
+  // settimanalmente, quindi molto più fresco) — il CSV Numia mensile resta
+  // come ripiego SOLO per un giorno che l'estratto conto non ha ancora
+  // coperto, e come verifica del mese intero (sezione mensile, invariata).
+  const _numiaBanca = _numiaPerGiornoDaBanca(data);
+  const posNumiaCSV = incassi
+    .filter(i=>i.data===data && i.source==='numia' && i.esito==='ok')
+    .reduce((s,i)=>s+(i.importo||0), 0);
+  const posNumiaLive = _numiaBanca.movimenti.length>0 ? _numiaBanca.totale : posNumiaCSV;
+  const posSumUpLive = incassi
+    .filter(i=>i.data===data && i.source==='sumup' && i.esito==='ok')
+    .reduce((s,i)=>s+(i.importo||0), 0);
+
   if(existing){
     // Gestisce sia snake_case (da Supabase) che camelCase (da RAM locale)
     const totale = existing.totale_corrispettivi
@@ -11405,34 +11446,42 @@ async function caricaChiusuraGiorno(){
       || ((existing.iva22||0)+(existing.iva10||0)+(existing.iva4||0))
       || 0;
     const cassa = existing.cassa || 0;
-    const pos   = existing.pos   || 0;
     document.getElementById('chgTotaleCorrInp').value = totale ? _fNum(totale) : '';
     document.getElementById('chgCassa').value = cassa ? _fNum(cassa) : '';
-    document.getElementById('chgPos').value   = pos   ? _fNum(pos)   : '';
-    // Ripartizione Numia/SumUp (23/08): se il giorno ha già la ripartizione
-    // salvata la mostra; per un giorno vecchio salvato PRIMA di questa
-    // modifica (solo il totale unico, nessuna ripartizione) mette tutto su
-    // SumUp per non perdere il dato — è solo una scelta di dove appoggiarlo
-    // visivamente, il totale resta comunque corretto.
-    const posNumia = existing.pos_numia || existing.posNumia || 0;
-    const posSumUp = existing.pos_sumup || existing.posSumUp || 0;
+    const posNumiaSalvato = existing.pos_numia || existing.posNumia || 0;
+    const posSumUpSalvato = existing.pos_sumup || existing.posSumUp || 0;
+    const posNumia = posNumiaLive>0 ? posNumiaLive : posNumiaSalvato;
+    const posSumUp = posSumUpLive>0 ? posSumUpLive : posSumUpSalvato;
     if(posNumia || posSumUp){
       document.getElementById('chgPosNumia').value = posNumia ? _fNum(posNumia) : '';
       document.getElementById('chgPosSumUp').value = posSumUp ? _fNum(posSumUp) : '';
-    } else if(pos){
-      document.getElementById('chgPosSumUp').value = _fNum(pos);
+    } else {
+      const pos = existing.pos || 0;
+      if(pos) document.getElementById('chgPosSumUp').value = _fNum(pos);
     }
-    document.getElementById('chgPosTotaleLbl').textContent = fmt(pos);
+    // FIX 27/08 (a valle del backfill storico Numia/SumUp, richiesto da
+    // Valerio): per un giorno VECCHIO che ha già un totale POS salvato —
+    // specialmente quelli "Importato da RT", fiscalmente quadrati con
+    // cassa+corrispettivi — il totale mostrato/da salvare resta SEMPRE
+    // quello storico, mai ricalcolato dalla somma numia+sumup ricostruita
+    // (che può differire di qualche decina di euro per normali tempi di
+    // accredito, mai un errore). La ricostruzione live sostituisce il
+    // totale SOLO per un giorno recente (ultimi 7gg) — il caso reale che
+    // ha fatto nascere questo fix (Scriptable/SumUp non ancora sincronizzato)
+    // — o quando non c'era proprio nessun totale salvato.
+    const _giorniFa = (new Date() - new Date(data+'T12:00:00')) / 86400000;
+    const _giornoRecente = _giorniFa >= 0 && _giorniFa <= 7;
+    const _usaTotaleRicostruito = (posNumia||posSumUp) && (_giornoRecente || !existing.pos);
+    document.getElementById('chgPos').value = _usaTotaleRicostruito ? _fNum(posNumia+posSumUp) : (existing.pos ? _fNum(existing.pos) : '');
+    document.getElementById('chgPosTotaleLbl').textContent = fmt(_usaTotaleRicostruito ? (posNumia+posSumUp) : (existing.pos||0));
     document.getElementById('chgNote').value  = existing.note || '';
     const pbEl = document.getElementById('chgPosBanca');
     if(pbEl) pbEl.value = existing.pos_banca ? _fNum(existing.pos_banca) : '';
   } else {
-    // Giorno nuovo: precompila Numia se disponibile (SumUp si scarica col
-    // suo bottone, non deriva mai da un import automatico dei totali)
-    const totPos = incassi
-      .filter(i=>i.data===data && i.source==='numia' && i.esito==='ok')
-      .reduce((s,i)=>s+(i.importo||0), 0);
-    if(totPos > 0) document.getElementById('chgPosNumia').value = _fNum(totPos);
+    // Giorno nuovo: precompila da qualunque dato sia già stato sincronizzato,
+    // Numia e SumUp allo stesso modo (prima solo Numia veniva precompilato).
+    if(posNumiaLive > 0) document.getElementById('chgPosNumia').value = _fNum(posNumiaLive);
+    if(posSumUpLive > 0) document.getElementById('chgPosSumUp').value = _fNum(posSumUpLive);
   }
   _chgPosSplitSum();
   _renderPosDetails(data);
@@ -11753,24 +11802,20 @@ async function _eseguiSyncSumUp(){
       + (items.length-successi.length>0 ? '<br><span style="color:var(--ink3)">'+(items.length-successi.length)+' scartate (non andate a buon fine)</span>' : '');
     toast('✓ SumUp sincronizzato: '+davveroNuovi.length+' nuove transazioni');
 
-    // Confronto col dato manuale (23/08, richiesta esplicita): se per il
-    // giorno attualmente aperto in Chiusura giornaliera avevi già scritto a
-    // mano un totale SumUp, e quello scaricato ora è diverso, avvisa subito
-    // — prima di ricaricare la scheda (che altrimenti sovrascriverebbe il
-    // valore manuale non ancora salvato senza dirlo). Va fatto PRIMA della
-    // caricaChiusuraGiorno() qui sotto, che rilegge dal database.
+    // FIX 27/08 (richiesto da Valerio: "doppio passaggio inutile" — niente
+    // più avviso-poi-correggi): caricaChiusuraGiorno() ora preferisce SEMPRE
+    // il dato live sincronizzato per il campo SumUp (vedi sopra), quindi
+    // ricaricare la scheda porta già automaticamente il valore giusto, senza
+    // bisogno di un avviso separato da confermare a mano.
     var dataAperta = gv('chgDataInp');
-    var manualeSumUp = _pNum(gv('chgPosSumUp'));
-    if(dataAperta && manualeSumUp > 0){
-      var scaricatoQuelGiorno = incassi
-        .filter(function(i){ return i.data===dataAperta && i.source==='sumup' && i.esito==='ok'; })
-        .reduce(function(s,i){ return s+(i.importo||0); }, 0);
-      if(Math.abs(scaricatoQuelGiorno - manualeSumUp) > 0.01){
-        alert('⚠️ Il totale SumUp scaricato per il '+dataAperta+' ('+fmt(scaricatoQuelGiorno)+') è diverso da quello che avevi scritto a mano ('+fmt(manualeSumUp)+').\n\nRicontrolla prima di salvare la chiusura.');
+    var vecchioValore = _pNum(gv('chgPosSumUp'));
+    await caricaChiusuraGiorno();
+    if(dataAperta){
+      var nuovoValore = _pNum(gv('chgPosSumUp'));
+      if(Math.abs(nuovoValore - vecchioValore) > 0.01){
+        toast('✓ Campo SumUp del '+dataAperta+' aggiornato automaticamente a '+fmt(nuovoValore), {forza:true});
       }
     }
-
-    caricaChiusuraGiorno();
   }catch(e){
     console.error('_eseguiSyncSumUp:', e);
     if(esito) esito.innerHTML = '<span style="color:var(--red)">❌ '+esc(e.message||String(e))+'</span>';
