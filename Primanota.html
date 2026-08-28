@@ -1094,7 +1094,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
       <input type="hidden" id="chgPos">
       <div style="font-size:11px;color:var(--ink3);text-align:right;margin-bottom:10px">Totale pagamenti elettronici: <b id="chgPosTotaleLbl">€ 0,00</b></div>
       <div style="margin-bottom:10px">
-        <div style="font-size:10px;color:#0066cc;margin-bottom:3px">🏦 Estratto conto banca</div>
+        <div style="font-size:10px;color:#0066cc;margin-bottom:3px">🏦 Estratto conto banca/POS</div>
         <input type="text" id="chgPosBanca" inputmode="decimal" placeholder="0,00 (se diverso dal POS fiscale)" oninput="_chgRecalc()" style="width:100%;padding:10px;border:1.5px solid #b3d7f5;border-radius:8px;font-size:14px;background:#f0f7ff;box-sizing:border-box;text-align:right">
         <div id="chgPosScostamento" style="font-size:11px;margin-top:4px;display:none"></div>
       </div>
@@ -12129,7 +12129,14 @@ async function renderIncLista(){
     // separate, non solo il totale combinato) — il totale resta comunque
     // disponibile per il confronto di quadratura sotto.
     const _incassiGiorno = (typeof incassi!=='undefined' ? incassi : []).filter(function(x){return x.data===c.data && x.esito==='ok';});
-    const totNumiaSolo = _incassiGiorno.filter(function(x){return x.source==='numia';}).reduce(function(s,x){return s+(x.importo||0);},0);
+    // FIX 27/08 (segnalato da Valerio): qui si guardava SOLO il CSV mensile
+    // Numia (incassi source='numia'), mai la ricostruzione dall'estratto
+    // conto — quindi qualunque giorno coperto solo dalla banca (la fonte ora
+    // primaria, vedi _numiaPerGiornoDaBanca) risultava sempre "manca ancora
+    // import CSV Numia", anche quando il dato vero c'era già ed era corretto.
+    const _numiaBancaGiorno = (typeof _numiaPerGiornoDaBanca==='function') ? _numiaPerGiornoDaBanca(c.data) : {movimenti:[], totale:0};
+    const totNumiaCSVSolo = _incassiGiorno.filter(function(x){return x.source==='numia';}).reduce(function(s,x){return s+(x.importo||0);},0);
+    const totNumiaSolo = _numiaBancaGiorno.movimenti.length>0 ? _numiaBancaGiorno.totale : totNumiaCSVSolo;
     const totSumupSolo = _incassiGiorno.filter(function(x){return x.source==='sumup';}).reduce(function(s,x){return s+(x.importo||0);},0);
     const totNumiaCard = totNumiaSolo + totSumupSolo;
     // FIX (23/08, richiesta esplicita): quando c'è dato SOLO da una fonte
@@ -12163,14 +12170,14 @@ async function renderIncLista(){
       ${_righeFontiPOS}
       ${soloUnaFonte ? `<tr><td colspan="2" style="padding:2px 0 5px;font-size:11px;color:#856404">Manca ancora ${fonteMancante==='Numia'?'import CSV Numia':'sincronizzazione SumUp'} per questo giorno — il confronto sotto non è affidabile finché non arriva anche quel dato.</td></tr>` : ''}
       ${(coincide || soloUnaFonte) ? '' : `<tr><td style="padding:5px 0;color:${scostPOS<0?'var(--red)':'#b36a00'};padding-left:12px">· Differenza vs Pagamenti elettronici</td><td style="padding:5px 0;text-align:right;font-weight:600;color:${scostPOS<0?'var(--red)':'#b36a00'}">${scostPOS>=0?'+':''}${fmt(scostPOS)}</td></tr>`}`
-      : (posBanca > 0 ? `<tr><td style="padding:5px 0;color:#0066cc">🏦 Estratto conto banca</td><td style="padding:5px 0;text-align:right;color:#0066cc">${fmt(posBanca)}</td></tr>` : '');
+      : (posBanca > 0 ? `<tr><td style="padding:5px 0;color:#0066cc">🏦 Estratto conto banca/POS</td><td style="padding:5px 0;text-align:right;color:#0066cc">${fmt(posBanca)}</td></tr>` : '');
     const scostBancaNumia = (posBanca > 0 && totNumiaCard > 0) ? Math.round((posBanca - totNumiaCard)*100)/100 : null;
     const coincideBancaNumia = scostBancaNumia !== null && Math.abs(scostBancaNumia) < 0.50;
     const nonQuadraBancaNumia = scostBancaNumia !== null && !coincideBancaNumia;
     const rigaBancaVsNumia = (posBanca > 0 && totNumiaCard > 0) ? `
       <tr><td colspan="2" style="padding:2px 0"></td></tr>
       <tr><td style="padding:5px 0;color:var(--ink2);font-weight:600">🔄 Banca vs estratto carta POS</td><td></td></tr>
-      <tr><td style="padding:5px 0;color:var(--ink3);padding-left:12px">· Estratto conto banca</td><td style="padding:5px 0;text-align:right">${fmt(posBanca)}</td></tr>
+      <tr><td style="padding:5px 0;color:var(--ink3);padding-left:12px">· Estratto conto banca/POS</td><td style="padding:5px 0;text-align:right">${fmt(posBanca)}</td></tr>
       <tr><td colspan="2" style="text-align:center;padding:6px 0">
         ${soloUnaFonte
           ? `<span style="background:#fff3cd;color:#856404;padding:3px 10px;border-radius:99px;font-weight:700;font-size:12px">⚠️ dato parziale — manca ${fonteMancante}</span>`
@@ -12419,7 +12426,7 @@ function renderIncMese(){
     <div style="margin-top:10px;padding:12px;border-radius:10px;background:var(--surface2)">
       <div style="font-size:12px;font-weight:700;color:var(--ink2);margin-bottom:8px">🔄 Estratto conto banca vs estratto carta POS</div>
       <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:8px">
-        <tr><td style="padding:4px 0;color:var(--ink3)">🏦 Estratto conto banca (${nGiorniEntrambi}gg)</td><td style="padding:4px 0;text-align:right">${fmt(totBancaConEntrambi)}</td></tr>
+        <tr><td style="padding:4px 0;color:var(--ink3)">🏦 Estratto conto banca/POS (${nGiorniEntrambi}gg)</td><td style="padding:4px 0;text-align:right">${fmt(totBancaConEntrambi)}</td></tr>
         <tr><td style="padding:4px 0;color:var(--ink3)">💳 Estratto carta POS (${nGiorniEntrambi}gg)</td><td style="padding:4px 0;text-align:right">${fmt(totNumiaConEntrambi)}</td></tr>
         ${totNumiaSoloEntrambi>0 ? `<tr><td style="padding:2px 0 4px;color:var(--ink3);padding-left:16px;font-size:12px">· Numia</td><td style="padding:2px 0 4px;text-align:right;font-size:12px;color:var(--ink3)">${fmt(totNumiaSoloEntrambi)}</td></tr>` : ''}
         ${totSumupSoloEntrambi>0 ? `<tr><td style="padding:2px 0 4px;color:var(--ink3);padding-left:16px;font-size:12px">· SumUp</td><td style="padding:2px 0 4px;text-align:right;font-size:12px;color:var(--ink3)">${fmt(totSumupSoloEntrambi)}</td></tr>` : ''}
@@ -15631,19 +15638,13 @@ function renderRiconciliazione(){
     //    non c'entrano nulla) — ma questo li faceva saltare ANCHE qui, nel
     //    confronto POS, dove invece servono. Vanno letti PRIMA del controllo
     //    "ignorata" qui sotto, che resta valido per tutto il resto.
-    var dPre = (m.descrizione||'').toLowerCase();
-    if(/sumup\s*pid\d/.test(dPre) && m.tipo==='entrata'){
-      var mPayout = m.descrizione.match(/PAYOUT\s+(\d{2})(\d{2})(\d{2})\b/i);
-      var dataPosSU = m.data;
-      if(mPayout){
-        dataPosSU = '20'+mPayout[3]+'-'+mPayout[2]+'-'+mPayout[1];
-      }
-      if(!posNumiaBanca[dataPosSU]) posNumiaBanca[dataPosSU] = 0;
-      posNumiaBanca[dataPosSU] += Math.abs(m.importo);
-      if(!posSumupBancaProv[dataPosSU]) posSumupBancaProv[dataPosSU] = 0;
-      posSumupBancaProv[dataPosSU] += Math.abs(m.importo);
-      return;
-    }
+    // FIX 27/08 (segnalato da Valerio): il payout SumUp in banca è UNA riga
+    // accorpata, al netto delle commissioni — non le vendite del giorno.
+    // Non lo usiamo più per popolare posSumupBancaProv (vedi sotto, dopo
+    // questo ciclo, dove si prende da incassi source='sumup' — le vendite
+    // vere sincronizzate dall'API, lo stesso dato già usato in Chiusura
+    // giornaliera). Il payout resta comunque un movimento bancario come gli
+    // altri: se non è marcato ignorata, prosegue nel resto della classificazione.
     // Un movimento marcato ignorata (es. storno/duplicato bancario già chiarito,
     // vedi caso S.Passalacqua 06/08) non deve MAI rientrare nel giro di
     // auto-match: prima non veniva escluso qui, quindi bastava riaprire la
@@ -16433,11 +16434,29 @@ function renderRiconciliazione(){
     }
   });
 
+  // FIX 27/08 (segnalato da Valerio): posSumupBancaProv non arriva più dal
+  // payout bancario (una riga accorpata al netto delle commissioni, con una
+  // data che non è quella di vendita) — arriva dalle vendite SumUp vere,
+  // sincronizzate via API (incassi source='sumup'), stesso dato già usato
+  // in Chiusura giornaliera. Filtrato sullo stesso periodo di movMese, per
+  // restare coerente con quello che si sta confrontando.
+  (typeof incassi!=='undefined' ? incassi : []).forEach(function(x){
+    if(x.source!=='sumup' || x.esito!=='ok') return;
+    if(_fDal && x.data < _fDal) return;
+    if(_fAl && x.data > _fAl) return;
+    if(!posSumupBancaProv[x.data]) posSumupBancaProv[x.data] = 0;
+    posSumupBancaProv[x.data] += (x.importo||0);
+  });
+
   // ═══ 3. CONFRONTO POS NUMIA ═══
   var posDiscrepanze = [];
   var posDaCompilare = [];
-  Object.keys(posNumiaBanca).forEach(function(data){
-    var totBanca = Math.round(posNumiaBanca[data]*100)/100;
+  // Unione dei giorni con dato Numia (banca) E/o SumUp (vendite sincronizzate)
+  // — prima si guardavano SOLO i giorni con un movimento Numia in banca, quindi
+  // un giorno con solo vendite SumUp (nessun Numia quel giorno) non compariva mai.
+  var _giorniPosTutti = Object.keys(Object.assign({}, posNumiaBanca, posSumupBancaProv));
+  _giorniPosTutti.forEach(function(data){
+    var totBanca = Math.round(((posNumiaBanca[data]||0) + (posSumupBancaProv[data]||0))*100)/100;
     if(typeof chiusure==='undefined') return;
     var ch = chiusure.find(function(c){return c.data===data;});
     var posNumiaSola = Math.round((posNumiaBancaProv[data]||0)*100)/100;
