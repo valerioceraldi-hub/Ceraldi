@@ -1012,7 +1012,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div id="app" style="display:none">
 
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.199</span></div>
+    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.202</span></div>
     <span class="topbar-badge" id="role-badge"></span>
     <button class="btn-topbar" onclick="ricaricaApp()" title="Ricarica la pagina (per essere sicuro di avere l'ultima versione)" style="padding:6px 10px">🔄</button>
     <button id="btn-promemoria" class="btn-topbar" onclick="apriPromemoria()" style="display:none;position:relative;padding:6px 10px">
@@ -1384,7 +1384,8 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
         <button class="btn-sm" style="flex:1;background:rgba(47,138,92,.1);color:var(--green);border-color:rgba(47,138,92,.3)" onclick="esportaPresenzeExcel()" title="Un unico file Excel con timbrature, stipendi, acconti, restituzioni, assenze e ferie — di tutta l'azienda o di un solo dipendente">⬇ Esporta dati (Excel)</button>
       </div>
       <button class="btn-secondary" style="width:100%;margin-bottom:8px" onclick="apriRiconciliazioneBonifici()">🏦 Riconciliazione bonifici stipendi</button>
-      <button class="btn-secondary" style="width:100%;margin-bottom:14px" onclick="apriCedoliniNonRiconciliati()">📋 Cedolini non riconciliati</button>
+      <button class="btn-secondary" style="width:100%;margin-bottom:8px" onclick="apriCedoliniNonRiconciliati()">📋 Cedolini non riconciliati</button>
+      <button class="btn-secondary" style="width:100%;margin-bottom:14px" onclick="apriStoricoRiconciliazioni()">🗂 Storico riconciliazioni (annulla)</button>
       <div id="stipendi-list"></div>
     </div>
 
@@ -1766,6 +1767,21 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 
 <!-- ── SHEET: aggancio manuale bonifico (28/08) ── -->
 <!-- ── SHEET: cedolini non riconciliati (28/08) ── -->
+<!-- ── SHEET: storico riconciliazioni, con possibilità di annullare (28/08) ── -->
+<div class="overlay" id="sh-storicoRiconc">
+  <div class="sheet" style="max-height:88vh">
+    <div class="sheet-handle"></div>
+    <div class="sheet-hdr"><span class="sheet-title">🗂 Storico riconciliazioni</span><button class="sheet-cls" onclick="closeSheet('sh-storicoRiconc')">✕</button></div>
+    <div class="sheet-body">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:14px">Ogni bonifico o movimento di portafoglio registrato — tocca "Annulla" per disfare una scelta sbagliata.</div>
+      <select id="sr-dip-filtro" class="field-inp last" style="margin-bottom:14px" onchange="srFiltraLista()">
+        <option value="">Tutti i dipendenti</option>
+      </select>
+      <div id="sr-lista"><div style="text-align:center;color:var(--muted);padding:20px">Caricamento…</div></div>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="sh-cedoliniNR">
   <div class="sheet" style="max-height:90vh">
     <div class="sheet-handle"></div>
@@ -10972,16 +10988,53 @@ async function esportaStoricoDipendente() {
   const dipId = _anagraficaId;
   if (!dipId) return;
   toast('Preparo il report…');
-  const [{ data: d }, { data: presenze }, { data: acconti }, { data: restituzioni }, { data: assenze }, { data: liquidazioni }, { data: storicoPaga }] = await Promise.all([
+  const [{ data: d }, { data: presenze }, { data: acconti }, { data: restituzioni }, { data: assenze }, { data: liquidazioni }, { data: storicoPaga },
+         { data: bonificiStip }, { data: portafoglio }, { data: correzioni }, { data: cambiTurnoRich }, { data: cambiTurnoColl }, { data: documenti }] = await Promise.all([
     sb.from('presenze_profili').select('nome,cognome,data_assunzione,paga_giornaliera,tipo_contratto,ferie_annuali,ferie_godute_extra,ruolo').eq('id', dipId).single(),
     sb.from('presenze').select('data,tipo_timbratura,confermata_dip').eq('dipendente_id', dipId).order('data'),
     sb.from('presenze_acconti').select('data,importo,causale,modalita,note,letto_dip,periodo_anno_inizio,saldo_periodo,mese_riferimento,anno_riferimento').eq('dipendente_id', dipId).order('data'),
     sb.from('presenze_restituzioni').select('data,importo,modalita,note,mese_riferimento,anno_riferimento').eq('dipendente_id', dipId).order('data'),
-    sb.from('presenze_assenze').select('tipo,data_inizio,data_fine,stato').eq('dipendente_id', dipId).order('data_inizio'),
+    sb.from('presenze_assenze').select('id,tipo,data_inizio,data_fine,stato').eq('dipendente_id', dipId).order('data_inizio'),
     sb.from('presenze_liquidazioni').select('mese,anno,importo_netto,bonifico,contanti,causale,confermata_dip,confermata_il,creato_il').eq('dipendente_id', dipId).order('anno').order('mese'),
-    sb.from('presenze_storico_paga').select('paga_giornaliera,data_decorrenza').eq('dipendente_id', dipId).order('data_decorrenza'),
+    sb.from('presenze_storico_paga').select('paga_giornaliera,data_decorrenza,note').eq('dipendente_id', dipId).order('data_decorrenza'),
+    // FIX 28/08 (richiesto da Valerio: "tutta la vita lavorativa, ogni cosa
+    // che ha riguardato... qualsiasi cosa di quel dipendente") — 6 fonti dati
+    // mai incluse finora in questo export: bonifici stipendio riconciliati,
+    // portafoglio, storico aumenti paga (già letto sopra ma mai mostrato come
+    // elenco), correzioni alle presenze, cambi turno, documenti/allegati.
+    DB.safe(() => sb.from('presenze_bonifici_stipendio').select('*').eq('dipendente_id', dipId).order('data_movimento'), null),
+    DB.safe(() => sb.from('presenze_portafoglio_movimenti').select('*').eq('dipendente_id', dipId).order('data'), null),
+    DB.safe(() => sb.from('presenze_correzioni').select('azione,motivo,dati_prima,creato_il').eq('dipendente_id', dipId).order('creato_il'), null),
+    DB.safe(() => sb.from('presenze_cambi_turno').select('*').eq('richiedente_id', dipId).order('created_at'), null),
+    DB.safe(() => sb.from('presenze_cambi_turno').select('*').eq('collega_id', dipId).order('created_at'), null),
+    DB.safe(() => sb.from('presenze_documenti').select('categoria,nome_file,url,mese,anno,creato_il').eq('dipendente_id', dipId).order('creato_il'), null),
   ]);
   if (!d) { toast('Dipendente non trovato'); return; }
+  // Allegati delle assenze (dipende dagli id delle assenze appena caricate)
+  const assenzeIds = (assenze||[]).map(a => a.id);
+  const { data: allegatiAssenze } = assenzeIds.length
+    ? await DB.safe(() => sb.from('presenze_assenze_allegati').select('assenza_id,nome_file,url,creato_il').in('assenza_id', assenzeIds), null)
+    : { data: [] };
+  // Cambi turno: il dipendente può comparire come richiedente O come collega
+  // che accetta/rifiuta — unione delle due, senza duplicati.
+  const cambiTurnoMap = {};
+  (cambiTurnoRich||[]).forEach(c => cambiTurnoMap[c.id] = { ...c, ruolo: 'Richiedente' });
+  (cambiTurnoColl||[]).forEach(c => { if (!cambiTurnoMap[c.id]) cambiTurnoMap[c.id] = { ...c, ruolo: 'Collega' }; });
+  const cambiTurno = Object.values(cambiTurnoMap).sort((a,b) => (a.created_at||'').localeCompare(b.created_at||''));
+  // Link firmati (validi 30 giorni, così il consulente/commercialista ha il
+  // tempo di aprirli dal report senza che scadano subito) per ogni documento
+  // e allegato trovato — un link firmato scaduto varrebbe comunque meno di
+  // niente: è comunque una prova che il file esiste ed è tracciato.
+  const TRENTA_GIORNI = 30*24*3600;
+  async function linkFirmato(path){
+    if (!path) return '';
+    try {
+      const { data } = await sb.storage.from('presenze-allegati').createSignedUrl(path, TRENTA_GIORNI);
+      return (data && data.signedUrl) || '';
+    } catch(e){ return ''; }
+  }
+  const documentiConLink = await Promise.all((documenti||[]).map(async doc => ({ ...doc, link: await linkFirmato(doc.url) })));
+  const allegatiConLink = await Promise.all((allegatiAssenze||[]).map(async al => ({ ...al, link: await linkFirmato(al.url) })));
   const nome = d.nome+(d.cognome?' '+d.cognome:'');
   const causaleLbl = c => ({ stipendio:'Stipendio', acconto_stipendio:'Acconto stipendio', acconto_tfr:'Acconto TFR', acconto_13:'Acconto 13ª', acconto_14:'Acconto 14ª', ferie_non_godute:'Ferie non godute', straordinari:'Straordinari', altro:'Altro' }[c] || (c||'Stipendio'));
   const dIT = iso => iso ? (iso.slice(8,10)+'/'+iso.slice(5,7)+'/'+iso.slice(0,4)) : '';
@@ -11055,7 +11108,7 @@ async function esportaStoricoDipendente() {
   setCell(ws0,'B'+(rr+1),'', sValore); setCell(ws0,'C'+(rr+1),'', sValore); setCell(ws0,'D'+(rr+1),'', sValore);
   rr += 2;
   setCell(ws0,'A'+(rr+1),'INDICE DEL REPORT', sSezione); setCell(ws0,'B'+(rr+1),'', sSezione); setCell(ws0,'C'+(rr+1),'', sSezione); setCell(ws0,'D'+(rr+1),'', sSezione);
-  const indice = ['1. Frontespizio (questo foglio)','2. Riepilogo esecutivo','3. Presenze — sintesi mensile','3bis. Riconciliazione mensile (controllo di integrità)','4. Presenze — dettaglio giornaliero','5. Movimenti finanziari (registro cronologico)','6. 13ª · 14ª mensilità — dettaglio periodi','7. TFR — dettaglio maturazione mensile','8. Ferie e assenze','9. Liquidazioni mensili — dettaglio','10. Note e legenda'];
+  const indice = ['1. Frontespizio (questo foglio)','2. Riepilogo esecutivo','3. Presenze — sintesi mensile','3bis. Riconciliazione mensile (controllo di integrità)','4. Presenze — dettaglio giornaliero','5. Movimenti finanziari (registro cronologico)','6. 13ª · 14ª mensilità — dettaglio periodi','7. TFR — dettaglio maturazione mensile','8. Ferie e assenze','9. Liquidazioni mensili — dettaglio','10. Note e legenda','11. Bonifici stipendio riconciliati','12. Portafoglio dipendente (salvadanaio)','13. Storico aumenti paga','14. Correzioni alle presenze','15. Cambi turno','16. Documenti e allegati (con link)'];
   rr += 1;
   indice.forEach(voce => { setCell(ws0,'A'+(rr+1), voce, sValore); ['B','C','D'].forEach(col=>setCell(ws0,col+(rr+1),'',sValore)); rr++; });
   ws0['!ref'] = rangeAddr(0,0,rr+1,3);
@@ -11486,6 +11539,161 @@ async function esportaStoricoDipendente() {
   setCell(ws9, XLSX.utils.encode_cell({r:r9,c:1}), '', sNota);
   ws9['!ref'] = rangeAddr(0,0,r9,1);
   XLSX.utils.book_append_sheet(wb, ws9, '10. Note e legenda');
+
+  /* ══════════════════ FOGLIO 11 — BONIFICI STIPENDIO RICONCILIATI ══════════════════ */
+  const ws10 = {}; let r10 = 0;
+  ws10['!cols'] = [{wch:16},{wch:14},{wch:14},{wch:14},{wch:46}];
+  ws10['!merges'] = [{s:{r:0,c:0},e:{r:0,c:4}}];
+  setCell(ws10,'A1','BONIFICI STIPENDIO RICONCILIATI', sTitolo); for(let cc=1;cc<5;cc++) setCell(ws10,XLSX.utils.encode_cell({r:0,c:cc}),'',sTitolo);
+  r10 = 1;
+  ['Mese/Anno rif.','Importo','Fonte','Data movimento','Descrizione movimento banca'].forEach((h,i)=>setCell(ws10,XLSX.utils.encode_cell({r:r10,c:i}),h,sHeaderTab));
+  r10++;
+  let totBonStip=0, altBS=false;
+  (bonificiStip||[]).forEach(b => {
+    const st = altBS?sValoreAlt:sValore, sn = altBS?sNumAlt:sNum;
+    totBonStip = num(totBonStip+num(b.importo));
+    setCell(ws10, XLSX.utils.encode_cell({r:r10,c:0}), MESI[b.mese_riferimento-1].toUpperCase()+' '+b.anno_riferimento, st);
+    setCell(ws10, XLSX.utils.encode_cell({r:r10,c:1}), num(b.importo), sn);
+    setCell(ws10, XLSX.utils.encode_cell({r:r10,c:2}), b.fonte_copertura==='portafoglio' ? '🐷 Portafoglio' : '🏦 Bonifico', st);
+    setCell(ws10, XLSX.utils.encode_cell({r:r10,c:3}), b.data_movimento ? dIT(b.data_movimento) : '', st);
+    setCell(ws10, XLSX.utils.encode_cell({r:r10,c:4}), b.descrizione_movimento || '', {...st, alignment:{wrapText:true, vertical:'center'}});
+    altBS=!altBS; r10++;
+  });
+  if (!(bonificiStip||[]).length) { setCell(ws10, XLSX.utils.encode_cell({r:r10,c:0}), 'Nessun bonifico riconciliato ancora', sValore); ['B','C','D','E'].forEach((_,i)=>setCell(ws10,XLSX.utils.encode_cell({r:r10,c:i+1}),'',sValore)); r10++; }
+  else { setCell(ws10, XLSX.utils.encode_cell({r:r10,c:0}),'TOTALE', sTotLabel); setCell(ws10, XLSX.utils.encode_cell({r:r10,c:1}), totBonStip, sTotRiga); ['C','D','E'].forEach((_,i)=>setCell(ws10,XLSX.utils.encode_cell({r:r10,c:i+2}),'',sTotLabel)); r10++; }
+  ws10['!ref'] = rangeAddr(0,0,r10,4);
+  XLSX.utils.book_append_sheet(wb, ws10, '11. Bonifici stipendio');
+
+  /* ══════════════════ FOGLIO 12 — PORTAFOGLIO DIPENDENTE ══════════════════ */
+  const ws11 = {}; let r11 = 0;
+  ws11['!cols'] = [{wch:14},{wch:20},{wch:14},{wch:16},{wch:30}];
+  ws11['!merges'] = [{s:{r:0,c:0},e:{r:0,c:4}}];
+  setCell(ws11,'A1','PORTAFOGLIO DIPENDENTE (SALVADANAIO)', sTitolo); for(let cc=1;cc<5;cc++) setCell(ws11,XLSX.utils.encode_cell({r:0,c:cc}),'',sTitolo);
+  r11 = 1;
+  ['Data','Tipo','Importo','Saldo progressivo','Causale'].forEach((h,i)=>setCell(ws11,XLSX.utils.encode_cell({r:r11,c:i}),h,sHeaderTab));
+  r11++;
+  let saldoProg=0, altPf=false;
+  (portafoglio||[]).forEach(p => {
+    const st = altPf?sValoreAlt:sValore, sn = altPf?sNumAlt:sNum;
+    const imp = num(p.importo);
+    saldoProg = num(saldoProg+imp);
+    setCell(ws11, XLSX.utils.encode_cell({r:r11,c:0}), dIT(p.data), st);
+    setCell(ws11, XLSX.utils.encode_cell({r:r11,c:1}), imp>=0 ? '➕ Deposito' : '➖ Prelievo', st);
+    setCell(ws11, XLSX.utils.encode_cell({r:r11,c:2}), imp, imp<0?sNumNeg:sn);
+    setCell(ws11, XLSX.utils.encode_cell({r:r11,c:3}), saldoProg, sn);
+    setCell(ws11, XLSX.utils.encode_cell({r:r11,c:4}), p.causale || '', st);
+    altPf=!altPf; r11++;
+  });
+  if (!(portafoglio||[]).length) { setCell(ws11, XLSX.utils.encode_cell({r:r11,c:0}), 'Nessun movimento di portafoglio', sValore); ['B','C','D','E'].forEach((_,i)=>setCell(ws11,XLSX.utils.encode_cell({r:r11,c:i+1}),'',sValore)); r11++; }
+  ws11['!ref'] = rangeAddr(0,0,r11,4);
+  XLSX.utils.book_append_sheet(wb, ws11, '12. Portafoglio');
+
+  /* ══════════════════ FOGLIO 13 — STORICO AUMENTI PAGA ══════════════════ */
+  const ws12 = {}; let r12 = 0;
+  ws12['!cols'] = [{wch:16},{wch:18},{wch:16},{wch:40}];
+  ws12['!merges'] = [{s:{r:0,c:0},e:{r:0,c:3}}];
+  setCell(ws12,'A1','STORICO AUMENTI PAGA GIORNALIERA', sTitolo); for(let cc=1;cc<4;cc++) setCell(ws12,XLSX.utils.encode_cell({r:0,c:cc}),'',sTitolo);
+  r12 = 1;
+  ['Decorrenza','Paga giornaliera','Variazione','Note'].forEach((h,i)=>setCell(ws12,XLSX.utils.encode_cell({r:r12,c:i}),h,sHeaderTab));
+  r12++;
+  const spOrd = (storicoPaga||[]).slice().sort((a,b)=>a.data_decorrenza<b.data_decorrenza?-1:1);
+  let altSP=false;
+  spOrd.forEach((s,i) => {
+    const st = altSP?sValoreAlt:sValore, sn = altSP?sNumAlt:sNum;
+    const prec = i>0 ? num(spOrd[i-1].paga_giornaliera) : null;
+    const delta = prec!=null ? num(s.paga_giornaliera - prec) : null;
+    setCell(ws12, XLSX.utils.encode_cell({r:r12,c:0}), dIT(s.data_decorrenza), st);
+    setCell(ws12, XLSX.utils.encode_cell({r:r12,c:1}), num(s.paga_giornaliera), sn);
+    setCell(ws12, XLSX.utils.encode_cell({r:r12,c:2}), delta!=null?delta:'', delta==null?st:(delta<0?sNumNeg:sn));
+    setCell(ws12, XLSX.utils.encode_cell({r:r12,c:3}), s.note || '', st);
+    altSP=!altSP; r12++;
+  });
+  if (!spOrd.length) { setCell(ws12, XLSX.utils.encode_cell({r:r12,c:0}), 'Nessun aumento registrato — paga sempre invariata', sValore); ['B','C','D'].forEach((_,i)=>setCell(ws12,XLSX.utils.encode_cell({r:r12,c:i+1}),'',sValore)); r12++; }
+  ws12['!ref'] = rangeAddr(0,0,r12,3);
+  XLSX.utils.book_append_sheet(wb, ws12, '13. Storico paga');
+
+  /* ══════════════════ FOGLIO 14 — CORREZIONI PRESENZE ══════════════════ */
+  const ws13 = {}; let r13 = 0;
+  ws13['!cols'] = [{wch:18},{wch:20},{wch:34},{wch:34}];
+  ws13['!merges'] = [{s:{r:0,c:0},e:{r:0,c:3}}];
+  setCell(ws13,'A1','CORREZIONI ALLE PRESENZE', sTitolo); for(let cc=1;cc<4;cc++) setCell(ws13,XLSX.utils.encode_cell({r:0,c:cc}),'',sTitolo);
+  r13 = 1;
+  ['Data correzione','Azione','Motivo','Situazione precedente'].forEach((h,i)=>setCell(ws13,XLSX.utils.encode_cell({r:r13,c:i}),h,sHeaderTab));
+  r13++;
+  let altC=false;
+  (correzioni||[]).forEach(c => {
+    const st = altC?sValoreAlt:sValore;
+    let dataPrimaTxt = '';
+    try { dataPrimaTxt = c.dati_prima ? JSON.stringify(c.dati_prima) : ''; } catch(e){ dataPrimaTxt = ''; }
+    setCell(ws13, XLSX.utils.encode_cell({r:r13,c:0}), c.creato_il ? dIT(c.creato_il.slice(0,10)) : '', st);
+    setCell(ws13, XLSX.utils.encode_cell({r:r13,c:1}), c.azione || '', st);
+    setCell(ws13, XLSX.utils.encode_cell({r:r13,c:2}), c.motivo || '', {...st, alignment:{wrapText:true, vertical:'center'}});
+    setCell(ws13, XLSX.utils.encode_cell({r:r13,c:3}), dataPrimaTxt, {...st, alignment:{wrapText:true, vertical:'center'}, font:{sz:8}});
+    altC=!altC; r13++;
+  });
+  if (!(correzioni||[]).length) { setCell(ws13, XLSX.utils.encode_cell({r:r13,c:0}), 'Nessuna correzione registrata', sValore); ['B','C','D'].forEach((_,i)=>setCell(ws13,XLSX.utils.encode_cell({r:r13,c:i+1}),'',sValore)); r13++; }
+  ws13['!ref'] = rangeAddr(0,0,r13,3);
+  XLSX.utils.book_append_sheet(wb, ws13, '14. Correzioni');
+
+  /* ══════════════════ FOGLIO 15 — CAMBI TURNO ══════════════════ */
+  const ws14 = {}; let r14 = 0;
+  ws14['!cols'] = [{wch:14},{wch:14},{wch:20},{wch:14},{wch:14},{wch:30}];
+  ws14['!merges'] = [{s:{r:0,c:0},e:{r:0,c:5}}];
+  setCell(ws14,'A1','CAMBI TURNO', sTitolo); for(let cc=1;cc<6;cc++) setCell(ws14,XLSX.utils.encode_cell({r:0,c:cc}),'',sTitolo);
+  r14 = 1;
+  ['Data turno','Ruolo','Controparte','Fascia oraria','Stato','Note'].forEach((h,i)=>setCell(ws14,XLSX.utils.encode_cell({r:r14,c:i}),h,sHeaderTab));
+  r14++;
+  let altCT=false;
+  cambiTurno.forEach(c => {
+    const st = altCT?sValoreAlt:sValore;
+    const controparte = c.ruolo==='Richiedente' ? (c.nome_collega||'—') : (c.nome_richiedente||'—');
+    const statoEff = c.ruolo==='Richiedente' ? c.stato : (c.collega_stato||c.stato);
+    setCell(ws14, XLSX.utils.encode_cell({r:r14,c:0}), c.data_turno ? dIT(c.data_turno) : '', st);
+    setCell(ws14, XLSX.utils.encode_cell({r:r14,c:1}), c.ruolo, st);
+    setCell(ws14, XLSX.utils.encode_cell({r:r14,c:2}), controparte, st);
+    setCell(ws14, XLSX.utils.encode_cell({r:r14,c:3}), c.fascia_oraria || '', st);
+    setCell(ws14, XLSX.utils.encode_cell({r:r14,c:4}), (statoEff||'').toUpperCase(), statoEff==='accettato'?sBadgeOk:sBadgeOpen);
+    setCell(ws14, XLSX.utils.encode_cell({r:r14,c:5}), c.note || '', st);
+    altCT=!altCT; r14++;
+  });
+  if (!cambiTurno.length) { setCell(ws14, XLSX.utils.encode_cell({r:r14,c:0}), 'Nessun cambio turno registrato', sValore); ['B','C','D','E','F'].forEach((_,i)=>setCell(ws14,XLSX.utils.encode_cell({r:r14,c:i+1}),'',sValore)); r14++; }
+  ws14['!ref'] = rangeAddr(0,0,r14,5);
+  XLSX.utils.book_append_sheet(wb, ws14, '15. Cambi turno');
+
+  /* ══════════════════ FOGLIO 16 — DOCUMENTI E ALLEGATI ══════════════════ */
+  const ws15 = {}; let r15 = 0;
+  ws15['!cols'] = [{wch:16},{wch:26},{wch:14},{wch:16},{wch:50}];
+  ws15['!merges'] = [{s:{r:0,c:0},e:{r:0,c:4}}];
+  setCell(ws15,'A1','DOCUMENTI E ALLEGATI', sTitolo); for(let cc=1;cc<5;cc++) setCell(ws15,XLSX.utils.encode_cell({r:0,c:cc}),'',sTitolo);
+  r15 = 1;
+  ['Tipo','Nome file','Periodo','Data caricamento','Link (valido 30 giorni da oggi)'].forEach((h,i)=>setCell(ws15,XLSX.utils.encode_cell({r:r15,c:i}),h,sHeaderTab));
+  r15++;
+  const catLbl = c => ({ busta_paga:'📄 Busta paga', cu:'📄 Certificazione Unica', contratto:'📄 Contratto' }[c] || c || 'Documento');
+  let altD=false;
+  documentiConLink.forEach(doc => {
+    const st = altD?sValoreAlt:sValore;
+    setCell(ws15, XLSX.utils.encode_cell({r:r15,c:0}), catLbl(doc.categoria), st);
+    setCell(ws15, XLSX.utils.encode_cell({r:r15,c:1}), doc.nome_file || '', st);
+    setCell(ws15, XLSX.utils.encode_cell({r:r15,c:2}), (doc.mese && doc.anno) ? (MESI[doc.mese-1].toUpperCase()+' '+doc.anno) : '', st);
+    setCell(ws15, XLSX.utils.encode_cell({r:r15,c:3}), doc.creato_il ? dIT(doc.creato_il.slice(0,10)) : '', st);
+    setCell(ws15, XLSX.utils.encode_cell({r:r15,c:4}), doc.link || '(link non disponibile)', st);
+    altD=!altD; r15++;
+  });
+  allegatiConLink.forEach(al => {
+    const st = altD?sValoreAlt:sValore;
+    setCell(ws15, XLSX.utils.encode_cell({r:r15,c:0}), '📎 Allegato assenza', st);
+    setCell(ws15, XLSX.utils.encode_cell({r:r15,c:1}), al.nome_file || '', st);
+    setCell(ws15, XLSX.utils.encode_cell({r:r15,c:2}), '', st);
+    setCell(ws15, XLSX.utils.encode_cell({r:r15,c:3}), al.creato_il ? dIT(al.creato_il.slice(0,10)) : '', st);
+    setCell(ws15, XLSX.utils.encode_cell({r:r15,c:4}), al.link || '(link non disponibile)', st);
+    altD=!altD; r15++;
+  });
+  if (!documentiConLink.length && !allegatiConLink.length) { setCell(ws15, XLSX.utils.encode_cell({r:r15,c:0}), 'Nessun documento caricato', sValore); ['B','C','D','E'].forEach((_,i)=>setCell(ws15,XLSX.utils.encode_cell({r:r15,c:i+1}),'',sValore)); r15++; }
+  r15 += 1;
+  setCell(ws15, XLSX.utils.encode_cell({r:r15,c:0}), 'I link scadono 30 giorni dopo la generazione di questo report — se servono più avanti, riesporta lo storico per link aggiornati.', sNota);
+  ['B','C','D','E'].forEach(col=>setCell(ws15,col+(r15+1),'',sNota));
+  ws15['!ref'] = rangeAddr(0,0,r15+1,4);
+  XLSX.utils.book_append_sheet(wb, ws15, '16. Documenti');
 
   XLSX.writeFile(wb, 'Storico_'+nome.replace(/\s+/g,'_')+'_'+todayISO()+'.xlsx');
   toast('✓ Report esportato');
@@ -12411,6 +12619,93 @@ function fmtQ(n){ return (n||0).toLocaleString('it-IT',{minimumFractionDigits:0,
 
 // ── Cedolini non riconciliati (28/08) — schermata di controllo ──
 let _cnrRisultati = [];
+// ── Storico riconciliazioni (28/08, richiesto da Valerio: "se mi sbaglio
+// nella scelta, come faccio a modificarla?") — elenca ogni bonifico
+// riconciliato e ogni movimento di portafoglio, con un modo per annullarli
+// uno per uno. Un prelievo dal portafoglio, quando annullato, cancella
+// automaticamente anche la copertura del cedolino che aveva generato —
+// altrimenti resterebbe un cedolino segnato "coperto" da un prelievo che
+// non esiste più. Un deposito invece si annulla da solo: i bonifici che lo
+// avevano generato restano (sono un fatto distinto, cancellabili a parte
+// dalla stessa lista se si vuole disfare tutta la decisione).
+async function apriStoricoRiconciliazioni(){
+  openSheet('sh-storicoRiconc');
+  $('sr-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Caricamento…</div>';
+  if (!_amDipendenti.length) {
+    const { data } = await sb.from('presenze_profili').select('id,nome,cognome').eq('attivo',true).order('cognome');
+    _amDipendenti = data || [];
+  }
+  // FIX 28/08 (richiesto da Valerio: "e lo storico dipendente?"): tendina
+  // per vedere solo le riconciliazioni di UN dipendente, invece che tutti
+  // mescolati — la lista completa resta salvata per poter cambiare filtro
+  // senza dover ricaricare da capo ogni volta.
+  const selFiltro = $('sr-dip-filtro');
+  if (selFiltro && selFiltro.options.length <= 1) {
+    _amDipendenti.forEach(d => {
+      const opt = document.createElement('option');
+      opt.value = d.id;
+      opt.textContent = d.nome + (d.cognome ? ' '+d.cognome : '');
+      selFiltro.appendChild(opt);
+    });
+  }
+  const dipMap = {}; _amDipendenti.forEach(d => { dipMap[d.id] = d.nome + ' ' + (d.cognome||''); });
+  const [{ data: bonifici }, { data: portaf }] = await Promise.all([
+    sb.from('presenze_bonifici_stipendio').select('*').order('creato_il', { ascending:false }),
+    sb.from('presenze_portafoglio_movimenti').select('*').order('creato_il', { ascending:false })
+  ]);
+  const righe = [];
+  (bonifici||[]).forEach(b => righe.push({
+    tipo: 'bonifico', id: b.id, dipId: b.dipendente_id, dip: dipMap[b.dipendente_id] || '—',
+    label: 'Stipendio ' + MESI_LBL[b.mese_riferimento] + ' ' + b.anno_riferimento,
+    fonte: b.fonte_copertura === 'portafoglio' ? '🐷 dal portafoglio' : '🏦 ' + (b.data_movimento||''),
+    importo: parseFloat(b.importo||0), quando: b.creato_il, portafoglioMovId: b.portafoglio_movimento_id
+  }));
+  (portaf||[]).forEach(p => righe.push({
+    tipo: 'portafoglio', id: p.id, dipId: p.dipendente_id, dip: dipMap[p.dipendente_id] || '—',
+    label: parseFloat(p.importo) >= 0 ? '🐷 Deposito nel portafoglio' : '🐷 Prelievo dal portafoglio',
+    fonte: p.causale || '', importo: parseFloat(p.importo||0), quando: p.creato_il
+  }));
+  righe.sort((a,b) => (b.quando||'').localeCompare(a.quando||''));
+  window._srRigheComplete = righe;
+  srFiltraLista();
+}
+
+function srFiltraLista(){
+  const dipFiltro = $('sr-dip-filtro') ? $('sr-dip-filtro').value : '';
+  const tutte = window._srRigheComplete || [];
+  const righe = dipFiltro ? tutte.filter(r => r.dipId === dipFiltro) : tutte;
+  window._srRighe = righe;
+  if (!righe.length) { $('sr-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Nessuna riconciliazione registrata ancora.</div>'; return; }
+  $('sr-lista').innerHTML = righe.slice(0,100).map((r,idx) => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid var(--border)">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600">${esc(r.dip)} — ${esc(r.label)}</div>
+        <div style="font-size:11px;color:var(--muted)">€ ${r.importo.toFixed(2)} · ${esc(r.fonte)}</div>
+      </div>
+      <button class="btn-sm" style="white-space:nowrap;margin-left:8px;color:var(--red)" onclick="srAnnulla(${idx})">🗑 Annulla</button>
+    </div>`).join('');
+}
+
+async function srAnnulla(idx){
+  const r = (window._srRighe||[])[idx];
+  if (!r) return;
+  if (!confirm('Annullare questa riconciliazione? "' + r.dip + ' — ' + r.label + '" (€ ' + r.importo.toFixed(2) + ')')) return;
+  try {
+    if (r.tipo === 'bonifico') {
+      await sb.from('presenze_bonifici_stipendio').delete().eq('id', r.id);
+      // Un prelievo dal portafoglio ha generato QUESTA copertura: cancellata
+      // la copertura, il prelievo stesso non ha più senso — va tolto anche lui.
+      if (r.portafoglioMovId) await sb.from('presenze_portafoglio_movimenti').delete().eq('id', r.portafoglioMovId);
+    } else {
+      await sb.from('presenze_portafoglio_movimenti').delete().eq('id', r.id);
+    }
+    toast('✓ Riconciliazione annullata');
+    apriStoricoRiconciliazioni();
+  } catch (e) {
+    toast('⚠️ Errore: ' + (e.message || e));
+  }
+}
+
 async function apriCedoliniNonRiconciliati(){
   openSheet('sh-cedoliniNR');
   $('cnr-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Analisi in corso…</div>';
@@ -13797,7 +14092,7 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
     qLiquidazioni = qLiquidazioni.eq('dipendente_id', dipIdFiltro);
     qAcconti1314 = qAcconti1314.eq('dipendente_id', dipIdFiltro);
   }
-  const [{ data: dipendenti }, { data: presenze }, { data: accontiGrezzi }, { data: restituzioniXls }, { data: assenze }, { data: acconti1314Tutti }, { data: liquidazioniGrezze }] = await Promise.all([
+  const [{ data: dipendenti }, { data: presenze }, { data: accontiGrezzi }, { data: restituzioniXls }, { data: assenze }, { data: acconti1314Tutti }, { data: liquidazioniGrezze }, { data: bonificiStipXls }, { data: portafoglioXls }] = await Promise.all([
     qProfili, qPresenze, qAcconti,
     DB.safe(() => {
       let q = sb.from('presenze_restituzioni').select('*').gte('data',dal).lte('data',al);
@@ -13807,7 +14102,28 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
     qAssenze,
     qAcconti1314,
     DB.safe(() => qLiquidazioni, null),
+    // FIX 28/08 (richiesto da Valerio: "trovo dentro tutti i pagamenti, i
+    // metodi, gli estremi, le date"): prima l'export non sapeva nulla dei
+    // bonifici riconciliati né del portafoglio dipendente — entrambe
+    // funzionalità nuove di questa sessione, mai collegate all'export.
+    DB.safe(() => {
+      let q = sb.from('presenze_bonifici_stipendio').select('*');
+      if (dipIdFiltro) q = q.eq('dipendente_id', dipIdFiltro);
+      return q;
+    }, null),
+    DB.safe(() => {
+      let q = sb.from('presenze_portafoglio_movimenti').select('*').gte('data',dal).lte('data',al);
+      if (dipIdFiltro) q = q.eq('dipendente_id', dipIdFiltro);
+      return q;
+    }, null),
   ]);
+  // Bonifici riconciliati il cui mese di riferimento ricade nel periodo —
+  // stesso criterio di acconti/liquidazioni sopra (mese_riferimento, non la
+  // data del movimento bancario, che può cadere anche nel mese prima).
+  const bonificiStip = (bonificiStipXls||[]).filter(b => {
+    const bym = b.anno_riferimento+'-'+String(b.mese_riferimento).padStart(2,'0');
+    return bym >= dal.slice(0,7) && bym <= al.slice(0,7);
+  });
   // Stesso criterio della card Stipendi: un acconto con mese_riferimento
   // esplicito appartiene a QUEL mese, non a quello della data reale — qui
   // generalizzato su un intervallo (non più un singolo mese), confrontando
@@ -14081,6 +14397,28 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
   (restituzioniXls||[]).forEach(r => movimenti.push({
     dip: nomeDi(r.dipendente_id), data: r.data, tipo: '➕ Restituzione ricevuta',
     modalita: '', importo: parseFloat(r.importo||0), confermato: '—', note: r.note||'',
+  }));
+  // FIX 28/08: bonifici riconciliati con estremi completi (data reale del
+  // movimento bancario, non solo il mese di competenza, + il testo esatto
+  // del movimento per rintracciarlo sull'estratto conto).
+  bonificiStip.forEach(b => movimenti.push({
+    dip: nomeDi(b.dipendente_id), data: b.data_movimento || '',
+    tipo: '➖ Stipendio ' + String(b.mese_riferimento).padStart(2,'0') + '/' + b.anno_riferimento,
+    modalita: b.fonte_copertura === 'portafoglio' ? '🐷 Portafoglio' : '🏦 Bonifico',
+    importo: -parseFloat(b.importo||0), confermato: 'Sì',
+    note: b.descrizione_movimento || '',
+  }));
+  // Solo i DEPOSITI (eccedenza che entra nel salvadanaio) vanno mostrati qui
+  // come riga a parte: servono a "restituire" nel totale l'importo del
+  // bonifico già contato per intero sopra (che includeva anche l'eccedenza).
+  // Un PRELIEVO invece è già rappresentato per intero dalla riga "🐷
+  // Portafoglio" appena sopra (bonificiStip, fonte_copertura='portafoglio')
+  // — includerlo di nuovo qui conterebbe la stessa uscita di cassa due volte.
+  (portafoglioXls||[]).filter(p => parseFloat(p.importo) > 0).forEach(p => movimenti.push({
+    dip: nomeDi(p.dipendente_id), data: p.data,
+    tipo: '➕ Deposito nel portafoglio',
+    modalita: '🐷 Portafoglio', importo: parseFloat(p.importo||0), confermato: '—',
+    note: p.causale || '',
   }));
   movimenti.sort((a,b) => a.data < b.data ? -1 : (a.data > b.data ? 1 : (a.dip < b.dip ? -1 : 1)));
   movimenti.forEach(mv => F4.push([mv.dip, mv.data, mv.tipo, mv.modalita, mv.importo, mv.confermato, mv.note]));
