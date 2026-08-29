@@ -1012,7 +1012,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div id="app" style="display:none">
 
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.197</span></div>
+    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.198</span></div>
     <span class="topbar-badge" id="role-badge"></span>
     <button class="btn-topbar" onclick="ricaricaApp()" title="Ricarica la pagina (per essere sicuro di avere l'ultima versione)" style="padding:6px 10px">🔄</button>
     <button id="btn-promemoria" class="btn-topbar" onclick="apriPromemoria()" style="display:none;position:relative;padding:6px 10px">
@@ -12519,21 +12519,36 @@ async function rbRenderLista(){
         const meseRifDef = annoSuccDef + '-' + String(meseSuccDef).padStart(2,'0');
 
         // ── Quadro mesi vicini + suggerimento automatico ──
+        // FIX 28/08 (richiesto da Valerio: "vale anche il contrario?"): oltre
+        // a controllare se il mese SUCCESSIVO risulta già scontato di questa
+        // eccedenza, si controlla anche se il mese PRECEDENTE risultava
+        // scoperto (aperto) per un importo simile — in quel caso non è un
+        // acconto in avanti né un deposito nel portafoglio, ma il saldo di
+        // un arretrato arrivato mescolato in questo bonifico: va segnalato in
+        // modo diverso, perché la cosa giusta da fare è agganciare il
+        // movimento al cedolino di quel mese precedente, non "spendere"
+        // l'eccedenza qui.
         const q = quadri[r.dipId+'|'+r.mese+'|'+r.anno] || [];
         const meseSuccQ = q.find(x => x.offset === 1);
+        const mesePrecQ = q.find(x => x.offset === -1);
         let suggerimento = '';
         let causaleDaPreselezionare = 'acconto_stipendio';
+
+        const precSpiegaEccedenza = mesePrecQ && mesePrecQ.netto != null && mesePrecQ.differenza < -0.5 && Math.abs(mesePrecQ.differenza + r.diff) <= 1;
+        if (precSpiegaEccedenza) {
+          suggerimento += `<div style="color:#b36a00;font-weight:700;font-size:11px;margin:6px 0">🔄 ${MESI_LBL[mesePrecQ.mese]} ${mesePrecQ.anno} risultava scoperto di € ${Math.abs(mesePrecQ.differenza).toFixed(2)} — quasi identico a questa eccedenza. Probabile saldo di un arretrato, non un acconto in avanti: valuta di agganciare questo movimento al cedolino di ${MESI_LBL[mesePrecQ.mese]} invece (da "🔍 Non trovi un bonifico? Cercalo manualmente" o da "📋 Cedolini non riconciliati"), invece di registrarlo qui come eccedenza.</div>`;
+        }
         if (meseSuccQ && meseSuccQ.netto != null) {
           if (Math.abs(meseSuccQ.differenza + r.diff) <= 1) {
-            suggerimento = `<div style="color:#1a7a3a;font-weight:700;font-size:11px;margin:6px 0">✓ ${MESI_LBL[meseSuccQ.mese]} ${meseSuccQ.anno} risulta pagato € ${Math.abs(meseSuccQ.differenza).toFixed(2)} in meno — coerente con un acconto già usato lì.</div>`;
-          } else if (Math.abs(meseSuccQ.differenza) <= 1) {
-            suggerimento = `<div style="color:#2b4acb;font-weight:700;font-size:11px;margin:6px 0">ℹ️ ${MESI_LBL[meseSuccQ.mese]} ${meseSuccQ.anno} risulta già pagato per intero da solo — questa eccedenza probabilmente NON è un acconto su quel mese: valuta 13ª/14ª, TFR o portafoglio.</div>`;
+            suggerimento += `<div style="color:#1a7a3a;font-weight:700;font-size:11px;margin:6px 0">✓ ${MESI_LBL[meseSuccQ.mese]} ${meseSuccQ.anno} risulta pagato € ${Math.abs(meseSuccQ.differenza).toFixed(2)} in meno — coerente con un acconto già usato lì.</div>`;
+          } else if (Math.abs(meseSuccQ.differenza) <= 1 && !precSpiegaEccedenza) {
+            suggerimento += `<div style="color:#2b4acb;font-weight:700;font-size:11px;margin:6px 0">ℹ️ ${MESI_LBL[meseSuccQ.mese]} ${meseSuccQ.anno} risulta già pagato per intero da solo — questa eccedenza probabilmente NON è un acconto su quel mese: valuta 13ª/14ª, TFR o portafoglio.</div>`;
             causaleDaPreselezionare = '__portafoglio__';
-          } else {
-            suggerimento = `<div style="color:var(--muted);font-size:11px;margin:6px 0">Il mese successivo non è ancora chiaro (differenza € ${meseSuccQ.differenza.toFixed(2)}) — verifica manualmente.</div>`;
+          } else if (!precSpiegaEccedenza) {
+            suggerimento += `<div style="color:var(--muted);font-size:11px;margin:6px 0">Il mese successivo non è ancora chiaro (differenza € ${meseSuccQ.differenza.toFixed(2)}) — verifica manualmente.</div>`;
           }
-        } else {
-          suggerimento = `<div style="color:var(--muted);font-size:11px;margin:6px 0">Cedolino di ${MESI_LBL[meseSuccDef]} ${annoSuccDef} non ancora caricato — impossibile verificare adesso.</div>`;
+        } else if (!precSpiegaEccedenza) {
+          suggerimento += `<div style="color:var(--muted);font-size:11px;margin:6px 0">Cedolino di ${MESI_LBL[meseSuccDef]} ${annoSuccDef} non ancora caricato — impossibile verificare adesso.</div>`;
         }
         const righeQuadro = q.map(m => {
           const lbl = MESI_LBL[m.mese] + ' \'' + String(m.anno).slice(2);
