@@ -1012,7 +1012,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div id="app" style="display:none">
 
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.194</span></div>
+    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.196</span></div>
     <span class="topbar-badge" id="role-badge"></span>
     <button class="btn-topbar" onclick="ricaricaApp()" title="Ricarica la pagina (per essere sicuro di avere l'ultima versione)" style="padding:6px 10px">🔄</button>
     <button id="btn-promemoria" class="btn-topbar" onclick="apriPromemoria()" style="display:none;position:relative;padding:6px 10px">
@@ -1383,7 +1383,8 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
         <button class="btn-sm" style="flex:1;background:rgba(43,74,203,.08);color:var(--accent);border-color:rgba(43,74,203,.3)" onclick="apriControlloMensile()" title="Controlla in un colpo d'occhio chi ha ricevuto la busta paga e chi è stato liquidato questo mese">🔍 Controllo rapido mese</button>
         <button class="btn-sm" style="flex:1;background:rgba(47,138,92,.1);color:var(--green);border-color:rgba(47,138,92,.3)" onclick="esportaPresenzeExcel()" title="Un unico file Excel con timbrature, stipendi, acconti, restituzioni, assenze e ferie — di tutta l'azienda o di un solo dipendente">⬇ Esporta dati (Excel)</button>
       </div>
-      <button class="btn-secondary" style="width:100%;margin-bottom:14px" onclick="apriRiconciliazioneBonifici()">🏦 Riconciliazione bonifici stipendi</button>
+      <button class="btn-secondary" style="width:100%;margin-bottom:8px" onclick="apriRiconciliazioneBonifici()">🏦 Riconciliazione bonifici stipendi</button>
+      <button class="btn-secondary" style="width:100%;margin-bottom:14px" onclick="apriCedoliniNonRiconciliati()">📋 Cedolini non riconciliati</button>
       <div id="stipendi-list"></div>
     </div>
 
@@ -1757,7 +1758,50 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     <div class="sheet-hdr"><span class="sheet-title">🏦 Riconciliazione bonifici</span><button class="sheet-cls" onclick="closeSheet('sh-riconcBonifici')">✕</button></div>
     <div class="sheet-body">
       <div style="font-size:12px;color:var(--muted);margin-bottom:14px">Confronto tra l'estratto conto e il netto delle buste paga caricate.</div>
+      <button class="btn-sm" style="width:100%;margin-bottom:14px" onclick="apriAgganciaManuale()">🔍 Non trovi un bonifico? Cercalo manualmente</button>
       <div id="rb-lista"><div style="text-align:center;color:var(--muted);padding:20px">Analisi in corso…</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── SHEET: aggancio manuale bonifico (28/08) ── -->
+<!-- ── SHEET: cedolini non riconciliati (28/08) ── -->
+<div class="overlay" id="sh-cedoliniNR">
+  <div class="sheet" style="max-height:90vh">
+    <div class="sheet-handle"></div>
+    <div class="sheet-hdr"><span class="sheet-title">📋 Cedolini non riconciliati</span><button class="sheet-cls" onclick="closeSheet('sh-cedoliniNR')">✕</button></div>
+    <div class="sheet-body">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:14px">Ogni cedolino non ancora coperto per intero da un bonifico o dal portafoglio — anche quello per cui non è mai stato trovato nessun candidato.</div>
+      <div id="cnr-lista"><div style="text-align:center;color:var(--muted);padding:20px">Analisi in corso…</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── SHEET: candidati per un singolo cedolino ── -->
+<div class="overlay" id="sh-cnrCandidati">
+  <div class="sheet" style="max-height:88vh">
+    <div class="sheet-handle"></div>
+    <div class="sheet-hdr"><span class="sheet-title" id="cnrc-titolo">Movimenti possibili</span><button class="sheet-cls" onclick="closeSheet('sh-cnrCandidati')">✕</button></div>
+    <div class="sheet-body">
+      <div id="cnrc-portafoglio" style="margin-bottom:12px"></div>
+      <div id="cnrc-lista"></div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="sh-agganciaManuale">
+  <div class="sheet" style="max-height:90vh">
+    <div class="sheet-handle"></div>
+    <div class="sheet-hdr"><span class="sheet-title">🔍 Aggancia bonifico manualmente</span><button class="sheet-cls" onclick="closeSheet('sh-agganciaManuale')">✕</button></div>
+    <div class="sheet-body">
+      <div class="field-lbl" style="margin-top:0">Dipendente</div>
+      <select id="am-dip" class="field-inp" onchange="amCercaMovimenti()"></select>
+      <div class="field-lbl">Mese di riferimento</div>
+      <input type="month" id="am-mese" class="field-inp" onchange="amCercaMovimenti()">
+      <div class="field-lbl">Cerca nel testo del movimento (opzionale)</div>
+      <input type="text" id="am-testo" class="field-inp last" placeholder="es. cognome, riferimento..." oninput="amCercaMovimenti()">
+      <div style="font-size:11px;color:var(--muted);margin:10px 0">Mostra i bonifici in uscita non ancora agganciati a nessuno, ± 45 giorni dal mese scelto.</div>
+      <div id="am-lista"><div style="text-align:center;color:var(--muted);padding:16px">Scegli dipendente e mese per iniziare.</div></div>
     </div>
   </div>
 </div>
@@ -3040,7 +3084,15 @@ async function presenzeCalcolaRiconciliazioneBonifici(){
   const risultati = [];
   try {
     const { data: dips } = await sb.from('presenze_profili')
-      .select('id,nome,cognome,iban').eq('ruolo','dipendente').eq('attivo',true).not('iban','is',null);
+      .select('id,nome,cognome,iban').eq('ruolo','dipendente').eq('attivo',true);
+    // FIX 28/08 (segnalato da Valerio: "molti bonifici non trovati" — causa
+    // vera trovata sui dati reali): 8 dipendenti su 11 con cedolino caricato
+    // NON hanno l'IBAN compilato nel profilo, pur essendo pagati davvero con
+    // bonifico — l'IBAN non è un segnale affidabile di "paga con bonifico"
+    // in questo sistema. Prima il filtro .not('iban','is',null) li escludeva
+    // TUTTI dalla ricerca, a monte, prima ancora di provare il matching per
+    // nome. Rimosso: chi non ha un bonifico reale nell'estratto semplicemente
+    // non produce nessun risultato più sotto, nessun danno a lasciarli dentro.
     if (!dips || !dips.length) return risultati;
     const dipIds = dips.map(d => d.id);
 
@@ -12318,6 +12370,82 @@ async function apriControlloMensile() {
 let _rbRisultati = [];
 const MESI_LBL = ['','Gen','Feb','Mar','Apr','Mag','Giu','Lug','Ago','Set','Ott','Nov','Dic'];
 
+// ── Cedolini non riconciliati (28/08) — schermata di controllo ──
+let _cnrRisultati = [];
+async function apriCedoliniNonRiconciliati(){
+  openSheet('sh-cedoliniNR');
+  $('cnr-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Analisi in corso…</div>';
+  _cnrRisultati = await presenzeCedoliniNonRiconciliati();
+  cnrRenderLista();
+}
+
+function cnrRenderLista(){
+  const el = $('cnr-lista');
+  if (!_cnrRisultati.length) {
+    el.innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Tutti i cedolini caricati risultano coperti per intero. 🎉</div>';
+    return;
+  }
+  el.innerHTML = _cnrRisultati.map((r,idx) => `
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;cursor:pointer" onclick="apriCnrCandidati(${idx})">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="font-weight:700;font-size:14px">${esc(r.nome)}</div>
+        <div style="font-size:11px;font-weight:700;color:#b36a00">manca € ${r.mancante.toFixed(2)}</div>
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-top:2px">${MESI_LBL[r.mese]} ${r.anno} — cedolino € ${r.netto.toFixed(2)}${r.coperto>0 ? ', già coperto € '+r.coperto.toFixed(2) : ''}${r.saldoPortafoglio>0.5 ? ' · 🐷 portafoglio disponibile € '+r.saldoPortafoglio.toFixed(2) : ''}</div>
+    </div>`).join('');
+}
+
+async function apriCnrCandidati(idx){
+  const r = _cnrRisultati[idx];
+  if (!r) return;
+  window._cnrCorrente = r;
+  $('cnrc-titolo').textContent = r.nome + ' — ' + MESI_LBL[r.mese] + ' ' + r.anno;
+  $('cnrc-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:16px">Ricerca in corso…</div>';
+  $('cnrc-portafoglio').innerHTML = '';
+  openSheet('sh-cnrCandidati');
+
+  if (r.saldoPortafoglio > 0.5) {
+    const usabile = Math.min(r.saldoPortafoglio, r.mancante);
+    $('cnrc-portafoglio').innerHTML = `
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:6px">🐷 Ha € ${r.saldoPortafoglio.toFixed(2)} nel portafoglio — puoi usarne fino a € ${usabile.toFixed(2)} per coprire questo cedolino invece di un nuovo bonifico.</div>
+        <button class="btn-green-solid" style="width:100%" onclick="cnrUsaPortafoglio(${idx})">🐷 Usa € ${usabile.toFixed(2)} dal portafoglio</button>
+      </div>`;
+  }
+
+  const candidati = await presenzeCercaCandidatiCedolino(r.dipId, r.mese, r.anno, r.mancante);
+  if (!candidati.length) {
+    $('cnrc-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:16px">Nessun movimento bancario possibile trovato entro 30 giorni. Prova con "🔍 Aggancia bonifico manualmente" per allargare la ricerca, o registra il pagamento come contanti.</div>';
+    return;
+  }
+  $('cnrc-lista').innerHTML = candidati.map(c => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid var(--border)">
+      <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">${c.data} — € ${c.importo.toFixed(2)}${c.perNome ? ' <span style=\"color:#1a7a3a;font-weight:700;font-size:10px\">per nome</span>' : ' <span style=\"color:#b36a00;font-weight:700;font-size:10px\">per importo</span>'}</div><div style="font-size:11px;color:var(--muted);word-break:break-word">${esc(c.descrizione)}</div></div>
+      <button class="btn-sm" style="white-space:nowrap;margin-left:8px" onclick="cnrAggancia(${idx},'${c.id}','${c.data}',${c.importo},'${esc(c.descrizione).replace(/'/g,"\\'")}')">🔗 Aggancia</button>
+    </div>`).join('');
+}
+
+async function cnrAggancia(idx, movId, data, importo, descrizione){
+  const r = _cnrRisultati[idx];
+  if (!r) return;
+  await presenzeAggancioCedolino(r.dipId, r.mese, r.anno, movId, data, importo, descrizione);
+  toast('✓ Bonifico agganciato al cedolino di ' + r.nome);
+  closeSheet('sh-cnrCandidati');
+  _cnrRisultati = await presenzeCedoliniNonRiconciliati();
+  cnrRenderLista();
+}
+
+async function cnrUsaPortafoglio(idx){
+  const r = _cnrRisultati[idx];
+  if (!r) return;
+  const usabile = Math.min(r.saldoPortafoglio, r.mancante);
+  await presenzePortafoglioPreleva(r.dipId, usabile, r.mese, r.anno);
+  toast('✓ € ' + usabile.toFixed(2) + ' prelevati dal portafoglio di ' + r.nome);
+  closeSheet('sh-cnrCandidati');
+  _cnrRisultati = await presenzeCedoliniNonRiconciliati();
+  cnrRenderLista();
+}
+
 async function apriRiconciliazioneBonifici(){
   openSheet('sh-riconcBonifici');
   $('rb-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Analisi in corso…</div>';
@@ -12356,6 +12484,7 @@ function rbRenderLista(){
             <div style="font-size:11px;color:var(--muted);margin-bottom:6px">A quale competenza appartiene l'eccedenza di € ${r.diff.toFixed(2)}?</div>
             <select id="rb-causale-${idx}" class="field-inp" style="margin-bottom:8px">
               ${Object.keys(CAUSALI).filter(c=>c!=='stipendio').map(c=>`<option value="${c}"${c==='acconto_stipendio'?' selected':''}>${CAUSALI[c]}</option>`).join('')}
+              <option value="__portafoglio__">🐷 Portafoglio dipendente (da usare in futuro)</option>
             </select>
             <div class="field-lbl" style="margin-top:0;font-size:10px">Mese di riferimento (default: mese successivo)</div>
             <input type="month" id="rb-meserif-${idx}" class="field-inp last" value="${meseRifDef}" style="margin-bottom:8px">
@@ -12397,6 +12526,21 @@ async function rbConfermaEccedenza(idx){
   const r = _rbRisultati[idx];
   if (!r) return;
   const causale = $('rb-causale-' + idx) ? $('rb-causale-' + idx).value : 'acconto_stipendio';
+
+  if (causale === '__portafoglio__') {
+    // FIX 28/08 (richiesto da Valerio): l'eccedenza va nel "salvadanaio" del
+    // dipendente invece che in un acconto legato a una competenza specifica.
+    // I movimenti bancari vengono comunque registrati come copertura normale
+    // (i soldi sono arrivati via bonifico) — solo la DESTINAZIONE
+    // dell'eccedenza cambia: non presenze_acconti, ma presenze_portafoglio_movimenti.
+    await presenzeConfermaMatchStipendio(r, r.movimenti, { registraEccedenzaAcconto: false });
+    await presenzePortafoglioDeposita(r.dipId, r.diff, 'eccedenza_bonifico_' + String(r.mese).padStart(2,'0') + '_' + r.anno);
+    toast('✓ € ' + r.diff.toFixed(2) + ' depositati nel portafoglio di ' + r.nome);
+    _rbRisultati.splice(idx, 1);
+    rbRenderLista();
+    return;
+  }
+
   const meseRifVal = $('rb-meserif-' + idx) ? $('rb-meserif-' + idx).value : '';
   let meseScelto = null, annoScelto = null;
   if (meseRifVal) { const [y,m] = meseRifVal.split('-'); annoScelto = parseInt(y); meseScelto = parseInt(m); }
@@ -12409,6 +12553,206 @@ async function rbConfermaEccedenza(idx){
   toast('✓ Riconciliato: ' + r.nome + ' — eccedenza assegnata a ' + causaleLbl(causale));
   _rbRisultati.splice(idx, 1);
   rbRenderLista();
+}
+
+// ── Aggancio manuale bonifico (28/08, richiesto da Valerio: "molti mi
+// mancano", per i casi che il matching automatico non ha trovato da solo —
+// es. importo del cedolino diverso dal bonifico per un motivo non previsto,
+// o nome scritto in un modo che il tokenizzatore non riconosce) ──
+let _amDipendenti = [];
+async function apriAgganciaManuale(){
+  openSheet('sh-agganciaManuale');
+  if (!_amDipendenti.length) {
+    const { data } = await sb.from('presenze_profili').select('id,nome,cognome').eq('ruolo','dipendente').eq('attivo',true).order('cognome');
+    _amDipendenti = data || [];
+    $('am-dip').innerHTML = '<option value="">— scegli —</option>' + _amDipendenti.map(d => `<option value="${d.id}">${esc(d.nome)} ${esc(d.cognome||'')}</option>`).join('');
+  }
+  const oggi = new Date();
+  $('am-mese').value = oggi.getFullYear() + '-' + String(oggi.getMonth()+1).padStart(2,'0');
+}
+
+async function amCercaMovimenti(){
+  const dipId = $('am-dip').value;
+  const meseVal = $('am-mese').value;
+  if (!dipId || !meseVal) { $('am-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:16px">Scegli dipendente e mese per iniziare.</div>'; return; }
+  $('am-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:16px">Ricerca in corso…</div>';
+  const [annoStr, meseStr] = meseVal.split('-');
+  const centro = new Date(parseInt(annoStr), parseInt(meseStr)-1, 15);
+  const dal = new Date(centro); dal.setDate(dal.getDate()-45);
+  const al = new Date(centro); al.setDate(al.getDate()+45);
+  const fmtD = d => d.toISOString().slice(0,10);
+  const testo = ($('am-testo').value || '').trim().toLowerCase();
+
+  const [{ data: movs }, { data: giaAssegnati }] = await Promise.all([
+    sb.from('movimenti_banca').select('id,data,importo,descrizione,tipo').eq('tipo','uscita').gte('data', fmtD(dal)).lte('data', fmtD(al)),
+    sb.from('presenze_bonifici_stipendio').select('movimento_banca_id')
+  ]);
+  const assegnatiSet = new Set((giaAssegnati||[]).map(r => r.movimento_banca_id));
+  let candidati = (movs||[]).filter(m => !assegnatiSet.has(m.id) && !_rsbECommissione(m.descrizione));
+  if (testo) candidati = candidati.filter(m => (m.descrizione||'').toLowerCase().includes(testo));
+  candidati.sort((a,b) => b.data.localeCompare(a.data));
+
+  if (!candidati.length) {
+    $('am-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:16px">Nessun movimento libero trovato in questo periodo.</div>';
+    return;
+  }
+  $('am-lista').innerHTML = candidati.map(m => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid var(--border)">
+      <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">${m.data} — € ${Math.abs(m.importo).toFixed(2)}</div><div style="font-size:11px;color:var(--muted);word-break:break-word">${esc(m.descrizione)}</div></div>
+      <button class="btn-sm" style="white-space:nowrap;margin-left:8px" onclick="amAggancia('${m.id}','${m.data}',${Math.abs(m.importo)},'${esc(m.descrizione).replace(/'/g,"\\'")}')">🔗 Aggancia</button>
+    </div>`).join('');
+}
+
+async function amAggancia(movId, data, importo, descrizione){
+  const dipId = $('am-dip').value;
+  const meseVal = $('am-mese').value;
+  if (!dipId || !meseVal) return;
+  const [anno, mese] = meseVal.split('-').map(Number);
+  try {
+    await sb.from('presenze_bonifici_stipendio').insert({
+      dipendente_id: dipId, movimento_banca_id: movId,
+      mese_riferimento: mese, anno_riferimento: anno,
+      importo, confermato: true, fonte_copertura: 'bonifico',
+      descrizione_movimento: descrizione, data_movimento: data
+    });
+    toast('✓ Bonifico agganciato');
+    amCercaMovimenti(); // ricarica la lista, il movimento appena agganciato sparisce
+  } catch (e) {
+    toast('⚠️ Errore: ' + (e.message || e));
+  }
+}
+
+
+/* ══════════════════════════════════════════════════════════════════
+   CEDOLINI NON RICONCILIATI (28/08, richiesto da Valerio) — schermata di
+   controllo che mostra SEMPRE ogni cedolino non ancora coperto per intero,
+   anche quando la ricerca automatica non ha trovato nessun candidato (cosa
+   che "Riconciliazione bonifici" invece ometteva del tutto). Cliccando su
+   un cedolino si cercano i movimenti bancari possibili: importo, data entro
+   30 giorni dal mese successivo al cedolino, beneficiario uguale o simile
+   al dipendente — stessa logica dell'abbinamento fatture di Ceraldi Fatture.
+
+   PORTAFOGLIO DIPENDENTE ("finanziamento dipendente"): un salvadanaio per
+   dipendente dove può finire l'eccedenza di un bonifico invece che un
+   acconto legato a una competenza specifica — e da cui si può ATTINGERE in
+   futuro per coprire uno stipendio, invece di un nuovo bonifico/contanti.
+   Tecnicamente un prelievo dal portafoglio copre il cedolino esattamente
+   come un bonifico (stessa tabella presenze_bonifici_stipendio, campo
+   fonte_copertura='portafoglio' invece di 'bonifico', movimento_banca_id
+   nullo e portafoglio_movimento_id valorizzato al suo posto) — quindi tutte
+   le viste che già sommano "quanto è stato coperto" per un cedolino
+   funzionano identiche, senza bisogno di toccarle.
+   ══════════════════════════════════════════════════════════════════ */
+
+async function presenzeCedoliniNonRiconciliati(){
+  const risultati = [];
+  try {
+    const [{ data: cedolini }, { data: coperture }, { data: dips }, { data: portaf }] = await Promise.all([
+      sb.from('presenze_documenti').select('dipendente_id,mese,anno,netto_busta').eq('categoria','busta_paga').not('netto_busta','is',null),
+      sb.from('presenze_bonifici_stipendio').select('dipendente_id,mese_riferimento,anno_riferimento,importo'),
+      sb.from('presenze_profili').select('id,nome,cognome').eq('attivo',true),
+      sb.from('presenze_portafoglio_movimenti').select('dipendente_id,importo')
+    ]);
+    const dipMap = {}; (dips||[]).forEach(d => { dipMap[d.id] = d; });
+    const copertoMap = {};
+    (coperture||[]).forEach(c => {
+      const k = c.dipendente_id + '|' + c.mese_riferimento + '|' + c.anno_riferimento;
+      copertoMap[k] = (copertoMap[k] || 0) + (parseFloat(c.importo) || 0);
+    });
+    const saldoMap = {};
+    (portaf||[]).forEach(p => { saldoMap[p.dipendente_id] = (saldoMap[p.dipendente_id]||0) + (parseFloat(p.importo)||0); });
+
+    (cedolini||[]).forEach(c => {
+      const dip = dipMap[c.dipendente_id];
+      if (!dip) return;
+      const k = c.dipendente_id + '|' + c.mese + '|' + c.anno;
+      const coperto = Math.round((copertoMap[k]||0) * 100) / 100;
+      const netto = parseFloat(c.netto_busta);
+      const mancante = Math.round((netto - coperto) * 100) / 100;
+      if (mancante <= 0.5) return; // già saldato per intero, non compare qui
+      risultati.push({
+        dipId: c.dipendente_id, nome: dip.nome + ' ' + (dip.cognome||''),
+        mese: c.mese, anno: c.anno, netto, coperto, mancante,
+        saldoPortafoglio: Math.round((saldoMap[c.dipendente_id]||0)*100)/100
+      });
+    });
+    risultati.sort((a,b) => (b.anno*100+b.mese) - (a.anno*100+a.mese));
+  } catch (e) { console.warn('presenzeCedoliniNonRiconciliati:', e.message||e); }
+  return risultati;
+}
+
+// Finestra per la ricerca candidati di un singolo cedolino: dal 1° del mese
+// successivo, fino a 30 giorni dopo quella data (richiesto esplicitamente).
+function _pncFinestra30gg(mese, anno){
+  const meseSucc = mese === 12 ? 1 : mese + 1;
+  const annoSucc = mese === 12 ? anno + 1 : anno;
+  const dalD = new Date(annoSucc, meseSucc-1, 1);
+  const alD = new Date(dalD); alD.setDate(alD.getDate() + 30);
+  const f = d => d.toISOString().slice(0,10);
+  return { dal: f(dalD), al: f(alD) };
+}
+
+async function presenzeCercaCandidatiCedolino(dipId, mese, anno, mancante){
+  const { data: dipRows } = await sb.from('presenze_profili').select('nome,cognome').eq('id',dipId);
+  const dip = (dipRows||[])[0];
+  const nomeCompleto = dip ? (dip.nome + ' ' + (dip.cognome||'')) : '';
+  const fin = _pncFinestra30gg(mese, anno);
+  const [{ data: movs }, { data: giaAssegnati }] = await Promise.all([
+    sb.from('movimenti_banca').select('id,data,importo,descrizione,tipo').eq('tipo','uscita').gte('data',fin.dal).lte('data',fin.al),
+    sb.from('presenze_bonifici_stipendio').select('movimento_banca_id')
+  ]);
+  const assegnatiSet = new Set((giaAssegnati||[]).map(r=>r.movimento_banca_id));
+  const candidati = (movs||[]).filter(m => {
+    if (assegnatiSet.has(m.id) || _rsbECommissione(m.descrizione)) return false;
+    const perNome = _rsbNomeMatchaDescrizione(m.descrizione, nomeCompleto);
+    const perImporto = Math.abs(Math.abs(m.importo) - mancante) <= 1;
+    return perNome || perImporto;
+  }).map(m => ({ id:m.id, data:m.data, importo:Math.abs(m.importo), descrizione:m.descrizione, perNome:_rsbNomeMatchaDescrizione(m.descrizione, nomeCompleto) }));
+  candidati.sort((a,b) => (b.perNome - a.perNome) || b.data.localeCompare(a.data));
+  return candidati;
+}
+
+async function presenzeAggancioCedolino(dipId, mese, anno, movId, data, importo, descrizione){
+  await sb.from('presenze_bonifici_stipendio').insert({
+    dipendente_id: dipId, movimento_banca_id: movId,
+    mese_riferimento: mese, anno_riferimento: anno,
+    importo, confermato: true, fonte_copertura: 'bonifico',
+    descrizione_movimento: descrizione, data_movimento: data
+  });
+}
+
+// ── Portafoglio dipendente ("finanziamento dipendente") ──
+async function presenzePortafoglioSaldo(dipId){
+  const { data } = await sb.from('presenze_portafoglio_movimenti').select('importo').eq('dipendente_id',dipId);
+  return Math.round((data||[]).reduce((s,r)=>s+(parseFloat(r.importo)||0),0)*100)/100;
+}
+
+// Deposita un'eccedenza nel portafoglio (alternativa a registrarla come
+// acconto legato a una competenza specifica).
+async function presenzePortafoglioDeposita(dipId, importo, causale){
+  const { data } = await sb.from('presenze_portafoglio_movimenti').insert({
+    dipendente_id: dipId, importo: Math.abs(importo), data: todayISO(),
+    causale: causale || 'eccedenza_bonifico', registrato_da: ME ? ME.id : null
+  });
+  return data && data[0] ? data[0].id : null;
+}
+
+// Preleva dal portafoglio per coprire (in tutto o in parte) il cedolino di
+// un mese futuro — riduce quanto serve chiedere in banca/contanti.
+async function presenzePortafoglioPreleva(dipId, importo, mese, anno){
+  const { data: inserito } = await sb.from('presenze_portafoglio_movimenti').insert({
+    dipendente_id: dipId, importo: -Math.abs(importo), data: todayISO(),
+    causale: 'utilizzo_stipendio_' + String(mese).padStart(2,'0') + '_' + anno,
+    registrato_da: ME ? ME.id : null
+  });
+  const idPortaf = (inserito||[])[0] ? inserito[0].id : null;
+  await sb.from('presenze_bonifici_stipendio').insert({
+    dipendente_id: dipId, movimento_banca_id: null,
+    mese_riferimento: mese, anno_riferimento: anno,
+    importo: Math.abs(importo), confermato: true, fonte_copertura: 'portafoglio',
+    portafoglio_movimento_id: idPortaf,
+    descrizione_movimento: 'Prelievo dal portafoglio dipendente', data_movimento: todayISO()
+  });
 }
 
 async function rbConfermaSingolo(idx, movIdx){

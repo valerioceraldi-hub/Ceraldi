@@ -407,7 +407,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.30.89</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.30.90</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -1356,6 +1356,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
             <option value="non_riconciliati">Solo non riconciliati</option>
           </select>
         </div>
+        <button class="btn btn-s" style="width:100%;margin-top:8px" onclick="apriAgganciaBonificoDipendente()">👤 Assegna un bonifico a un dipendente (Ceraldi Presenze)</button>
       </div>
       <div id="bancaContenuto"></div>
     </div>
@@ -7539,6 +7540,89 @@ function _trovaCombinazioniDdtPerFattura(fatturaId){
     return { ddt: sol.map(function(i){ return candidati[i]; }), somma: sol.reduce(function(s,i){ return s+(candidati[i].importo||0); },0) };
   });
   return {combinazioni:combinazioni, candidatiUsati:candidati.length};
+}
+
+// ═══ ASSEGNA BONIFICO A DIPENDENTE (28/08, richiesto da Valerio: "molti
+// bonifici stipendio mi mancano, dammi modo di agganciarli a mano anche da
+// qui, sia Presenze sia Fatture devono poterlo fare, comunicando" — scrive
+// nella STESSA tabella condivisa presenze_bonifici_stipendio già letta da
+// Ceraldi Presenze, quindi un aggancio fatto qui compare subito anche là. ═══
+async function apriAgganciaBonificoDipendente(){
+  const existing = document.getElementById('abdOv');
+  if(existing) existing.remove();
+  let dipendenti = [];
+  try{
+    dipendenti = await sbFetch('presenze_profili?select=id,nome,cognome&ruolo=eq.dipendente&attivo=eq.true&order=cognome');
+  }catch(e){
+    toast('⚠️ Impossibile leggere i dipendenti da Ceraldi Presenze: '+String(e.message||e).slice(0,60));
+    return;
+  }
+  const ov = document.createElement('div');
+  ov.id = 'abdOv';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:960;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px)';
+  const oggi = new Date();
+  const meseDef = oggi.getFullYear()+'-'+String(oggi.getMonth()+1).padStart(2,'0');
+  let hh = '<div style="background:var(--bg);border-radius:20px 20px 0 0;width:100%;max-width:500px;max-height:85vh;overflow-y:auto;padding:20px">';
+  hh += '<div style="font-size:17px;font-weight:700;margin-bottom:12px">👤 Assegna bonifico a dipendente</div>';
+  hh += '<select id="abdDip" onchange="abdCerca()" style="width:100%;padding:10px;border:1.5px solid var(--sep);border-radius:8px;margin-bottom:10px;font-family:inherit;font-size:14px"><option value="">— scegli —</option>'
+    + dipendenti.map(d=>`<option value="${d.id}">${esc(d.nome)} ${esc(d.cognome||'')}</option>`).join('') + '</select>';
+  hh += '<input type="month" id="abdMese" value="'+meseDef+'" onchange="abdCerca()" style="width:100%;padding:10px;border:1.5px solid var(--sep);border-radius:8px;margin-bottom:10px;font-family:inherit;font-size:14px">';
+  hh += '<input type="text" id="abdTesto" placeholder="Cerca nel testo (opzionale)" oninput="abdCerca()" style="width:100%;padding:10px;border:1.5px solid var(--sep);border-radius:8px;margin-bottom:12px;font-family:inherit;font-size:14px;box-sizing:border-box">';
+  hh += '<div id="abdLista" style="font-size:12px;color:var(--ink3)">Scegli dipendente e mese per iniziare.</div>';
+  hh += '<button onclick="document.getElementById(\'abdOv\').remove()" style="width:100%;margin-top:14px;padding:10px;border:1px solid var(--sep);border-radius:8px;background:var(--surface);color:var(--ink3);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">Chiudi</button>';
+  hh += '</div>';
+  ov.innerHTML = hh;
+  ov.onclick = e=>{ if(e.target===ov) ov.remove(); };
+  document.body.appendChild(ov);
+}
+
+async function abdCerca(){
+  const dipId = document.getElementById('abdDip').value;
+  const meseVal = document.getElementById('abdMese').value;
+  const lista = document.getElementById('abdLista');
+  if(!dipId || !meseVal){ lista.innerHTML = 'Scegli dipendente e mese per iniziare.'; return; }
+  lista.innerHTML = 'Ricerca in corso…';
+  const [annoStr, meseStr] = meseVal.split('-');
+  const centro = new Date(parseInt(annoStr), parseInt(meseStr)-1, 15);
+  const dal = new Date(centro); dal.setDate(dal.getDate()-45);
+  const al = new Date(centro); al.setDate(al.getDate()+45);
+  const fmtD = d => d.toISOString().slice(0,10);
+  let movs = [], giaAssegnati = [];
+  try{
+    movs = await sbFetch('movimenti_banca?select=id,data,importo,descrizione,tipo&tipo=eq.uscita&data=gte.'+fmtD(dal)+'&data=lte.'+fmtD(al));
+    giaAssegnati = await sbFetch('presenze_bonifici_stipendio?select=movimento_banca_id');
+  }catch(e){ lista.innerHTML = '⚠️ Errore: '+String(e.message||e).slice(0,80); return; }
+  const assegnatiSet = new Set(giaAssegnati.map(r=>r.movimento_banca_id));
+  const testo = (document.getElementById('abdTesto').value||'').trim().toLowerCase();
+  let cand = movs.filter(m => !assegnatiSet.has(m.id) && !/comm\.?\s*su\s*bonifici|\badd\.spe\b/i.test(m.descrizione||''));
+  if(testo) cand = cand.filter(m => (m.descrizione||'').toLowerCase().includes(testo));
+  cand.sort((a,b) => b.data.localeCompare(a.data));
+  if(!cand.length){ lista.innerHTML = 'Nessun movimento libero trovato in questo periodo.'; return; }
+  lista.innerHTML = cand.map(m =>
+    '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid var(--sep)">'
+    +'<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:var(--ink)">'+m.data+' — '+fmt(Math.abs(m.importo))+'</div><div style="font-size:11px;color:var(--ink3);word-break:break-word">'+esc(m.descrizione)+'</div></div>'
+    +'<button onclick="abdAggancia(\''+m.id+'\',\''+m.data+'\','+Math.abs(m.importo)+',\''+esc(m.descrizione).replace(/'/g,"\\'")+'\')" style="padding:6px 10px;border:1px solid var(--blue);border-radius:6px;background:var(--blue-light);color:var(--blue);font-family:inherit;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;margin-left:8px">🔗 Aggancia</button>'
+    +'</div>'
+  ).join('');
+}
+
+async function abdAggancia(movId, data, importo, descrizione){
+  const dipId = document.getElementById('abdDip').value;
+  const meseVal = document.getElementById('abdMese').value;
+  if(!dipId || !meseVal) return;
+  const [anno, mese] = meseVal.split('-').map(Number);
+  try{
+    await sbFetch('presenze_bonifici_stipendio', {method:'POST', headers:{'Prefer':'return=minimal'}, body: JSON.stringify({
+      dipendente_id: dipId, movimento_banca_id: movId,
+      mese_riferimento: mese, anno_riferimento: anno,
+      importo, confermato: true,
+      descrizione_movimento: descrizione, data_movimento: data
+    })});
+    toast('✓ Bonifico assegnato al dipendente');
+    abdCerca();
+  }catch(e){
+    toast('⚠️ Errore: '+String(e.message||e).slice(0,60));
+  }
 }
 
 function _apriCercaDdtFattura(fatturaId){
