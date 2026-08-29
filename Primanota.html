@@ -407,7 +407,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.30.91</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.30.92</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -16917,6 +16917,23 @@ function renderRiconciliazione(){
   var nonAbbinatiHide = nonAbbinati.filter(function(m){ return !m._classificaManuale && _escludiClassifica.test((m.descrizione||'').toLowerCase()); });
   window._nonAbbinati = nonAbbinati;
 
+  // FIX 28/08 (richiesto da Valerio): dentro "Scartati" i bonifici stipendio
+  // (dipendenti + parole come TFR/13a/14a) finivano mescolati con commissioni
+  // bancarie, bolli e SDD PayPal — voci di natura completamente diversa. Ora
+  // hanno una sezione propria "💼 Stipendi", con la possibilità di spostare
+  // manualmente un movimento da una sezione all'altra (persistito, sopravvive
+  // al ricaricamento) per i casi limite in cui il riconoscimento automatico
+  // sbaglia in un senso o nell'altro.
+  var _isStipendioMov = /ceraldi\s+valerio|valerio\s+ceraldi|ceraldi\s+vincenzo|vincenzo\s+ceraldi|ceraldi\s+michele|michele\s+ceraldi|pocci\s+salvatore|salvatore\s+pocci|murolo\s+mario|mario\s+murolo|parisi\s+antonio|antonio\s+parisi|capezzuto\s+alessandro|alessandro\s+capezzuto|taiano\s+luigi|luigi\s+taiano|moscato\s+emanuele|emanuele\s+moscato|guarino\s+giuliano|giuliano\s+guarino|lesina\s+angela|angela\s+lesina|russo\s+carmine|carmine\s+russo|vespa\s+vincenzo|vincenzo\s+vespa|carotenuto\s+antonella|antonella\s+carotenuto|\bstip(\.|endio)?\b|\btfr\b|\bstraordinari\b|\b1[34]\s*[aª]\b|acconto\s+stipendio|busta\s+paga/i;
+  var _categoriaManualeMov = {};
+  try{ _categoriaManualeMov = JSON.parse(localStorage.getItem('ceraldi_categoria_manuale_mov')||'{}'); }catch(e){}
+  function _categoriaMov(m){
+    if(_categoriaManualeMov[m.id]) return _categoriaManualeMov[m.id];
+    return _isStipendioMov.test((m.descrizione||'').toLowerCase()) ? 'stipendio' : 'scartato';
+  }
+  var nonAbbinatiStipendio      = nonAbbinatiHide.filter(function(m){ return _categoriaMov(m)==='stipendio'; });
+  var nonAbbinatiAltroScartato  = nonAbbinatiHide.filter(function(m){ return _categoriaMov(m)!=='stipendio'; });
+
   // ── TAB "Da classificare" ──
   var htmlClassificare = '';
   if(nonAbbinatiVis.length){
@@ -16969,19 +16986,23 @@ function renderRiconciliazione(){
     htmlClassificare = '<div style="text-align:center;padding:30px 14px;color:var(--ink3);font-size:13px">Nessun movimento da classificare per questo mese.</div>';
   }
 
-  // ── TAB "Scartati": filtrati automaticamente + ignorati manualmente ──
+  // ── TAB "Scartati": filtrati automaticamente (commissioni/bolli/ecc, MAI
+  // stipendi — quelli hanno la loro sezione a parte, vedi sotto) + ignorati manualmente ──
   var htmlScartati = '';
-  if(nonAbbinatiHide.length){
+  if(nonAbbinatiAltroScartato.length){
     htmlScartati += '<div style="background:var(--surface);border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow);border-left:3px solid #ccc">';
-    htmlScartati += '<div style="font-size:13px;font-weight:700;color:var(--ink3);margin-bottom:4px">🚫 Filtrati automaticamente ('+nonAbbinatiHide.length+')</div>';
-    htmlScartati += '<div style="font-size:11px;color:var(--ink3);margin-bottom:10px">Commissioni bancarie, bolli, stipendi e altre voci non abbinabili a fatture</div>';
-    nonAbbinatiHide.forEach(function(m){
+    htmlScartati += '<div style="font-size:13px;font-weight:700;color:var(--ink3);margin-bottom:4px">🚫 Filtrati automaticamente ('+nonAbbinatiAltroScartato.length+')</div>';
+    htmlScartati += '<div style="font-size:11px;color:var(--ink3);margin-bottom:10px">Commissioni bancarie, bolli e altre voci non abbinabili a fatture</div>';
+    nonAbbinatiAltroScartato.forEach(function(m){
       htmlScartati += '<div style="padding:7px 0;border-top:1px solid var(--sep);display:flex;justify-content:space-between;align-items:flex-start;gap:8px">';
       htmlScartati += '<div style="flex:1;min-width:0">';
       htmlScartati += '<div style="font-size:11px;color:var(--ink3)">'+m.data+' · <b>'+fmt(Math.abs(m.importo))+'</b>'+(m.sottotipo?' · <i>'+m.sottotipo+'</i>':'')+'</div>';
       htmlScartati += '<div style="font-size:11px;color:var(--ink2);word-break:break-word;line-height:1.3">'+esc(m.descrizione||'')+'</div>';
       htmlScartati += '</div>';
-      htmlScartati += '<button onclick="apriCambioAbbinamentoMov(\''+esc(m.id)+'\')" style="border:none;background:#fff8ee;color:#c06000;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:600;cursor:pointer;flex-shrink:0;white-space:nowrap">🔍 Riconcilia</button>';
+      htmlScartati += '<div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">';
+      htmlScartati += '<button onclick="apriCambioAbbinamentoMov(\''+esc(m.id)+'\')" style="border:none;background:#fff8ee;color:#c06000;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">🔍 Riconcilia</button>';
+      htmlScartati += '<button onclick="_spostaCategoriaMov(\''+esc(m.id)+'\',\'stipendio\')" style="border:none;background:#f0ebfd;color:#6b46c1;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">💼 È uno stipendio</button>';
+      htmlScartati += '</div>';
       htmlScartati += '</div>';
     });
     htmlScartati += '</div>';
@@ -17001,6 +17022,27 @@ function renderRiconciliazione(){
     htmlScartati += '</div>';
   }
   if(!htmlScartati) htmlScartati = '<div style="text-align:center;padding:30px 14px;color:var(--ink3);font-size:13px">Nessun movimento scartato per questo mese.</div>';
+
+  // ── TAB "Stipendi": bonifici verso dipendenti/TFR/13ª-14ª, separati dagli
+  // scarti tecnici (commissioni/bolli) — richiesto esplicitamente da Valerio.
+  var htmlStipendi = '';
+  if(nonAbbinatiStipendio.length){
+    htmlStipendi += '<div style="background:var(--surface);border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow);border-left:3px solid #6b46c1">';
+    htmlStipendi += '<div style="font-size:13px;font-weight:700;color:#6b46c1;margin-bottom:4px">💼 Bonifici stipendio ('+nonAbbinatiStipendio.length+')</div>';
+    htmlStipendi += '<div style="font-size:11px;color:var(--ink3);margin-bottom:10px">Pagamenti verso dipendenti — la riconciliazione con i cedolini si fa da Ceraldi Presenze</div>';
+    nonAbbinatiStipendio.forEach(function(m){
+      htmlStipendi += '<div style="padding:7px 0;border-top:1px solid var(--sep);display:flex;justify-content:space-between;align-items:flex-start;gap:8px">';
+      htmlStipendi += '<div style="flex:1;min-width:0">';
+      htmlStipendi += '<div style="font-size:11px;color:var(--ink3)">'+m.data+' · <b>'+fmt(Math.abs(m.importo))+'</b>'+(m.sottotipo?' · <i>'+m.sottotipo+'</i>':'')+'</div>';
+      htmlStipendi += '<div style="font-size:11px;color:var(--ink2);word-break:break-word;line-height:1.3">'+esc(m.descrizione||'')+'</div>';
+      htmlStipendi += '</div>';
+      htmlStipendi += '<button onclick="_spostaCategoriaMov(\''+esc(m.id)+'\',\'scartato\')" style="border:none;background:var(--surface2,#f0f0f0);color:var(--ink3);border-radius:6px;padding:5px 8px;font-size:11px;font-weight:600;cursor:pointer;flex-shrink:0;white-space:nowrap">↩️ Non è uno stipendio</button>';
+      htmlStipendi += '</div>';
+    });
+    htmlStipendi += '</div>';
+  } else {
+    htmlStipendi = '<div style="text-align:center;padding:30px 14px;color:var(--ink3);font-size:13px">Nessun bonifico stipendio per questo mese.</div>';
+  }
 
   // ── TAB "Tutti i movimenti": con filtri automatici per categoria ──
   // Categorie riconosciute dalla descrizione — pensate per raggruppare voci
@@ -17108,7 +17150,8 @@ function renderRiconciliazione(){
     {key:'conferma',     label:'❓ Da confermare',   n:daConfermare.length,     color:'#b36a00'},
     {key:'classificare', label:'⚠️ Da classificare', n:nonAbbinatiVis.length,  color:'var(--red)'},
     {key:'riconciliati', label:'✅ Riconciliati',    n:_righeRiconciliate.length,   color:'#1a7a3a'},
-    {key:'scartati',     label:'🚫 Scartati',        n:nonAbbinatiHide.length+ignorati.length, color:'var(--ink3)'},
+    {key:'scartati',     label:'🚫 Scartati',        n:nonAbbinatiAltroScartato.length+ignorati.length, color:'var(--ink3)'},
+    {key:'stipendi',     label:'💼 Stipendi',        n:nonAbbinatiStipendio.length, color:'#6b46c1'},
     {key:'tutti',        label:'📦 Altro',            n:movMeseAltro.length,   color:'var(--ink)'}
   ];
   html += '<div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:12px;padding-bottom:2px">';
@@ -17118,7 +17161,7 @@ function renderRiconciliazione(){
   });
   html += '</div>';
 
-  var _contenutoTab = {conferma:htmlConferma, classificare:htmlClassificare, riconciliati:htmlRiconciliati, scartati:htmlScartati, tutti:htmlTutti}[_tabAttivo] || htmlConferma;
+  var _contenutoTab = {conferma:htmlConferma, classificare:htmlClassificare, riconciliati:htmlRiconciliati, scartati:htmlScartati, stipendi:htmlStipendi, tutti:htmlTutti}[_tabAttivo] || htmlConferma;
   html += '<div id="_reconTabBody">'+_contenutoTab+'</div>';
 
   wrap.innerHTML = html;
@@ -17126,6 +17169,20 @@ function renderRiconciliazione(){
 
 function _setReconTab(key){
   window._reconTabAttiva = key;
+  var _sy = window.pageYOffset || document.documentElement.scrollTop || 0;
+  renderRiconciliazione();
+  setTimeout(function(){ window.scrollTo(0, _sy); }, 30);
+}
+
+// FIX 28/08 (richiesto da Valerio): sposta manualmente un movimento tra
+// "Stipendi" e "Scartati" — la scelta viene ricordata (localStorage) e
+// prevale sempre sul riconoscimento automatico per nome/parola chiave.
+function _spostaCategoriaMov(movId, categoria){
+  var mappa = {};
+  try{ mappa = JSON.parse(localStorage.getItem('ceraldi_categoria_manuale_mov')||'{}'); }catch(e){}
+  mappa[movId] = categoria;
+  localStorage.setItem('ceraldi_categoria_manuale_mov', JSON.stringify(mappa));
+  toast(categoria==='stipendio' ? '✓ Spostato in Stipendi' : '✓ Spostato in Scartati');
   var _sy = window.pageYOffset || document.documentElement.scrollTop || 0;
   renderRiconciliazione();
   setTimeout(function(){ window.scrollTo(0, _sy); }, 30);
