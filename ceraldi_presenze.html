@@ -1012,7 +1012,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div id="app" style="display:none">
 
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.202</span></div>
+    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.204</span></div>
     <span class="topbar-badge" id="role-badge"></span>
     <button class="btn-topbar" onclick="ricaricaApp()" title="Ricarica la pagina (per essere sicuro di avere l'ultima versione)" style="padding:6px 10px">🔄</button>
     <button id="btn-promemoria" class="btn-topbar" onclick="apriPromemoria()" style="display:none;position:relative;padding:6px 10px">
@@ -1383,9 +1383,11 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
         <button class="btn-sm" style="flex:1;background:rgba(43,74,203,.08);color:var(--accent);border-color:rgba(43,74,203,.3)" onclick="apriControlloMensile()" title="Controlla in un colpo d'occhio chi ha ricevuto la busta paga e chi è stato liquidato questo mese">🔍 Controllo rapido mese</button>
         <button class="btn-sm" style="flex:1;background:rgba(47,138,92,.1);color:var(--green);border-color:rgba(47,138,92,.3)" onclick="esportaPresenzeExcel()" title="Un unico file Excel con timbrature, stipendi, acconti, restituzioni, assenze e ferie — di tutta l'azienda o di un solo dipendente">⬇ Esporta dati (Excel)</button>
       </div>
-      <button class="btn-secondary" style="width:100%;margin-bottom:8px" onclick="apriRiconciliazioneBonifici()">🏦 Riconciliazione bonifici stipendi</button>
-      <button class="btn-secondary" style="width:100%;margin-bottom:8px" onclick="apriCedoliniNonRiconciliati()">📋 Cedolini non riconciliati</button>
-      <button class="btn-secondary" style="width:100%;margin-bottom:14px" onclick="apriStoricoRiconciliazioni()">🗂 Storico riconciliazioni (annulla)</button>
+      <div style="display:flex;gap:6px;margin-bottom:14px">
+        <button class="btn-sm" style="flex:1;padding:8px 4px;font-size:11px" onclick="apriRiconciliazioneBonifici()">🏦 Riconciliazione</button>
+        <button class="btn-sm" style="flex:1;padding:8px 4px;font-size:11px" onclick="apriCedoliniNonRiconciliati()">📋 Non riconciliati</button>
+        <button class="btn-sm" style="flex:1;padding:8px 4px;font-size:11px" onclick="apriStoricoRiconciliazioni()">🗂 Storico</button>
+      </div>
       <div id="stipendi-list"></div>
     </div>
 
@@ -9141,7 +9143,7 @@ async function calcolaPromemoria() {
     // 5. Malattie senza certificato allegato (ultimi 60 giorni)
     const d60 = new Date(oggi.getTime()-60*86400000).toISOString().split('T')[0];
     const { data: malattie } = await sb.from('presenze_assenze')
-      .select('id,nome_dipendente,data_inizio,protocollo_inps').eq('tipo','malattia').eq('stato','approvata')
+      .select('id,nome_dipendente,data_inizio,protocollo_inps').eq('tipo','malattia').in('stato',['approvata','confermata'])
       .gte('data_inizio', d60);
     if (malattie && malattie.length) {
       const malIds = malattie.map(m=>m.id);
@@ -10753,7 +10755,7 @@ async function apriLiquidazioneCompleta() {
     sb.from('presenze_acconti').select('importo,data,causale,mese_riferimento,anno_riferimento,periodo_anno_inizio,saldo_periodo').eq('dipendente_id', dipId),
     sb.from('presenze_restituzioni').select('importo,data,mese_riferimento,anno_riferimento').eq('dipendente_id', dipId),
     sb.from('presenze_liquidazioni').select('mese,anno').eq('dipendente_id', dipId),
-    sb.from('presenze_assenze').select('data_inizio,data_fine').eq('dipendente_id', dipId).eq('stato','approvata').eq('tipo','ferie'),
+    sb.from('presenze_assenze').select('data_inizio,data_fine').eq('dipendente_id', dipId).in('stato',['approvata','confermata']).eq('tipo','ferie'),
   ]);
   if (!d) { body.innerHTML = '<div class="empty"><div class="empty-txt">Dipendente non trovato</div></div>'; return; }
 
@@ -11119,7 +11121,7 @@ async function esportaStoricoDipendente() {
   const totLiquidato = (liquidazioni||[]).reduce((s,l)=>s+num(l.importo_netto), 0);
   const accontiReali = (acconti||[]).filter(a=>!isMarcatore(a));
   const totRestituito = (restituzioni||[]).reduce((s,r)=>s+num(r.importo), 0);
-  const giorniAssenza = t => (assenze||[]).filter(a=>a.tipo===t && a.stato==='approvata')
+  const giorniAssenza = t => (assenze||[]).filter(a=>a.tipo===t && (a.stato==='approvata'||a.stato==='confermata'))
     .reduce((s,a)=> s + (Math.round((new Date(a.data_fine)-new Date(a.data_inizio))/86400000)+1), 0);
   // FIX (segnalato): "Totale liquidato" prendeva SOLO le liquidazioni
   // mensili (presenze_liquidazioni), lasciando fuori gli acconti causale
@@ -11462,7 +11464,7 @@ async function esportaStoricoDipendente() {
     setCell(ws7, XLSX.utils.encode_cell({r:r7,c:1}), dIT(a.data_inizio), st);
     setCell(ws7, XLSX.utils.encode_cell({r:r7,c:2}), dIT(a.data_fine), st);
     setCell(ws7, XLSX.utils.encode_cell({r:r7,c:3}), giorni, st);
-    setCell(ws7, XLSX.utils.encode_cell({r:r7,c:4}), (a.stato||'').toUpperCase(), a.stato==='approvata'?sBadgeOk:sBadgeOpen);
+    setCell(ws7, XLSX.utils.encode_cell({r:r7,c:4}), (a.stato||'').toUpperCase(), (a.stato==='approvata'||a.stato==='confermata')?sBadgeOk:sBadgeOpen);
     altA = !altA; r7++;
   });
   setCell(ws7, XLSX.utils.encode_cell({r:r7,c:0}),'Totale giorni ferie approvate', sTotLabel);
@@ -12308,7 +12310,7 @@ async function toggleAccontoFerie() {
   const { data: p } = await sb.from('presenze_profili')
     .select('ferie_annuali,data_assunzione,ferie_godute_extra,paga_giornaliera').eq('id',_accontoDipId).single();
   const { data: assenzeFerie } = await sb.from('presenze_assenze')
-    .select('data_inizio,data_fine').eq('dipendente_id',_accontoDipId).eq('stato','approvata').eq('tipo','ferie');
+    .select('data_inizio,data_fine').eq('dipendente_id',_accontoDipId).in('stato',['approvata','confermata']).eq('tipo','ferie');
   const cicloFerieIso = _cicloFerieInizioISO();
   let godute = 0;
   (assenzeFerie||[]).filter(a => !cicloFerieIso || a.data_inizio >= cicloFerieIso)
@@ -14077,7 +14079,7 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
   let qProfili = sb.from('presenze_profili').select('id,nome,cognome,paga_giornaliera,ferie_annuali,ferie_godute_extra,codice_fiscale,data_assunzione').eq('ruolo','dipendente').eq('attivo',true).order('nome');
   let qPresenze = sb.from('presenze').select('*').gte('data',dal).lte('data',al).order('data');
   let qAcconti = sb.from('presenze_acconti').select('*').lte('data',al);
-  let qAssenze = sb.from('presenze_assenze').select('*').eq('stato','approvata').or(`and(data_inizio.lte.${al},data_fine.gte.${dal})`);
+  let qAssenze = sb.from('presenze_assenze').select('*').in('stato',['approvata','confermata']).or(`and(data_inizio.lte.${al},data_fine.gte.${dal})`);
   let qLiquidazioni = sb.from('presenze_liquidazioni').select('*');
   // Acconti 13a/14a SENZA filtro data (tutta la storia): serve a
   // maturato1314 per capire se il periodo precedente a quello
@@ -14157,6 +14159,16 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
     const d = (dipendenti||[]).find(x => x.id === id);
     return d ? (d.nome+(d.cognome?' '+d.cognome:'')) : '— (dipendente rimosso)';
   };
+  // FIX 29/08 (segnalato da Valerio): questo report riguarda SOLO i
+  // dipendenti (ruolo='dipendente') — Valerio e Vincenzo Ceraldi (admin)
+  // hanno da poco una presenza automatica ("sempre presente") che qui
+  // risultava con nome "— (dipendente rimosso)", perché non fanno parte di
+  // `dipendenti` (giustamente, non entrano nel calcolo busta paga). La
+  // soluzione corretta non è risolvere il loro nome, è escluderli del tutto
+  // da questo elenco: non devono proprio comparire in un documento sui
+  // giorni lavorati/paga dei dipendenti.
+  const _dipendentiIds = new Set((dipendenti||[]).map(d => d.id));
+  const presenzeDip = (presenze||[]).filter(p => _dipendentiIds.has(p.dipendente_id));
   const giorniTra = (di,df) => Math.round((new Date(df)-new Date(di))/86400000)+1;
   // Conta giorni di un'assenza che ricadono nel periodo
   const giorniNelMese = (di,df) => {
@@ -14319,7 +14331,7 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
   F2.push(['PRESENZE GIORNALIERE — '+periodoLbl.toUpperCase()]);
   F2.push([]);
   F2.push(['Dipendente','Data','Giorno','Festività','Entrata','Tipo timbratura','Note']);
-  const presOrd = (presenze||[]).slice().sort((a,b)=> (a.data<b.data?-1:a.data>b.data?1: (nomeDi(a.dipendente_id)<nomeDi(b.dipendente_id)?-1:1)));
+  const presOrd = presenzeDip.slice().sort((a,b)=> (a.data<b.data?-1:a.data>b.data?1: (nomeDi(a.dipendente_id)<nomeDi(b.dipendente_id)?-1:1)));
   presOrd.forEach(p => {
     const dObj = new Date(p.data);
     const giornoSett = dObj.toLocaleDateString('it-IT',{weekday:'long'});
@@ -14440,7 +14452,7 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
   /* ═══════ FOGLIO 5: SALDO FERIE ═══════ */
   let qFerieAnno = sb.from('presenze_assenze')
     .select('dipendente_id,data_inizio,data_fine')
-    .eq('tipo','ferie').eq('stato','approvata');
+    .eq('tipo','ferie').in('stato',['approvata','confermata']);
   if (dipIdFiltro) qFerieAnno = qFerieAnno.eq('dipendente_id', dipIdFiltro);
   const cicloFerieIsoXls = _cicloFerieInizioISO();
   if (cicloFerieIsoXls) qFerieAnno = qFerieAnno.gte('data_inizio', cicloFerieIsoXls);
@@ -19311,7 +19323,7 @@ async function caricaProfiloDip() {
   const { data: assenze } = await sb.from('presenze_assenze')
     .select('tipo,data_inizio,data_fine')
     .eq('dipendente_id', ME.id)
-    .eq('stato','approvata')
+    .in('stato',['approvata','confermata'])
     .eq('tipo','ferie');
 
   const cicloFerieIsoProf = _cicloFerieInizioISO();
@@ -19771,12 +19783,12 @@ async function caricaFerieAdmin(dipId, wrap) {
   const cicloFerieIsoAdmin = _cicloFerieInizioISO();
   let qFerieAdmin = sb.from('presenze_assenze')
     .select('data_inizio,data_fine')
-    .eq('dipendente_id', dipId).eq('stato','approvata').eq('tipo','ferie');
+    .eq('dipendente_id', dipId).in('stato',['approvata','confermata']).eq('tipo','ferie');
   if (cicloFerieIsoAdmin) qFerieAdmin = qFerieAdmin.gte('data_inizio', cicloFerieIsoAdmin);
   const { data: assenzeFerie } = await qFerieAdmin;
   const { data: assenzePerm } = await sb.from('presenze_assenze')
     .select('data_inizio,data_fine')
-    .eq('dipendente_id', dipId).eq('stato','approvata').eq('tipo','permesso')
+    .eq('dipendente_id', dipId).in('stato',['approvata','confermata']).eq('tipo','permesso')
     .gte('data_inizio', anno+'-01-01');
 
   let ferieGodute = 0, permGoduti = 0;
@@ -19827,7 +19839,7 @@ async function mostraBenvenuto() {
   const { data: prossFerie } = await sb.from('presenze_assenze')
     .select('data_inizio,tipo')
     .eq('dipendente_id', ME.id)
-    .eq('stato','approvata')
+    .in('stato',['approvata','confermata'])
     .eq('tipo','ferie')
     .gte('data_inizio', new Date().toISOString().split('T')[0])
     .order('data_inizio',{ascending:true})
