@@ -1012,7 +1012,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div id="app" style="display:none">
 
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.196</span></div>
+    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.197</span></div>
     <span class="topbar-badge" id="role-badge"></span>
     <button class="btn-topbar" onclick="ricaricaApp()" title="Ricarica la pagina (per essere sicuro di avere l'ultima versione)" style="padding:6px 10px">🔄</button>
     <button id="btn-promemoria" class="btn-topbar" onclick="apriPromemoria()" style="display:none;position:relative;padding:6px 10px">
@@ -3171,6 +3171,38 @@ async function presenzeCalcolaRiconciliazioneBonifici(){
 // quelli con certo=true, salvo conferma esplicita anche per gli altri).
 // Se lo stato è 'eccedenza' e confermaEccedenza=true, propone/crea anche
 // l'acconto sul mese successivo con modalita='bonifico'.
+// FIX 28/08 (richiesto da Valerio): per decidere se un'eccedenza è un
+// acconto sul mese dopo o va nel portafoglio, serve vedere cosa è successo
+// nei mesi vicini — in particolare se il mese SUCCESSIVO risulta pagato di
+// meno esattamente per l'importo dell'eccedenza (segno che è già stata
+// "spesa" lì) oppure per intero (segno che quei soldi sono altro).
+async function presenzeQuadroDipendente(dipId, meseCentro, annoCentro){
+  const mesi = [];
+  for (let offset = -3; offset <= 3; offset++) {
+    let m = meseCentro + offset, a = annoCentro;
+    while (m < 1) { m += 12; a -= 1; }
+    while (m > 12) { m -= 12; a += 1; }
+    mesi.push({ mese: m, anno: a, offset });
+  }
+  const [{ data: cedolini }, { data: confermati }] = await Promise.all([
+    sb.from('presenze_documenti').select('mese,anno,netto_busta').eq('dipendente_id',dipId).eq('categoria','busta_paga'),
+    sb.from('presenze_bonifici_stipendio').select('mese_riferimento,anno_riferimento,importo').eq('dipendente_id',dipId)
+  ]);
+  const cedMap = {}; (cedolini||[]).forEach(c => { if(c.netto_busta!=null) cedMap[c.mese+'|'+c.anno] = parseFloat(c.netto_busta); });
+  const confMap = {};
+  (confermati||[]).forEach(c => {
+    const k = c.mese_riferimento+'|'+c.anno_riferimento;
+    confMap[k] = (confMap[k]||0) + (parseFloat(c.importo)||0);
+  });
+  return mesi.map(r => {
+    const k = r.mese+'|'+r.anno;
+    const netto = cedMap[k] != null ? cedMap[k] : null;
+    const trovato = Math.round((confMap[k]||0)*100)/100;
+    const differenza = netto != null ? Math.round((trovato-netto)*100)/100 : null;
+    return { ...r, netto, trovato, differenza };
+  });
+}
+
 async function presenzeConfermaMatchStipendio(risultato, movimenti, opts){
   opts = opts || {};
   if (!movimenti || !movimenti.length) return;
@@ -12369,6 +12401,7 @@ async function apriControlloMensile() {
 // ── Riconciliazione bonifici stipendi (28/08) — UI di revisione ──
 let _rbRisultati = [];
 const MESI_LBL = ['','Gen','Feb','Mar','Apr','Mag','Giu','Lug','Ago','Set','Ott','Nov','Dic'];
+function fmtQ(n){ return (n||0).toLocaleString('it-IT',{minimumFractionDigits:0,maximumFractionDigits:0}); }
 
 // ── Cedolini non riconciliati (28/08) — schermata di controllo ──
 let _cnrRisultati = [];
@@ -12450,10 +12483,10 @@ async function apriRiconciliazioneBonifici(){
   openSheet('sh-riconcBonifici');
   $('rb-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Analisi in corso…</div>';
   _rbRisultati = await presenzeCalcolaRiconciliazioneBonifici();
-  rbRenderLista();
+  await rbRenderLista();
 }
 
-function rbRenderLista(){
+async function rbRenderLista(){
   const el = $('rb-lista');
   if (!_rbRisultati.length) {
     el.innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Nessun bonifico da riconciliare al momento — tutto già confermato o nessun candidato trovato nell\'estratto conto.</div>';
@@ -12461,6 +12494,15 @@ function rbRenderLista(){
   }
   const badgeStato = { saldato:'✅ Saldato', aperto:'⚠️ Manca ancora', eccedenza:'🔵 Eccedenza' };
   const colStato = { saldato:'#1a7a3a', aperto:'#b36a00', eccedenza:'#2b4acb' };
+  // FIX 28/08 (richiesto da Valerio): per un'eccedenza, precalcola il quadro
+  // dei mesi vicini — serve a capire se il mese successivo risulta già
+  // pagato di meno per lo stesso importo (allora è un acconto già "speso"
+  // lì) o pagato per intero da solo (allora l'eccedenza è probabilmente
+  // un'altra competenza, non un acconto sul mese dopo).
+  const quadri = {};
+  for (const r of _rbRisultati) {
+    if (r.stato === 'eccedenza') quadri[r.dipId+'|'+r.mese+'|'+r.anno] = await presenzeQuadroDipendente(r.dipId, r.mese, r.anno);
+  }
   el.innerHTML = _rbRisultati.map((r,idx) => {
     const tuttiCerti = r.movimenti.every(m => m.certo);
     const righeMov = r.movimenti.map((m,mi) => `
@@ -12475,16 +12517,41 @@ function rbRenderLista(){
         const meseSuccDef = r.mese === 12 ? 1 : r.mese + 1;
         const annoSuccDef = r.mese === 12 ? r.anno + 1 : r.anno;
         const meseRifDef = annoSuccDef + '-' + String(meseSuccDef).padStart(2,'0');
-        // FIX 28/08 (richiesto da Valerio): l'eccedenza può riferirsi a
-        // un'altra competenza scritta sul cedolino ma non letta dall'app
-        // (ferie, 13a/14a, TFR...) — quindi si sceglie qui, non è più
-        // automaticamente "acconto stipendio del mese dopo".
+
+        // ── Quadro mesi vicini + suggerimento automatico ──
+        const q = quadri[r.dipId+'|'+r.mese+'|'+r.anno] || [];
+        const meseSuccQ = q.find(x => x.offset === 1);
+        let suggerimento = '';
+        let causaleDaPreselezionare = 'acconto_stipendio';
+        if (meseSuccQ && meseSuccQ.netto != null) {
+          if (Math.abs(meseSuccQ.differenza + r.diff) <= 1) {
+            suggerimento = `<div style="color:#1a7a3a;font-weight:700;font-size:11px;margin:6px 0">✓ ${MESI_LBL[meseSuccQ.mese]} ${meseSuccQ.anno} risulta pagato € ${Math.abs(meseSuccQ.differenza).toFixed(2)} in meno — coerente con un acconto già usato lì.</div>`;
+          } else if (Math.abs(meseSuccQ.differenza) <= 1) {
+            suggerimento = `<div style="color:#2b4acb;font-weight:700;font-size:11px;margin:6px 0">ℹ️ ${MESI_LBL[meseSuccQ.mese]} ${meseSuccQ.anno} risulta già pagato per intero da solo — questa eccedenza probabilmente NON è un acconto su quel mese: valuta 13ª/14ª, TFR o portafoglio.</div>`;
+            causaleDaPreselezionare = '__portafoglio__';
+          } else {
+            suggerimento = `<div style="color:var(--muted);font-size:11px;margin:6px 0">Il mese successivo non è ancora chiaro (differenza € ${meseSuccQ.differenza.toFixed(2)}) — verifica manualmente.</div>`;
+          }
+        } else {
+          suggerimento = `<div style="color:var(--muted);font-size:11px;margin:6px 0">Cedolino di ${MESI_LBL[meseSuccDef]} ${annoSuccDef} non ancora caricato — impossibile verificare adesso.</div>`;
+        }
+        const righeQuadro = q.map(m => {
+          const lbl = MESI_LBL[m.mese] + ' \'' + String(m.anno).slice(2);
+          const evid = m.offset === 0 ? 'font-weight:700' : (m.offset === 1 ? 'background:rgba(43,74,203,.08)' : '');
+          const valore = m.netto == null ? '—' : (m.differenza === 0 ? '✓ ' + fmtQ(m.netto) : fmtQ(m.trovato) + '/' + fmtQ(m.netto));
+          return `<td style="padding:3px 5px;text-align:center;${evid}">${valore}</td>`;
+        }).join('');
+        const etichetteQuadro = q.map(m => `<td style="padding:2px 5px;text-align:center;font-size:9px;color:var(--muted)">${MESI_LBL[m.mese]}'${String(m.anno).slice(2)}</td>`).join('');
+
         azione = `
           <div style="margin-top:10px;background:var(--surface);border-radius:8px;padding:10px">
+            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;margin-bottom:2px">Quadro mesi vicini (trovato/cedolino)</div>
+            <table style="width:100%;border-collapse:collapse;font-size:10.5px;margin-bottom:2px"><tr>${etichetteQuadro}</tr><tr>${righeQuadro}</tr></table>
+            ${suggerimento}
             <div style="font-size:11px;color:var(--muted);margin-bottom:6px">A quale competenza appartiene l'eccedenza di € ${r.diff.toFixed(2)}?</div>
             <select id="rb-causale-${idx}" class="field-inp" style="margin-bottom:8px">
-              ${Object.keys(CAUSALI).filter(c=>c!=='stipendio').map(c=>`<option value="${c}"${c==='acconto_stipendio'?' selected':''}>${CAUSALI[c]}</option>`).join('')}
-              <option value="__portafoglio__">🐷 Portafoglio dipendente (da usare in futuro)</option>
+              ${Object.keys(CAUSALI).filter(c=>c!=='stipendio').map(c=>`<option value="${c}"${c===causaleDaPreselezionare?' selected':''}>${CAUSALI[c]}</option>`).join('')}
+              <option value="__portafoglio__"${causaleDaPreselezionare==='__portafoglio__'?' selected':''}>🐷 Portafoglio dipendente (da usare in futuro)</option>
             </select>
             <div class="field-lbl" style="margin-top:0;font-size:10px">Mese di riferimento (default: mese successivo)</div>
             <input type="month" id="rb-meserif-${idx}" class="field-inp last" value="${meseRifDef}" style="margin-bottom:8px">
@@ -12514,7 +12581,7 @@ async function rbConfermaTutto(idx, registraEccedenza){
   await presenzeConfermaMatchStipendio(r, r.movimenti, { registraEccedenzaAcconto: registraEccedenza });
   toast('✓ Riconciliato: ' + r.nome + ' — ' + MESI_LBL[r.mese] + ' ' + r.anno);
   _rbRisultati.splice(idx, 1);
-  rbRenderLista();
+  await rbRenderLista();
 }
 
 // FIX 28/08 (richiesto da Valerio): conferma di un'eccedenza scegliendo a
@@ -12537,7 +12604,7 @@ async function rbConfermaEccedenza(idx){
     await presenzePortafoglioDeposita(r.dipId, r.diff, 'eccedenza_bonifico_' + String(r.mese).padStart(2,'0') + '_' + r.anno);
     toast('✓ € ' + r.diff.toFixed(2) + ' depositati nel portafoglio di ' + r.nome);
     _rbRisultati.splice(idx, 1);
-    rbRenderLista();
+    await rbRenderLista();
     return;
   }
 
@@ -12552,7 +12619,7 @@ async function rbConfermaEccedenza(idx){
   });
   toast('✓ Riconciliato: ' + r.nome + ' — eccedenza assegnata a ' + causaleLbl(causale));
   _rbRisultati.splice(idx, 1);
-  rbRenderLista();
+  await rbRenderLista();
 }
 
 // ── Aggancio manuale bonifico (28/08, richiesto da Valerio: "molti mi
@@ -12764,7 +12831,7 @@ async function rbConfermaSingolo(idx, movIdx){
   toast('✓ Movimento confermato per ' + r.nome);
   // Ricalcola da capo questo risultato (potrebbe restare un altro pezzo da confermare)
   _rbRisultati = await presenzeCalcolaRiconciliazioneBonifici();
-  rbRenderLista();
+  await rbRenderLista();
 }
 
 async function caricaStipendi() {
