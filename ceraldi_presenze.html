@@ -1012,7 +1012,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div id="app" style="display:none">
 
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.204</span></div>
+    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.209</span></div>
     <span class="topbar-badge" id="role-badge"></span>
     <button class="btn-topbar" onclick="ricaricaApp()" title="Ricarica la pagina (per essere sicuro di avere l'ultima versione)" style="padding:6px 10px">🔄</button>
     <button id="btn-promemoria" class="btn-topbar" onclick="apriPromemoria()" style="display:none;position:relative;padding:6px 10px">
@@ -10992,7 +10992,7 @@ async function esportaStoricoDipendente() {
   toast('Preparo il report…');
   const [{ data: d }, { data: presenze }, { data: acconti }, { data: restituzioni }, { data: assenze }, { data: liquidazioni }, { data: storicoPaga },
          { data: bonificiStip }, { data: portafoglio }, { data: correzioni }, { data: cambiTurnoRich }, { data: cambiTurnoColl }, { data: documenti }] = await Promise.all([
-    sb.from('presenze_profili').select('nome,cognome,data_assunzione,paga_giornaliera,tipo_contratto,ferie_annuali,ferie_godute_extra,ruolo').eq('id', dipId).single(),
+    sb.from('presenze_profili').select('nome,cognome,data_assunzione,paga_giornaliera,tipo_contratto,ferie_annuali,ferie_godute_extra,ruolo,turni_riposo_fisso').eq('id', dipId).single(),
     sb.from('presenze').select('data,tipo_timbratura,confermata_dip').eq('dipendente_id', dipId).order('data'),
     sb.from('presenze_acconti').select('data,importo,causale,modalita,note,letto_dip,periodo_anno_inizio,saldo_periodo,mese_riferimento,anno_riferimento').eq('dipendente_id', dipId).order('data'),
     sb.from('presenze_restituzioni').select('data,importo,modalita,note,mese_riferimento,anno_riferimento').eq('dipendente_id', dipId).order('data'),
@@ -11121,8 +11121,26 @@ async function esportaStoricoDipendente() {
   const totLiquidato = (liquidazioni||[]).reduce((s,l)=>s+num(l.importo_netto), 0);
   const accontiReali = (acconti||[]).filter(a=>!isMarcatore(a));
   const totRestituito = (restituzioni||[]).reduce((s,r)=>s+num(r.importo), 0);
-  const giorniAssenza = t => (assenze||[]).filter(a=>a.tipo===t && (a.stato==='approvata'||a.stato==='confermata'))
-    .reduce((s,a)=> s + (Math.round((new Date(a.data_fine)-new Date(a.data_inizio))/86400000)+1), 0);
+  // FIX 29/08: i giorni di FERIE vanno contati come nella schermata e nel
+  // report Consulente — non consumano ferie né le festività né il riposo
+  // settimanale. Prima qui si contavano i giorni grezzi di calendario (9 su
+  // 15-23 agosto invece di 6). La malattia invece resta a giorni di
+  // calendario: l'indennità INPS si conta così, domeniche incluse.
+  const _annoDa = (assenze||[]).concat(presenze||[]).map(x => parseInt(String(x.data_inizio||x.data).slice(0,4))).filter(Boolean);
+  const _annoMin = _annoDa.length ? Math.min(..._annoDa) : new Date().getFullYear();
+  const _annoMax = _annoDa.length ? Math.max(..._annoDa) : new Date().getFullYear();
+  let _festStorico = {};
+  for (let a = _annoMin; a <= _annoMax; a++) Object.assign(_festStorico, festivitaItaliane(a));
+  const _festSetStorico = new Set(Object.keys(_festStorico));
+  const _workedSetStorico = new Set((presenze||[]).map(p => p.data));
+  const giorniAssenza = t => {
+    const righe = (assenze||[]).filter(a=>a.tipo===t && (a.stato==='approvata'||a.stato==='confermata'));
+    if (t === 'ferie') {
+      const _malSetStorico = _setGiorniDaPeriodi((assenze||[]).filter(x=>x.tipo==='malattia'));
+      return righe.reduce((s,a) => s + classificaGiorniFerieReale(a.data_inizio, a.data_fine, d.turni_riposo_fisso, _festSetStorico, _workedSetStorico, _malSetStorico).goduti, 0);
+    }
+    return righe.reduce((s,a)=> s + (Math.round((new Date(a.data_fine)-new Date(a.data_inizio))/86400000)+1), 0);
+  };
   // FIX (segnalato): "Totale liquidato" prendeva SOLO le liquidazioni
   // mensili (presenze_liquidazioni), lasciando fuori gli acconti causale
   // stipendio/acconto_stipendio — che sono anch'essi soldi di stipendio
@@ -11226,6 +11244,7 @@ async function esportaStoricoDipendente() {
   setCell(ws2, XLSX.utils.encode_cell({r:r2,c:6}),'', sTotLabel);
   ws2['!ref'] = rangeAddr(0,0,r2,6);
   ws2['!freeze'] = { xSplit:0, ySplit:2 };
+  ws2['!autofilter'] = { ref: XLSX.utils.encode_range({s:{r:1,c:0}, e:{r:Math.max(2,r2-1), c:6}}) };
   XLSX.utils.book_append_sheet(wb, ws2, '3. Presenze mensili');
 
   /* ══════ FOGLIO 3bis — RICONCILIAZIONE MENSILE (controllo di integrità) ══════
@@ -11302,6 +11321,7 @@ async function esportaStoricoDipendente() {
   });
   ws3['!ref'] = rangeAddr(0,0,Math.max(r3-1,2),3);
   ws3['!freeze'] = { xSplit:0, ySplit:2 };
+  ws3['!autofilter'] = { ref: XLSX.utils.encode_range({s:{r:1,c:0}, e:{r:Math.max(2,r3-1), c:3}}) };
   XLSX.utils.book_append_sheet(wb, ws3, '4. Presenze dettaglio');
 
   /* ══════════════════════ FOGLIO 5 — MOVIMENTI FINANZIARI ══════════════════════ */
@@ -13173,7 +13193,7 @@ async function caricaStipendi() {
   // Ora si recuperano TUTTI gli acconti fino a fine mese selezionato, e si
   // segna quali mesi risultano già liquidati (quindi già "chiusi"), per
   // riportare in avanti solo quelli davvero ancora in sospeso.
-  const [{ data: dipendenti }, { data: presenze }, { data: accontiTutti }, { data: restituzioniTutte }, { data: ferieAnno }, { data: liquidazTutte }, { data: presenzePrecedenti }, { data: cedoliniMese }, { data: acconti1314Storico }, { data: bonificiRiconciliatiMese }] = await Promise.all([
+  const [{ data: dipendenti }, { data: presenze }, { data: accontiTutti }, { data: restituzioniTutte }, { data: ferieAnno }, { data: malattieAnno }, { data: liquidazTutte }, { data: presenzePrecedenti }, { data: cedoliniMese }, { data: acconti1314Storico }, { data: bonificiRiconciliatiMese }] = await Promise.all([
     sb.from('presenze_profili').select('*').eq('attivo',true).or('ruolo.eq.dipendente,percepisce_stipendio.eq.true').order('nome'),
     sb.from('presenze').select('*').gte('data',dal).lte('data',al),
     sb.from('presenze_acconti').select('id,dipendente_id,importo,data,note,letto_dip,causale,saldato,mese_riferimento,anno_riferimento,periodo_anno_inizio,saldo_periodo').lte('data',al),
@@ -13188,6 +13208,13 @@ async function caricaStipendi() {
     sb.from('presenze_assenze').select('dipendente_id,data_inizio,data_fine,tipo')
       .eq('tipo','ferie').in('stato',['approvata','confermata'])
       .gte('data_inizio', y+'-01-01').lte('data_fine', y+'-12-31'),
+    // FIX 29/08 (indicato da Valerio): servono anche le MALATTIE — un giorno
+    // di malattia non è il riposo settimanale, e senza questo dato la
+    // classificazione delle ferie lo scambiava per tale, consumando un
+    // giorno di ferie in più al dipendente.
+    DB.safe(() => sb.from('presenze_assenze').select('dipendente_id,data_inizio,data_fine,tipo')
+      .eq('tipo','malattia').in('stato',['approvata','confermata'])
+      .gte('data_inizio', (parseInt(y)-1)+'-01-01').lte('data_fine', y+'-12-31'), null),
     sb.from('presenze_liquidazioni').select('dipendente_id,mese,anno')
       .or(`anno.lt.${parseInt(y)},and(anno.eq.${parseInt(y)},mese.lte.${parseInt(m)})`),
     // Presenze dei 12 mesi precedenti (esclusi dal mese in corso): servono
@@ -13304,8 +13331,15 @@ async function caricaStipendi() {
   dipendenti.forEach(d => { riposoFissoMap[d.id] = d.turni_riposo_fisso; });
   const ferieGodute = {};
   const feriePeriodi = {};
+  const malSetPerDip = {};
+  (malattieAnno||[]).forEach(a => {
+    if (!malSetPerDip[a.dipendente_id]) malSetPerDip[a.dipendente_id] = new Set();
+    for (let d = new Date(a.data_inizio+'T12:00:00'), f = new Date(a.data_fine+'T12:00:00'); d <= f; d.setDate(d.getDate()+1)) {
+      malSetPerDip[a.dipendente_id].add(_isoDate(d));
+    }
+  });
   (ferieAnno||[]).forEach(a => {
-    const cls = classificaGiorniFerieReale(a.data_inizio, a.data_fine, riposoFissoMap[a.dipendente_id], festSetAnno, workedSetPerDip[a.dipendente_id] || new Set());
+    const cls = classificaGiorniFerieReale(a.data_inizio, a.data_fine, riposoFissoMap[a.dipendente_id], festSetAnno, workedSetPerDip[a.dipendente_id] || new Set(), malSetPerDip[a.dipendente_id]);
     ferieGodute[a.dipendente_id] = (ferieGodute[a.dipendente_id]||0) + cls.goduti;
     if (!feriePeriodi[a.dipendente_id]) feriePeriodi[a.dipendente_id] = [];
     feriePeriodi[a.dipendente_id].push({ dal: a.data_inizio, al: a.data_fine, gg: cls.goduti });
@@ -13337,84 +13371,10 @@ async function caricaStipendi() {
   // impostato e se cade tra i giorni di ferie di quella settimana,
   // altrimenti domenica se presente, altrimenti l'ultimo giorno disponibile
   // di quella settimana all'interno del periodo di ferie.
-  function classificaGiorniFerieReale(dalISO, alISO, riposoFisso, festSet, workedSet) {
-    const riposoIdx = (riposoFisso !== null && riposoFisso !== undefined && riposoFisso !== '') ? parseInt(riposoFisso) : null;
-    const inizio = new Date(dalISO+'T12:00:00');
-    const fine = new Date(alISO+'T12:00:00');
-    let goduti = 0, riposo = 0, festivi = 0;
-    // Lunedì della settimana di "inizio"
-    let cursoreSett = new Date(inizio);
-    cursoreSett.setDate(cursoreSett.getDate() - ((cursoreSett.getDay()+6)%7));
-    while (cursoreSett <= fine) {
-      const giorniSett = [];
-      for (let i=0; i<7; i++) { const d = new Date(cursoreSett); d.setDate(d.getDate()+i); giorniSett.push(d); }
-      let riposoGiaPreso = false;
-      giorniSett.forEach(d => {
-        if (d >= inizio && d <= fine) return; // dentro la ferie, non conta per questo controllo
-        const iso = _isoDate(d);
-        if (!festSet.has(iso) && !workedSet.has(iso)) riposoGiaPreso = true;
-      });
-      let giornoRiposoScelto = null;
-      if (!riposoGiaPreso) {
-        const giorniFerieSett = giorniSett.filter(d => d >= inizio && d <= fine);
-        let scelto = riposoIdx !== null ? (giorniFerieSett.find(d => (d.getDay()+6)%7 === riposoIdx) || null) : null;
-        if (!scelto) scelto = giorniFerieSett.find(d => (d.getDay()+6)%7 === 6) || giorniFerieSett[giorniFerieSett.length-1] || null;
-        if (scelto) giornoRiposoScelto = _isoDate(scelto);
-      }
-      giorniSett.forEach(d => {
-        if (d < inizio || d > fine) return;
-        const iso = _isoDate(d);
-        if (festSet.has(iso)) festivi++;
-        else if (iso === giornoRiposoScelto) riposo++;
-        else goduti++;
-      });
-      cursoreSett.setDate(cursoreSett.getDate()+7);
-    }
-    return { goduti, riposo, festivi };
-  }
-
-  // Classifica, giorno per giorno, un periodo di ferie: quanti giorni sono
-  // effettivamente "goduti" (lavorativi, da pagare come giornata normale —
-  // Art. 2109 c.c.), quanti cadono nel riposo settimanale fisso del
-  // dipendente (default domenica se non impostato) e quanti su una
-  // festività — questi ultimi due NON consumano né pagano un giorno di
-  // ferie. riposoFisso segue la stessa codifica già usata per i turni:
-  // 0=Lunedì … 6=Domenica. Versione più semplice, senza guardare le
-  // presenze reali — tenuta come fallback per chi la richiama altrove.
-  function classificaGiorniFerie(dalISO, alISO, riposoFisso, festSet) {
-    const riposoIdx = (riposoFisso !== null && riposoFisso !== undefined && riposoFisso !== '') ? parseInt(riposoFisso) : 6;
-    let goduti = 0, riposo = 0, festivi = 0;
-    let cursore = new Date(dalISO+'T12:00:00');
-    const fine = new Date(alISO+'T12:00:00');
-    while (cursore <= fine) {
-      const iso = _isoDate(cursore);
-      const dowISO = (cursore.getDay() + 6) % 7; // JS 0=Dom..6=Sab → 0=Lun..6=Dom
-      if (festSet.has(iso)) festivi++;
-      else if (dowISO === riposoIdx) riposo++;
-      else goduti++;
-      cursore.setDate(cursore.getDate()+1);
-    }
-    return { goduti, riposo, festivi };
-  }
-
-  // Somma i giorni di ferie GODUTI (lavorativi) tra tutti i periodi di un
-  // dipendente che intersecano [dalPeriodo, alPeriodo] — usata sia per il
-  // lordo di un mese/periodo, sia altrove.
-  function sommaGiorniFerieGoduti(feriePeriodiDip, dalPeriodo, alPeriodo, riposoFisso, festSet, workedSet) {
-    let tot = 0;
-    (feriePeriodiDip||[]).forEach(fp => {
-      const dalI = fp.dal > dalPeriodo ? fp.dal : dalPeriodo;
-      const alI  = fp.al  < alPeriodo  ? fp.al  : alPeriodo;
-      if (dalI > alI) return;
-      // NB: si riclassifica sull'intersezione [dalI,alI] col periodo
-      // richiesto, ma il controllo "riposo già sceso" dentro
-      // classificaGiorniFerieReale guarda sempre l'intera settimana
-      // (anche oltre l'intersezione), quindi resta corretto anche quando
-      // l'intersezione taglia un periodo di ferie a metà settimana.
-      tot += classificaGiorniFerieReale(dalI, alI, riposoFisso, festSet, workedSet || new Set()).goduti;
-    });
-    return tot;
-  }
+  // (Le funzioni classificaGiorniFerieReale / classificaGiorniFerie /
+  // sommaGiorniFerieGoduti sono state spostate a livello globale — vedi
+  // sotto, vicino a calcolaFerieMaturate — così anche l'export Excel usa
+  // esattamente lo STESSO codice della schermata, senza copie divergenti.)
 
   function calcolaLordoPeriodo(datePresSet, dalPeriodo, alPeriodo, paga, festSet, feriePeriodiDip, riposoFisso, workedSet) {
     const giorni = datePresSet.size;
@@ -13521,7 +13481,7 @@ async function caricaStipendi() {
     // esplicita): prima le ferie non contribuivano in alcun modo al
     // "Totale lordo"/"Da pagare" del mese, restando solo un contatore
     // separato di residuo, come se non fossero giorni retribuiti.
-    const giorniFerie = sommaGiorniFerieGoduti(feriePeriodi[d.id], dal, al, riposoFissoMap[d.id], festSetAnno, workedSetPerDip[d.id]);
+    const giorniFerie = sommaGiorniFerieGoduti(feriePeriodi[d.id], dal, al, riposoFissoMap[d.id], festSetAnno, workedSetPerDip[d.id], malSetPerDip[d.id]);
     const totaleFerie = giorniFerie * paga;
     // Compenso netto mensile fisso (tipico di admin/soci Co.Co.Co, senza
     // paga giornaliera): se impostato e non c'è paga giornaliera, il lordo
@@ -14076,7 +14036,7 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
   // Filtro dipendente: se impostato, ogni query prende solo i dati di
   // quella persona — così si può scaricare "la scheda" di un singolo
   // dipendente senza vedere i dati di tutta l'azienda nello stesso file.
-  let qProfili = sb.from('presenze_profili').select('id,nome,cognome,paga_giornaliera,ferie_annuali,ferie_godute_extra,codice_fiscale,data_assunzione').eq('ruolo','dipendente').eq('attivo',true).order('nome');
+  let qProfili = sb.from('presenze_profili').select('id,nome,cognome,paga_giornaliera,ferie_annuali,ferie_godute_extra,codice_fiscale,data_assunzione,turni_riposo_fisso').eq('ruolo','dipendente').eq('attivo',true).order('nome');
   let qPresenze = sb.from('presenze').select('*').gte('data',dal).lte('data',al).order('data');
   let qAcconti = sb.from('presenze_acconti').select('*').lte('data',al);
   let qAssenze = sb.from('presenze_assenze').select('*').in('stato',['approvata','confermata']).or(`and(data_inizio.lte.${al},data_fine.gte.${dal})`);
@@ -14233,9 +14193,9 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
   F1.push(['Periodo: '+periodoLbl.toUpperCase()+'  •  Documento per il Consulente del Lavoro  •  Generato il '+new Date().toLocaleDateString('it-IT')]);
   F1.push(['LEGENDA: la festività retribuita non lavorata è pagata 1 giornata; se lavorata è pagata doppia (lavoro + festività).']);
   F1.push([]);
-  F1.push(['Dipendente','Codice fiscale','Giorni lavorati (ordinari)','Festività LAVORATE (paga x2)','Festività NON lavorate (pagate)','Giorni ferie','Giorni malattia','Giorni permesso/altro','Paga giorn. (€)','Retrib. giorni ordinari (€)','Retrib. festività non lavorate (€)','Retrib. festività lavorate (€)','Totale lordo (€)','Acconti erogati (€)','Restituzione ricevuta (€)','Netto da pagare (€)','Ratei 13ª','Importo 13ª (€)','Ratei 14ª','Importo 14ª (€)','Note']);
+  F1.push(['Dipendente','Codice fiscale','Giorni lavorati (ordinari)','Festività LAVORATE (paga x2)','Festività NON lavorate (pagate)','Giorni ferie','Giorni malattia','Giorni permesso/altro','Paga giorn. (€)','Retrib. giorni ordinari (€)','Retrib. festività non lavorate (€)','Retrib. festività lavorate (€)','Retrib. giorni ferie (€)','Totale lordo (€)','Acconti erogati (€)','Restituzione ricevuta (€)','Netto da pagare (€)','Ratei 13ª','Importo 13ª (€)','Ratei 14ª','Importo 14ª (€)','Note']);
   let totGord=0, totFlav=0, totFnonLav=0, totFerie=0, totMal=0, totAltro=0;
-  let totRord=0, totRfnl=0, totRflav=0, totTot=0, totAcc=0, totRest=0, totNetto=0;
+  let totRord=0, totRfnl=0, totRflav=0, totRferie=0, totTot=0, totAcc=0, totRest=0, totNetto=0;
   (dipendenti||[]).forEach(d => {
     const pres = (presenze||[]).filter(p => p.dipendente_id === d.id);
     // Giorni ordinari = presenze NON festive ; festività lavorate = presenze in giorno festivo
@@ -14266,7 +14226,18 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
     const accTot = accs.filter(a => !a.causale || a.causale === 'stipendio' || a.causale === 'acconto_stipendio').reduce((s,a)=>s+parseFloat(a.importo||0),0);
     const restTot = (restituzioniXls||[]).filter(r=>r.dipendente_id===d.id).reduce((s,r)=>s+parseFloat(r.importo||0),0);
     // Giorni ferie/malattia AL NETTO delle festività ricadenti (la festività non si conta come ferie/malattia)
-    const ggFerie = Math.max(0, ferieDip.reduce((s,a)=>s+giorniNelMese(a.data_inizio,a.data_fine),0) - festInFerie);
+    // FIX 29/08 (segnalato da Valerio: "non sono 6?" — sì, sono 6): qui si
+    // toglievano SOLO le festività, non il riposo settimanale. Su 15-23
+    // agosto (9 giorni di calendario) risultavano 8 giorni di ferie invece
+    // dei 6 reali: Ferragosto è festività e le due domeniche sono riposo
+    // settimanale — nessuno dei tre consuma ferie. Ora si usa
+    // sommaGiorniFerieGoduti, ESATTAMENTE la stessa funzione della
+    // schermata Stipendi (spostata a livello globale proprio per non avere
+    // due conteggi diversi che divergono, che è la causa di questo bug).
+    const _workedSetDip = new Set(pres.map(p => p.data));
+    const _feriePeriodiDip = ferieDip.map(a => ({ dal: a.data_inizio, al: a.data_fine }));
+    const _malSetDip = _setGiorniDaPeriodi(malDip);
+    const ggFerie = sommaGiorniFerieGoduti(_feriePeriodiDip, dal, al, d.turni_riposo_fisso, festSet, _workedSetDip, _malSetDip);
     const ggMal   = Math.max(0, malDip.reduce((s,a)=>s+giorniNelMese(a.data_inizio,a.data_fine),0) - festInMal);
     const ggAltro = altroDip.reduce((s,a)=>s+giorniNelMese(a.data_inizio,a.data_fine),0);
     const paga = parseFloat(d.paga_giornaliera)||0;
@@ -14274,7 +14245,17 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
     const retrOrd  = giorniOrdinari * paga;          // giorni lavorati normali
     const retrFnl  = festNonLav * paga;              // festività non lavorate: 1 paga (incluse quelle in mal/ferie)
     const retrFlav = festiviLav * paga * 2;          // festività lavorate: 2 paghe
-    const totLordoDip = retrOrd + retrFnl + retrFlav;
+    // FIX 29/08 (segnalato da Valerio, errore GRAVE sui soldi): le ferie
+    // godute NON venivano retribuite affatto — il totale lordo sommava solo
+    // giorni lavorati e festività, ignorando del tutto i giorni di ferie.
+    // Le ferie sono per definizione retribuite: chi ha fatto 8 giorni di
+    // ferie ad agosto risultava non pagato per quegli 8 giorni. Aggiunta
+    // come voce distinta, così resta leggibile e verificabile dal
+    // consulente. (La malattia NON viene aggiunta qui di proposito: la sua
+    // retribuzione è in parte a carico INPS e dipende da carenza/CCNL —
+    // resta indicata come giorni, la quantifica il consulente.)
+    const retrFerie = ggFerie * paga;
+    const totLordoDip = retrOrd + retrFnl + retrFlav + retrFerie;
     const netto = totLordoDip - accTot + restTot;
     // Ratei 13a e 14a (CCNL art. 183-184) — solo il periodo dell'anno
     // corrente (anno solare per la 13a, luglio-giugno per la 14a); il
@@ -14302,27 +14283,32 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
     }
     F1.push([
       nomeDi(d.id), d.codice_fiscale||'', giorniOrdinari, festiviLav, festNonLav, ggFerie, ggMal, ggAltro,
-      paga, retrOrd, retrFnl, retrFlav, totLordoDip, accTot, restTot, netto,
+      paga, retrOrd, retrFnl, retrFlav, retrFerie, totLordoDip, accTot, restTot, netto,
       mat13Xls.ratei+'/12', mat13Xls.importo, mat14Xls.ratei+'/12', mat14Xls.importo,
       note.join('; ')
     ]);
     totGord+=giorniOrdinari; totFlav+=festiviLav; totFnonLav+=festNonLav;
     totFerie+=ggFerie; totMal+=ggMal; totAltro+=ggAltro;
-    totRord+=retrOrd; totRfnl+=retrFnl; totRflav+=retrFlav; totTot+=totLordoDip; totAcc+=accTot; totRest+=restTot; totNetto+=netto;
+    totRord+=retrOrd; totRfnl+=retrFnl; totRflav+=retrFlav; totRferie+=retrFerie; totTot+=totLordoDip; totAcc+=accTot; totRest+=restTot; totNetto+=netto;
   });
-  F1.push(['TOTALE MESE','',totGord,totFlav,totFnonLav,totFerie,totMal,totAltro,'',totRord,totRfnl,totRflav,totTot,totAcc,totRest,totNetto,'','','','']);
+  F1.push(['TOTALE MESE','',totGord,totFlav,totFnonLav,totFerie,totMal,totAltro,'',totRord,totRfnl,totRflav,totRferie,totTot,totAcc,totRest,totNetto,'','','','','']);
   const ws1 = XLSX.utils.aoa_to_sheet(F1);
-  ws1['!cols'] = [{wch:24},{wch:18},{wch:14},{wch:16},{wch:18},{wch:9},{wch:10},{wch:12},{wch:11},{wch:16},{wch:18},{wch:18},{wch:13},{wch:13},{wch:14},{wch:10},{wch:12},{wch:10},{wch:12},{wch:40}];
-  // FIX: il merge dei titoli si fermava alla colonna T invece che U (la
-  // tabella ha 21 colonne, 0-20 — mancava l'ultima).
-  ws1['!merges'] = [{s:{r:0,c:0},e:{r:0,c:20}},{s:{r:1,c:0},e:{r:1,c:20}},{s:{r:2,c:0},e:{r:2,c:20}}];
+  ws1['!cols'] = [{wch:26},{wch:19},{wch:13},{wch:15},{wch:17},{wch:10},{wch:11},{wch:13},{wch:12},{wch:17},{wch:19},{wch:18},{wch:17},{wch:14},{wch:14},{wch:15},{wch:16},{wch:9},{wch:13},{wch:9},{wch:13},{wch:60}];
+  // Righe un po' più alte: le celle Note contengono testo lungo a capo.
+  ws1['!rows'] = [{hpt:22},{hpt:16},{hpt:16},{hpt:8},{hpt:30}];
+  // La tabella ha 22 colonne (0-21) dopo l'aggiunta di "Retrib. giorni
+  // ferie": merge dei titoli e ncols aggiornati di conseguenza.
+  ws1['!merges'] = [{s:{r:0,c:0},e:{r:0,c:21}},{s:{r:1,c:0},e:{r:1,c:21}},{s:{r:2,c:0},e:{r:2,c:21}}];
   ws1['!freeze'] = { xSplit: 0, ySplit: 5 };
   rifiniciFoglio(ws1, {
-    ncols: 21, righeIntestazione: [4],
-    colonneValuta: [8,9,10,11,12,13,14,15,17,19],
+    ncols: 22, righeIntestazione: [4],
+    colonneValuta: [8,9,10,11,12,13,14,15,16,18,20],
     primaRigaDati: 5, ultimaRigaDati: 5 + (dipendenti||[]).length - 1,
     righeTotale: [5 + (dipendenti||[]).length],
   });
+  // Filtro automatico sull'intestazione: il consulente può ordinare/filtrare
+  // per dipendente senza dover selezionare a mano l'intervallo.
+  ws1['!autofilter'] = { ref: XLSX.utils.encode_range({s:{r:4,c:0}, e:{r:4+(dipendenti||[]).length, c:21}}) };
   setStile(ws1,0,0,XSTY.titolo); setStile(ws1,1,0,XSTY.sottotitolo); setStile(ws1,2,0,XSTY.sottotitolo);
   XLSX.utils.book_append_sheet(wb, ws1, 'Riepilogo Consulente');
 
@@ -14340,9 +14326,10 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
     F2.push([nomeDi(p.dipendente_id), p.data, giornoSett, isFest, ent, p.tipo_timbratura||'qr', p.note||'']);
   });
   const ws2 = XLSX.utils.aoa_to_sheet(F2);
-  ws2['!cols'] = [{wch:24},{wch:12},{wch:12},{wch:24},{wch:9},{wch:15},{wch:30}];
+  ws2['!cols'] = [{wch:26},{wch:13},{wch:12},{wch:26},{wch:10},{wch:20},{wch:34}];
   ws2['!merges'] = [{s:{r:0,c:0},e:{r:0,c:6}}];
   ws2['!freeze'] = { xSplit: 0, ySplit: 3 };
+  ws2['!autofilter'] = { ref: XLSX.utils.encode_range({s:{r:2,c:0}, e:{r:2+presOrd.length, c:6}}) };
   rifiniciFoglio(ws2, { ncols:7, righeIntestazione:[2], primaRigaDati:3, ultimaRigaDati: 2+presOrd.length });
   setStile(ws2,0,0,XSTY.titolo);
   XLSX.utils.book_append_sheet(wb, ws2, 'Presenze Giornaliere');
@@ -14368,9 +14355,10 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
   });
   if (!nRigheF3) F3.push(['Nessuna assenza registrata nel periodo','','','','','','','']);
   const ws3 = XLSX.utils.aoa_to_sheet(F3);
-  ws3['!cols'] = [{wch:24},{wch:14},{wch:12},{wch:12},{wch:16},{wch:18},{wch:18},{wch:30}];
+  ws3['!cols'] = [{wch:26},{wch:14},{wch:13},{wch:13},{wch:17},{wch:19},{wch:19},{wch:36}];
   ws3['!merges'] = [{s:{r:0,c:0},e:{r:0,c:7}}];
   ws3['!freeze'] = { xSplit: 0, ySplit: 3 };
+  ws3['!autofilter'] = { ref: XLSX.utils.encode_range({s:{r:2,c:0}, e:{r:2+(assenze||[]).length, c:7}}) };
   rifiniciFoglio(ws3, { ncols:8, righeIntestazione:[2], primaRigaDati:3, ultimaRigaDati: 2+Math.max(nRigheF3,1) });
   setStile(ws3,0,0,XSTY.titolo);
   XLSX.utils.book_append_sheet(wb, ws3, 'Assenze e Malattie');
@@ -14438,9 +14426,10 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
   if (!movimenti.length) F4.push(['Nessun movimento registrato nel periodo','','','','','','']);
   else F4.push(['TOTALE (saldo netto dei movimenti)','','','', totMovimenti,'','']);
   const ws4 = XLSX.utils.aoa_to_sheet(F4);
-  ws4['!cols'] = [{wch:24},{wch:12},{wch:22},{wch:20},{wch:14},{wch:14},{wch:34}];
+  ws4['!cols'] = [{wch:26},{wch:13},{wch:26},{wch:20},{wch:15},{wch:15},{wch:46}];
   ws4['!merges'] = [{s:{r:0,c:0},e:{r:0,c:6}},{s:{r:1,c:0},e:{r:1,c:6}}];
   ws4['!freeze'] = { xSplit: 0, ySplit: 4 };
+  ws4['!autofilter'] = { ref: XLSX.utils.encode_range({s:{r:3,c:0}, e:{r:3+movimenti.length, c:6}}) };
   rifiniciFoglio(ws4, {
     ncols:7, righeIntestazione:[3], colonneValuta:[4],
     primaRigaDati:4, ultimaRigaDati: 3+Math.max(movimenti.length,1),
@@ -14458,8 +14447,18 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
   if (cicloFerieIsoXls) qFerieAnno = qFerieAnno.gte('data_inizio', cicloFerieIsoXls);
   const { data: ferieAnno } = await qFerieAnno;
   const ferieMap = {};
+  // FIX 29/08: stesso identico criterio del foglio "Riepilogo Consulente" e
+  // della schermata Stipendi — non consumano ferie né le festività né il
+  // riposo settimanale. Prima qui si contavano i giorni grezzi di calendario
+  // (9 su 15-23 agosto invece di 6), scalando dal saldo di ogni dipendente
+  // 3 giorni in più del dovuto.
+  const _workedSetTutti = new Set((presenze||[]).map(p => p.dipendente_id+'|'+p.data));
   (ferieAnno||[]).forEach(f => {
-    ferieMap[f.dipendente_id] = (ferieMap[f.dipendente_id]||0) + giorniTra(f.data_inizio,f.data_fine);
+    const prof = (dipendenti||[]).find(x => x.id === f.dipendente_id);
+    const wsDip = new Set((presenze||[]).filter(p => p.dipendente_id === f.dipendente_id).map(p => p.data));
+    const malDipSaldo = (assenze||[]).filter(a => a.dipendente_id === f.dipendente_id && a.tipo === 'malattia');
+    const goduti = classificaGiorniFerieReale(f.data_inizio, f.data_fine, prof ? prof.turni_riposo_fisso : null, festSet, wsDip, _setGiorniDaPeriodi(malDipSaldo)).goduti;
+    ferieMap[f.dipendente_id] = (ferieMap[f.dipendente_id]||0) + goduti;
   });
   const F5 = [];
   F5.push(['SALDO FERIE — CERALDI GROUP S.r.l. ('+(cicloFerieIsoXls ? 'ciclo dal '+new Date(cicloFerieIsoXls).toLocaleDateString('it-IT')+' — azzerato ogni 1° settembre' : 'calcolato su tutta l\'anzianità')+')']);
@@ -14477,9 +14476,10 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
     ]);
   });
   const ws5 = XLSX.utils.aoa_to_sheet(F5);
-  ws5['!cols'] = [{wch:24},{wch:16},{wch:14},{wch:14},{wch:20},{wch:14},{wch:14}];
+  ws5['!cols'] = [{wch:26},{wch:17},{wch:15},{wch:15},{wch:22},{wch:16},{wch:15}];
   ws5['!merges'] = [{s:{r:0,c:0},e:{r:0,c:6}},{s:{r:1,c:0},e:{r:1,c:6}}];
   ws5['!freeze'] = { xSplit: 0, ySplit: 4 };
+  ws5['!autofilter'] = { ref: XLSX.utils.encode_range({s:{r:3,c:0}, e:{r:3+(dipendenti||[]).length, c:6}}) };
   rifiniciFoglio(ws5, { ncols:7, righeIntestazione:[3], primaRigaDati:4, ultimaRigaDati: 3+(dipendenti||[]).length });
   setStile(ws5,0,0,XSTY.titolo); setStile(ws5,1,0,XSTY.sottotitolo);
   XLSX.utils.book_append_sheet(wb, ws5, 'Saldo Ferie');
@@ -19619,7 +19619,18 @@ function maturato1314(ratei, tipo, accontiCausale) {
   const erogatoPrec = righePrec.reduce((s,a) => s + parseFloat(a.importo), 0);
   const saldataPrec = righePrec.some(a => a.saldo_periodo);
   const residuoPrec = prec ? (saldataPrec ? 0 : Math.max(0, prec.importo - erogatoPrec)) : 0;
-  const haArretrato = !!(prec && prec.ratei > 0 && residuoPrec > 0.01);
+  // FIX 29/08 (bug reale, causato dalla cancellazione dei vecchi movimenti
+  // 13a/14a richiesta da Valerio il giorno prima): quella cancellazione ha
+  // tolto anche i segnaposto "saldo_periodo" che marcavano i periodi
+  // precedenti come già chiusi — senza di quelli, un periodo prima del 2026
+  // risultava con residuo intero (nessun acconto trovato = niente erogato),
+  // sommando 12 ratei in più a quelli correnti (da qui i "19/12"/"13/12"
+  // visti nel report). La soluzione giusta non è ricreare quei segnaposto:
+  // è non considerare MAI arretrato un periodo precedente al 2026, punto,
+  // indipendentemente da eventuali righe trovate o non trovate — coerente
+  // con "prima del 2026 non esiste nulla" già stabilito esplicitamente.
+  const precPrima2026 = prec && prec.annoInizio < 2026;
+  const haArretrato = !precPrima2026 && !!(prec && prec.ratei > 0 && residuoPrec > 0.01);
   const arretrato = haArretrato ? {
     ratei: prec.ratei, importo: prec.importo, erogato: erogatoPrec, residuo: residuoPrec,
     annoInizio: prec.annoInizio, inizioISO: prec.inizioISO, fineISO: prec.fineISO,
@@ -19713,6 +19724,111 @@ function _cicloFerieInizioISO(riferimento) {
   if (oggi < _FERIE_CUTOVER) return null; // ancora vecchio sistema: nessun filtro per ciclo
   const annoCiclo = oggi.getMonth() >= 8 ? oggi.getFullYear() : oggi.getFullYear() - 1;
   return annoCiclo + '-09-01';
+}
+
+// Espande un elenco di periodi (malattia, permessi, ecc.) in un Set di date
+// ISO — usato per dire a classificaGiorniFerieReale quali giorni NON sono il
+// riposo settimanale pur non essendo lavorati (FIX 29/08, indicato da Valerio).
+function _setGiorniDaPeriodi(periodi, campoDal, campoAl) {
+  const s = new Set();
+  (periodi||[]).forEach(p => {
+    const di = p[campoDal||'data_inizio'], df = p[campoAl||'data_fine'];
+    if (!di || !df) return;
+    for (let d = new Date(di+'T12:00:00'), f = new Date(df+'T12:00:00'); d <= f; d.setDate(d.getDate()+1)) {
+      s.add(_isoDate(d));
+    }
+  });
+  return s;
+}
+
+function classificaGiorniFerieReale(dalISO, alISO, riposoFisso, festSet, workedSet, occupatiNonRiposoSet) {
+  const riposoIdx = (riposoFisso !== null && riposoFisso !== undefined && riposoFisso !== '') ? parseInt(riposoFisso) : null;
+  const occupati = occupatiNonRiposoSet || new Set();
+  const inizio = new Date(dalISO+'T12:00:00');
+  const fine = new Date(alISO+'T12:00:00');
+  let goduti = 0, riposo = 0, festivi = 0;
+  // Lunedì della settimana di "inizio"
+  let cursoreSett = new Date(inizio);
+  cursoreSett.setDate(cursoreSett.getDate() - ((cursoreSett.getDay()+6)%7));
+  while (cursoreSett <= fine) {
+    const giorniSett = [];
+    for (let i=0; i<7; i++) { const d = new Date(cursoreSett); d.setDate(d.getDate()+i); giorniSett.push(d); }
+    let riposoGiaPreso = false;
+    giorniSett.forEach(d => {
+      if (d >= inizio && d <= fine) return; // dentro la ferie, non conta per questo controllo
+      const iso = _isoDate(d);
+      // FIX 29/08 (indicato da Valerio): un giorno di MALATTIA (o altra
+      // assenza giustificata) non è il riposo settimanale — prima veniva
+      // scambiato per tale, perché "non lavorato e non festivo", e quindi il
+      // riposo non veniva più dedotto dentro le ferie, consumando un giorno
+      // di ferie in più al dipendente (caso reale: 7 giorni invece di 6).
+      // Resta invece valido il principio opposto, confermato da Valerio: se
+      // il riposo NON è stato fatto davvero (settimana lavorata per intero),
+      // non va dedotto nulla — quel caso è già gestito da questa stessa
+      // logica, che deduce il riposo solo quando risulta non ancora goduto.
+      if (occupati.has(iso)) return;
+      if (!festSet.has(iso) && !workedSet.has(iso)) riposoGiaPreso = true;
+    });
+    let giornoRiposoScelto = null;
+    if (!riposoGiaPreso) {
+      const giorniFerieSett = giorniSett.filter(d => d >= inizio && d <= fine);
+      let scelto = riposoIdx !== null ? (giorniFerieSett.find(d => (d.getDay()+6)%7 === riposoIdx) || null) : null;
+      if (!scelto) scelto = giorniFerieSett.find(d => (d.getDay()+6)%7 === 6) || giorniFerieSett[giorniFerieSett.length-1] || null;
+      if (scelto) giornoRiposoScelto = _isoDate(scelto);
+    }
+    giorniSett.forEach(d => {
+      if (d < inizio || d > fine) return;
+      const iso = _isoDate(d);
+      if (festSet.has(iso)) festivi++;
+      else if (iso === giornoRiposoScelto) riposo++;
+      else goduti++;
+    });
+    cursoreSett.setDate(cursoreSett.getDate()+7);
+  }
+  return { goduti, riposo, festivi };
+}
+
+// Classifica, giorno per giorno, un periodo di ferie: quanti giorni sono
+// effettivamente "goduti" (lavorativi, da pagare come giornata normale —
+// Art. 2109 c.c.), quanti cadono nel riposo settimanale fisso del
+// dipendente (default domenica se non impostato) e quanti su una
+// festività — questi ultimi due NON consumano né pagano un giorno di
+// ferie. riposoFisso segue la stessa codifica già usata per i turni:
+// 0=Lunedì … 6=Domenica. Versione più semplice, senza guardare le
+// presenze reali — tenuta come fallback per chi la richiama altrove.
+function classificaGiorniFerie(dalISO, alISO, riposoFisso, festSet) {
+  const riposoIdx = (riposoFisso !== null && riposoFisso !== undefined && riposoFisso !== '') ? parseInt(riposoFisso) : 6;
+  let goduti = 0, riposo = 0, festivi = 0;
+  let cursore = new Date(dalISO+'T12:00:00');
+  const fine = new Date(alISO+'T12:00:00');
+  while (cursore <= fine) {
+    const iso = _isoDate(cursore);
+    const dowISO = (cursore.getDay() + 6) % 7; // JS 0=Dom..6=Sab → 0=Lun..6=Dom
+    if (festSet.has(iso)) festivi++;
+    else if (dowISO === riposoIdx) riposo++;
+    else goduti++;
+    cursore.setDate(cursore.getDate()+1);
+  }
+  return { goduti, riposo, festivi };
+}
+
+// Somma i giorni di ferie GODUTI (lavorativi) tra tutti i periodi di un
+// dipendente che intersecano [dalPeriodo, alPeriodo] — usata sia per il
+// lordo di un mese/periodo, sia altrove.
+function sommaGiorniFerieGoduti(feriePeriodiDip, dalPeriodo, alPeriodo, riposoFisso, festSet, workedSet, occupatiNonRiposoSet) {
+  let tot = 0;
+  (feriePeriodiDip||[]).forEach(fp => {
+    const dalI = fp.dal > dalPeriodo ? fp.dal : dalPeriodo;
+    const alI  = fp.al  < alPeriodo  ? fp.al  : alPeriodo;
+    if (dalI > alI) return;
+    // NB: si riclassifica sull'intersezione [dalI,alI] col periodo
+    // richiesto, ma il controllo "riposo già sceso" dentro
+    // classificaGiorniFerieReale guarda sempre l'intera settimana
+    // (anche oltre l'intersezione), quindi resta corretto anche quando
+    // l'intersezione taglia un periodo di ferie a metà settimana.
+    tot += classificaGiorniFerieReale(dalI, alI, riposoFisso, festSet, workedSet || new Set(), occupatiNonRiposoSet).goduti;
+  });
+  return tot;
 }
 
 function calcolaFerieMaturate(dataAssunzione, ferieAnnuali, ferieGoduteTotali, ferieGoduteExtra) {
