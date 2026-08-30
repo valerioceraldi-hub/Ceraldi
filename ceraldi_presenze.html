@@ -1012,7 +1012,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div id="app" style="display:none">
 
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.212</span></div>
+    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.213</span></div>
     <span class="topbar-badge" id="role-badge"></span>
     <button class="btn-topbar" onclick="ricaricaApp()" title="Ricarica la pagina (per essere sicuro di avere l'ultima versione)" style="padding:6px 10px">🔄</button>
     <button id="btn-promemoria" class="btn-topbar" onclick="apriPromemoria()" style="display:none;position:relative;padding:6px 10px">
@@ -3333,16 +3333,25 @@ async function presenzeConfermaMatchStipendio(risultato, movimenti, opts){
     // un'altra competenza scritta sul cedolino ma che l'app non legge (ferie,
     // 13a/14a, TFR...). causale e mese/anno di riferimento sono quindi
     // scelte esplicite (con un default ragionevole), non più fisse.
+    // FIX 30/08 (bug grave segnalato da Valerio: "la riconciliazione
+    // contabile è una cosa, questo è un'altra — non si devono incontrare
+    // mai"): questa scrittura finiva in presenze_acconti, la STESSA tabella
+    // che il calcolo reale di stipendio/arretrato legge — un'eccedenza
+    // assegnata a un mese senza presenze reali (es. prima che l'app fosse
+    // in uso) produceva un "arretrato" negativo assurdo, E la riga
+    // compariva tra gli "acconti da confermare" del dipendente (un'esposizione
+    // che non deve mai esistere per la contabilità interna). Ora scrive in
+    // una tabella dedicata, mai letta né dal calcolo stipendi né da nessuna
+    // schermata del dipendente — due binari paralleli che non si incrociano.
     const causaleScelta = opts.causaleEccedenza || 'acconto_stipendio';
     const meseScelto = opts.meseRifEccedenza || meseSucc;
     const annoScelto = opts.annoRifEccedenza || annoSucc;
     try {
-      await sb.from('presenze_acconti').insert({
+      await sb.from('presenze_riconciliazione_note').insert({
         dipendente_id: risultato.dipId,
         importo: risultato.diff,
         data: todayISO(),
-        causale: causaleScelta,
-        modalita: 'bonifico', // MAI 'contanti': è un'eccedenza di un bonifico già ricevuto, non contante dato a mano
+        competenza_tipo: causaleScelta,
         mese_riferimento: meseScelto,
         anno_riferimento: annoScelto,
         note: 'Eccedenza bonifico ' + String(risultato.mese).padStart(2,'0') + '/' + risultato.anno
@@ -3350,7 +3359,7 @@ async function presenzeConfermaMatchStipendio(risultato, movimenti, opts){
           + (causaleLbl ? '. Competenza: ' + causaleLbl(causaleScelta) : ''),
         registrato_da: ME ? ME.id : null
       });
-    } catch (e) { console.warn('presenzeConfermaMatchStipendio acconto:', e.message || e); }
+    } catch (e) { console.warn('presenzeConfermaMatchStipendio nota riconciliazione:', e.message || e); }
   }
 }
 
