@@ -6507,18 +6507,31 @@ function _showPDFPreviewInApp(supName,entries,note,total){
   shareBtn.style.cssText='flex:1;padding:13px;border-radius:12px;border:none;background:var(--accent);color:#fff;font-size:14px;font-weight:700;cursor:pointer';
   shareBtn.textContent='📤 Condividi';
   shareBtn.onclick=function(){
-    // Riprova a generare PDF (magari il CDN era lento la prima volta)
-    _ensureJsPDF(function(jsPDF){
-      if(jsPDF){
-        document.body.removeChild(overlay);
-        _sharePDF(supName,entries,note,total,jsPDF);
-        return;
-      }
-      // Ultimo fallback: condividi testo
-      var msg=buildMsg(supName,entries,total);
-      if(navigator.share){navigator.share({title:'Ordine Caffetteria Ceraldi \u2014 '+supName,text:msg}).catch(function(){});}
-      else{var ta=document.createElement('textarea');ta.value=msg;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);toast('Testo copiato ✓');}
-    });
+    // FIX (30/08, Valerio: "il tasto condividi non funziona"): prima si
+    // ritentava di ricaricare jsPDF via CDN e SOLO quando quel caricamento
+    // (asincrono) finiva si chiamava navigator.share(). Ma se siamo arrivati
+    // a questa schermata di riserva è perché jsPDF non è già riuscito a
+    // caricarsi; ritentarlo qui sposta la chiamata a navigator.share() fuori
+    // dal gesto sincrono dell'utente (il click), e Safari/iOS a quel punto
+    // la blocca in silenzio — nessun errore, nessuna condivisione, il tasto
+    // "sembra" non fare nulla. Ora si condivide subito il testo, in modo
+    // sincrono nel click, con un fallback visibile se anche quello fallisce.
+    var msg=buildMsg(supName,entries,total);
+    function copyMsgFallback(){
+      try{
+        var ta=document.createElement('textarea');ta.value=msg;document.body.appendChild(ta);
+        ta.select();document.execCommand('copy');document.body.removeChild(ta);
+        toast('Testo copiato negli appunti ✓');
+      }catch(e){toast('⚠️ Impossibile copiare il testo');}
+    }
+    if(navigator.share){
+      navigator.share({title:'Ordine Caffetteria Ceraldi \u2014 '+supName,text:msg}).catch(function(e){
+        if(e&&e.name==='AbortError')return; // utente ha annullato la condivisione: nessun errore
+        copyMsgFallback();
+      });
+    } else {
+      copyMsgFallback();
+    }
   };
   // Tasto Chiudi
   var closeBtn=document.createElement('button');
@@ -8469,9 +8482,19 @@ function importaRichiesta(jsonText, onDone){
 
   document.getElementById('rich-add-btn').onclick=function(){
     var added=0;var merged=0;
+    // Prodotti senza scorta minima impostata: la quantità che Valerio decide
+    // qui diventa la scorta minima salvata sul catalogo, così ai prossimi
+    // ordini Richieste la trova già impostata e calcola da sola la quantità
+    // (Valerio, 30/08: "quando arriva un prodotto senza scorta minima
+    // impostato solo la prima volta me lo fai inserire e lo salvi").
+    var scortaMinDaSalvare=[];
     richItems.forEach(function(ri){
       if(!ri.include||!ri.match)return;
       var pid=ri.match.id;
+      if(ri.item.needsScortaMin&&!ri.match._unlisted&&ri.match.scorta_min==null&&ri.qty>0){
+        ri.match.scorta_min=ri.qty;
+        scortaMinDaSalvare.push(ri.match);
+      }
       if(S.cart[pid]){
         // Prodotto già presente: somma le quantità
         S.cart[pid].qty+=ri.qty;
@@ -8485,11 +8508,13 @@ function importaRichiesta(jsonText, onDone){
       }
     });
     updateBadge();renderCatalog();
+    if(scortaMinDaSalvare.length)saveCatalogToSupabase(scortaMinDaSalvare);
     closeOverlay('richiesta-overlay');
     var msg='';
     if(added&&merged) msg=added+' aggiunti, '+merged+' uniti al carrello ✓';
     else if(added) msg=added+' prodott'+(added===1?'o aggiunto':'i aggiunti')+' al carrello ✓';
     else if(merged) msg=merged+' prodott'+(merged===1?'o unito':'i uniti')+' al carrello esistente ✓';
+    if(scortaMinDaSalvare.length)msg+=' · scorta minima impostata per '+scortaMinDaSalvare.length+' prodott'+(scortaMinDaSalvare.length===1?'o':'i');
     toast(msg,3000);
     showPage('pg-catalog');
     setTimeout(function(){renderCart();openOverlay('cart-overlay');},200);
