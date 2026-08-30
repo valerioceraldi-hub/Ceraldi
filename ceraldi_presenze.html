@@ -1012,7 +1012,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div id="app" style="display:none">
 
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.210</span></div>
+    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.211</span></div>
     <span class="topbar-badge" id="role-badge"></span>
     <button class="btn-topbar" onclick="ricaricaApp()" title="Ricarica la pagina (per essere sicuro di avere l'ultima versione)" style="padding:6px 10px">🔄</button>
     <button id="btn-promemoria" class="btn-topbar" onclick="apriPromemoria()" style="display:none;position:relative;padding:6px 10px">
@@ -1772,6 +1772,17 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <!-- ── SHEET: cedolini non riconciliati (28/08) ── -->
 <!-- ── SHEET: storico riconciliazioni, con possibilità di annullare (28/08) ── -->
 <!-- ── SHEET: esporta riconciliazione con selezione multipla dipendenti (29/08) ── -->
+<!-- ── SHEET: quadro completo in-app (cedolino+bonifico affiancati), 29/08 ── -->
+<div class="overlay" id="sh-quadroCompleto">
+  <div class="sheet" style="max-height:88vh">
+    <div class="sheet-handle"></div>
+    <div class="sheet-hdr"><span class="sheet-title" id="qc-titolo">Quadro completo</span><button class="sheet-cls" onclick="closeSheet('sh-quadroCompleto')">✕</button></div>
+    <div class="sheet-body">
+      <div id="qc-lista"></div>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="sh-esportaRiconc">
   <div class="sheet" style="max-height:88vh">
     <div class="sheet-handle"></div>
@@ -3229,47 +3240,44 @@ async function presenzeCalcolaRiconciliazioneBonifici(){
 // con fonte_copertura='bonifico' (denaro vero entrato); i movimenti di
 // portafoglio compaiono comunque nell'elenco per trasparenza, ma marcati
 // come "non conta nel saldo" e senza toccare il saldo progressivo.
+// FIX 29/08 (richiesto da Valerio: "cedolino e bonifico sulla stessa riga,
+// non devo andare a capo per trovarli"): organizzato per COMPETENZA
+// (mese/anno del cedolino) invece che per data reale del movimento — così
+// ogni riga è "quel mese: dovevo X, ho ricevuto Y", con tutti i bonifici di
+// quel mese elencati insieme. Il portafoglio resta visibile (nota a parte,
+// per trasparenza) ma non tocca il saldo — stesso motivo di sempre: è
+// denaro già contato per intero nel bonifico che lo ha generato.
 async function presenzeCalcolaPartitario(dipId){
   const [{ data: cedolini }, { data: bonifici }, { data: portaf }] = await Promise.all([
     sb.from('presenze_documenti').select('mese,anno,netto_busta').eq('dipendente_id',dipId).eq('categoria','busta_paga').not('netto_busta','is',null),
     sb.from('presenze_bonifici_stipendio').select('*').eq('dipendente_id',dipId),
     sb.from('presenze_portafoglio_movimenti').select('*').eq('dipendente_id',dipId)
   ]);
-  const eventi = [];
-  (cedolini||[]).forEach(c => {
-    eventi.push({
-      data: c.anno+'-'+String(c.mese).padStart(2,'0')+'-01',
-      tipo: '📄 Cedolino maturato', dare: parseFloat(c.netto_busta)||0, avere: 0,
-      dettaglio: MESI_LBL[c.mese]+' '+c.anno, contaNelSaldo: true
-    });
-  });
-  (bonifici||[]).forEach(b => {
-    const reale = b.fonte_copertura !== 'portafoglio';
-    eventi.push({
-      data: b.data_movimento || (b.anno_riferimento+'-'+String(b.mese_riferimento).padStart(2,'0')+'-01'),
-      tipo: reale ? '🏦 Bonifico ricevuto' : '🐷 Coperto dal portafoglio',
-      dare: 0, avere: reale ? (parseFloat(b.importo)||0) : 0,
-      dettaglio: 'per ' + MESI_LBL[b.mese_riferimento] + ' ' + b.anno_riferimento + (b.descrizione_movimento ? ' — ' + b.descrizione_movimento : ''),
-      contaNelSaldo: reale
-    });
-  });
-  (portaf||[]).forEach(p => {
-    const imp = parseFloat(p.importo)||0;
-    eventi.push({
-      data: p.data,
-      tipo: imp >= 0 ? '🐷 Deposito nel portafoglio' : '🐷 Prelievo dal portafoglio',
-      dare: 0, avere: 0, // movimento interno, non tocca il saldo (vedi nota sopra)
-      dettaglio: (p.causale || '') + ' — non conta nel saldo, è denaro già contato nel bonifico',
-      contaNelSaldo: false
-    });
-  });
-  eventi.sort((a,b) => a.data.localeCompare(b.data));
+  const righe = (cedolini||[]).map(c => {
+    const chiave = c.mese+'|'+c.anno;
+    const bonificiMese = (bonifici||[]).filter(b => b.mese_riferimento===c.mese && b.anno_riferimento===c.anno);
+    const reali = bonificiMese.filter(b => b.fonte_copertura !== 'portafoglio');
+    const daPortafoglio = bonificiMese.filter(b => b.fonte_copertura === 'portafoglio');
+    const dare = parseFloat(c.netto_busta)||0;
+    const avereTotale = reali.reduce((s,b)=>s+(parseFloat(b.importo)||0), 0);
+    const diff = Math.round((avereTotale - dare) * 100) / 100;
+    let note = [];
+    if (daPortafoglio.length) note.push('🐷 coperto dal portafoglio per € ' + daPortafoglio.reduce((s,b)=>s+(parseFloat(b.importo)||0),0).toFixed(2) + ' (non conta nel saldo, già contato altrove)');
+    const depositoEccedenza = (portaf||[]).filter(p => p.causale === 'eccedenza_bonifico_' + String(c.mese).padStart(2,'0') + '_' + c.anno);
+    if (depositoEccedenza.length) note.push('🐷 eccedenza € ' + depositoEccedenza.reduce((s,p)=>s+(parseFloat(p.importo)||0),0).toFixed(2) + ' messa nel portafoglio');
+    return {
+      mese: c.mese, anno: c.anno,
+      dataCedolino: c.anno+'-'+String(c.mese).padStart(2,'0')+'-01',
+      dare, avereTotale, diff,
+      stato: Math.abs(diff) <= 0.5 ? 'saldato' : (diff < 0 ? 'aperto' : 'eccedenza'),
+      bonifici: reali.map(b => ({ data: b.data_movimento, importo: parseFloat(b.importo)||0, descrizione: b.descrizione_movimento || '' })),
+      nota: note.join(' · ')
+    };
+  }).sort((a,b) => (a.anno*100+a.mese) - (b.anno*100+b.mese));
+
   let saldo = 0;
-  eventi.forEach(e => {
-    if (e.contaNelSaldo) saldo = Math.round((saldo + e.avere - e.dare) * 100) / 100;
-    e.saldoProgressivo = saldo;
-  });
-  return eventi;
+  righe.forEach(r => { saldo = Math.round((saldo + r.diff) * 100) / 100; r.saldoProgressivo = saldo; });
+  return righe;
 }
 
 async function presenzeQuadroDipendente(dipId, meseCentro, annoCentro){
@@ -12726,8 +12734,14 @@ let _cnrRisultati = [];
 async function apriEsportaRiconciliazione(){
   openSheet('sh-esportaRiconc');
   if (!_amDipendenti.length) {
-    const { data } = await sb.from('presenze_profili').select('id,nome,cognome').eq('attivo',true).order('cognome');
-    _amDipendenti = data || [];
+    const { data } = await sb.from('presenze_profili').select('id,nome,cognome,ruolo,percepisce_stipendio').eq('attivo',true).order('cognome');
+    // FIX 29/08 (richiesto da Valerio: "Michele Ceraldi non deve comparire,
+    // non percepisce stipendio"): un dipendente normale (ruolo='dipendente')
+    // ha percepisce_stipendio=false per TUTTI e 10 — quel campo riguarda solo
+    // gli admin (se disegnano anche loro uno stipendio vero, come Valerio e
+    // Vincenzo). Il filtro corretto è quindi: dipendenti sempre inclusi,
+    // admin solo se hanno esplicitamente percepisce_stipendio=true.
+    _amDipendenti = (data || []).filter(d => d.ruolo === 'dipendente' || d.percepisce_stipendio === true);
   }
   $('er-lista-dip').innerHTML = _amDipendenti.map(d => `
     <label style="display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:13px;border-bottom:1px solid var(--border)">
@@ -12764,43 +12778,46 @@ async function erGeneraExcel(){
   const riepiloghi = [];
 
   for (const dip of selezionati) {
-    const eventi = await presenzeCalcolaPartitario(dip.id);
-    const saldoFinale = eventi.length ? eventi[eventi.length-1].saldoProgressivo : 0;
-    riepiloghi.push({ nome: dip.nome, saldo: saldoFinale, nEventi: eventi.length });
+    const righe = await presenzeCalcolaPartitario(dip.id);
+    const saldoFinale = righe.length ? righe[righe.length-1].saldoProgressivo : 0;
+    riepiloghi.push({ nome: dip.nome, saldo: saldoFinale, nEventi: righe.length });
 
     const ws = {}; let r = 0;
-    ws['!cols'] = [{wch:12},{wch:15},{wch:22},{wch:44},{wch:13},{wch:13},{wch:15}];
-    ws['!merges'] = [{s:{r:0,c:0},e:{r:0,c:6}}];
-    setCell(ws,'A1','PARTITARIO — '+dip.nome, sTitolo); for(let cc=1;cc<7;cc++) setCell(ws,XLSX.utils.encode_cell({r:0,c:cc}),'',sTitolo);
+    ws['!cols'] = [{wch:13},{wch:12},{wch:12},{wch:11},{wch:38},{wch:9},{wch:34},{wch:16}];
+    ws['!merges'] = [{s:{r:0,c:0},e:{r:0,c:7}}];
+    setCell(ws,'A1','PARTITARIO — '+dip.nome, sTitolo); for(let cc=1;cc<8;cc++) setCell(ws,XLSX.utils.encode_cell({r:0,c:cc}),'',sTitolo);
     r = 1;
-    setCell(ws, XLSX.utils.encode_cell({r,c:0}), 'Ogni cedolino maturato (DARE) e ogni bonifico reale ricevuto (AVERE), in ordine cronologico. I movimenti di portafoglio compaiono per trasparenza ma non toccano il saldo — sono denaro già contato nel bonifico che li ha generati.', { font:{sz:9,italic:true,color:{rgb:'666666'}} });
-    ws['!merges'].push({s:{r,c:0},e:{r,c:6}});
+    setCell(ws, XLSX.utils.encode_cell({r,c:0}), 'Una riga per competenza: cedolino maturato (DARE) e bonifico/i ricevuto/i per quel mese (AVERE) insieme, così si legge tutto senza dover cercare la riga corrispondente.', { font:{sz:9,italic:true,color:{rgb:'666666'}} });
+    ws['!merges'].push({s:{r,c:0},e:{r,c:7}});
     r = 3;
-    ['Data','Competenza','Tipo movimento','Dettaglio','Dare (€)','Avere (€)','Saldo progressivo (€)'].forEach((h,i)=>setCell(ws,XLSX.utils.encode_cell({r,c:i}),h,sHeader));
+    ['Competenza','Cedolino — Dare (€)','Bonifico — Avere (€)','Stato','Bonifici ricevuti (data — importo)','N.','Note','Saldo progressivo (€)'].forEach((h,i)=>setCell(ws,XLSX.utils.encode_cell({r,c:i}),h,sHeader));
     r++;
+    const badgeStato = { saldato:'✅ Saldato', aperto:'⚠️ Manca', eccedenza:'🔵 Eccedenza' };
     let alt = false;
-    eventi.forEach(e => {
+    righe.forEach(rg => {
       const st = alt?sValAlt:sVal, sn = alt?sNumAlt:sNum;
-      setCell(ws, XLSX.utils.encode_cell({r,c:0}), e.data, st);
-      setCell(ws, XLSX.utils.encode_cell({r,c:1}), e.dettaglio.match(/^(per )?(\S+ \d{4})/) ? RegExp.$2 : '', st);
-      setCell(ws, XLSX.utils.encode_cell({r,c:2}), e.tipo + (e.contaNelSaldo ? '' : ' (non conta)'), e.contaNelSaldo ? st : {...st, font:{...st.font, italic:true, color:{rgb:'999999'}}});
-      setCell(ws, XLSX.utils.encode_cell({r,c:3}), e.dettaglio, {...st, alignment:{wrapText:true,vertical:'center'}});
-      setCell(ws, XLSX.utils.encode_cell({r,c:4}), e.dare || '', e.dare ? sn : st);
-      setCell(ws, XLSX.utils.encode_cell({r,c:5}), e.avere || '', e.avere ? sn : st);
-      setCell(ws, XLSX.utils.encode_cell({r,c:6}), e.saldoProgressivo, sn);
+      const elencoBonifici = rg.bonifici.map(b => (b.data||'?') + ' — €' + b.importo.toFixed(2) + (b.descrizione ? ' ('+b.descrizione.slice(0,40)+')' : '')).join('\n');
+      setCell(ws, XLSX.utils.encode_cell({r,c:0}), MESI_LBL[rg.mese]+' '+rg.anno, st);
+      setCell(ws, XLSX.utils.encode_cell({r,c:1}), rg.dare, sn);
+      setCell(ws, XLSX.utils.encode_cell({r,c:2}), rg.avereTotale, sn);
+      setCell(ws, XLSX.utils.encode_cell({r,c:3}), badgeStato[rg.stato], st);
+      setCell(ws, XLSX.utils.encode_cell({r,c:4}), elencoBonifici || '—', {...st, alignment:{wrapText:true,vertical:'center'}});
+      setCell(ws, XLSX.utils.encode_cell({r,c:5}), rg.bonifici.length, {...sn});
+      setCell(ws, XLSX.utils.encode_cell({r,c:6}), rg.nota || '', {...st, font:{...st.font,italic:true,color:{rgb:'666666'}}, alignment:{wrapText:true,vertical:'center'}});
+      setCell(ws, XLSX.utils.encode_cell({r,c:7}), rg.saldoProgressivo, sn);
       alt = !alt; r++;
     });
-    if (!eventi.length) { setCell(ws, XLSX.utils.encode_cell({r,c:0}), 'Nessun cedolino o bonifico registrato per questo dipendente', sVal); r++; }
+    if (!righe.length) { setCell(ws, XLSX.utils.encode_cell({r,c:0}), 'Nessun cedolino caricato per questo dipendente', sVal); r++; }
     r++;
     setCell(ws, XLSX.utils.encode_cell({r,c:0}), 'SALDO FINALE', { font:{bold:true,sz:12} });
-    ws['!merges'].push({s:{r,c:0},e:{r,c:5}});
-    setCell(ws, XLSX.utils.encode_cell({r,c:6}), saldoFinale, sSaldoFinale(saldoFinale >= 0));
+    ws['!merges'].push({s:{r,c:0},e:{r,c:6}});
+    setCell(ws, XLSX.utils.encode_cell({r,c:7}), saldoFinale, sSaldoFinale(saldoFinale >= 0));
     r++;
     setCell(ws, XLSX.utils.encode_cell({r,c:0}), saldoFinale >= 0 ? '(a favore del dipendente: ha ricevuto più di quanto maturato finora)' : '(a debito del dipendente: gli è ancora dovuto rispetto a quanto ricevuto)', { font:{sz:9,italic:true,color:{rgb:'666666'}} });
-    ws['!merges'].push({s:{r,c:0},e:{r,c:6}});
+    ws['!merges'].push({s:{r,c:0},e:{r,c:7}});
     ws['!freeze'] = { xSplit:0, ySplit:4 };
-    ws['!ref'] = XLSX.utils.encode_range({s:{r:0,c:0}, e:{r:r+1,c:6}});
-    ws['!autofilter'] = { ref: XLSX.utils.encode_range({s:{r:3,c:0}, e:{r:Math.max(4,r-3),c:6}}) };
+    ws['!ref'] = XLSX.utils.encode_range({s:{r:0,c:0}, e:{r:r+1,c:7}});
+    ws['!autofilter'] = { ref: XLSX.utils.encode_range({s:{r:3,c:0}, e:{r:Math.max(4,r-3),c:7}}) };
     const nomeFoglio = dip.nome.replace(/[\\/*?:\[\]]/g,'').slice(0,31) || 'Dipendente';
     fogliDipendenti.push({ ws, nomeFoglio });
   }
@@ -12835,8 +12852,14 @@ async function apriStoricoRiconciliazioni(){
   openSheet('sh-storicoRiconc');
   $('sr-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Caricamento…</div>';
   if (!_amDipendenti.length) {
-    const { data } = await sb.from('presenze_profili').select('id,nome,cognome').eq('attivo',true).order('cognome');
-    _amDipendenti = data || [];
+    const { data } = await sb.from('presenze_profili').select('id,nome,cognome,ruolo,percepisce_stipendio').eq('attivo',true).order('cognome');
+    // FIX 29/08 (richiesto da Valerio: "Michele Ceraldi non deve comparire,
+    // non percepisce stipendio"): un dipendente normale (ruolo='dipendente')
+    // ha percepisce_stipendio=false per TUTTI e 10 — quel campo riguarda solo
+    // gli admin (se disegnano anche loro uno stipendio vero, come Valerio e
+    // Vincenzo). Il filtro corretto è quindi: dipendenti sempre inclusi,
+    // admin solo se hanno esplicitamente percepisce_stipendio=true.
+    _amDipendenti = (data || []).filter(d => d.ruolo === 'dipendente' || d.percepisce_stipendio === true);
   }
   // FIX 28/08 (richiesto da Valerio: "e lo storico dipendente?"): tendina
   // per vedere solo le riconciliazioni di UN dipendente, invece che tutti
@@ -12953,8 +12976,43 @@ function cnrRenderLista(){
         <div style="font-size:11px;color:var(--muted)">${g.righe.length} mes${g.righe.length===1?'e':'i'} in sospeso · manca in tutto € ${totMancante.toFixed(2)}</div>
       </div>
       ${righeHtml}
+      <button class="btn-sm" style="width:100%;margin-top:8px" onclick="apriQuadroCompleto('${g.righe[0].dipId}','${esc(g.nome)}')">👁 Vedi quadro completo di ${esc(g.nome)} (cedolino + bonifico affiancati)</button>
     </div>`;
   }).join('');
+}
+
+// FIX 29/08 (richiesto da Valerio: "non ho la situazione chiara del
+// dipendente ma per vederla devo scaricare il file excel per forza") —
+// mostra lo stesso partitario dell'export, ma dentro l'app, senza scaricare
+// nulla: cedolino e bonifico affiancati sulla stessa riga, mese per mese.
+async function apriQuadroCompleto(dipId, nome){
+  $('qc-titolo').textContent = '👁 Quadro completo — ' + nome;
+  $('qc-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Caricamento…</div>';
+  openSheet('sh-quadroCompleto');
+  const righe = await presenzeCalcolaPartitario(dipId);
+  if (!righe.length) { $('qc-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Nessun cedolino caricato per questo dipendente.</div>'; return; }
+  const badgeStato = { saldato:'✅', aperto:'⚠️', eccedenza:'🔵' };
+  const colStato = { saldato:'#1a7a3a', aperto:'#b36a00', eccedenza:'#2b4acb' };
+  $('qc-lista').innerHTML = righe.map(r => `
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="font-size:13px;font-weight:700">${MESI_LBL[r.mese]} ${r.anno}</div>
+        <div style="font-size:11px;font-weight:700;color:${colStato[r.stato]}">${badgeStato[r.stato]} ${r.stato==='saldato'?'Saldato':r.stato==='aperto'?'Manca':'Eccedenza'}</div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:6px">
+        <div style="flex:1;background:var(--surface);border-radius:8px;padding:8px">
+          <div style="font-size:9px;color:var(--muted);text-transform:uppercase">📄 Cedolino (dare)</div>
+          <div style="font-size:15px;font-weight:700">€ ${r.dare.toFixed(2)}</div>
+        </div>
+        <div style="flex:1;background:var(--surface);border-radius:8px;padding:8px">
+          <div style="font-size:9px;color:var(--muted);text-transform:uppercase">🏦 Bonifico (avere)</div>
+          <div style="font-size:15px;font-weight:700">€ ${r.avereTotale.toFixed(2)}</div>
+          ${r.bonifici.map(b=>`<div style="font-size:10px;color:var(--muted)">${b.data||'?'} — €${b.importo.toFixed(2)}</div>`).join('')}
+        </div>
+      </div>
+      ${r.nota ? `<div style="font-size:10.5px;color:var(--muted);margin-top:6px;font-style:italic">${esc(r.nota)}</div>` : ''}
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;text-align:right">saldo progressivo: <b style="color:${r.saldoProgressivo>=0?'#1a7a3a':'#c0392b'}">€ ${r.saldoProgressivo.toFixed(2)}</b></div>
+    </div>`).join('');
 }
 
 async function apriCnrCandidati(idx){
@@ -13186,8 +13244,14 @@ async function apriAgganciaManuale(){
   // vuota. Ora si recupera la lista solo se serve, ma la tendina si riempie
   // sempre, ogni volta che questa schermata si apre.
   if (!_amDipendenti.length) {
-    const { data } = await sb.from('presenze_profili').select('id,nome,cognome').eq('attivo',true).order('cognome');
-    _amDipendenti = data || [];
+    const { data } = await sb.from('presenze_profili').select('id,nome,cognome,ruolo,percepisce_stipendio').eq('attivo',true).order('cognome');
+    // FIX 29/08 (richiesto da Valerio: "Michele Ceraldi non deve comparire,
+    // non percepisce stipendio"): un dipendente normale (ruolo='dipendente')
+    // ha percepisce_stipendio=false per TUTTI e 10 — quel campo riguarda solo
+    // gli admin (se disegnano anche loro uno stipendio vero, come Valerio e
+    // Vincenzo). Il filtro corretto è quindi: dipendenti sempre inclusi,
+    // admin solo se hanno esplicitamente percepisce_stipendio=true.
+    _amDipendenti = (data || []).filter(d => d.ruolo === 'dipendente' || d.percepisce_stipendio === true);
   }
   $('am-dip').innerHTML = '<option value="">— scegli —</option>' + _amDipendenti.map(d => `<option value="${d.id}">${esc(d.nome)} ${esc(d.cognome||'')}</option>`).join('');
   const oggi = new Date();

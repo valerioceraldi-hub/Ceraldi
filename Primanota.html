@@ -407,7 +407,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.30.92</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.30.93</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -7625,6 +7625,57 @@ async function abdAggancia(movId, data, importo, descrizione){
   }
 }
 
+// FIX 29/08 (richiesto da Valerio: "fammeli riconciliare anche da lì,
+// andando ad aggiornare Ceraldi Presenze") — picker leggero per UN
+// movimento già visibile nella tab Stipendi. Scrive nella STESSA tabella
+// condivisa con Ceraldi Presenze: l'aggiornamento è automatico nei due
+// sensi, non serve nessuna sincronizzazione a parte.
+async function apriRiconciliaStipendioSingolo(movId, data, importo, descrizione){
+  const existing = document.getElementById('rssOv');
+  if(existing) existing.remove();
+  let dipendenti = [];
+  try{ dipendenti = await sbFetch('presenze_profili?select=id,nome,cognome&attivo=eq.true&order=cognome'); }
+  catch(e){ toast('⚠️ Impossibile leggere i dipendenti: '+String(e.message||e).slice(0,60)); return; }
+  const ov = document.createElement('div');
+  ov.id = 'rssOv';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:960;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px)';
+  const oggi = new Date();
+  const meseDef = oggi.getFullYear()+'-'+String(oggi.getMonth()+1).padStart(2,'0');
+  let hh = '<div style="background:var(--bg);border-radius:20px 20px 0 0;width:100%;max-width:500px;padding:20px">';
+  hh += '<div style="font-size:16px;font-weight:700;margin-bottom:4px">🔗 Riconcilia questo bonifico</div>';
+  hh += '<div style="font-size:12px;color:var(--ink3);margin-bottom:12px">'+data+' — '+fmt(importo)+'<br>'+esc(descrizione)+'</div>';
+  hh += '<select id="rssDip" style="width:100%;padding:10px;border:1.5px solid var(--sep);border-radius:8px;margin-bottom:10px;font-family:inherit;font-size:14px"><option value="">— scegli il dipendente —</option>'
+    + dipendenti.map(function(d){ return '<option value="'+d.id+'">'+esc(d.nome)+' '+esc(d.cognome||'')+'</option>'; }).join('') + '</select>';
+  hh += '<div style="font-size:11px;color:var(--ink3);margin:6px 0 2px">Mese di competenza</div>';
+  hh += '<input type="month" id="rssMese" value="'+meseDef+'" style="width:100%;padding:10px;border:1.5px solid var(--sep);border-radius:8px;margin-bottom:14px;font-family:inherit;font-size:14px">';
+  hh += '<button onclick="_confermaRiconciliaStipendioSingolo(\''+movId+'\',\''+data+'\','+importo+',\''+esc(descrizione).replace(/\'/g,"\\'")+'\')" style="width:100%;padding:12px;border:none;border-radius:10px;background:#1a7a3a;color:#fff;font-family:inherit;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:8px">✓ Conferma</button>';
+  hh += '<button onclick="document.getElementById(\'rssOv\').remove()" style="width:100%;padding:10px;border:1px solid var(--sep);border-radius:8px;background:var(--surface);color:var(--ink3);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">Annulla</button>';
+  hh += '</div>';
+  ov.innerHTML = hh;
+  ov.onclick = function(e){ if(e.target===ov) ov.remove(); };
+  document.body.appendChild(ov);
+}
+
+async function _confermaRiconciliaStipendioSingolo(movId, data, importo, descrizione){
+  const dipId = document.getElementById('rssDip').value;
+  const meseVal = document.getElementById('rssMese').value;
+  if(!dipId){ toast('⚠️ Scegli un dipendente'); return; }
+  const [anno, mese] = meseVal.split('-').map(Number);
+  try{
+    await sbFetch('presenze_bonifici_stipendio', {method:'POST', headers:{'Prefer':'return=minimal'}, body: JSON.stringify({
+      dipendente_id: dipId, movimento_banca_id: movId,
+      mese_riferimento: mese, anno_riferimento: anno,
+      importo, confermato: true, fonte_copertura: 'bonifico',
+      descrizione_movimento: descrizione, data_movimento: data
+    })});
+    const ov = document.getElementById('rssOv'); if(ov) ov.remove();
+    toast('✓ Riconciliato — visibile anche in Ceraldi Presenze');
+    await caricaMovimentiBanca();
+  }catch(e){
+    toast('⚠️ Errore: '+String(e.message||e).slice(0,60));
+  }
+}
+
 function _apriCercaDdtFattura(fatturaId){
   const f = (fatture||[]).find(function(x){ return String(x.id)===String(fatturaId); });
   if(!f) return;
@@ -13865,6 +13916,27 @@ function _bancaNorm(r){
 function _salvaBancaLocale(){ try{ localStorage.setItem(KBANCA, JSON.stringify(_bancaMovimenti)); }catch(e){} }
 
 async function caricaMovimentiBanca(){
+  // FIX 29/08 (richiesto da Valerio: "fammi vedere quali sono i movimenti
+  // riconciliati e quale manca da riconciliare, e fammeli riconciliare
+  // anche da qui, aggiornando Ceraldi Presenze e viceversa") — la tabella
+  // presenze_bonifici_stipendio è GIÀ condivisa con Presenze: scrivere qui
+  // aggiorna automaticamente anche là, e viceversa, senza bisogno di
+  // sincronizzazione a parte. Qui si legge solo lo stato per mostrarlo.
+  try{
+    const [righeStip, dipendenti] = await Promise.all([
+      sbFetch('presenze_bonifici_stipendio?select=movimento_banca_id,dipendente_id,mese_riferimento,anno_riferimento,importo,fonte_copertura'),
+      sbFetch('presenze_profili?select=id,nome,cognome')
+    ]);
+    const dipMap = {}; (dipendenti||[]).forEach(d => { dipMap[d.id] = d.nome + (d.cognome ? ' '+d.cognome : ''); });
+    window._bonificiStipendioMap = {};
+    (righeStip||[]).forEach(r => {
+      if (!r.movimento_banca_id) return;
+      window._bonificiStipendioMap[r.movimento_banca_id] = {
+        nome: dipMap[r.dipendente_id] || '—', mese: r.mese_riferimento, anno: r.anno_riferimento,
+        importo: parseFloat(r.importo)||0, fonte: r.fonte_copertura
+      };
+    });
+  }catch(e){ console.warn('caricaMovimentiBanca: stato riconciliazione stipendi non caricato:', e.message||e); }
   // Cache-first: mostra subito i dati locali
   try{
     const c = JSON.parse(localStorage.getItem(KBANCA)||'[]');
@@ -16925,6 +16997,7 @@ function renderRiconciliazione(){
   // al ricaricamento) per i casi limite in cui il riconoscimento automatico
   // sbaglia in un senso o nell'altro.
   var _isStipendioMov = /ceraldi\s+valerio|valerio\s+ceraldi|ceraldi\s+vincenzo|vincenzo\s+ceraldi|ceraldi\s+michele|michele\s+ceraldi|pocci\s+salvatore|salvatore\s+pocci|murolo\s+mario|mario\s+murolo|parisi\s+antonio|antonio\s+parisi|capezzuto\s+alessandro|alessandro\s+capezzuto|taiano\s+luigi|luigi\s+taiano|moscato\s+emanuele|emanuele\s+moscato|guarino\s+giuliano|giuliano\s+guarino|lesina\s+angela|angela\s+lesina|russo\s+carmine|carmine\s+russo|vespa\s+vincenzo|vincenzo\s+vespa|carotenuto\s+antonella|antonella\s+carotenuto|\bstip(\.|endio)?\b|\btfr\b|\bstraordinari\b|\b1[34]\s*[aª]\b|acconto\s+stipendio|busta\s+paga/i;
+  var MESI_LBL_PN = ['','Gen','Feb','Mar','Apr','Mag','Giu','Lug','Ago','Set','Ott','Nov','Dic'];
   var _categoriaManualeMov = {};
   try{ _categoriaManualeMov = JSON.parse(localStorage.getItem('ceraldi_categoria_manuale_mov')||'{}'); }catch(e){}
   function _categoriaMov(m){
@@ -17025,18 +17098,30 @@ function renderRiconciliazione(){
 
   // ── TAB "Stipendi": bonifici verso dipendenti/TFR/13ª-14ª, separati dagli
   // scarti tecnici (commissioni/bolli) — richiesto esplicitamente da Valerio.
+  // FIX 29/08: ora mostra anche lo stato di riconciliazione (stessa tabella
+  // condivisa con Ceraldi Presenze) e permette di riconciliare da qui.
   var htmlStipendi = '';
+  var _mappaStip = window._bonificiStipendioMap || {};
+  var _stipRiconc = nonAbbinatiStipendio.filter(function(m){ return !!_mappaStip[m.id]; });
+  var _stipDaFare = nonAbbinatiStipendio.filter(function(m){ return !_mappaStip[m.id]; });
   if(nonAbbinatiStipendio.length){
     htmlStipendi += '<div style="background:var(--surface);border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow);border-left:3px solid #6b46c1">';
     htmlStipendi += '<div style="font-size:13px;font-weight:700;color:#6b46c1;margin-bottom:4px">💼 Bonifici stipendio ('+nonAbbinatiStipendio.length+')</div>';
-    htmlStipendi += '<div style="font-size:11px;color:var(--ink3);margin-bottom:10px">Pagamenti verso dipendenti — la riconciliazione con i cedolini si fa da Ceraldi Presenze</div>';
+    htmlStipendi += '<div style="font-size:11px;color:var(--ink3);margin-bottom:10px">✅ '+_stipRiconc.length+' già riconciliati · ⚠️ '+_stipDaFare.length+' da riconciliare</div>';
     nonAbbinatiStipendio.forEach(function(m){
+      var stato = _mappaStip[m.id];
       htmlStipendi += '<div style="padding:7px 0;border-top:1px solid var(--sep);display:flex;justify-content:space-between;align-items:flex-start;gap:8px">';
       htmlStipendi += '<div style="flex:1;min-width:0">';
       htmlStipendi += '<div style="font-size:11px;color:var(--ink3)">'+m.data+' · <b>'+fmt(Math.abs(m.importo))+'</b>'+(m.sottotipo?' · <i>'+m.sottotipo+'</i>':'')+'</div>';
       htmlStipendi += '<div style="font-size:11px;color:var(--ink2);word-break:break-word;line-height:1.3">'+esc(m.descrizione||'')+'</div>';
+      htmlStipendi += stato
+        ? '<div style="font-size:11px;color:#1a7a3a;font-weight:700;margin-top:3px">✅ Riconciliato — '+esc(stato.nome)+' · '+MESI_LBL_PN[stato.mese]+' '+stato.anno+(stato.fonte==='portafoglio'?' (dal portafoglio)':'')+'</div>'
+        : '<div style="font-size:11px;color:#b36a00;font-weight:700;margin-top:3px">⚠️ Da riconciliare</div>';
       htmlStipendi += '</div>';
-      htmlStipendi += '<button onclick="_spostaCategoriaMov(\''+esc(m.id)+'\',\'scartato\')" style="border:none;background:var(--surface2,#f0f0f0);color:var(--ink3);border-radius:6px;padding:5px 8px;font-size:11px;font-weight:600;cursor:pointer;flex-shrink:0;white-space:nowrap">↩️ Non è uno stipendio</button>';
+      htmlStipendi += '<div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">';
+      if(!stato) htmlStipendi += '<button onclick="apriRiconciliaStipendioSingolo(\''+esc(m.id)+'\',\''+esc(m.data)+'\','+Math.abs(m.importo)+',\''+esc(m.descrizione||'').replace(/\'/g,"\\\\'")+'\')" style="border:none;background:#eaf4ff;color:#0066cc;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">🔗 Riconcilia</button>';
+      htmlStipendi += '<button onclick="_spostaCategoriaMov(\''+esc(m.id)+'\',\'scartato\')" style="border:none;background:var(--surface2,#f0f0f0);color:var(--ink3);border-radius:6px;padding:5px 8px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">↩️ Non è uno stipendio</button>';
+      htmlStipendi += '</div>';
       htmlStipendi += '</div>';
     });
     htmlStipendi += '</div>';
