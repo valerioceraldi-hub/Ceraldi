@@ -1012,7 +1012,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div id="app" style="display:none">
 
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.211</span></div>
+    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.212</span></div>
     <span class="topbar-badge" id="role-badge"></span>
     <button class="btn-topbar" onclick="ricaricaApp()" title="Ricarica la pagina (per essere sicuro di avere l'ultima versione)" style="padding:6px 10px">🔄</button>
     <button id="btn-promemoria" class="btn-topbar" onclick="apriPromemoria()" style="display:none;position:relative;padding:6px 10px">
@@ -1805,9 +1805,10 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     <div class="sheet-hdr"><span class="sheet-title">🗂 Storico riconciliazioni</span><button class="sheet-cls" onclick="closeSheet('sh-storicoRiconc')">✕</button></div>
     <div class="sheet-body">
       <div style="font-size:12px;color:var(--muted);margin-bottom:14px">Ogni bonifico o movimento di portafoglio registrato — tocca "Annulla" per disfare una scelta sbagliata.</div>
-      <select id="sr-dip-filtro" class="field-inp last" style="margin-bottom:14px" onchange="srFiltraLista()">
+      <select id="sr-dip-filtro" class="field-inp" style="margin-bottom:10px" onchange="srFiltraLista()">
         <option value="">Tutti i dipendenti</option>
       </select>
+      <button class="btn-sm" id="sr-btn-quadro" style="width:100%;margin-bottom:14px;display:none;white-space:normal" onclick="srApriQuadroSelezionato()">👁 Quadro completo del dipendente scelto</button>
       <div id="sr-lista"><div style="text-align:center;color:var(--muted);padding:20px">Caricamento…</div></div>
     </div>
   </div>
@@ -12898,6 +12899,8 @@ async function apriStoricoRiconciliazioni(){
 
 function srFiltraLista(){
   const dipFiltro = $('sr-dip-filtro') ? $('sr-dip-filtro').value : '';
+  const btnQuadro = $('sr-btn-quadro');
+  if (btnQuadro) btnQuadro.style.display = dipFiltro ? 'block' : 'none';
   const tutte = window._srRigheComplete || [];
   const righe = dipFiltro ? tutte.filter(r => r.dipId === dipFiltro) : tutte;
   window._srRighe = righe;
@@ -12910,6 +12913,13 @@ function srFiltraLista(){
       </div>
       <button class="btn-sm" style="white-space:nowrap;margin-left:8px;color:var(--red)" onclick="srAnnulla(${idx})">🗑 Annulla</button>
     </div>`).join('');
+}
+
+function srApriQuadroSelezionato(){
+  const sel = $('sr-dip-filtro');
+  if (!sel || !sel.value) return;
+  const nome = sel.options[sel.selectedIndex].textContent;
+  apriQuadroCompleto(sel.value, nome);
 }
 
 async function srAnnulla(idx){
@@ -12976,7 +12986,7 @@ function cnrRenderLista(){
         <div style="font-size:11px;color:var(--muted)">${g.righe.length} mes${g.righe.length===1?'e':'i'} in sospeso · manca in tutto € ${totMancante.toFixed(2)}</div>
       </div>
       ${righeHtml}
-      <button class="btn-sm" style="width:100%;margin-top:8px" onclick="apriQuadroCompleto('${g.righe[0].dipId}','${esc(g.nome)}')">👁 Vedi quadro completo di ${esc(g.nome)} (cedolino + bonifico affiancati)</button>
+      <button class="btn-sm" style="width:100%;margin-top:8px;white-space:normal;line-height:1.3" onclick="apriQuadroCompleto('${g.righe[0].dipId}','${esc(g.nome)}')">👁 Quadro completo (cedolino + bonifico)</button>
     </div>`;
   }).join('');
 }
@@ -12985,34 +12995,45 @@ function cnrRenderLista(){
 // dipendente ma per vederla devo scaricare il file excel per forza") —
 // mostra lo stesso partitario dell'export, ma dentro l'app, senza scaricare
 // nulla: cedolino e bonifico affiancati sulla stessa riga, mese per mese.
+// FIX 29/08 bis (segnalato da Valerio: "il tasto non funziona, e la
+// descrizione esce fuori schermo"): il testo del bottone era troppo lungo
+// per una classe con white-space:nowrap (sopra, risolto) — qui invece
+// avvolgo il caricamento in un try/catch: se qualcosa va storto (es. un
+// problema di rete) prima restava un "Caricamento…" fermo per sempre senza
+// nessun avviso, sembrando "il bottone non fa nulla".
 async function apriQuadroCompleto(dipId, nome){
-  $('qc-titolo').textContent = '👁 Quadro completo — ' + nome;
-  $('qc-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Caricamento…</div>';
-  openSheet('sh-quadroCompleto');
-  const righe = await presenzeCalcolaPartitario(dipId);
-  if (!righe.length) { $('qc-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Nessun cedolino caricato per questo dipendente.</div>'; return; }
-  const badgeStato = { saldato:'✅', aperto:'⚠️', eccedenza:'🔵' };
-  const colStato = { saldato:'#1a7a3a', aperto:'#b36a00', eccedenza:'#2b4acb' };
-  $('qc-lista').innerHTML = righe.map(r => `
-    <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px">
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <div style="font-size:13px;font-weight:700">${MESI_LBL[r.mese]} ${r.anno}</div>
-        <div style="font-size:11px;font-weight:700;color:${colStato[r.stato]}">${badgeStato[r.stato]} ${r.stato==='saldato'?'Saldato':r.stato==='aperto'?'Manca':'Eccedenza'}</div>
-      </div>
-      <div style="display:flex;gap:10px;margin-top:6px">
-        <div style="flex:1;background:var(--surface);border-radius:8px;padding:8px">
-          <div style="font-size:9px;color:var(--muted);text-transform:uppercase">📄 Cedolino (dare)</div>
-          <div style="font-size:15px;font-weight:700">€ ${r.dare.toFixed(2)}</div>
+  try {
+    $('qc-titolo').textContent = '👁 Quadro completo — ' + nome;
+    $('qc-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Caricamento…</div>';
+    openSheet('sh-quadroCompleto');
+    const righe = await presenzeCalcolaPartitario(dipId);
+    if (!righe.length) { $('qc-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Nessun cedolino caricato per questo dipendente.</div>'; return; }
+    const badgeStato = { saldato:'✅', aperto:'⚠️', eccedenza:'🔵' };
+    const colStato = { saldato:'#1a7a3a', aperto:'#b36a00', eccedenza:'#2b4acb' };
+    $('qc-lista').innerHTML = righe.map(r => `
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="font-size:13px;font-weight:700">${MESI_LBL[r.mese]} ${r.anno}</div>
+          <div style="font-size:11px;font-weight:700;color:${colStato[r.stato]}">${badgeStato[r.stato]} ${r.stato==='saldato'?'Saldato':r.stato==='aperto'?'Manca':'Eccedenza'}</div>
         </div>
-        <div style="flex:1;background:var(--surface);border-radius:8px;padding:8px">
-          <div style="font-size:9px;color:var(--muted);text-transform:uppercase">🏦 Bonifico (avere)</div>
-          <div style="font-size:15px;font-weight:700">€ ${r.avereTotale.toFixed(2)}</div>
-          ${r.bonifici.map(b=>`<div style="font-size:10px;color:var(--muted)">${b.data||'?'} — €${b.importo.toFixed(2)}</div>`).join('')}
+        <div style="display:flex;gap:10px;margin-top:6px">
+          <div style="flex:1;min-width:0;background:var(--surface);border-radius:8px;padding:8px">
+            <div style="font-size:9px;color:var(--muted);text-transform:uppercase">📄 Cedolino (dare)</div>
+            <div style="font-size:15px;font-weight:700">€ ${r.dare.toFixed(2)}</div>
+          </div>
+          <div style="flex:1;min-width:0;background:var(--surface);border-radius:8px;padding:8px">
+            <div style="font-size:9px;color:var(--muted);text-transform:uppercase">🏦 Bonifico (avere)</div>
+            <div style="font-size:15px;font-weight:700">€ ${r.avereTotale.toFixed(2)}</div>
+            ${r.bonifici.map(b=>`<div style="font-size:10px;color:var(--muted);word-break:break-word">${b.data||'?'} — €${b.importo.toFixed(2)}</div>`).join('')}
+          </div>
         </div>
-      </div>
-      ${r.nota ? `<div style="font-size:10.5px;color:var(--muted);margin-top:6px;font-style:italic">${esc(r.nota)}</div>` : ''}
-      <div style="font-size:11px;color:var(--muted);margin-top:6px;text-align:right">saldo progressivo: <b style="color:${r.saldoProgressivo>=0?'#1a7a3a':'#c0392b'}">€ ${r.saldoProgressivo.toFixed(2)}</b></div>
-    </div>`).join('');
+        ${r.nota ? `<div style="font-size:10.5px;color:var(--muted);margin-top:6px;font-style:italic;word-break:break-word">${esc(r.nota)}</div>` : ''}
+        <div style="font-size:11px;color:var(--muted);margin-top:6px;text-align:right">saldo progressivo: <b style="color:${r.saldoProgressivo>=0?'#1a7a3a':'#c0392b'}">€ ${r.saldoProgressivo.toFixed(2)}</b></div>
+      </div>`).join('');
+  } catch (e) {
+    console.warn('apriQuadroCompleto:', e.message || e);
+    $('qc-lista').innerHTML = '<div style="text-align:center;color:var(--red);padding:20px">⚠️ Errore nel caricamento: ' + esc(String(e.message||e)) + '</div>';
+  }
 }
 
 async function apriCnrCandidati(idx){
@@ -13171,7 +13192,10 @@ async function rbRenderLista(){
     } else {
       azione = `<div style="font-size:11px;color:var(--muted);margin-top:8px">Conferma i singoli movimenti "beneficiari vari" sopra per completare.</div>`;
     }
-    return `${idx===0 || _rbRisultati[idx-1].nome !== r.nome ? `<div style="font-size:13px;font-weight:800;color:var(--accent);margin:${idx===0?'0':'18px'} 0 8px">${esc(r.nome)}</div>` : ''}<div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px">
+    return `${idx===0 || _rbRisultati[idx-1].nome !== r.nome ? `<div style="display:flex;justify-content:space-between;align-items:center;margin:${idx===0?'0':'18px'} 0 8px">
+      <div style="font-size:13px;font-weight:800;color:var(--accent)">${esc(r.nome)}</div>
+      <button class="btn-sm" style="font-size:10px;padding:4px 8px;white-space:normal" onclick="apriQuadroCompleto('${r.dipId}','${esc(r.nome)}')">👁 Quadro completo</button>
+    </div>` : ''}<div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <div style="font-weight:700;font-size:14px">${esc(r.nome)}</div>
         <div style="font-size:11px;font-weight:700;color:${colStato[r.stato]}">${badgeStato[r.stato]}</div>
