@@ -1012,7 +1012,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div id="app" style="display:none">
 
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.209</span></div>
+    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.210</span></div>
     <span class="topbar-badge" id="role-badge"></span>
     <button class="btn-topbar" onclick="ricaricaApp()" title="Ricarica la pagina (per essere sicuro di avere l'ultima versione)" style="padding:6px 10px">🔄</button>
     <button id="btn-promemoria" class="btn-topbar" onclick="apriPromemoria()" style="display:none;position:relative;padding:6px 10px">
@@ -1387,6 +1387,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
         <button class="btn-sm" style="flex:1;padding:8px 4px;font-size:11px" onclick="apriRiconciliazioneBonifici()">🏦 Riconciliazione</button>
         <button class="btn-sm" style="flex:1;padding:8px 4px;font-size:11px" onclick="apriCedoliniNonRiconciliati()">📋 Non riconciliati</button>
         <button class="btn-sm" style="flex:1;padding:8px 4px;font-size:11px" onclick="apriStoricoRiconciliazioni()">🗂 Storico</button>
+        <button class="btn-sm" style="flex:1;padding:8px 4px;font-size:11px" onclick="apriEsportaRiconciliazione()">⬇ Esporta</button>
       </div>
       <div id="stipendi-list"></div>
     </div>
@@ -1770,6 +1771,23 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <!-- ── SHEET: aggancio manuale bonifico (28/08) ── -->
 <!-- ── SHEET: cedolini non riconciliati (28/08) ── -->
 <!-- ── SHEET: storico riconciliazioni, con possibilità di annullare (28/08) ── -->
+<!-- ── SHEET: esporta riconciliazione con selezione multipla dipendenti (29/08) ── -->
+<div class="overlay" id="sh-esportaRiconc">
+  <div class="sheet" style="max-height:88vh">
+    <div class="sheet-handle"></div>
+    <div class="sheet-hdr"><span class="sheet-title">⬇ Esporta riconciliazione</span><button class="sheet-cls" onclick="closeSheet('sh-esportaRiconc')">✕</button></div>
+    <div class="sheet-body">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Un "partitario" dare/avere per dipendente: ogni cedolino maturato e ogni bonifico ricevuto, in ordine cronologico, con il saldo che si aggiorna riga per riga — così si vede se quella persona ha avuto di più o di meno rispetto al dovuto.</div>
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <button class="btn-sm" style="flex:1" onclick="erSelezionaTutti(true)">☑ Seleziona tutti</button>
+        <button class="btn-sm" style="flex:1" onclick="erSelezionaTutti(false)">☐ Nessuno</button>
+      </div>
+      <div id="er-lista-dip" style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px;margin-bottom:14px"></div>
+      <button class="btn-green-solid" style="width:100%" onclick="erGeneraExcel()">⬇ Genera Excel</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="sh-storicoRiconc">
   <div class="sheet" style="max-height:88vh">
     <div class="sheet-handle"></div>
@@ -3200,6 +3218,60 @@ async function presenzeCalcolaRiconciliazioneBonifici(){
 // nei mesi vicini — in particolare se il mese SUCCESSIVO risulta pagato di
 // meno esattamente per l'importo dell'eccedenza (segno che è già stata
 // "spesa" lì) oppure per intero (segno che quei soldi sono altro).
+// FIX 29/08 (richiesto da Valerio: "partitario dare e avere... se dall'inizio
+// dei conteggi ha avuto di più o di meno rispetto a quanto dovuto") — elenco
+// cronologico di ogni cedolino maturato (DARE) e ogni bonifico reale
+// ricevuto (AVERE), con un saldo che si aggiorna riga per riga.
+// ATTENZIONE al portafoglio: un deposito nel portafoglio NON è denaro nuovo
+// — è già stato contato per intero nel bonifico che l'ha generato (che
+// copriva anche l'eccedenza). Se lo sommassi di nuovo come AVERE, il saldo
+// risulterebbe falsato in eccesso. Per questo qui contano SOLO i bonifici
+// con fonte_copertura='bonifico' (denaro vero entrato); i movimenti di
+// portafoglio compaiono comunque nell'elenco per trasparenza, ma marcati
+// come "non conta nel saldo" e senza toccare il saldo progressivo.
+async function presenzeCalcolaPartitario(dipId){
+  const [{ data: cedolini }, { data: bonifici }, { data: portaf }] = await Promise.all([
+    sb.from('presenze_documenti').select('mese,anno,netto_busta').eq('dipendente_id',dipId).eq('categoria','busta_paga').not('netto_busta','is',null),
+    sb.from('presenze_bonifici_stipendio').select('*').eq('dipendente_id',dipId),
+    sb.from('presenze_portafoglio_movimenti').select('*').eq('dipendente_id',dipId)
+  ]);
+  const eventi = [];
+  (cedolini||[]).forEach(c => {
+    eventi.push({
+      data: c.anno+'-'+String(c.mese).padStart(2,'0')+'-01',
+      tipo: '📄 Cedolino maturato', dare: parseFloat(c.netto_busta)||0, avere: 0,
+      dettaglio: MESI_LBL[c.mese]+' '+c.anno, contaNelSaldo: true
+    });
+  });
+  (bonifici||[]).forEach(b => {
+    const reale = b.fonte_copertura !== 'portafoglio';
+    eventi.push({
+      data: b.data_movimento || (b.anno_riferimento+'-'+String(b.mese_riferimento).padStart(2,'0')+'-01'),
+      tipo: reale ? '🏦 Bonifico ricevuto' : '🐷 Coperto dal portafoglio',
+      dare: 0, avere: reale ? (parseFloat(b.importo)||0) : 0,
+      dettaglio: 'per ' + MESI_LBL[b.mese_riferimento] + ' ' + b.anno_riferimento + (b.descrizione_movimento ? ' — ' + b.descrizione_movimento : ''),
+      contaNelSaldo: reale
+    });
+  });
+  (portaf||[]).forEach(p => {
+    const imp = parseFloat(p.importo)||0;
+    eventi.push({
+      data: p.data,
+      tipo: imp >= 0 ? '🐷 Deposito nel portafoglio' : '🐷 Prelievo dal portafoglio',
+      dare: 0, avere: 0, // movimento interno, non tocca il saldo (vedi nota sopra)
+      dettaglio: (p.causale || '') + ' — non conta nel saldo, è denaro già contato nel bonifico',
+      contaNelSaldo: false
+    });
+  });
+  eventi.sort((a,b) => a.data.localeCompare(b.data));
+  let saldo = 0;
+  eventi.forEach(e => {
+    if (e.contaNelSaldo) saldo = Math.round((saldo + e.avere - e.dare) * 100) / 100;
+    e.saldoProgressivo = saldo;
+  });
+  return eventi;
+}
+
 async function presenzeQuadroDipendente(dipId, meseCentro, annoCentro){
   const mesi = [];
   for (let offset = -3; offset <= 3; offset++) {
@@ -12650,6 +12722,115 @@ let _cnrRisultati = [];
 // non esiste più. Un deposito invece si annulla da solo: i bonifici che lo
 // avevano generato restano (sono un fatto distinto, cancellabili a parte
 // dalla stessa lista se si vuole disfare tutta la decisione).
+// ── Esporta riconciliazione: partitario dare/avere, selezione multipla (29/08) ──
+async function apriEsportaRiconciliazione(){
+  openSheet('sh-esportaRiconc');
+  if (!_amDipendenti.length) {
+    const { data } = await sb.from('presenze_profili').select('id,nome,cognome').eq('attivo',true).order('cognome');
+    _amDipendenti = data || [];
+  }
+  $('er-lista-dip').innerHTML = _amDipendenti.map(d => `
+    <label style="display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:13px;border-bottom:1px solid var(--border)">
+      <input type="checkbox" class="er-check" value="${d.id}" data-nome="${esc(d.nome)} ${esc(d.cognome||'')}">
+      ${esc(d.nome)} ${esc(d.cognome||'')}
+    </label>`).join('');
+}
+
+function erSelezionaTutti(stato){
+  document.querySelectorAll('.er-check').forEach(cb => { cb.checked = stato; });
+}
+
+async function erGeneraExcel(){
+  if (typeof XLSX === 'undefined') { toast('Libreria Excel non caricata, riprova'); return; }
+  const selezionati = Array.from(document.querySelectorAll('.er-check:checked')).map(cb => ({ id: cb.value, nome: cb.dataset.nome }));
+  if (!selezionati.length) { toast('Scegli almeno un dipendente'); return; }
+  toast('⏳ Preparo il partitario…');
+
+  const sTitolo = { font:{bold:true,sz:14,color:{rgb:'FFFFFF'}}, fill:{fgColor:{rgb:'2B4ACB'}}, alignment:{horizontal:'center',vertical:'center'} };
+  const sHeader = { font:{bold:true,sz:11,color:{rgb:'FFFFFF'}}, fill:{fgColor:{rgb:'444444'}}, alignment:{horizontal:'center',vertical:'center',wrapText:true} };
+  const sVal = { font:{sz:10}, alignment:{vertical:'center'} };
+  const sValAlt = { font:{sz:10}, fill:{fgColor:{rgb:'F4F6FB'}}, alignment:{vertical:'center'} };
+  const sNum = { font:{sz:10}, alignment:{horizontal:'right',vertical:'center'}, numFmt:'#,##0.00' };
+  const sNumAlt = { ...sNum, fill:{fgColor:{rgb:'F4F6FB'}} };
+  const sSaldoFinale = (pos) => ({ font:{bold:true,sz:12,color:{rgb: pos?'1A7A3A':'C0392B'}}, alignment:{horizontal:'right',vertical:'center'}, numFmt:'#,##0.00' });
+  const setCell = (ws,addr,v,s) => { ws[addr] = { v, t: typeof v==='number'?'n':'s', s }; };
+
+  const wb = XLSX.utils.book_new();
+  const fogliDipendenti = []; // {ws, nomeFoglio} — aggiunti al workbook DOPO il riepilogo, per averlo come prima scheda
+
+  // ── Riepilogo (calcolato per primo, ma aggiunto al workbook per ultimo
+  // nel codice — l'ordine reale dipende dall'ordine di book_append_sheet,
+  // quindi lo si aggiunge fisicamente prima di tutti gli altri più sotto) ──
+  const riepiloghi = [];
+
+  for (const dip of selezionati) {
+    const eventi = await presenzeCalcolaPartitario(dip.id);
+    const saldoFinale = eventi.length ? eventi[eventi.length-1].saldoProgressivo : 0;
+    riepiloghi.push({ nome: dip.nome, saldo: saldoFinale, nEventi: eventi.length });
+
+    const ws = {}; let r = 0;
+    ws['!cols'] = [{wch:12},{wch:15},{wch:22},{wch:44},{wch:13},{wch:13},{wch:15}];
+    ws['!merges'] = [{s:{r:0,c:0},e:{r:0,c:6}}];
+    setCell(ws,'A1','PARTITARIO — '+dip.nome, sTitolo); for(let cc=1;cc<7;cc++) setCell(ws,XLSX.utils.encode_cell({r:0,c:cc}),'',sTitolo);
+    r = 1;
+    setCell(ws, XLSX.utils.encode_cell({r,c:0}), 'Ogni cedolino maturato (DARE) e ogni bonifico reale ricevuto (AVERE), in ordine cronologico. I movimenti di portafoglio compaiono per trasparenza ma non toccano il saldo — sono denaro già contato nel bonifico che li ha generati.', { font:{sz:9,italic:true,color:{rgb:'666666'}} });
+    ws['!merges'].push({s:{r,c:0},e:{r,c:6}});
+    r = 3;
+    ['Data','Competenza','Tipo movimento','Dettaglio','Dare (€)','Avere (€)','Saldo progressivo (€)'].forEach((h,i)=>setCell(ws,XLSX.utils.encode_cell({r,c:i}),h,sHeader));
+    r++;
+    let alt = false;
+    eventi.forEach(e => {
+      const st = alt?sValAlt:sVal, sn = alt?sNumAlt:sNum;
+      setCell(ws, XLSX.utils.encode_cell({r,c:0}), e.data, st);
+      setCell(ws, XLSX.utils.encode_cell({r,c:1}), e.dettaglio.match(/^(per )?(\S+ \d{4})/) ? RegExp.$2 : '', st);
+      setCell(ws, XLSX.utils.encode_cell({r,c:2}), e.tipo + (e.contaNelSaldo ? '' : ' (non conta)'), e.contaNelSaldo ? st : {...st, font:{...st.font, italic:true, color:{rgb:'999999'}}});
+      setCell(ws, XLSX.utils.encode_cell({r,c:3}), e.dettaglio, {...st, alignment:{wrapText:true,vertical:'center'}});
+      setCell(ws, XLSX.utils.encode_cell({r,c:4}), e.dare || '', e.dare ? sn : st);
+      setCell(ws, XLSX.utils.encode_cell({r,c:5}), e.avere || '', e.avere ? sn : st);
+      setCell(ws, XLSX.utils.encode_cell({r,c:6}), e.saldoProgressivo, sn);
+      alt = !alt; r++;
+    });
+    if (!eventi.length) { setCell(ws, XLSX.utils.encode_cell({r,c:0}), 'Nessun cedolino o bonifico registrato per questo dipendente', sVal); r++; }
+    r++;
+    setCell(ws, XLSX.utils.encode_cell({r,c:0}), 'SALDO FINALE', { font:{bold:true,sz:12} });
+    ws['!merges'].push({s:{r,c:0},e:{r,c:5}});
+    setCell(ws, XLSX.utils.encode_cell({r,c:6}), saldoFinale, sSaldoFinale(saldoFinale >= 0));
+    r++;
+    setCell(ws, XLSX.utils.encode_cell({r,c:0}), saldoFinale >= 0 ? '(a favore del dipendente: ha ricevuto più di quanto maturato finora)' : '(a debito del dipendente: gli è ancora dovuto rispetto a quanto ricevuto)', { font:{sz:9,italic:true,color:{rgb:'666666'}} });
+    ws['!merges'].push({s:{r,c:0},e:{r,c:6}});
+    ws['!freeze'] = { xSplit:0, ySplit:4 };
+    ws['!ref'] = XLSX.utils.encode_range({s:{r:0,c:0}, e:{r:r+1,c:6}});
+    ws['!autofilter'] = { ref: XLSX.utils.encode_range({s:{r:3,c:0}, e:{r:Math.max(4,r-3),c:6}}) };
+    const nomeFoglio = dip.nome.replace(/[\\/*?:\[\]]/g,'').slice(0,31) || 'Dipendente';
+    fogliDipendenti.push({ ws, nomeFoglio });
+  }
+
+  // ── Foglio riepilogo, sempre in cima ──
+  const wsR = {}; let rr = 0;
+  wsR['!cols'] = [{wch:26},{wch:16},{wch:14}];
+  wsR['!merges'] = [{s:{r:0,c:0},e:{r:0,c:2}}];
+  setCell(wsR,'A1','RIEPILOGO SALDI', sTitolo); setCell(wsR,'B1','',sTitolo); setCell(wsR,'C1','',sTitolo);
+  rr = 2;
+  ['Dipendente','Saldo (€)','Situazione'].forEach((h,i)=>setCell(wsR,XLSX.utils.encode_cell({r:rr,c:i}),h,sHeader));
+  rr++;
+  let altR = false;
+  riepiloghi.forEach(x => {
+    const st = altR?sValAlt:sVal;
+    setCell(wsR, XLSX.utils.encode_cell({r:rr,c:0}), x.nome, st);
+    setCell(wsR, XLSX.utils.encode_cell({r:rr,c:1}), x.saldo, sSaldoFinale(x.saldo>=0));
+    setCell(wsR, XLSX.utils.encode_cell({r:rr,c:2}), x.saldo>=0 ? 'A favore' : 'A debito', st);
+    altR = !altR; rr++;
+  });
+  wsR['!ref'] = XLSX.utils.encode_range({s:{r:0,c:0}, e:{r:rr,c:2}});
+  wsR['!autofilter'] = { ref: XLSX.utils.encode_range({s:{r:2,c:0}, e:{r:rr-1,c:2}}) };
+  XLSX.utils.book_append_sheet(wb, wsR, '0. Riepilogo');
+  fogliDipendenti.forEach(f => XLSX.utils.book_append_sheet(wb, f.ws, f.nomeFoglio));
+
+  XLSX.writeFile(wb, 'Partitario_stipendi_'+todayISO()+'.xlsx');
+  closeSheet('sh-esportaRiconc');
+  toast('✓ File generato');
+}
+
 async function apriStoricoRiconciliazioni(){
   openSheet('sh-storicoRiconc');
   $('sr-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Caricamento…</div>';
@@ -12741,14 +12922,39 @@ function cnrRenderLista(){
     el.innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Tutti i cedolini caricati risultano coperti per intero. 🎉</div>';
     return;
   }
-  el.innerHTML = _cnrRisultati.map((r,idx) => `
-    <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;cursor:pointer" onclick="apriCnrCandidati(${idx})">
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <div style="font-weight:700;font-size:14px">${esc(r.nome)}</div>
-        <div style="font-size:11px;font-weight:700;color:#b36a00">manca € ${r.mancante.toFixed(2)}</div>
+  // FIX 29/08 (richiesto da Valerio: "non riesco ad avere il quadro della
+  // situazione, organizzala per dipendente e in ordine di data"): prima era
+  // un elenco piatto, tutti mescolati. Ora un blocco per dipendente, con i
+  // suoi mesi in ordine cronologico dentro — e in cima a ogni blocco un
+  // totale di quanto manca ancora a quella persona, per capire a colpo
+  // d'occhio la situazione di ciascuno.
+  const perDip = {};
+  const ordineIdx = {}; // indice originale di ogni riga in _cnrRisultati, serve a onclick
+  _cnrRisultati.forEach((r, idx) => {
+    if (!perDip[r.dipId]) perDip[r.dipId] = { nome: r.nome, righe: [] };
+    perDip[r.dipId].righe.push({ ...r, idx });
+  });
+  const gruppi = Object.values(perDip).sort((a,b) => a.nome.localeCompare(b.nome));
+  gruppi.forEach(g => g.righe.sort((a,b) => (a.anno*100+a.mese) - (b.anno*100+b.mese)));
+
+  el.innerHTML = gruppi.map(g => {
+    const totMancante = g.righe.reduce((s,r) => s+r.mancante, 0);
+    const righeHtml = g.righe.map(r => `
+      <div style="padding:9px 0;border-top:1px solid var(--border);cursor:pointer" onclick="apriCnrCandidati(${r.idx})">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="font-size:13px;font-weight:600">${MESI_LBL[r.mese]} ${r.anno}</div>
+          <div style="font-size:11px;font-weight:700;color:#b36a00">manca € ${r.mancante.toFixed(2)}</div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:1px">cedolino € ${r.netto.toFixed(2)}${r.coperto>0 ? ', già coperto € '+r.coperto.toFixed(2) : ''}${r.saldoPortafoglio>0.5 ? ' · 🐷 portafoglio disponibile € '+r.saldoPortafoglio.toFixed(2) : ''}</div>
+      </div>`).join('');
+    return `<div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <div style="font-weight:700;font-size:15px">${esc(g.nome)}</div>
+        <div style="font-size:11px;color:var(--muted)">${g.righe.length} mes${g.righe.length===1?'e':'i'} in sospeso · manca in tutto € ${totMancante.toFixed(2)}</div>
       </div>
-      <div style="font-size:11px;color:var(--muted);margin-top:2px">${MESI_LBL[r.mese]} ${r.anno} — cedolino € ${r.netto.toFixed(2)}${r.coperto>0 ? ', già coperto € '+r.coperto.toFixed(2) : ''}${r.saldoPortafoglio>0.5 ? ' · 🐷 portafoglio disponibile € '+r.saldoPortafoglio.toFixed(2) : ''}</div>
-    </div>`).join('');
+      ${righeHtml}
+    </div>`;
+  }).join('');
 }
 
 async function apriCnrCandidati(idx){
@@ -12815,6 +13021,12 @@ async function rbRenderLista(){
     el.innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Nessun bonifico da riconciliare al momento — tutto già confermato o nessun candidato trovato nell\'estratto conto.</div>';
     return;
   }
+  // FIX 29/08 (richiesto da Valerio: "organizzala per dipendente e in ordine
+  // di data"): si ordina l'ARRAY STESSO (non una copia) — i bottoni più sotto
+  // si riferiscono all'indice della riga in _rbRisultati, quindi riordinare
+  // una copia separata romperebbe quei riferimenti. Riordinandolo una volta
+  // sola qui, indici e ordine visivo restano sempre coerenti.
+  _rbRisultati.sort((a,b) => a.nome.localeCompare(b.nome) || (a.anno*100+a.mese) - (b.anno*100+b.mese));
   const badgeStato = { saldato:'✅ Saldato', aperto:'⚠️ Manca ancora', eccedenza:'🔵 Eccedenza' };
   const colStato = { saldato:'#1a7a3a', aperto:'#b36a00', eccedenza:'#2b4acb' };
   // FIX 28/08 (richiesto da Valerio): per un'eccedenza, precalcola il quadro
@@ -12901,7 +13113,7 @@ async function rbRenderLista(){
     } else {
       azione = `<div style="font-size:11px;color:var(--muted);margin-top:8px">Conferma i singoli movimenti "beneficiari vari" sopra per completare.</div>`;
     }
-    return `<div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px">
+    return `${idx===0 || _rbRisultati[idx-1].nome !== r.nome ? `<div style="font-size:13px;font-weight:800;color:var(--accent);margin:${idx===0?'0':'18px'} 0 8px">${esc(r.nome)}</div>` : ''}<div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <div style="font-weight:700;font-size:14px">${esc(r.nome)}</div>
         <div style="font-size:11px;font-weight:700;color:${colStato[r.stato]}">${badgeStato[r.stato]}</div>
@@ -12967,11 +13179,17 @@ async function rbConfermaEccedenza(idx){
 let _amDipendenti = [];
 async function apriAgganciaManuale(){
   openSheet('sh-agganciaManuale');
+  // FIX 29/08 (bug reale: "non esce la lista, nessuna opzione"): _amDipendenti
+  // è condivisa con "Storico riconciliazioni" — se quella schermata viene
+  // aperta prima, la lista risultava già caricata e questo blocco (che
+  // riempiva la tendina qui) veniva saltato del tutto, lasciando "am-dip"
+  // vuota. Ora si recupera la lista solo se serve, ma la tendina si riempie
+  // sempre, ogni volta che questa schermata si apre.
   if (!_amDipendenti.length) {
     const { data } = await sb.from('presenze_profili').select('id,nome,cognome').eq('attivo',true).order('cognome');
     _amDipendenti = data || [];
-    $('am-dip').innerHTML = '<option value="">— scegli —</option>' + _amDipendenti.map(d => `<option value="${d.id}">${esc(d.nome)} ${esc(d.cognome||'')}</option>`).join('');
   }
+  $('am-dip').innerHTML = '<option value="">— scegli —</option>' + _amDipendenti.map(d => `<option value="${d.id}">${esc(d.nome)} ${esc(d.cognome||'')}</option>`).join('');
   const oggi = new Date();
   $('am-mese').value = oggi.getFullYear() + '-' + String(oggi.getMonth()+1).padStart(2,'0');
 }
