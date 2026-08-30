@@ -4139,7 +4139,28 @@ function renderHistory(){
         });
       }})(r);
       var dupBtn=document.createElement('button');dupBtn.style.cssText='flex:1;padding:11px;border-radius:10px;border:1.5px solid var(--gold);background:rgba(200,135,58,.1);color:var(--gold);font-size:13px;font-weight:700;cursor:pointer';dupBtn.textContent='Duplica';
-      dupBtn.onclick=(function(rec){return function(){if(Object.keys(S.cart).length>0&&!confirm('Il carrello attuale verra sostituito. Continuare?'))return;S.cart={};S.orderSupOverride={};
+      dupBtn.onclick=(function(rec){return function(){
+        // FIX (30/08, Valerio: "ho perso l'ordine che mi era arrivato dal
+        // dipendente che dovevo inviare"): prima bastava confermare un
+        // popup nativo per sostituire il carrello, cancellando per sempre
+        // quello che c'era — facile da confermare senza pensarci, senza
+        // modo di recuperarlo dopo. Ora, se il carrello non è vuoto, il suo
+        // contenuto viene spostato automaticamente in "Salvati per dopo"
+        // invece di essere cancellato: nulla va perso, e lo si ritrova lì.
+        var cartAveaProdotti=Object.keys(S.cart).length>0;
+        if(cartAveaProdotti){
+          if(!S.savedForLater)S.savedForLater={};
+          Object.keys(S.cart).forEach(function(pid){
+            if(S.savedForLater[pid]){
+              S.savedForLater[pid].qty+=S.cart[pid].qty;
+            }else{
+              S.savedForLater[pid]=JSON.parse(JSON.stringify(S.cart[pid]));
+              if(S.orderSupOverride[pid]!==undefined)S.savedForLater[pid]._savedSupOverride=S.orderSupOverride[pid];
+            }
+          });
+          ssfl();updateSavedNavBadge();
+        }
+        S.cart={};S.orderSupOverride={};
         var synthSeed=-1000000-Math.floor(Math.random()*1000);
         rec.items.forEach(function(it){
           var prod=null;
@@ -4153,13 +4174,27 @@ function renderHistory(){
           S.cart[key]={product:prod,qty:it.qty};
           S.orderSupOverride[key]=rec.supplier;
         });
-        scart();updateBadge();renderCart();openOverlay('cart-overlay');toast('Ordine duplicato - '+rec.items.length+' prodotti caricati');
+        scart();updateBadge();renderCart();openOverlay('cart-overlay');
+        toast('Ordine duplicato - '+rec.items.length+' prodotti caricati'+(cartAveaProdotti?' · carrello precedente in "Salvati per dopo"':''));
       };})(r);
       resend.appendChild(pdfBtn);resend.appendChild(dupBtn);body.appendChild(resend);
       card.appendChild(body);wrap.appendChild(card);
     });
   }
   renderCards();
+
+  // ═══ SEZIONE 2.5: STORICO RICHIESTE DIPENDENTI ═══
+  // Tutte le richieste ricevute dai dipendenti (non solo quelle ancora da
+  // evadere), con chi le ha mandate e quando, per poterle ritrovare e
+  // reimportare nel carrello anche se già evase o se un ordine viene perso
+  // (Valerio, 30/08: "ho perso l'ordine che mi era arrivato dal dipendente
+  // che dovevo inviare... devo vedere anche gli storici degli ordini
+  // inviati dai dipendenti per vedere chi ha inviato cosa e quando").
+  var richStoricoBody=mkHistSec(el,'📋 Storico richieste dipendenti',null,false);
+  var richStoricoWrap=document.createElement('div');
+  richStoricoWrap.innerHTML='<div style="text-align:center;padding:20px;color:var(--muted);font-size:12px">Caricamento...</div>';
+  richStoricoBody.appendChild(richStoricoWrap);
+  loadRichiesteStoricoSection(richStoricoWrap);
 
   // ═══ SEZIONE 3: REPORT PERSONALIZZATO (chiusa di default) ═══
   var reportBody=mkHistSec(el,'📅 Report personalizzato',null,false);
@@ -8526,6 +8561,89 @@ function importaRichiesta(jsonText, onDone){
 
 /* ── RICHIESTE DA EVADERE (letture da Cloud, no deep-link) ──── */
 var S_pendingRichieste=[];
+/* ── STORICO RICHIESTE DIPENDENTI (tutte, non solo le pending) ─────────
+   Mostrato nella pagina Storico, sezione "📋 Storico richieste dipendenti":
+   permette di vedere chi ha inviato cosa e quando, e di reimportare nel
+   carrello anche una richiesta già evasa — utile per recuperare un ordine
+   perso prima che venisse inviato al fornitore. ──────────────────────── */
+async function loadRichiesteStoricoSection(container){
+  try{
+    var r=await fetch(SUPABASE_URL+'/rest/v1/ceraldi_richieste_storico?order=created_at.desc&limit=500&select=id,dipendente,nota,items,created_at,stato',
+      {headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    var rows=await r.json();
+    renderRichiesteStoricoList(container,rows);
+  }catch(e){
+    container.innerHTML='<div style="text-align:center;padding:20px;color:var(--red);font-size:12px">Errore caricamento: '+e.message+'</div>';
+  }
+}
+function renderRichiesteStoricoList(container,rows){
+  container.innerHTML='';
+  if(!rows.length){
+    container.innerHTML='<div style="text-align:center;padding:24px 10px;color:var(--muted);font-size:12px">Nessuna richiesta ricevuta finora</div>';
+    return;
+  }
+  var dipendenti=['Tutti'].concat(Array.from(new Set(rows.map(function(r){return r.dipendente;}))).sort());
+  var currentFilter='Tutti';
+  var frow=document.createElement('div');frow.className='h-filters';frow.style.cssText='margin:4px 0 8px;flex-wrap:wrap';
+  var listWrap=document.createElement('div');
+  var statoInfo={pending:['⏳ In attesa','var(--gold)'],importata:['✅ Importata','var(--green)'],scartata:['🗑️ Scartata','var(--muted)']};
+  function draw(){
+    listWrap.innerHTML='';
+    var filtered=currentFilter==='Tutti'?rows:rows.filter(function(r){return r.dipendente===currentFilter;});
+    if(!filtered.length){
+      listWrap.innerHTML='<div style="text-align:center;padding:16px;color:var(--muted);font-size:12px">Nessuna richiesta per questo dipendente</div>';
+      return;
+    }
+    filtered.forEach(function(rec){
+      var d=new Date(rec.created_at);
+      var ds=d.toLocaleDateString('it-IT',{day:'numeric',month:'short',year:'numeric'})+' · '+d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});
+      var si=statoInfo[rec.stato]||[rec.stato||'','var(--muted)'];
+      var card=document.createElement('div');
+      card.style.cssText='background:var(--bg);border:1.5px solid var(--border);border-radius:11px;padding:11px 13px;margin-bottom:8px';
+      var top=document.createElement('div');
+      top.style.cssText='display:flex;justify-content:space-between;align-items:flex-start;gap:8px;cursor:pointer';
+      top.innerHTML='<div style="min-width:0"><div style="font-weight:700;color:var(--text);font-size:13px">'+rec.dipendente+'</div>'
+        +'<div style="font-size:11px;color:var(--muted);margin-top:1px">'+ds+' · '+rec.items.length+' prodott'+(rec.items.length===1?'o':'i')+(rec.nota?' · 📝 '+rec.nota:'')+'</div></div>'
+        +'<div style="font-size:10.5px;font-weight:700;color:'+si[1]+';white-space:nowrap;flex-shrink:0">'+si[0]+'</div>';
+      card.appendChild(top);
+      var itemsBody=document.createElement('div');
+      itemsBody.style.cssText='display:none;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)';
+      rec.items.forEach(function(it){
+        var row=document.createElement('div');row.style.cssText='display:flex;justify-content:space-between;font-size:12px;color:var(--text);padding:2px 0';
+        row.innerHTML='<span>'+it.name+(it.conf?' ('+it.conf+')':'')+'</span><span style="font-weight:600">x'+(it.qty||1)+'</span>';
+        itemsBody.appendChild(row);
+      });
+      var recoverBtn=document.createElement('button');
+      recoverBtn.style.cssText='width:100%;margin-top:9px;padding:9px;border-radius:9px;border:none;background:var(--gold);color:#fff;font-size:12.5px;font-weight:700;cursor:pointer';
+      recoverBtn.textContent='↩️ Recupera nel carrello';
+      recoverBtn.onclick=function(e){
+        e.stopPropagation();
+        var payload={dipendente:rec.dipendente,data:rec.created_at,nota:rec.nota||'',items:rec.items};
+        importaRichiesta(JSON.stringify(payload),function(){
+          if(rec.stato==='pending')markRichiestaImportata(rec.id);
+        });
+      };
+      itemsBody.appendChild(recoverBtn);
+      card.appendChild(itemsBody);
+      var expanded=false;
+      top.onclick=function(){expanded=!expanded;itemsBody.style.display=expanded?'block':'none';};
+      listWrap.appendChild(card);
+    });
+  }
+  dipendenti.forEach(function(dn){
+    var b=document.createElement('button');b.className='h-pill'+(dn===currentFilter?' on':'');b.textContent=dn;
+    b.onclick=function(){
+      currentFilter=dn;
+      frow.querySelectorAll('.h-pill').forEach(function(p){p.classList.toggle('on',p.textContent===dn);});
+      draw();
+    };
+    frow.appendChild(b);
+  });
+  container.appendChild(frow);
+  container.appendChild(listWrap);
+  draw();
+}
 async function refreshPendingRichieste(){
   try{
     var r=await fetch(SUPABASE_URL+'/rest/v1/ceraldi_richieste_storico?stato=eq.pending&order=created_at.desc&select=id,dipendente,nota,items,created_at',
