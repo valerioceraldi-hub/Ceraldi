@@ -407,7 +407,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.30.94</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.30.96</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -11765,7 +11765,15 @@ function _chgRecalc(){
     el.style.background = 'var(--red-light)';
     el.style.color = 'var(--red)';
     const verso = diff > 0 ? 'in più incassato' : 'mancano';
-    el.innerHTML = `⚠️ Differenza ${fmt(absDiff)} — ${verso}<br><span style="font-size:12px;font-weight:500">Corrispettivi ${fmt(totale)} · Cassa+POS ${fmt(incassatoTot)}</span>`;
+    // FIX 31/08 (richiesto da Valerio: "se Numia non lo inserisco
+    // permettimi di fare sempre la chiusura"): il salvataggio non è mai
+    // stato bloccato da questo avviso — ma il rosso può far pensare il
+    // contrario. Se manca proprio Numia, lo si dice esplicitamente: si
+    // può salvare comunque, e Numia si aggiunge anche più tardi dalla
+    // riconciliazione quando arriva l'estratto banca.
+    const numiaVuoto = !(_pNum(gv('chgPosNumia')) > 0);
+    const notaNumia = numiaVuoto ? '<br><span style="font-size:11px;color:var(--ink3)">Numia non ancora inserito — puoi salvare comunque, lo aggiungi anche più tardi dalla riconciliazione.</span>' : '';
+    el.innerHTML = `⚠️ Differenza ${fmt(absDiff)} — ${verso}<br><span style="font-size:12px;font-weight:500">Corrispettivi ${fmt(totale)} · Cassa+POS ${fmt(incassatoTot)}</span>${notaNumia}`;
   }
 }
 
@@ -16660,56 +16668,74 @@ function renderRiconciliazione(){
     posSumupBancaProv[x.data] += (x.importo||0);
   });
 
-  // ═══ 3. CONFRONTO POS NUMIA ═══
-  // FIX 30/08 (segnalato da Valerio: "non si capisce niente, confondi
-  // SumUp con il totale della chiusura"): Numia deposita in banca con
-  // qualche giorno di ritardo rispetto alla vendita — per i giorni molto
-  // recenti è NORMALE che "banca ricostruita" sia più bassa del Fiscale
-  // (manca ancora la parte Numia, non è arrivata). Prima questi giorni
-  // finivano mescolati con veri scostamenti da controllare, con la stessa
-  // urgenza visiva — ecco la vera fonte di confusione. Ora sono separati:
-  // sotto GIORNI_GRAZIA_NUMIA non sono un problema, sono solo "in attesa".
-  var GIORNI_GRAZIA_NUMIA = 4;
-  var _oggiPos = new Date(); _oggiPos.setHours(0,0,0,0);
-  var posDiscrepanze = [];
-  var posDaCompilare = [];
-  var posProvvisori = []; // giorni recenti, Numia probabilmente non ancora arrivato — solo informativo
-  // Unione dei giorni con dato Numia (banca) E/o SumUp (vendite sincronizzate)
-  // — prima si guardavano SOLO i giorni con un movimento Numia in banca, quindi
-  // un giorno con solo vendite SumUp (nessun Numia quel giorno) non compariva mai.
-  var _giorniPosTutti = Object.keys(Object.assign({}, posNumiaBanca, posSumupBancaProv));
+  // ═══ 3. CONFRONTO POS ═══
+  // FIX 31/08 (redesign su indicazione precisa di Valerio, dopo il caso
+  // reale del 24 agosto: Numia aveva transato 243,90€ ma la sezione
+  // mostrava solo SumUp, 876,40€, senza permettergli di inserire il dato
+  // che lui già conosceva). Il flusso corretto, come descritto da Valerio:
+  // - Numia arriva in due modi: inserito A MANO a fine giornata, OPPURE
+  //   estratto più tardi dall'estratto conto banca (con qualche giorno di
+  //   ritardo). Se ENTRAMBI arrivano e non corrispondono, è un conflitto
+  //   da segnalare. Se manca del tutto, va chiesto di inserirlo — non
+  //   fatto aspettare in silenzio (l'idea del "periodo di grazia" della
+  //   volta scorsa era sbagliata: lui il dato Numia spesso lo conosce già
+  //   lo stesso giorno, non deve aspettare la banca).
+  // - Fiscale (quello scritto in chiusura) va sempre confrontato con
+  //   Numia+SumUp, e lo scostamento va mostrato — sempre indicando IL
+  //   GIORNO preciso, mai solo un riepilogo.
+  var posManutenzioneNumia = []; // giorni dove manca Numia, o Numia manuale e banca non coincidono
+  var posScostamentoFiscale = []; // giorni dove Fiscale ≠ Numia+SumUp
+  var posDiscrepanze = []; // banca già salvata vs banca ricalcolata ora (INVARIATO, Valerio conferma che va bene così)
+  var _giorniPosTutti = Object.keys(Object.assign({}, posNumiaBanca, posSumupBancaProv,
+    (typeof chiusure!=='undefined' ? Object.fromEntries((chiusure||[]).filter(function(c){return c.pos_numia!=null || c.pos!=null;}).map(function(c){return [c.data,true];})) : {})));
   _giorniPosTutti.forEach(function(data){
-    var totBanca = Math.round(((posNumiaBanca[data]||0) + (posSumupBancaProv[data]||0))*100)/100;
     if(typeof chiusure==='undefined') return;
     var ch = chiusure.find(function(c){return c.data===data;});
-    var posNumiaSola = Math.round((posNumiaBancaProv[data]||0)*100)/100;
-    var posSumupSola = Math.round((posSumupBancaProv[data]||0)*100)/100;
-    var giorniFa = Math.round((_oggiPos - new Date(data+'T00:00:00')) / 86400000);
-    var recente = giorniFa >= 0 && giorniFa < GIORNI_GRAZIA_NUMIA;
-    if(!ch){
-      if(recente) posProvvisori.push({data:data, totBanca:totBanca, posNumia:posNumiaSola, posSumup:posSumupSola, posFiscale:null});
-      else posDaCompilare.push({data:data, totBanca:totBanca, posNumia:posNumiaSola, posSumup:posSumupSola});
-      return;
+    var numiaBanca = posNumiaBanca.hasOwnProperty(data) ? Math.round((posNumiaBancaProv[data]||0)*100)/100 : null;
+    var sumup = Math.round((posSumupBancaProv[data]||0)*100)/100;
+    var numiaManuale = (ch && ch.pos_numia!=null) ? Math.round(ch.pos_numia*100)/100 : null;
+    var fiscale = (ch && ch.pos!=null) ? Math.round(ch.pos*100)/100 : null;
+
+    // 1) Conflitto, mancanza, o Numia trovato in banca ma mai confermato
+    if(numiaManuale!=null && numiaBanca!=null && Math.abs(numiaManuale-numiaBanca)>0.50){
+      posManutenzioneNumia.push({data:data, tipo:'conflitto', numiaManuale:numiaManuale, numiaBanca:numiaBanca, sumup:sumup, fiscale:fiscale, chiusura:ch});
+    } else if(numiaManuale==null && numiaBanca==null && ch){
+      // C'è una chiusura ma Numia non si sa da nessuna delle due fonti — va chiesto.
+      posManutenzioneNumia.push({data:data, tipo:'manca', sumup:sumup, fiscale:fiscale, chiusura:ch});
+    } else if(numiaManuale==null && numiaBanca!=null && ch){
+      // FIX 31/08 (richiesto da Valerio: "se Numia non è inserito e arriva
+      // l'estratto conto banca, fammelo vedere e fammelo inserire,
+      // facendomi vedere i dati che ho in chiusura tra SumUp e Fiscale") —
+      // prima questo caso non veniva mostrato per niente: il dato trovato
+      // in banca veniva usato in silenzio solo per il calcolo, mai
+      // proposto per la conferma/salvataggio in pos_numia.
+      posManutenzioneNumia.push({data:data, tipo:'da_confermare', numiaBanca:numiaBanca, sumup:sumup, fiscale:fiscale, chiusura:ch});
     }
+
+    // 2) Scostamento Fiscale vs Numia+SumUp (usa il manuale se c'è, altrimenti quello da banca)
+    var numiaScelto = numiaManuale!=null ? numiaManuale : numiaBanca;
+    if(fiscale!=null && numiaScelto!=null){
+      var totRicostruito = Math.round((numiaScelto + sumup)*100)/100;
+      var scost = Math.round((totRicostruito - fiscale)*100)/100;
+      if(Math.abs(scost) > 0.50){
+        posScostamentoFiscale.push({data:data, fiscale:fiscale, numia:numiaScelto, sumup:sumup, totRicostruito:totRicostruito, scostamento:scost, fonteNumia: numiaManuale!=null?'manuale':'banca'});
+      }
+    }
+
+    // 3) Banca già salvata vs banca ricalcolata ora (INVARIATO)
+    var totBanca = Math.round(((posNumiaBanca[data]||0) + (posSumupBancaProv[data]||0))*100)/100;
+    if(!ch) return;
     var posBancaSalvato = Math.round((ch.pos_banca||0)*100)/100;
-    var posFiscale = Math.round((ch.pos||0)*100)/100;
-    if(posBancaSalvato === 0){
-      // POS banca non ancora registrato: mostra come da compilare, a meno
-      // che il giorno sia troppo recente (Numia probabilmente incompleto).
-      if(recente) posProvvisori.push({data:data, totBanca:totBanca, posNumia:posNumiaSola, posSumup:posSumupSola, posFiscale:posFiscale, chiusura:ch});
-      else posDaCompilare.push({data:data, totBanca:totBanca, posNumia:posNumiaSola, posSumup:posSumupSola, chiusura:ch});
-    } else if(Math.abs(posBancaSalvato - totBanca) > 0.50){
+    if(posBancaSalvato > 0 && Math.abs(posBancaSalvato - totBanca) > 0.50){
       // ATTENZIONE: qui si confronta il valore di pos_banca già salvato in
       // precedenza con quello ricalcolato ORA dall'estratto conto — NON è
-      // un confronto banca-vs-fiscale (il fiscale, ch.pos, è riportato solo
-      // come riferimento in più). Una differenza qui significa che sono
+      // un confronto banca-vs-fiscale. Una differenza qui significa che sono
       // arrivate righe nuove/diverse sull'estratto rispetto a quando è
-      // stato salvato l'ultima volta (es. un canale — Numia o SumUp — non
-      // ancora incluso al momento del salvataggio precedente), OPPURE che
-      // la cache locale dei movimenti banca è incompleta rispetto a quando
-      // fu salvato (vedi bottone "Ricarica tutti i movimenti da zero" più
-      // sotto, se il numero nuovo sembra sbagliato per difetto).
-      posDiscrepanze.push({data:data, totBanca:totBanca, posApp:posBancaSalvato, posFiscale:posFiscale, posNumia:posNumiaSola, posSumup:posSumupSola, chiusura:ch});
+      // stato salvato l'ultima volta, OPPURE che la cache locale dei
+      // movimenti banca è incompleta (vedi bottone "Ricarica tutti i
+      // movimenti da zero" più sotto, se il numero nuovo sembra sbagliato
+      // per difetto).
+      posDiscrepanze.push({data:data, totBanca:totBanca, posApp:posBancaSalvato, posFiscale:fiscale, posNumia:numiaBanca||0, posSumup:sumup, chiusura:ch});
     }
   });
 
@@ -16770,49 +16796,65 @@ function renderRiconciliazione(){
     }
   }
 
-  // ═══ SEZIONE 2: POS — confronto tra il Fiscale dichiarato in chiusura e
-  // il totale ricostruito da banca (Numia, con ritardo) + SumUp (in tempo
-  // reale via API). FIX 30/08 (segnalato da Valerio: "non si capisce
-  // niente, confondi SumUp col totale della chiusura"): prima "Fiscale" e
-  // "Banca" comparivano con etichette diverse a seconda della sezione — ora
-  // sono sempre le stesse due, in ogni riga, in ogni sezione.
-  if(posProvvisori.length){
-    html += '<div style="background:var(--surface);border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow);border-left:3px solid var(--ink3)">';
-    html += '<div style="font-size:13px;font-weight:700;color:var(--ink2)">🕐 In attesa di Numia ('+posProvvisori.length+')</div>';
-    html += '<div style="font-size:11px;color:var(--ink3);margin-top:2px;margin-bottom:10px">Giorni recenti: Numia deposita in banca con qualche giorno di ritardo, quindi il totale banca qui sotto è ancora incompleto — non è un errore, si completa da solo. Nessuna azione da fare.</div>';
-    posProvvisori.forEach(function(p){
-      html += '<div style="padding:7px 0;border-top:1px solid var(--sep);font-size:12px;display:flex;flex-wrap:wrap;gap:10px;justify-content:space-between">';
-      html += '<b>'+p.data+'</b>';
-      html += '<span>📠 Fiscale: <b>'+(p.posFiscale!=null?fmt(p.posFiscale):'—')+'</b></span>';
-      html += '<span style="color:var(--ink3)">🏦 Banca finora (solo SumUp): <b>'+fmt(p.totBanca)+'</b></span>';
+  // ═══ SEZIONE 2: POS — tre controlli distinti, ciascuno con le date
+  // precise (mai solo un riepilogo), come richiesto da Valerio il 31/08.
+  if(posManutenzioneNumia.length){
+    html += '<div style="background:var(--surface);border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow);border-left:3px solid var(--orange)">';
+    html += '<div style="font-size:13px;font-weight:700;color:#b36a00">🔵 Numia da inserire o verificare ('+posManutenzioneNumia.length+')</div>';
+    html += '<div style="font-size:11px;color:var(--ink3);margin-top:2px;margin-bottom:10px">Inserito a mano a fine giornata, oppure trovato più tardi nell\'estratto banca — qui i giorni dove manca uno dei due, o dove i due non coincidono.</div>';
+    window._posManutenzioneNumia = posManutenzioneNumia;
+    posManutenzioneNumia.forEach(function(p, i){
+      html += '<div style="padding:9px 0;border-top:1px solid var(--sep);font-size:13px">';
+      html += '<div style="font-weight:600;margin-bottom:4px">'+p.data+'</div>';
+      if(p.tipo==='conflitto'){
+        html += '<div style="font-size:11px;color:var(--ink3);display:flex;flex-wrap:wrap;gap:10px;margin-bottom:6px">';
+        html += '<span>✍️ Numia inserito a mano: <b>'+fmt(p.numiaManuale)+'</b></span>';
+        html += '<span>🏦 Numia trovato in banca: <b>'+fmt(p.numiaBanca)+'</b></span>';
+        html += '</div>';
+        html += '<div style="font-size:11px;color:var(--red);font-weight:600;margin-bottom:6px">⚠️ I due non coincidono — quale è giusto?</div>';
+        html += '<div style="display:flex;gap:8px">';
+        html += '<button onclick="_risolviConflittoNumia('+i+',\'manuale\')" style="flex:1;padding:7px;border:1px solid var(--orange);border-radius:6px;background:transparent;color:#b36a00;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">Tieni il mio ('+fmt(p.numiaManuale)+')</button>';
+        html += '<button onclick="_risolviConflittoNumia('+i+',\'banca\')" style="flex:1;padding:7px;border:1px solid #0066cc;border-radius:6px;background:transparent;color:#0066cc;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">Usa quello di banca ('+fmt(p.numiaBanca)+')</button>';
+        html += '</div>';
+      } else if(p.tipo==='da_confermare'){
+        html += '<div style="font-size:11px;color:var(--ink3);margin-bottom:6px">📠 Fiscale: <b>'+(p.fiscale!=null?fmt(p.fiscale):'—')+'</b> · 🟣 SumUp: <b>'+fmt(p.sumup)+'</b></div>';
+        html += '<div style="font-size:11px;color:#0066cc;margin-bottom:6px">🏦 Numia trovato ora nell\'estratto banca: <b>'+fmt(p.numiaBanca)+'</b> — confermi?</div>';
+        html += '<button onclick="_risolviConflittoNumia('+i+',\'banca\')" style="width:100%;padding:8px;border:none;border-radius:8px;background:#0066cc;color:#fff;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">✓ Conferma '+fmt(p.numiaBanca)+'</button>';
+      } else {
+        html += '<div style="font-size:11px;color:var(--ink3);margin-bottom:6px">📠 Fiscale: <b>'+(p.fiscale!=null?fmt(p.fiscale):'—')+'</b> · 🟣 SumUp: <b>'+fmt(p.sumup)+'</b> · Numia: <span style="color:var(--red)">non ancora saputo</span></div>';
+        html += '<div style="display:flex;gap:8px;align-items:center">';
+        html += '<input type="text" id="numiaInput'+i+'" inputmode="decimal" placeholder="Quanto ha transato Numia" style="flex:1;padding:8px 10px;border:1.5px solid var(--sep);border-radius:8px;font-size:13px;box-sizing:border-box">';
+        html += '<button onclick="_salvaNumiaManuale('+i+')" style="padding:8px 14px;border:none;border-radius:8px;background:var(--orange);color:#fff;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">💾 Salva</button>';
+        html += '</div>';
+      }
       html += '</div>';
     });
     html += '</div>';
   }
-  if(posDaCompilare.length || posDiscrepanze.length){
-    html += '<div style="background:var(--surface);border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow);border-left:3px solid var(--orange)">';
-    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">';
-    html += '<div><div style="font-size:13px;font-weight:700;color:#b36a00">💳 POS: '+posDaCompilare.length+' da registrare, '+posDiscrepanze.length+' da verificare</div>';
-    html += '<div style="font-size:11px;color:var(--ink3);margin-top:2px">Confronto tra il Fiscale scritto in chiusura e il totale ricostruito da banca (Numia + SumUp)</div></div>';
-    if(posDaCompilare.length){
-      html += '<button onclick="_compilaTuttiPOS()" style="padding:8px 14px;border:none;border-radius:8px;background:var(--orange);color:#fff;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">⚡ Registra tutti</button>';
-    }
-    html += '</div>';
-    window._posDaCompilare = posDaCompilare;
-    window._posDiscrepanze = posDiscrepanze;
-    posDaCompilare.forEach(function(p, i){
-      var breakdownC = (p.posNumia>0 && p.posSumup>0) ? ' (Numia '+fmt(p.posNumia)+' + SumUp '+fmt(p.posSumup)+')' : '';
-      html += '<div style="padding:8px 0;border-top:1px solid var(--sep);font-size:13px">';
-      html += '<div style="display:flex;justify-content:space-between;align-items:center">';
-      html += '<div><div style="font-weight:600">'+p.data+'</div>';
-      html += '<div style="font-size:11px;color:var(--ink3);display:flex;flex-wrap:wrap;gap:10px">';
-      html += '<span>📠 Fiscale: <b>'+(p.chiusura?fmt(p.chiusura.pos||0):'—')+'</b>'+(p.chiusura?'':' (nessuna chiusura per questo giorno)')+'</span>';
-      html += '<span style="color:#0066cc">🏦 Banca ricostruita: <b>'+fmt(p.totBanca)+'</b>'+breakdownC+'</span>';
-      html += '</div></div>';
-      html += '<div style="display:flex;align-items:center;gap:10px">';
-      html += '<button onclick="_compilaPOS('+i+')" style="padding:5px 10px;border:1px solid var(--orange);border-radius:6px;background:transparent;color:#b36a00;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">⚡ Registra POS banca</button>';
-      html += '</div></div></div>';
+  if(posScostamentoFiscale.length){
+    html += '<div style="background:var(--surface);border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow);border-left:3px solid var(--red)">';
+    html += '<div style="font-size:13px;font-weight:700;color:var(--red)">⚠️ Fiscale non torna con Numia + SumUp ('+posScostamentoFiscale.length+')</div>';
+    html += '<div style="font-size:11px;color:var(--ink3);margin-top:2px;margin-bottom:10px">Il totale POS scritto in chiusura è diverso da quanto risulta transato — da controllare a mano, l\'app non può correggerlo da sola.</div>';
+    posScostamentoFiscale.forEach(function(p){
+      var col = p.scostamento>0 ? '#1a7a3a' : 'var(--red)';
+      html += '<div style="padding:8px 0;border-top:1px solid var(--sep);font-size:12px">';
+      html += '<div style="font-weight:600;margin-bottom:2px">'+p.data+'</div>';
+      html += '<div style="color:var(--ink3);display:flex;flex-wrap:wrap;gap:10px">';
+      html += '<span>📠 Fiscale: <b>'+fmt(p.fiscale)+'</b></span>';
+      html += '<span>Numia'+(p.fonteNumia==='manuale'?' (a mano)':' (banca)')+': <b>'+fmt(p.numia)+'</b></span>';
+      html += '<span>🟣 SumUp: <b>'+fmt(p.sumup)+'</b></span>';
+      html += '<span>= Totale: <b>'+fmt(p.totRicostruito)+'</b></span>';
+      html += '</div>';
+      html += '<div style="color:'+col+';font-weight:600;margin-top:2px">Scostamento: '+(p.scostamento>0?'+':'')+fmt(p.scostamento)+'</div>';
+      html += '</div>';
     });
+    html += '</div>';
+  }
+  if(posDiscrepanze.length){
+    html += '<div style="background:var(--surface);border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow);border-left:3px solid var(--orange)">';
+    html += '<div style="font-size:13px;font-weight:700;color:#b36a00">💳 Estratto conto banca — da verificare ('+posDiscrepanze.length+')</div>';
+    html += '<div style="font-size:11px;color:var(--ink3);margin-top:2px;margin-bottom:10px">Il POS banca già salvato in passato è diverso da quello ricalcolato ora dall\'estratto conto</div>';
+    window._posDiscrepanze = posDiscrepanze;
     posDiscrepanze.forEach(function(p, i){
       // Qui si confronta il totale banca GIÀ SALVATO con quello RICALCOLATO
       // ORA dall'estratto — non è "banca contro fiscale" (il fiscale resta
@@ -18642,6 +18684,41 @@ async function _compilaPOSItem(p){
   if(typeof salvaChiusureLocale==='function') salvaChiusureLocale();
   if(_reconReport) _reconReport.posCompilati.push({data:p.data, importo:p.totBanca, nuova:nuovaChiusuraCreata});
   // NON chiama renderRiconciliazione qui — lo fa _compilaTuttiPOS alla fine
+}
+
+// FIX 31/08 (nuovo flusso Numia, indicato da Valerio): salva un valore
+// Numia inserito a mano quando non se ne sa nulla da nessuna delle due
+// fonti — stesso schema di scrittura già usato da _correggiPOS.
+async function _salvaNumiaManuale(idx){
+  var p = (window._posManutenzioneNumia||[])[idx];
+  if(!p || !p.chiusura) return;
+  var input = document.getElementById('numiaInput'+idx);
+  var val = _pNum(input ? input.value : '');
+  if(!(val > 0)){ toast('⚠️ Inserisci un importo valido'); return; }
+  p.chiusura.pos_numia = val;
+  p.chiusura.updated_at = new Date().toISOString();
+  try{
+    await sbFetch('chiusure_giornaliere?id=eq.'+p.chiusura.id, {method:'PATCH', headers:Object.assign({}, SB_H, {'Prefer':'return=minimal'}), body: JSON.stringify({pos_numia:val, updated_at:p.chiusura.updated_at})});
+  }catch(e){ toast('⚠️ Errore: '+String(e.message||e).slice(0,60)); return; }
+  if(typeof salvaChiusureLocale==='function') salvaChiusureLocale();
+  toast('✓ Numia salvato per il '+p.data);
+  if(typeof renderRiconciliazione==='function') renderRiconciliazione();
+}
+
+// Quando Numia manuale e Numia da banca non coincidono, Valerio sceglie
+// quale tenere — scrive quel valore come pos_numia definitivo.
+async function _risolviConflittoNumia(idx, scelta){
+  var p = (window._posManutenzioneNumia||[])[idx];
+  if(!p || !p.chiusura) return;
+  var val = scelta==='banca' ? p.numiaBanca : p.numiaManuale;
+  p.chiusura.pos_numia = val;
+  p.chiusura.updated_at = new Date().toISOString();
+  try{
+    await sbFetch('chiusure_giornaliere?id=eq.'+p.chiusura.id, {method:'PATCH', headers:Object.assign({}, SB_H, {'Prefer':'return=minimal'}), body: JSON.stringify({pos_numia:val, updated_at:p.chiusura.updated_at})});
+  }catch(e){ toast('⚠️ Errore: '+String(e.message||e).slice(0,60)); return; }
+  if(typeof salvaChiusureLocale==='function') salvaChiusureLocale();
+  toast('✓ Numia del '+p.data+' impostato a '+fmt(val));
+  if(typeof renderRiconciliazione==='function') renderRiconciliazione();
 }
 
 async function _correggiPOS(idx){
