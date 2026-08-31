@@ -402,7 +402,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.30.98</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.31.0</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -1073,8 +1073,8 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
       <input type="hidden" id="chgPos">
       <div style="font-size:11px;color:var(--ink3);text-align:right;margin-bottom:10px">Totale pagamenti elettronici: <b id="chgPosTotaleLbl">€ 0,00</b></div>
       <div style="margin-bottom:10px">
-        <div style="font-size:10px;color:#0066cc;margin-bottom:3px">🏦 Estratto conto banca/POS</div>
-        <input type="text" id="chgPosBanca" inputmode="decimal" placeholder="0,00 (se diverso dal POS fiscale)" oninput="_chgRecalc()" style="width:100%;padding:10px;border:1.5px solid #b3d7f5;border-radius:8px;font-size:14px;background:#f0f7ff;box-sizing:border-box;text-align:right">
+        <div style="font-size:10px;color:#0066cc;margin-bottom:3px">🏦 Estratto conto banca/POS (di solito Numia + SumUp insieme)</div>
+        <input type="text" id="chgPosBanca" inputmode="decimal" placeholder="0,00 — lascia vuoto se uguale a Numia+SumUp qui sopra" oninput="_chgRecalc()" style="width:100%;padding:10px;border:1.5px solid #b3d7f5;border-radius:8px;font-size:14px;background:#f0f7ff;box-sizing:border-box;text-align:right">
         <div id="chgPosScostamento" style="font-size:11px;margin-top:4px;display:none"></div>
       </div>
 
@@ -11834,6 +11834,27 @@ function _chgRecalc(){
 async function salvaChiusuraGiornaliera(){
   const data = document.getElementById('chgDataInp').value;
   if(!data){ toast('⚠️ Seleziona una data'); return; }
+
+  // FIX 31/08 (causa trovata di un bug reale, segnalato da Valerio: dal 7 al
+  // 14 agosto "POS banca" era stato salvato con SOLO Numia, senza SumUp —
+  // 1522,20€ spariti l'8 agosto, per dire). La causa: questo campo
+  // "Estratto conto banca/POS" è manuale e separato dal calcolo automatico
+  // Numia+SumUp — chi lo compila può facilmente scriverci solo Numia,
+  // dimenticando SumUp, e l'app lo salvava così senza controllo. Ora, se
+  // c'è un disallineamento con quanto calcolato automaticamente, si avvisa
+  // prima di salvare — resta possibile confermare comunque, per i casi in
+  // cui il valore manuale è davvero voluto.
+  const _numiaChg = _pNum(gv('chgPosNumia'));
+  const _sumupChg = _pNum(gv('chgPosSumUp'));
+  const _bancaManualeChg = _pNum(gv('chgPosBanca'));
+  if(_bancaManualeChg > 0 && (_numiaChg > 0 || _sumupChg > 0)){
+    const _totCalcolatoChg = Math.round((_numiaChg + _sumupChg) * 100) / 100;
+    if(Math.abs(_bancaManualeChg - _totCalcolatoChg) > 0.50){
+      const ok = confirm('Il valore scritto in "Estratto conto banca/POS" ('+fmt(_bancaManualeChg)+') non coincide con Numia + SumUp calcolato qui sopra ('+fmt(_totCalcolatoChg)+').\n\nSe hai scritto solo Numia dimenticando SumUp (o viceversa), il totale salvato risulterebbe sbagliato per difetto.\n\nSalvare comunque il valore manuale?');
+      if(!ok) return;
+    }
+  }
+
   const totale = _pNum(gv('chgTotaleCorrInp'));
   const imponibile = totale / 1.10;
   const ivaDaVersare = totale - imponibile;
@@ -16878,7 +16899,7 @@ function renderRiconciliazione(){
       if(p.tipo==='conflitto'){
         html += '<div style="font-size:11px;color:var(--ink3);display:flex;flex-wrap:wrap;gap:10px;margin-bottom:6px">';
         html += '<span>✍️ Numia inserito a mano: <b>'+fmt(p.numiaManuale)+'</b></span>';
-        html += '<span>🏦 Numia trovato in banca: <b>'+fmt(p.numiaBanca)+'</b></span>';
+        html += '<span>🏦 Numia trovato in banca (BPM): <b>'+fmt(p.numiaBanca)+'</b></span>';
         html += '</div>';
         html += '<div style="font-size:11px;color:var(--red);font-weight:600;margin-bottom:6px">⚠️ I due non coincidono — quale è giusto?</div>';
         html += '<div style="display:flex;gap:8px">';
@@ -16887,7 +16908,7 @@ function renderRiconciliazione(){
         html += '</div>';
       } else if(p.tipo==='da_confermare'){
         html += '<div style="font-size:11px;color:var(--ink3);margin-bottom:6px">📠 Fiscale: <b>'+(p.fiscale!=null?fmt(p.fiscale):'—')+'</b> · 🟣 SumUp: <b>'+fmt(p.sumup)+'</b></div>';
-        html += '<div style="font-size:11px;color:#0066cc;margin-bottom:6px">🏦 Numia trovato ora nell\'estratto banca: <b>'+fmt(p.numiaBanca)+'</b> — confermi?</div>';
+        html += '<div style="font-size:11px;color:#0066cc;margin-bottom:6px">🏦 Numia trovato ora nell\'estratto banca (BPM): <b>'+fmt(p.numiaBanca)+'</b> — confermi?</div>';
         html += '<button onclick="_risolviConflittoNumia('+i+',\'banca\')" style="width:100%;padding:8px;border:none;border-radius:8px;background:#0066cc;color:#fff;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">✓ Conferma '+fmt(p.numiaBanca)+'</button>';
       } else {
         html += '<div style="font-size:11px;color:var(--ink3);margin-bottom:6px">📠 Fiscale: <b>'+(p.fiscale!=null?fmt(p.fiscale):'—')+'</b> · 🟣 SumUp: <b>'+fmt(p.sumup)+'</b> · Numia: <span style="color:var(--red)">non ancora saputo</span></div>';
@@ -16910,7 +16931,7 @@ function renderRiconciliazione(){
       html += '<div style="font-weight:600;margin-bottom:2px">'+p.data+'</div>';
       html += '<div style="color:var(--ink3);display:flex;flex-wrap:wrap;gap:10px">';
       html += '<span>📠 Fiscale: <b>'+fmt(p.fiscale)+'</b></span>';
-      html += '<span>Numia'+(p.fonteNumia==='manuale'?' (a mano)':' (banca)')+': <b>'+fmt(p.numia)+'</b></span>';
+      html += '<span>Numia'+(p.fonteNumia==='manuale'?' (a mano)':' (da BPM)')+': <b>'+fmt(p.numia)+'</b></span>';
       html += '<span>🟣 SumUp: <b>'+fmt(p.sumup)+'</b></span>';
       html += '<span>= Totale: <b>'+fmt(p.totRicostruito)+'</b></span>';
       html += '</div>';
@@ -16936,7 +16957,12 @@ function renderRiconciliazione(){
       var diff = p.totBanca - p.posApp;
       var diffColor = diff > 0 ? '#1a7a3a' : 'var(--red)';
       var diffLabel = diff > 0 ? '🟢 Il nuovo calcolo è più alto' : '🔴 Il nuovo calcolo è più basso — verifica prima di correggere';
-      var breakdown = (p.posNumia>0 && p.posSumup>0) ? ' (Numia '+fmt(p.posNumia)+' + SumUp '+fmt(p.posSumup)+')' : '';
+      // FIX 31/08 (segnalato da Valerio: "banca ricalcolata... senza
+      // specificare quale banca, BPM per Numia o SumUp") — prima il
+      // dettaglio compariva SOLO se entrambi erano diversi da zero; nei
+      // giorni col bug (entrambi a zero) spariva, lasciando un numero
+      // ambiguo senza dire a cosa si riferisce. Ora sempre visibile.
+      var breakdown = ' (Numia (BPM) '+fmt(p.posNumia)+' + SumUp '+fmt(p.posSumup)+')';
       html += '<div style="padding:10px 0;border-top:1px solid var(--sep);font-size:13px">';
       html += '<div style="display:flex;justify-content:space-between;align-items:flex-start">';
       html += '<div style="flex:1"><div style="font-weight:600">'+p.data+'</div>';
