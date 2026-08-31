@@ -6296,6 +6296,11 @@ function buildOrderPDFFromHistory(supName,entries,note,total){
 
 // ── PDF DIRETTAMENTE NELLA PWA (senza finestre esterne) ─────────
 // Helper: assicura che jsPDF sia caricato (con fallback a unpkg)
+// Controllo sincrono, senza attese: dice se jsPDF è già pronto in memoria
+// in questo preciso istante (usato dal tasto Condividi della schermata di
+// riserva per decidere, nel gesto stesso del click, se può condividere il
+// PDF vero e proprio oppure deve ripiegare sul testo — vedi _showPDFPreviewInApp).
+function _jsPDFReady(){return (window.jspdf&&window.jspdf.jsPDF)||window.jsPDF||null;}
 function _ensureJsPDF(cb){
   var ready=function(){return (window.jspdf&&window.jspdf.jsPDF)||window.jsPDF;};
   if(ready()){cb(ready());return;}
@@ -6460,6 +6465,13 @@ function _downloadPDFBytes(bytes,filename){
 
 function _showPDFPreviewInApp(supName,entries,note,total){
   // Overlay anteprima dentro la PWA — nessuna finestra esterna
+  // Avvia SUBITO, in background, un nuovo tentativo di caricare jsPDF: se
+  // il primo tentativo (in buildOrderPDF) è fallito per un CDN lento più
+  // che bloccato, mentre Valerio guarda/scorre questa anteprima la libreria
+  // ha il tempo di arrivare. Così quando poi preme "Condividi" il PDF è
+  // spesso già pronto e si può condividere il file vero e proprio invece
+  // del solo testo (vedi commento sul tasto Condividi più sotto).
+  _ensureJsPDF(function(){});
   var d=new Date().toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'});
   var overlay=document.createElement('div');
   overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:500;display:flex;align-items:flex-end';
@@ -6544,13 +6556,24 @@ function _showPDFPreviewInApp(supName,entries,note,total){
   shareBtn.onclick=function(){
     // FIX (30/08, Valerio: "il tasto condividi non funziona"): prima si
     // ritentava di ricaricare jsPDF via CDN e SOLO quando quel caricamento
-    // (asincrono) finiva si chiamava navigator.share(). Ma se siamo arrivati
-    // a questa schermata di riserva è perché jsPDF non è già riuscito a
-    // caricarsi; ritentarlo qui sposta la chiamata a navigator.share() fuori
-    // dal gesto sincrono dell'utente (il click), e Safari/iOS a quel punto
-    // la blocca in silenzio — nessun errore, nessuna condivisione, il tasto
-    // "sembra" non fare nulla. Ora si condivide subito il testo, in modo
-    // sincrono nel click, con un fallback visibile se anche quello fallisce.
+    // (asincrono) finiva si chiamava navigator.share() — questo sposta la
+    // chiamata fuori dal gesto sincrono dell'utente e Safari/iOS la blocca
+    // in silenzio: nessun errore, nessuna condivisione, il tasto "sembrava"
+    // non fare nulla.
+    // FIX (31/08, Valerio: "non produce un pdf ma un messaggio di testo"):
+    // la correzione precedente era andata all'estremo opposto, condividendo
+    // SEMPRE e solo il testo, anche quando jsPDF nel frattempo si era
+    // caricato (es. grazie al tentativo in background avviato all'apertura
+    // di questa schermata, sopra). Ora si controlla PRIMA, in modo
+    // sincrono e senza attese, se jsPDF è già pronto in memoria: se lo è si
+    // condivide il PDF vero e proprio (chiamata sincrona nel click, quindi
+    // sicura su iOS); solo se non lo è ancora si condivide il testo, subito.
+    var jsPDFReady=_jsPDFReady();
+    if(jsPDFReady){
+      document.body.removeChild(overlay);
+      _sharePDF(supName,entries,note,total,jsPDFReady);
+      return;
+    }
     var msg=buildMsg(supName,entries,total);
     function copyMsgFallback(){
       try{
