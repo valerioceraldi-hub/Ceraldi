@@ -4446,11 +4446,18 @@ function renderSettings(){
     var detBtn=document.createElement('button');detBtn.className='ios-link';detBtn.textContent='Vedi scheda fornitore ›';
     detBtn.onclick=(function(sname){return function(){openSupplierDetail(sname);};})(s.name);
     var delBtn=document.createElement('button');delBtn.className='ios-link danger';delBtn.textContent='Elimina';
-    delBtn.onclick=(function(idx){return function(){
-      if(!confirm('Eliminare questo fornitore?'))return;
-      var removedName=S.suppliers[idx]&&S.suppliers[idx].name;
-      S.suppliers.splice(idx,1);saveState();renderSettings();if(removedName)_sbDeleteFornitore(removedName);
-    };})(i);
+    delBtn.onclick=(function(supRef){return function(){
+      // FIX (01/09, Valerio: "dammi la possibilità di poter eliminare un
+      // fornitore dal catalogo con tutti i suoi prodotti collegati... nel
+      // cestino per 30 giorni"): prima "Elimina" toglieva solo il
+      // fornitore dall'anagrafica — i prodotti che aveva a catalogo, e il
+      // prezzo che teneva sui prodotti condivisi con altri fornitori,
+      // restavano lì (la pulizia automatica prevista nel codice non
+      // funzionava mai: chiamava una funzione mai definita). Ora sposta
+      // fornitore e prodotti esclusivi nel Cestino fornitori qui sotto,
+      // recuperabile per 30 giorni.
+      eliminaFornitoreConCestino(supRef).then(function(ok){if(ok)renderSettings();});
+    };})(s);
     linkRow.appendChild(detBtn);linkRow.appendChild(delBtn);
     row.appendChild(linkRow);
     return row;
@@ -4483,6 +4490,51 @@ function renderSettings(){
   asb.onclick=function(){S.suppliers.push({name:'',whatsapp:'',email:''});_settingsOpenState['Fornitori']=true;renderSettings();};
   supBody.appendChild(asb);
   supSec.appendChild(supBody);
+
+  // ── 1b. CESTINO FORNITORI (collassabile, disegno concordato 01/09) ──
+  var cestBody=mkSecCollapsible('🗑️ Cestino fornitori','');
+  var cestCard=document.createElement('div');cestCard.className='set-card';cestBody.appendChild(cestCard);
+  var cestList=document.createElement('div');
+  cestList.innerHTML='<div style="text-align:center;padding:14px;color:var(--muted);font-size:12px">Caricamento...</div>';
+  cestCard.appendChild(cestList);
+  (function(){
+    caricaCestinoFornitori().then(function(rows){
+      if(rows===null){
+        cestList.innerHTML='<div style="text-align:center;padding:14px;color:var(--muted);font-size:12px;line-height:1.5">Cestino non disponibile — manca la tabella "fornitori_cestino" su Supabase (va creata una volta sola).</div>';
+        return;
+      }
+      purgaCestinoFornitoriScaduto(rows).then(function(purgedIds){
+        if(purgedIds.length)rows=rows.filter(function(r){return purgedIds.indexOf(r.id)<0;});
+        drawCestino(rows);
+      });
+    });
+  })();
+  function drawCestino(rows){
+    cestList.innerHTML='';
+    if(!rows.length){
+      cestList.innerHTML='<div style="text-align:center;padding:14px;color:var(--muted);font-size:12px">Cestino vuoto</div>';
+      return;
+    }
+    rows.forEach(function(row){
+      var giorniPassati=Math.floor((Date.now()-new Date(row.deleted_at).getTime())/86400000);
+      var giorniRest=Math.max(0,FORNITORI_CESTINO_GIORNI-giorniPassati);
+      var nEscl=(row.prodotti_eliminati||[]).length,nMod=(row.prodotti_modificati||[]).length;
+      var card=document.createElement('div');
+      card.style.cssText='background:var(--bg);border:1.5px solid var(--border);border-radius:10px;padding:11px 13px;margin-bottom:8px';
+      card.innerHTML='<div style="font-weight:700;font-size:13.5px;color:var(--text)">'+row.fornitore+'</div>'
+        +'<div style="font-size:11.5px;color:var(--muted);margin-top:2px">'+nEscl+' prodotti eliminati \u00B7 '+nMod+' prezzi rimossi \u00B7 <span style="color:'+(giorniRest<=5?'var(--red)':'var(--gold)')+'">'+giorniRest+' giorni rimasti</span></div>';
+      var btnRow=document.createElement('div');btnRow.style.cssText='display:flex;gap:7px;margin-top:9px';
+      var ripBtn=document.createElement('button');ripBtn.textContent='\u21A9\uFE0F Ripristina';
+      ripBtn.style.cssText='flex:1;padding:9px;border-radius:8px;border:none;background:var(--gold);color:#fff;font-size:12px;font-weight:700;cursor:pointer';
+      ripBtn.onclick=function(){ripBtn.disabled=true;ripBtn.textContent='...';ripristinaFornitoreDaCestino(row).then(function(ok){if(ok)card.remove();else{ripBtn.disabled=false;ripBtn.textContent='\u21A9\uFE0F Ripristina';}});};
+      var delDefBtn=document.createElement('button');delDefBtn.textContent='Elimina subito';
+      delDefBtn.style.cssText='flex:1;padding:9px;border-radius:8px;border:1.5px solid var(--red);background:transparent;color:var(--red);font-size:12px;font-weight:700;cursor:pointer';
+      delDefBtn.onclick=function(){eliminaDefinitivamenteDaCestino(row).then(function(ok){if(ok)card.remove();});};
+      btnRow.appendChild(ripBtn);btnRow.appendChild(delDefBtn);
+      card.appendChild(btnRow);
+      cestList.appendChild(card);
+    });
+  }
 
   // ── 2. CATALOGO (collassabile) ───────────────────────────────
   var catBody=mkSecCollapsible('Catalogo');
@@ -7187,6 +7239,177 @@ async function _sbDeleteFornitore(name){
     }catch(ec){console.warn('[Fornitori] cascade prezzi fallito:',ec.message);}
     return r.ok;
   }catch(e){console.warn('[Fornitori] delete fallito:',e.message);return false;}
+}
+
+/* ── CESTINO FORNITORI (Valerio, 01/09): eliminare un fornitore con tutti i
+   suoi prodotti collegati, recuperabile per 30 giorni prima della
+   cancellazione definitiva da app e Cloud. ─────────────────────────────
+   Richiede una tabella Supabase 'fornitori_cestino' (fornitore, deleted_at,
+   fornitore_meta jsonb, prodotti_eliminati jsonb, prodotti_modificati
+   jsonb) — vedi SQL fornito a parte. Se la tabella non esiste ancora,
+   l'eliminazione si blocca con un avviso invece di procedere senza rete di
+   sicurezza: mai cancellare senza aver salvato prima la copia di recupero. */
+var FORNITORI_CESTINO_GIORNI=30;
+function _productsExclusiveTo(fornitore){
+  return S.products.filter(function(p){
+    return p.prices&&p.prices[fornitore]!=null&&Object.keys(p.prices).length===1;
+  });
+}
+function _productsSharedWith(fornitore){
+  return S.products.filter(function(p){
+    return p.prices&&p.prices[fornitore]!=null&&Object.keys(p.prices).length>1;
+  });
+}
+async function eliminaFornitoreConCestino(sup){
+  var fornitore=sup.name;
+  if(!fornitore){toast('Fornitore senza nome');return false;}
+  var esclusivi=_productsExclusiveTo(fornitore);
+  var condivisi=_productsSharedWith(fornitore);
+  var msg='Eliminare "'+fornitore+'"?\n\n'
+    +esclusivi.length+' prodott'+(esclusivi.length===1?'o è esclusivo':'i sono esclusivi')+' di questo fornitore: '+(esclusivi.length===1?'andrà':'andranno')+' nel cestino insieme a lui.\n'
+    +condivisi.length+' prodott'+(condivisi.length===1?'o':'i')+' condivis'+(condivisi.length===1?'o':'i')+' con altri fornitori: rest'+(condivisi.length===1?'a':'ano')+' a catalogo, solo il prezzo di questo fornitore verrà tolto.\n\n'
+    +'Tutto recuperabile per '+FORNITORI_CESTINO_GIORNI+' giorni dal Cestino fornitori.';
+  if(!confirm(msg))return false;
+  toast('Sposto nel cestino...');
+  var snapshotEsclusivi=esclusivi.map(function(p){return JSON.parse(JSON.stringify(p));});
+  var snapshotModificati=condivisi.map(function(p){return{id:p.id,prices:JSON.parse(JSON.stringify(p.prices)),best:p.best};});
+  var fornitoreMeta={name:sup.name,whatsapp:sup.whatsapp||'',email:sup.email||'',settori:getSupplierSectors(sup.name)||[]};
+  try{
+    var rIns=await fetch(SUPABASE_URL+'/rest/v1/fornitori_cestino',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN,'Prefer':'return=minimal'},
+      body:JSON.stringify([{fornitore:fornitore,fornitore_meta:fornitoreMeta,prodotti_eliminati:snapshotEsclusivi,prodotti_modificati:snapshotModificati}])
+    });
+    if(!rIns.ok){
+      var et=await rIns.text();
+      toast('⚠️ Impossibile creare la copia di recupero — nulla è stato eliminato. Verifica che la tabella "fornitori_cestino" esista su Supabase.');
+      console.warn('[Cestino fornitori] insert fallito:',et);
+      return false;
+    }
+  }catch(e){
+    toast('⚠️ Errore di rete — nulla è stato eliminato: '+e.message);
+    return false;
+  }
+  // Copia di recupero salvata: ora si può procedere con l'eliminazione vera.
+  try{
+    if(esclusivi.length){
+      var idsEsclusivi=esclusivi.map(function(p){return p.id;});
+      await fetch(SUPABASE_URL+'/rest/v1/catalogo_ceraldi?id=in.('+idsEsclusivi.join(',')+')',{
+        method:'DELETE',headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}
+      });
+    }
+    for(var i=0;i<condivisi.length;i++){
+      var p=condivisi[i];
+      var newPrices=Object.assign({},p.prices);delete newPrices[fornitore];
+      var bv=Infinity,bn='';Object.keys(newPrices).forEach(function(s){if(newPrices[s]<bv){bv=newPrices[s];bn=s;}});
+      await fetch(SUPABASE_URL+'/rest/v1/catalogo_ceraldi?id=eq.'+p.id,{
+        method:'PATCH',headers:{'Content-Type':'application/json','apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN,'Prefer':'return=minimal'},
+        body:JSON.stringify({prices:newPrices,best:bn})
+      });
+      p.prices=newPrices;p.best=bn; // aggiorna anche l'oggetto locale, stesso riferimento in BP/S.products
+    }
+    var idxEsclusivi={};esclusivi.forEach(function(p){idxEsclusivi[p.id]=true;});
+    BP=BP.filter(function(p){return !idxEsclusivi[p.id];});
+    S.products=BP.concat(S.custom||[]);
+    var supIdx=S.suppliers.indexOf(sup);
+    if(supIdx>=0)S.suppliers.splice(supIdx,1);
+    saveState();
+    await _sbDeleteFornitoreRowOnly(fornitore);
+    try{_saveCatalogCache(BP);}catch(e){}
+    toast('"'+fornitore+'" spostato nel cestino ✓ — recuperabile per '+FORNITORI_CESTINO_GIORNI+' giorni');
+    return true;
+  }catch(e){
+    toast('⚠️ Copia di recupero salvata, ma l\'eliminazione ha avuto un problema: '+e.message+' — riprova, i dati sono al sicuro nel cestino');
+    return false;
+  }
+}
+// Rimuove solo la riga anagrafica fornitore (fornitori_ordini) — i prezzi
+// sono già stati gestiti a monte in eliminaFornitoreConCestino, quindi qui
+// non serve (e sarebbe sbagliato) rifare anche il cascade sui prezzi.
+async function _sbDeleteFornitoreRowOnly(name){
+  try{
+    await fetch(SUPABASE_URL+'/rest/v1/fornitori_ordini?nome=eq.'+encodeURIComponent(name),{
+      method:'DELETE',headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}
+    });
+  }catch(e){console.warn('[Fornitori] delete riga fallito:',e.message);}
+}
+async function caricaCestinoFornitori(){
+  try{
+    var r=await fetch(SUPABASE_URL+'/rest/v1/fornitori_cestino?order=deleted_at.desc',
+      {headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}});
+    if(!r.ok)return null; // tabella non ancora creata o altro errore — gestito dal chiamante
+    return await r.json();
+  }catch(e){return null;}
+}
+// Elimina dal cestino (silenzioso, best-effort) le voci più vecchie di 30
+// giorni — i prodotti erano già stati tolti da catalogo_ceraldi al momento
+// dello spostamento nel cestino, quindi qui basta far sparire la copia di
+// recupero: da quel momento il fornitore è fuori sia dall'app sia da Cloud,
+// senza più possibilità di ripristino.
+async function purgaCestinoFornitoriScaduto(rows){
+  var now=Date.now();
+  var scaduti=(rows||[]).filter(function(row){
+    var t=new Date(row.deleted_at).getTime();
+    return (now-t)>FORNITORI_CESTINO_GIORNI*86400000;
+  });
+  for(var i=0;i<scaduti.length;i++){
+    try{
+      await fetch(SUPABASE_URL+'/rest/v1/fornitori_cestino?id=eq.'+scaduti[i].id,{
+        method:'DELETE',headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}
+      });
+    }catch(e){console.warn('[Cestino fornitori] purga fallita per id '+scaduti[i].id,e.message);}
+  }
+  return scaduti.map(function(s){return s.id;});
+}
+async function ripristinaFornitoreDaCestino(row){
+  toast('Ripristino "'+row.fornitore+'"...');
+  try{
+    var meta=row.fornitore_meta||{name:row.fornitore};
+    var esclusivi=row.prodotti_eliminati||[];
+    var modificati=row.prodotti_modificati||[];
+    if(esclusivi.length){
+      var rIns=await fetch(SUPABASE_URL+'/rest/v1/catalogo_ceraldi',{
+        method:'POST',
+        headers:{'Content-Type':'application/json','apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN,'Prefer':'resolution=merge-duplicates,return=minimal'},
+        body:JSON.stringify(esclusivi)
+      });
+      if(!rIns.ok){var et=await rIns.text();throw new Error('Ripristino prodotti esclusivi fallito: '+et);}
+    }
+    for(var i=0;i<modificati.length;i++){
+      var m=modificati[i];
+      await fetch(SUPABASE_URL+'/rest/v1/catalogo_ceraldi?id=eq.'+m.id,{
+        method:'PATCH',headers:{'Content-Type':'application/json','apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN,'Prefer':'return=minimal'},
+        body:JSON.stringify({prices:m.prices,best:m.best})
+      });
+    }
+    // Fornitore in anagrafica, se non è già stato ri-creato nel frattempo
+    if(!S.suppliers.some(function(s){return s.name===meta.name;})){
+      S.suppliers.push({name:meta.name,whatsapp:meta.whatsapp||'',email:meta.email||''});
+      if(meta.settori&&meta.settori.length){if(!S.supplierSectors)S.supplierSectors={};S.supplierSectors[meta.name]=meta.settori;saveSupplierSectors();}
+      saveState();
+    }
+    await _sbUpsertFornitore({name:meta.name,whatsapp:meta.whatsapp,email:meta.email},S.suppliers.length-1);
+    await fetch(SUPABASE_URL+'/rest/v1/fornitori_cestino?id=eq.'+row.id,{
+      method:'DELETE',headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}
+    });
+    await loadCatalogFromSupabase(true);
+    buildCats();renderCatalog();renderSettings();
+    toast('"'+meta.name+'" ripristinato ✓ — '+esclusivi.length+' prodotti, '+modificati.length+' prezzi');
+    return true;
+  }catch(e){
+    toast('Errore nel ripristino: '+e.message);
+    return false;
+  }
+}
+async function eliminaDefinitivamenteDaCestino(row){
+  if(!confirm('Eliminare definitivamente "'+row.fornitore+'" dal cestino? I prodotti esclusivi già rimossi non saranno più recuperabili.'))return false;
+  try{
+    await fetch(SUPABASE_URL+'/rest/v1/fornitori_cestino?id=eq.'+row.id,{
+      method:'DELETE',headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}
+    });
+    toast('Eliminato definitivamente');
+    return true;
+  }catch(e){toast('Errore: '+e.message);return false;}
 }
 
 // ── RINOMINA FORNITORE: propaga il nuovo nome ovunque (riga fornitore + prezzi prodotti) ──
