@@ -402,7 +402,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.31.0</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.31.1</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -14015,6 +14015,11 @@ async function ricaricaBancaCompleta(){
     const rows = await sbFetchAll('movimenti_banca?select=*&order=data.desc');
     _bancaMovimenti = (rows||[]).map(_bancaNorm);
     _salvaBancaLocale();
+    try{
+      const righeNumia = await sbFetchAll('v_numia_per_giorno?select=data_vendita,totale_numia');
+      window._numiaPerGiornoDB = {};
+      (righeNumia||[]).forEach(r => { window._numiaPerGiornoDB[r.data_vendita] = parseFloat(r.totale_numia)||0; });
+    }catch(e2){ console.warn('ricaricaBancaCompleta: Numia dal database non aggiornato:', e2.message||e2); }
     if(typeof renderRiconciliazione==='function') renderRiconciliazione();
     toast('✓ Ricaricati '+_bancaMovimenti.length+' movimenti — cache locale sostituita per intero');
   }catch(e){
@@ -14044,6 +14049,19 @@ async function caricaMovimentiBanca(){
       };
     });
   }catch(e){ console.warn('caricaMovimentiBanca: stato riconciliazione stipendi non caricato:', e.message||e); }
+  // FIX 31/08 (dopo una settimana di problemi di cache mai risolti del
+  // tutto — segnalato da Valerio) — Numia per giorno ora si legge SEMPRE
+  // da qui, con una query diretta al database (vista v_numia_per_giorno),
+  // MAI più dalla copia locale di _bancaMovimenti sul telefono. Anche se
+  // quella copia è incompleta o corrotta in qualunque modo, questo dato
+  // specifico resta sempre corretto, perché non dipende da lei.
+  try{
+    const righeNumia = await sbFetch('v_numia_per_giorno?select=data_vendita,totale_numia');
+    window._numiaPerGiornoDB = {};
+    (righeNumia||[]).forEach(r => { window._numiaPerGiornoDB[r.data_vendita] = parseFloat(r.totale_numia)||0; });
+  }catch(e){
+    console.warn('caricaMovimentiBanca: Numia dal database non caricato, si userà il calcolo locale come riserva:', e.message||e);
+  }
   // Cache-first: mostra subito i dati locali
   try{
     const c = JSON.parse(localStorage.getItem(KBANCA)||'[]');
@@ -15974,6 +15992,24 @@ function renderRiconciliazione(){
       altri.push(m);
     }
   });
+
+  // FIX 31/08 (segnalato da Valerio dopo una settimana di problemi di
+  // cache mai risolti del tutto): da qui in poi Numia per giorno NON è più
+  // solo quello che il calcolo qui sopra ha trovato scorrendo la copia
+  // locale (_bancaMovimenti, che può essere incompleta per motivi che non
+  // dipendono da questa schermata) — viene sovrascritto con il dato
+  // caricato direttamente dal database in caricaMovimentiBanca(), sempre
+  // corretto perché non passa da nessuna copia sul telefono. Il calcolo
+  // locale resta come riserva SOLO per i giorni che il database non
+  // conosce ancora (fuori dall'intervallo coperto dalla vista) o se, per
+  // qualche motivo, il caricamento da database non fosse riuscito.
+  if (window._numiaPerGiornoDB) {
+    Object.keys(window._numiaPerGiornoDB).forEach(function(data){
+      var valoreDb = window._numiaPerGiornoDB[data];
+      posNumiaBanca[data] = valoreDb;
+      posNumiaBancaProv[data] = valoreDb;
+    });
+  }
 
   // ═══ 2. ABBINAMENTO INTELLIGENTE PAGAMENTI ═══
   // Livello 1: già registrato in app con stesso metodo → verifica automatica (spunta)
