@@ -14558,9 +14558,32 @@ async function confermaEsportaExcel() {
   }
 }
 
-// ── EXPORT SINTETICO: un foglio unico, una riga per giorno (lavorato o
-// assente), per mandare al commercialista solo l'essenziale senza tutto il
-// report completo (stipendi, movimenti, saldo ferie, ecc). ──
+// ── EXPORT SINTETICO: UNA RIGA PER DIPENDENTE, non per giorno — la prima
+// versione (una riga per ogni singola data) su un mese intero produceva
+// centinaia di righe, tutt'altro che "sintetico" (segnalato da Valerio: "
+// troppo lungo e niente di sintetico"). Ora ogni dipendente ha una sola
+// riga, con i giorni raggruppati in intervalli compatti (es. "17 gg:
+// 01/08-08/08, 10/08-14/08, 24/08-27/08") — pochissime righe, pensato per
+// stare su un'unica pagina anche stampato. NB: la libreria Excel usata
+// (xlsx-js-style) non supporta la scrittura dell'orientamento pagina nel
+// file — l'orizzontale va scelto a mano in stampa, ma il contenuto ora è
+// abbastanza corto da starci comunque su un solo foglio.
+function _formattaDateCompatte(dateArr) {
+  const arr = [...new Set(dateArr)].sort();
+  if (!arr.length) return '';
+  const fmtG = iso => iso.slice(8,10)+'/'+iso.slice(5,7);
+  const gruppi = [];
+  let inizio = arr[0], prec = arr[0];
+  for (let i=1;i<arr.length;i++) {
+    const d = arr[i];
+    const diffGiorni = Math.round((new Date(d+'T12:00:00') - new Date(prec+'T12:00:00'))/86400000);
+    if (diffGiorni === 1) { prec = d; continue; }
+    gruppi.push([inizio, prec]); inizio = d; prec = d;
+  }
+  gruppi.push([inizio, prec]);
+  return gruppi.map(([a,b]) => a===b ? fmtG(a) : fmtG(a)+'-'+fmtG(b)).join(', ');
+}
+
 async function generaExcelPresenzeSintetico(dipIdFiltro, periodo) {
   if (typeof XLSX === 'undefined') { toast('Libreria Excel non caricata, riprova'); return; }
   const dal = periodo.dal, al = periodo.al;
@@ -14575,53 +14598,63 @@ async function generaExcelPresenzeSintetico(dipIdFiltro, periodo) {
   let qAssenze  = sb.from('presenze_assenze').select('dipendente_id,tipo,data_inizio,data_fine,note').in('stato',['approvata','confermata']).or(`and(data_inizio.lte.${al},data_fine.gte.${dal})`);
   if (dipIdFiltro) { qProfili = qProfili.eq('id',dipIdFiltro); qPresenze = qPresenze.eq('dipendente_id',dipIdFiltro); qAssenze = qAssenze.eq('dipendente_id',dipIdFiltro); }
   const [{ data: dipendenti }, { data: presenze }, { data: assenze }] = await Promise.all([qProfili, qPresenze, qAssenze]);
-  const nomeDi = id => { const d = (dipendenti||[]).find(x => x.id === id); return d ? d.nome+(d.cognome?' '+d.cognome:'') : '?'; };
-  const tipiLbl = { ferie:'Ferie', malattia:'Malattia', permesso:'Permesso', altro:'Altro/Permesso' };
 
-  const righe = [];
-  (presenze||[]).forEach(p => righe.push({ dip: nomeDi(p.dipendente_id), data: p.data, tipo: 'Lavorato', note: '' }));
+  // Raccoglie, per ogni dipendente, le date di ogni categoria.
+  const perDip = {};
+  const ensure = id => perDip[id] = perDip[id] || { lavorato:[], ferie:[], malattia:[], altro:[], note:new Set() };
+  (presenze||[]).forEach(p => ensure(p.dipendente_id).lavorato.push(p.data));
   (assenze||[]).filter(a => a.tipo !== 'acconto').forEach(a => {
-    // Una riga per ogni giorno del periodo di assenza, ma solo dentro
-    // l'intervallo esportato — stessa logica di lettura di "giorno per
-    // giorno" già usata altrove nel file per le assenze.
+    const bucket = a.tipo === 'ferie' ? 'ferie' : a.tipo === 'malattia' ? 'malattia' : 'altro';
+    const e = ensure(a.dipendente_id);
     let c = new Date((a.data_inizio > dal ? a.data_inizio : dal)+'T12:00:00');
     const fine = new Date((a.data_fine < al ? a.data_fine : al)+'T12:00:00');
-    while (c <= fine) {
-      righe.push({ dip: nomeDi(a.dipendente_id), data: _isoDate(c), tipo: tipiLbl[a.tipo]||a.tipo, note: a.note||'' });
-      c.setDate(c.getDate()+1);
-    }
+    while (c <= fine) { e[bucket].push(_isoDate(c)); c.setDate(c.getDate()+1); }
+    if (a.note) e.note.add(a.note);
   });
-  righe.sort((x,y) => x.dip < y.dip ? -1 : (x.dip > y.dip ? 1 : (x.data < y.data ? -1 : 1)));
 
-  const dItLoc = iso => iso ? (iso.slice(8,10)+'/'+iso.slice(5,7)+'/'+iso.slice(0,4)) : '';
+  const cellaCategoria = arr => { const u = [...new Set(arr)]; return u.length ? (u.length+' gg: '+_formattaDateCompatte(u)) : '—'; };
+  const righe = (dipendenti||[]).map(d => {
+    const e = perDip[d.id] || { lavorato:[], ferie:[], malattia:[], altro:[], note:new Set() };
+    return {
+      dip: d.nome+(d.cognome?' '+d.cognome:''),
+      lavorato: cellaCategoria(e.lavorato), ferie: cellaCategoria(e.ferie),
+      malattia: cellaCategoria(e.malattia), altro: cellaCategoria(e.altro),
+      note: [...e.note].join('; '),
+    };
+  }).sort((a,b) => a.dip < b.dip ? -1 : 1);
+
   const F = [];
   F.push(['PRESENZE SINTETICHE — '+periodoLbl.toUpperCase()]);
-  F.push(['Un foglio unico: ogni riga è un giorno lavorato o un giorno di assenza (ferie/malattia/permesso), con la relativa data.']);
+  F.push(['Una riga per dipendente. I giorni sono raggruppati in intervalli (es. "01/08-08/08" = dall\'1 all\'8 agosto compresi).']);
   F.push([]);
-  F.push(['Dipendente','Data','Tipo','Note']);
-  righe.forEach(r => F.push([r.dip, dItLoc(r.data), r.tipo, r.note]));
-  if (!righe.length) F.push(['Nessun dato nel periodo','','','']);
+  F.push(['Dipendente','Giorni lavorati','Ferie','Malattia','Permesso/Altro','Note']);
+  righe.forEach(r => F.push([r.dip, r.lavorato, r.ferie, r.malattia, r.altro, r.note]));
+  if (!righe.length) F.push(['Nessun dato nel periodo','','','','','']);
 
   const ws = XLSX.utils.aoa_to_sheet(F);
-  ws['!cols'] = [{wch:26},{wch:14},{wch:16},{wch:40}];
-  ws['!merges'] = [{s:{r:0,c:0},e:{r:0,c:3}},{s:{r:1,c:0},e:{r:1,c:3}}];
+  ws['!cols'] = [{wch:22},{wch:34},{wch:26},{wch:22},{wch:22},{wch:38}];
+  ws['!merges'] = [{s:{r:0,c:0},e:{r:0,c:5}},{s:{r:1,c:0},e:{r:1,c:5}}];
   ws['!freeze'] = { xSplit:1, ySplit:4 };
+  // Margini stretti: aiutano a stare su una pagina quando si stampa (vedi
+  // nota in testa alla funzione sul limite della libreria per l'orientamento).
+  ws['!margins'] = { left:0.3, right:0.3, top:0.4, bottom:0.4, header:0.2, footer:0.2 };
   const bordoSottile = { style:'thin', color:{rgb:'CBD5E1'} };
   const bordoCella = { top:bordoSottile, bottom:bordoSottile, left:bordoSottile, right:bordoSottile };
   const setSt = (r,c,s) => { const ref = XLSX.utils.encode_cell({r,c}); if (!ws[ref]) ws[ref] = { t:'s', v:'' }; ws[ref].s = Object.assign({}, ws[ref].s, s); };
-  for (let c=0;c<4;c++) setSt(0,c,{ font:{ bold:true, sz:14, color:{rgb:'1E293B'} } });
-  for (let c=0;c<4;c++) setSt(1,c,{ font:{ italic:true, sz:10, color:{rgb:'64748B'} } });
-  for (let c=0;c<4;c++) setSt(3,c,{ font:{ bold:true, sz:11, color:{rgb:'FFFFFF'} }, fill:{ fgColor:{rgb:'2B4ACB'} }, alignment:{ horizontal:'center', vertical:'center', wrapText:true }, border:bordoCella });
+  for (let c=0;c<6;c++) setSt(0,c,{ font:{ bold:true, sz:14, color:{rgb:'1E293B'} } });
+  for (let c=0;c<6;c++) setSt(1,c,{ font:{ italic:true, sz:10, color:{rgb:'64748B'} } });
+  for (let c=0;c<6;c++) setSt(3,c,{ font:{ bold:true, sz:11, color:{rgb:'FFFFFF'} }, fill:{ fgColor:{rgb:'2B4ACB'} }, alignment:{ horizontal:'center', vertical:'center', wrapText:true }, border:bordoCella });
   ws['!rows'] = ws['!rows'] || [];
-  ws['!rows'][3] = { hpx: 34 };
+  ws['!rows'][3] = { hpx: 30 };
   const ultimaRiga = 3 + Math.max(righe.length,1);
   for (let r=4;r<=ultimaRiga;r++) {
     const alt = (r-4) % 2 === 1;
-    for (let c=0;c<4;c++) setSt(r,c, Object.assign({ border:bordoCella, alignment:{ vertical:'center', horizontal:'left', wrapText:true } }, alt ? { fill:{ fgColor:{rgb:'F8FAFC'} } } : {}));
-    ws['!rows'][r] = { hpx: 30 };
+    for (let c=0;c<6;c++) setSt(r,c, Object.assign({ border:bordoCella, alignment:{ vertical:'center', horizontal:'left', wrapText:true } }, alt ? { fill:{ fgColor:{rgb:'F8FAFC'} } } : {}));
+    ws['!rows'][r] = { hpx: 32 };
   }
-  ws['!autofilter'] = { ref: XLSX.utils.encode_range({s:{r:3,c:0}, e:{r:ultimaRiga, c:3}}) };
+  ws['!autofilter'] = { ref: XLSX.utils.encode_range({s:{r:3,c:0}, e:{r:ultimaRiga, c:5}}) };
 
+  const nomeDi = id => { const d = (dipendenti||[]).find(x => x.id === id); return d ? d.nome+(d.cognome?' '+d.cognome:'') : ''; };
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Presenze sintetiche');
   const nomeFile = 'Presenze_sintetiche_'+(dipIdFiltro ? nomeDi(dipIdFiltro).replace(/\s+/g,'_')+'_' : '')+dal+'_'+al+'.xlsx';
