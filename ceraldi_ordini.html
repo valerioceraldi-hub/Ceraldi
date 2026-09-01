@@ -664,6 +664,29 @@ function authScheduleRefresh(sess){
   var msLeft=(sess.expires_at*1000)-Date.now()-60000; // rinnova 60s prima della scadenza
   _authRefreshTimer=setTimeout(function(){authRefreshSession();},msLeft<0?0:msLeft);
 }
+// Fetch verso Supabase con un solo retry automatico se il token è scaduto
+// nel frattempo (es. sessione tenuta aperta a lungo, PWA in background su
+// iOS che sospende il timer di rinnovo programmato — authScheduleRefresh
+// non spara mentre l'app non è in primo piano). Senza questo, un salvataggio
+// fatto dopo una pausa lunga falliva con l'errore Postgrest "PGRST303 — JWT
+// expired" invece di rinnovare da sola la sessione e riprovare (Valerio,
+// 01/09: "non li fa salvare l'abbinamento e li dà questo errore").
+async function _fetchAuthRetry(url,options){
+  var opts=options||{};
+  var r=await fetch(url,opts);
+  if(r.status===401||r.status===403){
+    var bodyText='';
+    try{bodyText=await r.clone().text();}catch(e){}
+    var looksExpired=bodyText.indexOf('PGRST303')>=0||/jwt/i.test(bodyText)&&/exp/i.test(bodyText);
+    if(looksExpired&&authGetSession()){
+      await authRefreshSession();
+      var headers=Object.assign({},opts.headers||{});
+      if(headers.Authorization)headers.Authorization='Bearer '+AUTH_TOKEN;
+      r=await fetch(url,Object.assign({},opts,{headers:headers}));
+    }
+  }
+  return r;
+}
 async function authRefreshSession(){
   var sess=authGetSession();
   if(!sess||!sess.refresh_token){authClearSession();authShowLogin();return;}
@@ -1502,9 +1525,35 @@ function _tokens(s){
     .replace(/\s+/g,' ').trim();
   return new Set(clean.split(' ').filter(function(t){return t.length>=3;}));
 }
+// Estrae il formato/volume (in ml) dal nome prodotto, per distinguere
+// CL70/CL100/CL150/LT.1,5 ecc. — gestisce CL, LT, ML con punto/spazio/virgola
+// decimale opzionali, in entrambi gli ordini numero-unità e unità-numero.
+// Ritorna null se il nome non contiene un formato riconoscibile (es. "KG1",
+// nessun confronto forzato in quel caso).
+function _extractVolumeMl(name){
+  var s=String(name||'').toUpperCase();
+  var mCl=s.match(/CL\.?\s?(\d+(?:[.,]\d+)?)/);
+  if(mCl)return Math.round(parseFloat(mCl[1].replace(',','.'))*10);
+  var mLt=s.match(/(\d+(?:[.,]\d+)?)\s?LT\.?|LT\.?\s?(\d+(?:[.,]\d+)?)/);
+  if(mLt){var v=mLt[1]||mLt[2];return Math.round(parseFloat(v.replace(',','.'))*1000);}
+  var mMl=s.match(/(\d+)\s?ML\b|ML\.?\s?(\d+)/);
+  if(mMl){var v2=mMl[1]||mMl[2];return parseInt(v2,10);}
+  return null;
+}
 function _similarity(a,b){
   var ta=_tokens(a), tb=_tokens(b);
   if(!ta.size||!tb.size)return 0;
+  // FIX (01/09, Valerio: "siamo sicuri che i match sono più affidabili...
+  // anche per il formato? Cl 100, cl 70, cl 150, cl 1,5 lt"): la sola
+  // somiglianza testuale non distingueva il FORMATO più di quanto non
+  // distinguesse la marca — "GIN BULLDOG CL70" e "GIN BULLDOG CL100"
+  // condividono tutte le parole tranne il volume, quindi arrivavano a uno
+  // score altissimo pur essendo due prodotti (e due prezzi) diversi. Se
+  // entrambi i nomi hanno un volume riconoscibile e sono diversi, il
+  // punteggio va a zero: non può essere lo stesso prodotto, punto — non
+  // serve nemmeno passare dall'IA per deciderlo.
+  var va=_extractVolumeMl(a),vb=_extractVolumeMl(b);
+  if(va!=null&&vb!=null&&Math.abs(va-vb)>5)return 0;
   var inter=0;ta.forEach(function(t){if(tb.has(t))inter++;});
   var union=new Set([].concat(Array.from(ta),Array.from(tb))).size;
   return union?inter/union*100:0;
@@ -1569,10 +1618,10 @@ async function _hybridMatchCatalog(names,catalogList,apiKey,extras){
   if(toAI.length&&apiKey){
     try{
       var prompt='Per ciascuna voce sotto, decidi se corrisponde a UNO dei prodotti candidati elencati (stesso prodotto, anche scritto diversamente) oppure a NESSUNO.\n'
-        +'ATTENZIONE MARCA: la marca/produttore è parte identificativa del prodotto tanto quanto il tipo — prodotti con marca diversa (es. "JAGERMEISTER" vs "CYNAR", "DISARONNO" vs "COINTREAU", "PERONI" vs "NASTRO AZZURRO") NON sono lo stesso prodotto anche se categoria/formato/parole coincidono. Match solo se la marca (quando indicata) coincide e cambia solo formato/confezione/sinonimo/ordine parole.\n\n'
+        +'ATTENZIONE MARCA E FORMATO: la marca/produttore E il formato/volume (CL70, CL100, CL150, LT1,5...) sono ENTRAMBI parte identificativa del prodotto quanto il tipo — prodotti con marca diversa (es. "JAGERMEISTER" vs "CYNAR", "DISARONNO" vs "COINTREAU", "PERONI" vs "NASTRO AZZURRO") NON sono lo stesso prodotto anche se categoria/formato/parole coincidono; ALLO STESSO MODO due prodotti della STESSA marca ma con volume diverso (es. "GIN BULLDOG CL70" vs "GIN BULLDOG CL100") NON sono lo stesso prodotto — sono confezioni diverse con prezzi diversi. Match SOLO se marca E formato/volume coincidono entrambi, e cambia solo confezione/sinonimo/ordine parole.\n\n'
         +'VOCI DA VERIFICARE:\n'
         +toAI.map(function(t,i){return i+'. "'+t.name+'" — candidati: '+t.candidates.map(function(c){return '[id:'+c.id+'] '+c.name;}).join(' | ');}).join('\n')
-        +'\n\nRispondi SOLO array JSON, un elemento per voce nello stesso ordine (stessa lunghezza, nessuna voce saltata), formato: [{"match_id":123,"confidenza":"alta"},{"match_id":null,"confidenza":"nessuna"}]. confidenza: "alta" se sicuro sia lo stesso prodotto, "bassa" se probabile ma non certo, "nessuna" se nessun candidato corrisponde davvero (marca diversa conta come nessuna).';
+        +'\n\nRispondi SOLO array JSON, un elemento per voce nello stesso ordine (stessa lunghezza, nessuna voce saltata), formato: [{"match_id":123,"confidenza":"alta"},{"match_id":null,"confidenza":"nessuna"}]. confidenza: "alta" se sicuro sia lo stesso prodotto (marca E formato coincidenti), "bassa" se probabile ma non certo, "nessuna" se nessun candidato corrisponde davvero (marca diversa O formato/volume diverso contano entrambi come nessuna).';
       var resp=await fetch('https://api.anthropic.com/v1/messages',{
         method:'POST',headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
         body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:Math.min(8000,300+toAI.length*60),messages:[{role:'user',content:prompt}]})
@@ -1596,10 +1645,7 @@ async function _hybridMatchCatalog(names,catalogList,apiKey,extras){
       // sfasato per tutti gli elementi.
       if(!Array.isArray(arr)||arr.length!==toAI.length){
         console.warn('[Match IA] risposta di lunghezza inattesa ('+(Array.isArray(arr)?arr.length:'non array')+' vs '+toAI.length+' attesi) — uso fallback locale per l\'intero gruppo');
-        toAI.forEach(function(t){
-          var best=t.candidates[0];
-          results[t.idx]=best?{matchTipo:'probabile',id:best.id,name:best.name}:{matchTipo:'nessuno',id:null,name:null};
-        });
+        toAI.forEach(function(t){results[t.idx]={matchTipo:'nessuno',id:null,name:null};});
       }else{
         toAI.forEach(function(t,i){
           var res=arr[i];
@@ -1621,19 +1667,26 @@ async function _hybridMatchCatalog(names,catalogList,apiKey,extras){
       }
     }catch(e){
       console.warn('[Match IA] fallback fallito:',e.message);
-      // Se l'IA fallisce (rete, chiave, ecc.) meglio segnare "da verificare"
-      // col miglior candidato locale piuttosto che perdere la riga: l'utente
-      // la vede comunque e decide, invece di sparire silenziosamente.
-      toAI.forEach(function(t){
-        var best=t.candidates[0];
-        results[t.idx]=best?{matchTipo:'probabile',id:best.id,name:best.name}:{matchTipo:'nessuno',id:null,name:null};
-      });
+      // FIX (01/09, Valerio, dati reali: "JAGERMEISTER AMARO"→"BRAULIO
+      // AMARO", "COINTREAU"→"CACHACA", "GIN TANQUERAY"→"GIN BULLDOG"/"GIN
+      // BOSFORD" — abbinamenti tra marche diverse presentati come sicuri):
+      // qui prima, se l'IA falliva la chiamata (rete, timeout, chiave
+      // rifiutata, JSON non valido...), si prendeva alla cieca il miglior
+      // candidato per sola somiglianza testuale come "probabile" — cioè
+      // esattamente lo stesso identico bug per cui era stata introdotta
+      // l'IA con l'istruzione sulla marca (18/08): la somiglianza testuale
+      // da sola confonde marche diverse nella stessa categoria/formato.
+      // Zona ambigua senza IA disponibile = nessun match proposto: l'utente
+      // lo ritrova comunque tra i "Prodotti estratti"/nuovi e lo abbina lui
+      // a mano se serve, invece di vedersi un abbinamento con l'aria
+      // affidabile ma mai verificato sulla marca.
+      toAI.forEach(function(t){results[t.idx]={matchTipo:'nessuno',id:null,name:null};});
     }
   }else{
-    toAI.forEach(function(t){
-      var best=t.candidates[0];
-      results[t.idx]=best?{matchTipo:'probabile',id:best.id,name:best.name}:{matchTipo:'nessuno',id:null,name:null};
-    });
+    // Nessuna API Key disponibile: stesso motivo del blocco catch qui sopra
+    // — la zona ambigua (15-88) resta "nessun match" invece di un
+    // "probabile" mai verificato sulla marca.
+    toAI.forEach(function(t){results[t.idx]={matchTipo:'nessuno',id:null,name:null};});
   }
   return results;
 }
@@ -6732,7 +6785,7 @@ var DEFAULT_SUPPLIER_SECTORS = {}; // filled from S.suppliers
 async function addPrezzoDifforme(fornitore,nomeProdotto,idCatalogo,prezzoCatalogo,prezzoNuovo,fonte){
   var row={fornitore:fornitore,nome_prodotto:nomeProdotto,id_prodotto_catalogo:idCatalogo||null,
     prezzo_catalogo:prezzoCatalogo!=null?prezzoCatalogo:null,prezzo_nuovo:prezzoNuovo,fonte:fonte||'preventivo'};
-  var r=await fetch(SUPABASE_URL+'/rest/v1/prezzi_difformi',{method:'POST',
+  var r=await _fetchAuthRetry(SUPABASE_URL+'/rest/v1/prezzi_difformi',{method:'POST',
     headers:{'Content-Type':'application/json','apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN,'Prefer':'return=minimal'},
     body:JSON.stringify([row])});
   if(!r.ok){var et=await r.text();throw new Error(et);}
@@ -10804,7 +10857,7 @@ async function _pdfImportUpdatePriceOnly(matchId,fornitore,nuovoPrezzo){
   var prices=Object.assign({},prod?prod.prices:{});
   prices[fornitore]=nuovoPrezzo;
   var best='',bv=Infinity;Object.keys(prices).forEach(function(s){if(prices[s]<bv){bv=prices[s];best=s;}});
-  var r=await fetch(SUPABASE_URL+'/rest/v1/catalogo_ceraldi?id=eq.'+matchId,{
+  var r=await _fetchAuthRetry(SUPABASE_URL+'/rest/v1/catalogo_ceraldi?id=eq.'+matchId,{
     method:'PATCH',headers:{'Content-Type':'application/json','apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN,'Prefer':'return=minimal'},
     body:JSON.stringify({prices:prices,best:best})});
   if(!r.ok){var et=await r.text();throw new Error(et);}
@@ -11212,9 +11265,16 @@ function _pdfImportInit(){
           var matchProd=S.products.find(function(mp){return mp.id===p.match_id;});
           if(matchProd){
             var prezzoCatalogo=(matchProd.prices&&matchProd.prices[fornitoreSel]!=null)?matchProd.prices[fornitoreSel]:null;
-            var stessoPrezzo=prezzoCatalogo!=null&&Math.abs(prezzoCatalogo-priceIva)<0.01;
+            // FIX (01/09, Valerio: "rischio che anche i prodotti
+            // automaticamente scartati non siano corretti"): l'esclusione
+            // silenziosa (nessuna card, Valerio non la vede nemmeno) ora
+            // vale SOLO per un match 'exact' — un match 'similar' è per
+            // definizione incerto sul PRODOTTO stesso, quindi anche se il
+            // prezzo coincidesse per puro caso non va escluso senza che
+            // Valerio veda almeno l'abbinamento proposto.
+            var stessoPrezzo=p.match==='exact'&&prezzoCatalogo!=null&&Math.abs(prezzoCatalogo-priceIva)<0.01;
             if(stessoPrezzo){
-              autoEsclusi++; // stesso prezzo del catalogo (match esatto o simile): niente da fare
+              autoEsclusi++; // stesso prezzo del catalogo, match esatto: niente da fare
               return;
             }
             conflicts.push({nome:nomeProdotto,matchTipo:p.match,matchNome:matchProd.name,matchId:matchProd.id,
