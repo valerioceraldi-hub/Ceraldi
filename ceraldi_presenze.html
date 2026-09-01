@@ -2076,6 +2076,14 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
         <div class="field-lbl">Al</div>
         <input class="field-inp last" type="date" id="exp-al" style="margin-bottom:0" onchange="aggiornaListaFestivitaExport()">
       </div>
+      <div style="background:rgba(43,74,203,.06);border:1.5px solid rgba(43,74,203,.25);border-radius:10px;padding:12px;margin-bottom:16px">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer">
+          <input type="checkbox" id="exp-solo-sintetico" onchange="toggleExpSoloSintetico()" style="width:18px;height:18px">
+          Solo presenze sintetiche (un foglio unico)
+        </label>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px">Un unico foglio, una riga per ogni giorno: lavorato, oppure in ferie/malattia/permesso. Niente stipendi, acconti o altri fogli — comodo da mandare al volo al commercialista.</div>
+      </div>
+      <div id="exp-festivita-wrap">
       <div style="font-size:13px;color:var(--muted);line-height:1.5;margin-bottom:14px">
         Per ogni festività del mese scegli come trattarla nel calcolo. Chi ha timbrato in quel giorno risulta automaticamente come <b>festività lavorata</b> (paga doppia).
       </div>
@@ -2086,6 +2094,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
         ⚪ <b>Non pagare</b> — la festività non viene conteggiata (solo per tua scelta).<br>
         🔴 <b>Lavorata</b> — automatico per chi ha timbrato: paga doppia.<br>
         🤒 <b>In ferie/malattia</b> — la festività è pagata comunque (CCNL) e non viene scalata dalle ferie.
+      </div>
       </div>
       <div class="msg" id="fest-export-msg"></div>
     </div>
@@ -14431,6 +14440,8 @@ function esportaPresenzeExcel() {
       });
   }
   if (selDip) selDip.value = '';
+  if ($('exp-solo-sintetico')) { $('exp-solo-sintetico').checked = false; }
+  if ($('exp-festivita-wrap')) $('exp-festivita-wrap').style.display = 'block';
   if ($('exp-periodo-tipo')) $('exp-periodo-tipo').value = 'mese';
   if ($('exp-periodo-custom')) $('exp-periodo-custom').style.display = 'none';
   if ($('exp-periodo-mese')) $('exp-periodo-mese').style.display = 'block';
@@ -14470,6 +14481,14 @@ function toggleExpPeriodoPersonalizzato() {
   if ($('exp-periodo-custom')) $('exp-periodo-custom').style.display = custom ? 'block' : 'none';
   if ($('exp-periodo-mese')) $('exp-periodo-mese').style.display = custom ? 'none' : 'block';
   aggiornaListaFestivitaExport();
+}
+
+// Il report sintetico non tratta le festività riga per riga (non calcola
+// paga doppia/singola, solo "lavorato o assente") — quindi quella sezione
+// non serve e viene nascosta per non confondere.
+function toggleExpSoloSintetico() {
+  const solo = $('exp-solo-sintetico') && $('exp-solo-sintetico').checked;
+  if ($('exp-festivita-wrap')) $('exp-festivita-wrap').style.display = solo ? 'none' : 'block';
 }
 
 // Ricostruisce la lista delle festività da configurare in base al periodo
@@ -14513,10 +14532,19 @@ async function confermaEsportaExcel() {
   const periodo = periodoEsportazioneCorrente();
   if (!periodo) { showMsg('fest-export-msg','Imposta un intervallo valido (Dal ≤ Al)','err'); return; }
   closeSheet('sh-festExport');
+  const dipIdFiltro = $('exp-dip-sel') ? $('exp-dip-sel').value : '';
+  if ($('exp-solo-sintetico') && $('exp-solo-sintetico').checked) {
+    try {
+      await generaExcelPresenzeSintetico(dipIdFiltro || null, periodo);
+    } catch (e) {
+      console.error('confermaEsportaExcel (sintetico):', e);
+      toast('⚠️ Errore nella generazione: ' + String(e.message || e).slice(0, 80));
+    }
+    return;
+  }
   // Raccogli le scelte per ogni festività
   const sceltePag = {};
   document.querySelectorAll('.fest-export-sel').forEach(s => { sceltePag[s.dataset.dt] = s.value; });
-  const dipIdFiltro = $('exp-dip-sel') ? $('exp-dip-sel').value : '';
   // FIX 01/09 (segnalato da Valerio: "esce solo l'avviso ma non genera il
   // file") — questa funzione non aveva NESSUN controllo errori: se
   // qualcosa andava storto durante la generazione, l'eccezione spariva nel
@@ -14528,6 +14556,77 @@ async function confermaEsportaExcel() {
     console.error('confermaEsportaExcel:', e);
     toast('⚠️ Errore nella generazione: ' + String(e.message || e).slice(0, 80));
   }
+}
+
+// ── EXPORT SINTETICO: un foglio unico, una riga per giorno (lavorato o
+// assente), per mandare al commercialista solo l'essenziale senza tutto il
+// report completo (stipendi, movimenti, saldo ferie, ecc). ──
+async function generaExcelPresenzeSintetico(dipIdFiltro, periodo) {
+  if (typeof XLSX === 'undefined') { toast('Libreria Excel non caricata, riprova'); return; }
+  const dal = periodo.dal, al = periodo.al;
+  const fmtIt = iso => new Date(iso+'T12:00:00').toLocaleDateString('it-IT');
+  const periodoLbl = periodo.custom
+    ? ('dal '+fmtIt(dal)+' al '+fmtIt(al))
+    : new Date(periodo.y, periodo.m-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
+  toast('Preparazione Excel…');
+
+  let qProfili  = sb.from('presenze_profili').select('id,nome,cognome').eq('ruolo','dipendente').eq('attivo',true).order('nome');
+  let qPresenze = sb.from('presenze').select('dipendente_id,data').gte('data',dal).lte('data',al).order('data');
+  let qAssenze  = sb.from('presenze_assenze').select('dipendente_id,tipo,data_inizio,data_fine,note').in('stato',['approvata','confermata']).or(`and(data_inizio.lte.${al},data_fine.gte.${dal})`);
+  if (dipIdFiltro) { qProfili = qProfili.eq('id',dipIdFiltro); qPresenze = qPresenze.eq('dipendente_id',dipIdFiltro); qAssenze = qAssenze.eq('dipendente_id',dipIdFiltro); }
+  const [{ data: dipendenti }, { data: presenze }, { data: assenze }] = await Promise.all([qProfili, qPresenze, qAssenze]);
+  const nomeDi = id => { const d = (dipendenti||[]).find(x => x.id === id); return d ? d.nome+(d.cognome?' '+d.cognome:'') : '?'; };
+  const tipiLbl = { ferie:'Ferie', malattia:'Malattia', permesso:'Permesso', altro:'Altro/Permesso' };
+
+  const righe = [];
+  (presenze||[]).forEach(p => righe.push({ dip: nomeDi(p.dipendente_id), data: p.data, tipo: 'Lavorato', note: '' }));
+  (assenze||[]).filter(a => a.tipo !== 'acconto').forEach(a => {
+    // Una riga per ogni giorno del periodo di assenza, ma solo dentro
+    // l'intervallo esportato — stessa logica di lettura di "giorno per
+    // giorno" già usata altrove nel file per le assenze.
+    let c = new Date((a.data_inizio > dal ? a.data_inizio : dal)+'T12:00:00');
+    const fine = new Date((a.data_fine < al ? a.data_fine : al)+'T12:00:00');
+    while (c <= fine) {
+      righe.push({ dip: nomeDi(a.dipendente_id), data: _isoDate(c), tipo: tipiLbl[a.tipo]||a.tipo, note: a.note||'' });
+      c.setDate(c.getDate()+1);
+    }
+  });
+  righe.sort((x,y) => x.dip < y.dip ? -1 : (x.dip > y.dip ? 1 : (x.data < y.data ? -1 : 1)));
+
+  const dItLoc = iso => iso ? (iso.slice(8,10)+'/'+iso.slice(5,7)+'/'+iso.slice(0,4)) : '';
+  const F = [];
+  F.push(['PRESENZE SINTETICHE — '+periodoLbl.toUpperCase()]);
+  F.push(['Un foglio unico: ogni riga è un giorno lavorato o un giorno di assenza (ferie/malattia/permesso), con la relativa data.']);
+  F.push([]);
+  F.push(['Dipendente','Data','Tipo','Note']);
+  righe.forEach(r => F.push([r.dip, dItLoc(r.data), r.tipo, r.note]));
+  if (!righe.length) F.push(['Nessun dato nel periodo','','','']);
+
+  const ws = XLSX.utils.aoa_to_sheet(F);
+  ws['!cols'] = [{wch:26},{wch:14},{wch:16},{wch:40}];
+  ws['!merges'] = [{s:{r:0,c:0},e:{r:0,c:3}},{s:{r:1,c:0},e:{r:1,c:3}}];
+  ws['!freeze'] = { xSplit:1, ySplit:4 };
+  const bordoSottile = { style:'thin', color:{rgb:'CBD5E1'} };
+  const bordoCella = { top:bordoSottile, bottom:bordoSottile, left:bordoSottile, right:bordoSottile };
+  const setSt = (r,c,s) => { const ref = XLSX.utils.encode_cell({r,c}); if (!ws[ref]) ws[ref] = { t:'s', v:'' }; ws[ref].s = Object.assign({}, ws[ref].s, s); };
+  for (let c=0;c<4;c++) setSt(0,c,{ font:{ bold:true, sz:14, color:{rgb:'1E293B'} } });
+  for (let c=0;c<4;c++) setSt(1,c,{ font:{ italic:true, sz:10, color:{rgb:'64748B'} } });
+  for (let c=0;c<4;c++) setSt(3,c,{ font:{ bold:true, sz:11, color:{rgb:'FFFFFF'} }, fill:{ fgColor:{rgb:'2B4ACB'} }, alignment:{ horizontal:'center', vertical:'center', wrapText:true }, border:bordoCella });
+  ws['!rows'] = ws['!rows'] || [];
+  ws['!rows'][3] = { hpx: 34 };
+  const ultimaRiga = 3 + Math.max(righe.length,1);
+  for (let r=4;r<=ultimaRiga;r++) {
+    const alt = (r-4) % 2 === 1;
+    for (let c=0;c<4;c++) setSt(r,c, Object.assign({ border:bordoCella, alignment:{ vertical:'center', horizontal:'left', wrapText:true } }, alt ? { fill:{ fgColor:{rgb:'F8FAFC'} } } : {}));
+    ws['!rows'][r] = { hpx: 30 };
+  }
+  ws['!autofilter'] = { ref: XLSX.utils.encode_range({s:{r:3,c:0}, e:{r:ultimaRiga, c:3}}) };
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Presenze sintetiche');
+  const nomeFile = 'Presenze_sintetiche_'+(dipIdFiltro ? nomeDi(dipIdFiltro).replace(/\s+/g,'_')+'_' : '')+dal+'_'+al+'.xlsx';
+  XLSX.writeFile(wb, nomeFile);
+  toast('✓ File generato');
 }
 
 async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
@@ -14670,10 +14769,16 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
     titolo:    { font:{ bold:true, sz:14, color:{rgb:'1E293B'} } },
     sottotitolo: { font:{ italic:true, sz:10, color:{rgb:'64748B'} } },
     intestazione: { font:{ bold:true, sz:11, color:{rgb:'FFFFFF'} }, fill:{ fgColor:{rgb:'2B4ACB'} }, alignment:{ horizontal:'center', vertical:'center', wrapText:true }, border:bordoCella },
-    cella:     { border:bordoCella, alignment:{ vertical:'center' } },
-    celleAlt:  { border:bordoCella, alignment:{ vertical:'center' }, fill:{ fgColor:{rgb:'F8FAFC'} } },
-    valuta:    { border:bordoCella, alignment:{ vertical:'center', horizontal:'right' }, numFmt:'#,##0.00" €"' },
-    valutaAlt: { border:bordoCella, alignment:{ vertical:'center', horizontal:'right' }, numFmt:'#,##0.00" €"', fill:{ fgColor:{rgb:'F8FAFC'} } },
+    // FIX (segnalato da Valerio: "alcune scritte non si leggono in cella"):
+    // qui mancava wrapText — un testo più lungo della colonna (es. "➖
+    // Stipendio" in una colonna stretta) non andava a capo, restava
+    // tagliato/invisibile oltre il bordo se la cella accanto aveva
+    // contenuto. Ora va a capo dentro la cella, e rifiniciFoglio() alza
+    // l'altezza della riga quanto serve per leggerlo tutto.
+    cella:     { border:bordoCella, alignment:{ vertical:'center', horizontal:'left', wrapText:true } },
+    celleAlt:  { border:bordoCella, alignment:{ vertical:'center', horizontal:'left', wrapText:true }, fill:{ fgColor:{rgb:'F8FAFC'} } },
+    valuta:    { border:bordoCella, alignment:{ vertical:'center', horizontal:'right', wrapText:true }, numFmt:'#,##0.00" €"' },
+    valutaAlt: { border:bordoCella, alignment:{ vertical:'center', horizontal:'right', wrapText:true }, numFmt:'#,##0.00" €"', fill:{ fgColor:{rgb:'F8FAFC'} } },
     totale:    { font:{ bold:true }, fill:{ fgColor:{rgb:'E2E8F0'} }, border:bordoCella },
     totaleValuta: { font:{ bold:true }, fill:{ fgColor:{rgb:'E2E8F0'} }, border:bordoCella, alignment:{ horizontal:'right' }, numFmt:'#,##0.00" €"' },
   };
@@ -14688,8 +14793,16 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
   // le righe di totale in fondo; colonneValuta gli indici colonna (0-based)
   // da formattare come importo; primaRigaDati/ultimaRigaDati delimitano il
   // corpo dati per bordi + righe alternate.
+  // FIX: prima le righe restavano all'altezza automatica di Excel (una sola
+  // riga di testo) anche dopo aver aggiunto wrapText sopra — il testo
+  // andava a capo ma la seconda riga restava tagliata fuori dalla cella,
+  // invisibile finché non si allargava la colonna a mano. Ora ogni riga
+  // dati/intestazione ha un'altezza fissa abbastanza alta da mostrare fino
+  // a 2 righe di testo, sempre, senza dover intervenire manualmente.
   function rifiniciFoglio(ws, { ncols, righeIntestazione = [], righeTotale = [], colonneValuta = [], primaRigaDati = null, ultimaRigaDati = null }) {
-    righeIntestazione.forEach(r => { for (let c=0;c<ncols;c++) setStile(ws,r,c,XSTY.intestazione); });
+    ws['!rows'] = ws['!rows'] || [];
+    const altezzaRiga = (r, alta) => { ws['!rows'][r] = { hpx: alta ? 46 : 34 }; };
+    righeIntestazione.forEach(r => { for (let c=0;c<ncols;c++) setStile(ws,r,c,XSTY.intestazione); altezzaRiga(r, true); });
     if (primaRigaDati !== null && ultimaRigaDati !== null) {
       for (let r=primaRigaDati; r<=ultimaRigaDati; r++) {
         const alt = (r - primaRigaDati) % 2 === 1;
@@ -14697,9 +14810,10 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
           const isValuta = colonneValuta.includes(c);
           setStile(ws,r,c, isValuta ? (alt?XSTY.valutaAlt:XSTY.valuta) : (alt?XSTY.celleAlt:XSTY.cella));
         }
+        altezzaRiga(r, false);
       }
     }
-    righeTotale.forEach(r => { for (let c=0;c<ncols;c++) setStile(ws,r,c, colonneValuta.includes(c) ? XSTY.totaleValuta : XSTY.totale); });
+    righeTotale.forEach(r => { for (let c=0;c<ncols;c++) setStile(ws,r,c, colonneValuta.includes(c) ? XSTY.totaleValuta : XSTY.totale); altezzaRiga(r, false); });
   }
 
   /* ═══════ FOGLIO 1: RIEPILOGO BUSTA PAGA (per il consulente) ═══════ */
