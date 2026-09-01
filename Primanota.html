@@ -23,6 +23,7 @@ window.addEventListener('unhandledrejection', function(e){
 </script>
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js" crossorigin="anonymous"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -9717,47 +9718,71 @@ function closeFotoMo(){
 }
 
 // ── CONDIVISIONE REGISTRAZIONE ──
+// Genera un PDF con i dati della registrazione (fornitore, importo, pagamento,
+// stato, ecc.) — se la fattura ha una foto allegata, la aggiunge come seconda
+// pagina. Richiesta esplicita di Valerio (01/09): prima condivideva solo un
+// messaggio di testo (WhatsApp-style), non un documento vero da salvare/inviare.
+function _generaPdfRegistrazione(f){
+  if(!window.jspdf || !window.jspdf.jsPDF){ toast('⚠️ Libreria PDF non disponibile'); return null; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({unit:'mm', format:'a4'});
+  const df=f.data?new Date(f.data).toLocaleDateString('it-IT',{day:'2-digit',month:'long',year:'numeric'}):'—';
+  const pag={contanti:'Contanti',bonifico:'Bonifico',assegno:'Assegno'}[f.pagamento]||f.pagamento||'—';
+  const stato={pagata:'Pagata',da_pagare:'Da pagare',parziale:'Parziale'}[f.stato||'pagata']||'—';
+  const tipo=f.tipo==='ddt'?'DDT':'Fattura';
+
+  let y=20;
+  doc.setFont('helvetica','bold'); doc.setFontSize(16);
+  doc.text('Caffetteria Ceraldi', 15, y); y+=8;
+  doc.setFontSize(12); doc.setFont('helvetica','normal');
+  doc.text(tipo+' — Registrazione pagamento', 15, y); y+=6;
+  doc.setDrawColor(200); doc.line(15,y,195,y); y+=10;
+
+  doc.setFontSize(11);
+  const riga=(label,valore)=>{
+    if(!valore) return;
+    doc.setFont('helvetica','bold'); doc.text(label+':', 15, y);
+    doc.setFont('helvetica','normal'); doc.text(String(valore), 60, y);
+    y+=8;
+  };
+  riga('Fornitore', f.fornitore||'—');
+  riga('N° Documento', f.numero||'—');
+  riga('Data', df);
+  riga('Importo', fmt(f.importo));
+  riga('Pagamento', pag);
+  riga('Stato', stato);
+  if(f.scadenza) riga('Scadenza', new Date(f.scadenza).toLocaleDateString('it-IT'));
+  if(f.bonIban) riga('IBAN', f.bonIban);
+  var _assegniShare=(typeof _assegniPerFattura==='function')?_assegniPerFattura(f.id):[];
+  if(_assegniShare.length>1) riga('N° Assegni', _assegniShare.join(', '));
+  else if(f.assegno) riga('N° Assegno', f.assegno);
+  if(f.note) riga('Note', f.note);
+
+  doc.setFontSize(9); doc.setTextColor(140);
+  doc.text('Generato da Caffetteria Ceraldi — Gestione Fatture', 15, 285);
+
+  if(f.foto){
+    try{
+      doc.addPage();
+      const props = doc.getImageProperties(f.foto);
+      const pageW = doc.internal.pageSize.getWidth() - 20;
+      const pageH = doc.internal.pageSize.getHeight() - 20;
+      let w = pageW, h = (props.height*pageW)/props.width;
+      if(h > pageH){ h = pageH; w = (props.width*pageH)/props.height; }
+      doc.addImage(f.foto, 'JPEG', 10, 10, w, h);
+    }catch(e){ console.warn('PDF: foto non aggiunta', e); }
+  }
+
+  return doc.output('blob');
+}
 function condividiRegistrazione(id){
   const f=fatture.find(x=>x.id===id);
   if(!f) return;
-  const df=f.data?new Date(f.data).toLocaleDateString('it-IT',{day:'2-digit',month:'long',year:'numeric'}):'—';
-  const pag={contanti:'Contanti 💵',bonifico:'Bonifico 🏦',assegno:'Assegno 📝'}[f.pagamento]||f.pagamento||'—';
-  const stato={pagata:'✅ Pagata',da_pagare:'🔴 Da pagare',parziale:'🟡 Parziale'}[f.stato||'pagata']||'—';
   const tipo=f.tipo==='ddt'?'DDT':'Fattura';
-  let testo=`📄 *${tipo} — Caffetteria Ceraldi*\n`;
-  testo+=`\n*Fornitore:* ${f.fornitore||'—'}`;
-  testo+=`\n*N° Documento:* ${f.numero||'—'}`;
-  testo+=`\n*Data:* ${df}`;
-  testo+=`\n*Importo:* ${fmt(f.importo)}`;
-  testo+=`\n*Pagamento:* ${pag}`;
-  testo+=`\n*Stato:* ${stato}`;
-  if(f.scadenza) testo+=`\n*Scadenza:* ${new Date(f.scadenza).toLocaleDateString('it-IT')}`;
-  if(f.bonIban) testo+=`\n*IBAN:* ${f.bonIban}`;
-  var _assegniShare=(typeof _assegniPerFattura==='function')?_assegniPerFattura(f.id):[];
-  if(_assegniShare.length>1) testo+=`\n*N° Assegni:* ${_assegniShare.join(', ')}`;
-  else if(f.assegno) testo+=`\n*N° Assegno:* ${f.assegno}`;
-  if(f.note) testo+=`\n*Note:* ${f.note}`;
-  testo+=`\n\n_Inviato da Caffetteria Ceraldi — Gestione Fatture_`;
-
-  const doShare=(files)=>{
-    if(navigator.canShare&&files&&navigator.canShare({files,text:testo})){
-      navigator.share({files,text:testo,title:tipo+' '+f.fornitore}).catch(()=>{});
-    } else if(navigator.share){
-      navigator.share({text:testo,title:tipo+' '+(f.fornitore||'')}).catch(()=>{});
-    } else {
-      navigator.clipboard.writeText(testo).then(()=>toast('📋 Copiato negli appunti')).catch(()=>toast('Condivisione non disponibile'));
-    }
-  };
-
-  if(f.foto){
-    // Converti base64 in File per allegare la foto
-    fetch(f.foto).then(r=>r.blob()).then(blob=>{
-      const nome='fattura_'+(f.fornitore||'doc').replace(/[^a-zA-Z0-9]/g,'_')+'_'+(f.numero||f.id)+'.jpg';
-      doShare([new File([blob],nome,{type:'image/jpeg'})]);
-    }).catch(()=>doShare(null));
-  } else {
-    doShare(null);
-  }
+  const nomeFile=tipo.toLowerCase()+'_'+(f.fornitore||'doc').replace(/[^a-zA-Z0-9]/g,'_')+'_'+(f.numero||f.id)+'.pdf';
+  const blob=_generaPdfRegistrazione(f);
+  if(!blob) return;
+  condividi(blob, nomeFile, 'application/pdf');
 }
 
 // ── HELPERS XML / FOTO DA SCADENZARIO ──
@@ -10886,6 +10911,12 @@ async function init(){
       }
       await caricaMovimentiBanca();
       await caricaMovimentiCarta();
+      // Stesso bug del sync in background (FIX 01/09): la vista riconciliazione
+      // (Cassa → Storico) non veniva mai ridisegnata qui, quindi restava ferma
+      // sui dati vecchi anche dopo che chiusure/movimenti banca erano arrivati.
+      if(document.getElementById('view-banca') && document.getElementById('view-banca').classList.contains('active') && typeof renderRiconciliazione==='function'){
+        renderRiconciliazione();
+      }
       pnControllaPagaFissaInSospeso();
     })().catch(()=>{});
   } else {
@@ -11059,10 +11090,18 @@ async function _eseguiSyncIncrementale(){
     const ok = await loadAll();
     if(ok){ aggiornaDL(); renderLista(); aggiornaAlertBanner(); }
     await caricaMovimentiBanca();
+    // BUG REALE (trovato 01/09, segnalato da Valerio: "risultano ancora tutte
+    // da confermare" per mesi già confermati sul Cloud) — qui sotto la
+    // riconciliazione veniva ridisegnata usando `chiusure` ancora vecchio,
+    // perché caricaIncassi() (che aggiorna chiusure/pos_numia da Supabase)
+    // veniva chiamato SOLO dopo. Il database era già giusto, ma la sync
+    // automatica in background (ogni 60s / al ritorno in primo piano) la
+    // mostrava come se non lo fosse. "Sincronizza ora" aveva già l'ordine
+    // corretto — corretto qui per farlo coincidere.
+    await caricaIncassi();
     if(document.getElementById('view-banca') && document.getElementById('view-banca').classList.contains('active')){
       renderRiconciliazione();
     }
-    await caricaIncassi();
     aggiornaSaldoCassa();
     if(document.getElementById('view-incassi') && document.getElementById('view-incassi').classList.contains('active')){
       if(_incTabAttivo === 'giorno') caricaChiusuraGiorno();
