@@ -2467,9 +2467,25 @@ async function dbInsert(f){
 
       if(esistente){
         // Merge: aggiorna i campi non vuoti del nuovo payload sopra quello esistente
+        // BUG REALE (trovato 01/09, segnalato da Valerio su 2 fatture Bigfood 25/08
+        // riconciliate con un unico assegno): questo merge scattava anche quando il
+        // "nuovo payload" era in realtà un import XML arrivato DOPO che la fattura
+        // era già stata pagata/riconciliata a mano. Il payload XML porta sempre dei
+        // valori di default non vuoti (stato:'da_pagare', pagamento_origine:'xml') —
+        // non vuoti quindi passavano il filtro sotto e sovrascrivevano silenziosamente
+        // "pagata"/"manuale" già impostati, cancellando di fatto il pagamento inserito
+        // a mano. Stessa regola di priorità dichiarata altrove nel file (manuale >
+        // prima_nota > default) va rispettata anche qui: se il pagamento esistente è
+        // già stato deciso (manuale o prima_nota), i campi di pagamento restano
+        // esclusi dal merge — l'XML può arricchire solo i dati "di fattura".
+        const _pagGiaDeciso = esistente.pagamento_origine === 'manuale' || esistente.pagamento_origine === 'prima_nota';
+        const _campiPagamentoDaProteggere = ['stato','pagamento','pagamento_origine','pagamento_impostato_il',
+          'assegno','ass_int','ass_banca','bon_iban','bon_caus','bon_data','bon_rif',
+          'riconciliata','riconciliazione','parz_pagato','data_pagamento'];
         const patch = {};
         Object.keys(payload).forEach(k=>{
           if(k === 'id') return;
+          if(_pagGiaDeciso && _campiPagamentoDaProteggere.includes(k)) return;
           const v = payload[k];
           if(v !== null && v !== undefined && v !== '' && !(Array.isArray(v) && v.length === 0)){
             patch[k] = v;
@@ -2488,7 +2504,7 @@ async function dbInsert(f){
           body:JSON.stringify(patch)
         });
         saved = (upd && upd[0]) ? upd[0] : Object.assign({}, esistente, patch);
-        if(typeof toast === 'function') toast('ℹ️ Fattura già presente — aggiornata su Cloud');
+        if(typeof toast === 'function') toast(_pagGiaDeciso ? 'ℹ️ Fattura già presente — dati XML aggiunti, pagamento già impostato conservato' : 'ℹ️ Fattura già presente — aggiornata su Cloud');
       } else {
         // Non riusciamo a trovare il duplicato: rilancia con messaggio chiaro
         throw new Error('Fattura duplicata sul Cloud ma non identificabile. '+(e.pgMessage||e.message||'').slice(0,120));
@@ -7070,11 +7086,30 @@ async function importaMassivoXml(input){
       if(!fornitore && !numero && !importo){ risultati.errori++; continue; }
 
       // Deduplicazione: stesso fornitore + numero già presente
-      const dup = fatture.find(f =>
+      let dup = fatture.find(f =>
         normS(f.numero) === normS(numero) &&
         normS(f.fornitore) === normS(fornitore) &&
         numero.length > 0
       );
+      // BUG REALE (trovato 01/09, dati verificati su Supabase: si ripete da mesi
+      // su BIG FOOD — 08/04, 30/04, 25/08 x2): alcuni fornitori scrivono nell'XML
+      // un numero fattura DIVERSO da quello sul documento cartaceo che Valerio
+      // digita a mano (es. XML "V1058209" per il cartaceo "058209" — prefisso
+      // "V1" costante). Il confronto per numero da solo non li riconosce mai come
+      // la stessa fattura: ogni import XML creava una riga NUOVA "da pagare",
+      // lasciando quella vera (pagata/riconciliata) intatta ma affiancata da un
+      // doppione fantasma che nell'app sembra "la fattura non pagata".
+      // Fallback sicuro: stesso fornitore + stessa data + stesso importo (2
+      // centesimi di tolleranza), solo se il candidato è UNICO — niente fusioni
+      // ambigue tra più fatture reali diverse dello stesso giorno.
+      if(!dup && numero){
+        const candidatiSecondari = fatture.filter(f =>
+          normS(f.fornitore) === normS(fornitore) &&
+          f.data === data &&
+          Math.abs((f.importo||0) - importo) < 0.02
+        );
+        if(candidatiSecondari.length === 1) dup = candidatiSecondari[0];
+      }
       if(dup){
         // Diagnostica: logga SEMPRE il dettaglio del conflitto, per capire
         // con certezza quale fattura esistente ha causato il "duplicato"
