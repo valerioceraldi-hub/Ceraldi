@@ -304,12 +304,12 @@ input[type="search"],input[type="text"],input[type="number"],input[type="time"],
       <!-- SOTTO-TAB: IMPORT PDF (spostato da "Prodotto/Listino", 26/08) -->
       <div id="catalogo-sub-pdf" style="display:none">
         <div class="export-block" id="pdf-import-block">
-          <div class="export-block-title" style="color:var(--gold)">&#128196; Import prodotti da PDF preventivo</div>
-          <div class="export-block-sub">Carica il PDF di un preventivo fornitore, estrae i prodotti automaticamente e genera l'SQL per Cloud</div>
+          <div class="export-block-title" style="color:var(--gold)">&#128196; Import prodotti da preventivo (PDF, Excel, CSV)</div>
+          <div class="export-block-sub">Carica il preventivo di un fornitore in qualunque formato — PDF, Excel o CSV, anche non nel formato Ceraldi — estrae i prodotti automaticamente e ti fa confermare prezzi e prodotti nuovi prima di toccare il catalogo</div>
           <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
             <div style="display:flex;gap:8px">
               <div style="flex:1">
-                <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;font-weight:600">Fornitore</div>
+                <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;font-weight:600">Fornitore (facolt. per Excel/CSV)</div>
                 <select id="pdfimport-fornitore" style="width:100%;padding:9px 10px;border-radius:8px;border:1.5px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;outline:none;box-sizing:border-box">
                   <option value="">Caricamento...</option>
                 </select>
@@ -337,8 +337,8 @@ input[type="search"],input[type="text"],input[type="number"],input[type="time"],
               </div>
               <div id="pdfimport-id-info" style="font-size:11px;color:var(--muted);margin-top:4px"></div>
             </div>
-            <button class="btn-em" id="pdfimport-upload-btn" style="background:rgba(200,100,58,.1);color:var(--gold);border-color:rgba(200,100,58,.3)">&#128196; Carica PDF preventivo</button>
-            <input type="file" id="pdfimport-file" accept="application/pdf,.pdf" style="display:none">
+            <button class="btn-em" id="pdfimport-upload-btn" style="background:rgba(200,100,58,.1);color:var(--gold);border-color:rgba(200,100,58,.3)">&#128196; Carica preventivo (PDF/Excel/CSV)</button>
+            <input type="file" id="pdfimport-file" accept="application/pdf,.pdf,.csv,.xlsx,.xls" style="display:none">
             <div id="pdfimport-status" style="display:none;font-size:13px;color:var(--muted);text-align:center;padding:8px"></div>
           </div>
           <div id="pdfimport-conflicts" style="display:none;margin-top:12px"></div>
@@ -382,11 +382,12 @@ input[type="search"],input[type="text"],input[type="number"],input[type="time"],
         <!-- BLOCCO 2: MODELLO FORNITORE -->
         <div class="export-block" style="margin-top:8px">
           <div class="export-block-title">📦 Modello listino per fornitori</div>
-          <div class="export-block-sub">Scegli uno o più fornitori (anche nuovi) e scarica il listino vuoto da far compilare, oppure già con i prezzi attuali</div>
+          <div class="export-block-sub">Scegli uno o più fornitori (anche nuovi) e scarica il listino vuoto da far compilare, oppure già con i prezzi attuali. All'importazione, aggiorna i prezzi dei prodotti già a catalogo e ti fa confermare quelli nuovi — non tocca altri fornitori o prodotti.</div>
           <div class="send-row" style="margin-top:10px">
             <button class="btn-em" id="ex-modello-btn" style="background:rgba(0,122,255,.08);color:var(--accent);border-color:rgba(0,122,255,.25)">&#128229; Scarica modello</button>
             <button class="btn-em" id="ap-import-btn" style="background:rgba(0,122,255,.05);color:var(--accent);border-color:rgba(0,122,255,.2)">&#128228; Importa listino</button>
           </div>
+          <input type="file" id="ap-import-merge-file" accept=".csv,.xlsx,.xls" style="display:none">
         </div>
 
         <!-- BLOCCO 3: LISTINO LOCALE (ricerca) -->
@@ -403,6 +404,7 @@ input[type="search"],input[type="text"],input[type="number"],input[type="time"],
           </div>
           <input type="file" id="ap-import-file" accept=".csv,.xlsx,.xls" style="display:none">
         </div>
+
 
         <div id="listino-search-box" style="margin-top:10px;display:none">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:12px;font-weight:700;color:var(--ink2);text-transform:uppercase">&#128270; Cerca listino <span id="listino-count-lbl" style="font-weight:400;color:var(--muted)"></span></span><button onclick="toggleListinoManage()" style="font-size:11px;border:none;background:none;color:var(--accent);cursor:pointer;font-weight:700">&#9881;&#65039; Gestisci</button></div>
@@ -587,6 +589,7 @@ input[type="search"],input[type="text"],input[type="number"],input[type="time"],
 </div></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" crossorigin="anonymous"></script>
 <script>
 // Blocca zoom pinch e double-tap su iOS
 document.addEventListener('gesturestart',function(e){e.preventDefault();},{passive:false});
@@ -6334,6 +6337,106 @@ function _ensureJsPDF(cb){
   tryNext(0);
 }
 
+// Stesso pattern di caricamento resiliente usato per jsPDF: usato per
+// bloccare le celle nel modello Excel dei fornitori (solo la colonna
+// prezzo resta modificabile). Se il CDN non risponde, il modello Excel
+// esce comunque, solo senza protezione celle (vedi scaricaModelloFornitore).
+function _ensureJSZip(cb){
+  var ready=function(){return window.JSZip;};
+  if(ready()){cb(ready());return;}
+  if(window.__jsZipLoading){
+    var t=0;var iv=setInterval(function(){
+      t+=100;
+      if(ready()){clearInterval(iv);cb(ready());}
+      else if(t>10000){clearInterval(iv);cb(null);}
+    },100);
+    return;
+  }
+  window.__jsZipLoading=true;
+  var sources=[
+    'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
+    'https://unpkg.com/jszip@3.10.1/dist/jszip.min.js',
+    'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js'
+  ];
+  var tryNextZ=function(i){
+    if(i>=sources.length){window.__jsZipLoading=false;cb(null);return;}
+    var s=document.createElement('script');
+    s.src=sources[i];
+    s.onload=function(){
+      setTimeout(function(){
+        if(ready()){window.__jsZipLoading=false;cb(ready());}
+        else tryNextZ(i+1);
+      },50);
+    };
+    s.onerror=function(){console.warn('[JSZip] fallita fonte:',sources[i]);tryNextZ(i+1);};
+    document.head.appendChild(s);
+  };
+  tryNextZ(0);
+}
+// Converte un indice colonna 0-based nella lettera Excel (0→A, 1→B, 26→AA...)
+function _xlColLetter(idx){
+  var s='',n=idx+1;
+  while(n>0){var rem=(n-1)%26;s=String.fromCharCode(65+rem)+s;n=Math.floor((n-1)/26);}
+  return s;
+}
+// Prende i byte grezzi di un .xlsx già scritto da SheetJS e li modifica a
+// livello di XML (via JSZip) per bloccare tutte le celle TRANNE quelle
+// delle colonne indicate (0-based) nel foglio "sheetName", per tutte le
+// righe dati (dalla 2 in poi — la riga 1 è l'intestazione e resta
+// bloccata anch'essa). SheetJS in versione community non scrive stili
+// personalizzati, quindi la protezione va aggiunta così, a mano, sull'XML.
+async function _lockExcelExceptColumns(wbBytes,sheetName,unlockedColIdxs,dataRowsCount){
+  var JSZipLib=window.JSZip;
+  var zip=await JSZipLib.loadAsync(wbBytes);
+  // Trova il file XML del foglio a partire dal suo nome (più affidabile che
+  // assumere "sheet1.xml": passa da workbook.xml → r:id → workbook.xml.rels).
+  var wbXml=await zip.file('xl/workbook.xml').async('string');
+  var sheetTags=wbXml.match(/<sheet[^>]*\/>/g)||[];
+  var sheetTag=sheetTags.filter(function(t){return t.indexOf('name="'+sheetName+'"')>=0;})[0];
+  if(!sheetTag)return null;
+  var ridM=sheetTag.match(/r:id="([^"]+)"/);
+  if(!ridM)return null;
+  var relsXml=await zip.file('xl/_rels/workbook.xml.rels').async('string');
+  var relTags=relsXml.match(/<Relationship[^>]*\/>/g)||[];
+  var relTag=relTags.filter(function(t){return t.indexOf('Id="'+ridM[1]+'"')>=0;})[0];
+  var tgtM=relTag&&relTag.match(/Target="([^"]+)"/);
+  if(!tgtM)return null;
+  var sheetPath='xl/'+tgtM[1].replace(/^\.?\//,'');
+  var sheetXml=await zip.file(sheetPath).async('string');
+
+  // Aggiunge in styles.xml un nuovo formato cella "sbloccata" (le celle non
+  // toccate restano sul formato di default, che è bloccato per definizione
+  // quando il foglio è protetto).
+  var stylesPath='xl/styles.xml';
+  var stylesXml=await zip.file(stylesPath).async('string');
+  var cxM=stylesXml.match(/<cellXfs count="(\d+)">/);
+  if(!cxM)return null;
+  var unlockedIdx=parseInt(cxM[1],10);
+  stylesXml=stylesXml.replace('<cellXfs count="'+unlockedIdx+'">','<cellXfs count="'+(unlockedIdx+1)+'">')
+    .replace('</cellXfs>','<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyProtection="1"><protection locked="0"/></xf></cellXfs>');
+  zip.file(stylesPath,stylesXml);
+
+  // Assegna il nuovo stile a ogni cella delle colonne sbloccate, righe dati
+  // (dalla 2 alla dataRowsCount+1). Se SheetJS non ha scritto la cella
+  // (perché vuota) qui non viene creata: per questo scaricaModelloFornitore
+  // forza a monte un valore vuoto esplicito su ogni cella prezzo, cosí la
+  // cella esiste sempre nell'XML e la protezione la trova.
+  unlockedColIdxs.forEach(function(ci){
+    var L=_xlColLetter(ci);
+    for(var r=2;r<=dataRowsCount+1;r++){
+      var ref=L+r;
+      sheetXml=sheetXml.split('r="'+ref+'"').join('r="'+ref+'" s="'+unlockedIdx+'"');
+    }
+  });
+  // Protegge il foglio: stesso XML che scrive Excel quando fai "Proteggi
+  // foglio" senza password, lasciando Excel libero di far selezionare
+  // (non modificare) sia le celle bloccate sia quelle sbloccate.
+  sheetXml=sheetXml.replace('</sheetData>','</sheetData><sheetProtection sheet="1" objects="1" scenarios="1"/>');
+  zip.file(sheetPath,sheetXml);
+
+  return await zip.generateAsync({type:'uint8array'});
+}
+
 function buildOrderPDF(supName,snapshotEntries){
   var entries=snapshotEntries||(groupBySup()[supName]||[]);
   if(!entries.length){toast('Nessun prodotto per '+supName);return;}
@@ -8851,7 +8954,7 @@ function esportaJSONRichieste(){
 }
 
 // ── CATALOGO CERALDI (esporta/importa → aggiorna Cloud) ──
-document.getElementById('ex-csv-catalogo-btn').addEventListener('click',esportaCSVCatalogo);
+document.getElementById('ex-csv-catalogo-btn').addEventListener('click',openEsportaCatalogoPicker);
 document.getElementById('ap-import-catalogo-btn').addEventListener('click',function(){document.getElementById('ap-import-catalogo-file').click();});
 document.getElementById('ap-import-catalogo-file').addEventListener('change',function(e){
   var file=e.target.files&&e.target.files[0];if(!file)return;
@@ -8865,9 +8968,24 @@ document.getElementById('ap-import-catalogo-file').addEventListener('change',fun
   e.target.value='';
 });
 
-// ── MODELLO FORNITORE (scarica modello / importa listino fornitore → IDB locale) ──
+// ── MODELLO FORNITORE (scarica modello / importa listino fornitore → aggiorna Cloud) ──
 document.getElementById('ex-modello-btn').addEventListener('click',openModelloFornitorePicker);
-document.getElementById('ap-import-btn').addEventListener('click',function(){document.getElementById('ap-import-file').click();});
+document.getElementById('ap-import-btn').addEventListener('click',function(){document.getElementById('ap-import-merge-file').click();});
+document.getElementById('ap-import-merge-file').addEventListener('change',function(e){
+  var file=e.target.files&&e.target.files[0];if(!file)return;
+  var name=file.name.toLowerCase();
+  if(name.endsWith('.pdf')){toast('Questo è un file PDF, non un CSV/Excel — usa il modulo "Import da PDF preventivo" qui sotto');e.target.value='';return;}
+  if(name.endsWith('.xlsx')||name.endsWith('.xls')){
+    if(typeof XLSX==='undefined'){toast('Libreria Excel non caricata — ricarica la pagina e riprova');return;}
+    var r=new FileReader();
+    r.onload=function(ev){try{var data=new Uint8Array(ev.target.result);var wb=XLSX.read(data,{type:'array'});var ws=wb.Sheets[wb.SheetNames[0]];var csv=XLSX.utils.sheet_to_csv(ws,{rawNumbers:true});importaListinoFornitoreMerge(csv);}catch(ex){toast('Errore lettura Excel: '+ex.message);}};
+    r.readAsArrayBuffer(file);
+  }else{var r2=new FileReader();r2.onload=function(ev){importaListinoFornitoreMerge(ev.target.result);};r2.readAsText(file,'utf-8');}
+  e.target.value='';
+});
+
+// ── LISTINO LOCALE ──
+document.getElementById('ap-import-listino-btn').addEventListener('click',function(){document.getElementById('ap-import-file').click();});
 document.getElementById('ap-import-file').addEventListener('change',function(e){
   var file=e.target.files&&e.target.files[0];if(!file)return;
   var name=file.name.toLowerCase();
@@ -8880,9 +8998,6 @@ document.getElementById('ap-import-file').addEventListener('change',function(e){
   }else{var r2=new FileReader();r2.onload=function(ev){importListinoLocale(ev.target.result,fornOverride);};r2.readAsText(file,'utf-8');}
   e.target.value='';
 });
-
-// ── LISTINO LOCALE ──
-document.getElementById('ap-import-listino-btn').addEventListener('click',function(){document.getElementById('ap-import-file').click();});
 
 /* ── ESPORTA LISTINO EXCEL ───────────────────────────────── */
 function esportaXLSX(withPrices){
@@ -9121,7 +9236,17 @@ async function _listinoAIParse(text,fornitoreOverride){
     if(sourceLabel&&r.price!=null)prices[sourceLabel]=Math.round(r.price*100)/100;
     return{name:(r.name||'').toUpperCase(),conf:r.conf||'',cat:'',prices:prices};
   }).filter(function(r){return r.name&&Object.keys(r.prices).length;});
-  return{rows:np,sourceLabel:sourceLabel};
+  // rawRows: stessa estrazione ma SENZA richiedere un fornitore noto — righe
+  // scartate da "rows" solo perché sourceLabel è rimasto null finiscono qui
+  // (prezzo tenuto a parte in .price, non annidato in .prices). Serve ai
+  // chiamanti che vogliono distinguere "l'AI non ha trovato nulla" da
+  // "ha trovato i prodotti ma non sa a quale fornitore assegnarli" — es.
+  // importaListinoFornitoreMerge, che a quel punto può chiedere e riprovare
+  // senza dover rifare la chiamata AI da capo.
+  var rawRows=allRows.map(function(r){
+    return{name:(r.name||'').toUpperCase(),conf:r.conf||'',price:r.price!=null?Math.round(r.price*100)/100:null};
+  }).filter(function(r){return r.name&&r.price!=null;});
+  return{rows:np,sourceLabel:sourceLabel,rawRows:rawRows};
 }
 async function _listinoAIParseChunk(chunkText,apiKey,knownSupplier,docHeadContext){
   var prompt=(docHeadContext?('Contesto: queste sono le primissime righe del documento originale, utili per capire fornitore/intestazione/colonne anche se il blocco qui sotto è preso da più avanti nel file:\n'+docHeadContext+'\n\n'):'')+
@@ -9298,8 +9423,78 @@ async function importListinoLocale(text,fornitoreOverride){
 }
 
 /* ── ESPORTA CATALOGO COMPLETO (per aggiornamento) ─────────── */
-function esportaCSVCatalogo(){
+// Picker con filtro settore prima di esportare (Valerio, 31/08: "questa
+// possibilità ce le ho sia in esporta catalogo che in scarica modello?" —
+// sì, come in "Scarica modello". ATTENZIONE però: questo bottone è
+// accoppiato con "Importa aggiornato", che tratta il file come il
+// catalogo COMPLETO e cancella dal Cloud tutto ciò che non trova nel file
+// (vedi importFromCSV, "LOGICA CATALOGO COMPLETO"). Per questo, se si
+// sceglie un settore, il picker avvisa chiaramente prima di scaricare.
+function openEsportaCatalogoPicker(){
+  var overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:300;display:flex;align-items:flex-end';
+  var sheet=document.createElement('div');
+  sheet.style.cssText='background:var(--surface);border-radius:20px 20px 0 0;width:100%;max-height:88dvh;display:flex;flex-direction:column';
+  var handle=document.createElement('div');
+  handle.style.cssText='width:36px;height:4px;background:var(--border);border-radius:2px;margin:10px auto 0;flex-shrink:0';
+  var hdr=document.createElement('div');
+  hdr.style.cssText='display:flex;align-items:center;justify-content:space-between;padding:13px 18px 11px;border-bottom:1px solid var(--border);flex-shrink:0';
+  var cls=document.createElement('button');
+  cls.style.cssText='background:var(--border);border:none;border-radius:50%;width:28px;height:28px;color:var(--muted);font-size:13px;cursor:pointer';
+  cls.textContent='\u2715';
+  cls.onclick=function(){document.body.removeChild(overlay);};
+  hdr.innerHTML='<span style="font-size:17px;font-weight:700;color:var(--text)">\uD83D\uDCCB Esporta catalogo</span>';
+  hdr.appendChild(cls);
+  var body=document.createElement('div');
+  body.style.cssText='flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px 18px';
+
+  var secLbl=document.createElement('div');
+  secLbl.style.cssText='font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;margin-bottom:6px';
+  secLbl.textContent='Settore merceologico (facoltativo)';
+  body.appendChild(secLbl);
+  var secRow=document.createElement('div');
+  secRow.style.cssText='display:flex;flex-wrap:wrap;gap:7px;margin-bottom:6px';
+  var selectedSectors={};
+  var warnBox=document.createElement('div');
+  warnBox.style.cssText='display:none;background:rgba(192,57,43,.1);border:1.5px solid rgba(192,57,43,.3);border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:var(--red);line-height:1.4;font-weight:600';
+  warnBox.textContent='\u26A0\uFE0F Attenzione: se poi reimporti questo file con "Importa aggiornato", tutti i prodotti FUORI da questo settore verranno considerati rimossi e cancellati dal catalogo Cloud. Usa un export per settore solo per consultazione o invio a terzi, non per il giro modifica-e-reimporta.';
+  function refreshWarn(){warnBox.style.display=Object.keys(selectedSectors).length?'block':'none';}
+  ['Bar','Pasticceria','Cucina','Carta'].forEach(function(sec){
+    var p=document.createElement('button');p.className='pill';p.textContent=sec;
+    p.onclick=function(){
+      if(selectedSectors[sec]){delete selectedSectors[sec];p.className='pill';}
+      else{selectedSectors[sec]=true;p.className='pill on';}
+      refreshWarn();
+    };
+    secRow.appendChild(p);
+  });
+  body.appendChild(secRow);
+  var secSub=document.createElement('div');
+  secSub.style.cssText='font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.4';
+  secSub.textContent='Nessun settore selezionato = catalogo completo (consigliato per il giro modifica-e-reimporta).';
+  body.appendChild(secSub);
+  body.appendChild(warnBox);
+
+  var foot=document.createElement('div');
+  foot.style.cssText='padding:12px 18px calc(12px + var(--safe-b));border-top:1px solid var(--border);flex-shrink:0';
+  var dl=document.createElement('button');
+  dl.style.cssText='width:100%;padding:13px;border-radius:11px;border:none;background:var(--green);color:#fff;font-size:15px;font-weight:700;cursor:pointer';
+  dl.textContent='\uD83D\uDCE5 Esporta catalogo';
+  dl.onclick=function(){
+    var sectors=Object.keys(selectedSectors);
+    document.body.removeChild(overlay);
+    esportaCSVCatalogo(sectors);
+  };
+  foot.appendChild(dl);
+  sheet.appendChild(handle);sheet.appendChild(hdr);sheet.appendChild(body);sheet.appendChild(foot);
+  overlay.appendChild(sheet);
+  overlay.addEventListener('click',function(e){if(e.target===this)document.body.removeChild(overlay);});
+  document.body.appendChild(overlay);
+}
+function esportaCSVCatalogo(sectors){
+  var secList=(sectors&&sectors.length)?sectors.slice():[];
   var prods=BP.concat(S.custom||[]);
+  if(secList.length)prods=prods.filter(function(p){return secList.indexOf(getSectorForProduct(p))>=0;});
   if(!prods.length){toast('Catalogo vuoto');return;}
   var header=['DESCRIZIONE ARTICOLO','CONFEZIONE','CATEGORIA'];
   S.suppliers.forEach(function(s){header.push(s.name.toUpperCase());});
@@ -9319,13 +9514,14 @@ function esportaCSVCatalogo(){
     }).join(',');
   }).join('\r\n');
   var today=new Date().toISOString().slice(0,10);
-  var filename='catalogo_ceraldi_'+today+'.csv';
+  var secSuf=secList.length?('_'+secList.map(function(s){return s.toLowerCase();}).join('-')):'';
+  var filename='catalogo_ceraldi'+secSuf+'_'+today+'.csv';
   var blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'});
   var url=URL.createObjectURL(blob);
   var a=document.createElement('a');a.href=url;a.download=filename;
   document.body.appendChild(a);a.click();document.body.removeChild(a);
   setTimeout(function(){URL.revokeObjectURL(url);},5000);
-  toast('Catalogo scaricato: '+prods.length+' prodotti');
+  toast('Catalogo scaricato: '+prods.length+' prodotti'+(secList.length?' ('+secList.join(', ')+')':''));
 }
 
 /* ── MODELLO EXCEL PER FORNITORI ────────────────────────────────── */
@@ -9368,10 +9564,32 @@ function openModelloFornitorePicker(){
   modeSub.textContent='Vuoto: colonna prezzo libera da far compilare al fornitore. Con prezzi attuali: scarica il catalogo già valorizzato per il/i fornitori scelti.';
   body.appendChild(modeSub);
 
+  // ── Settore merceologico (opzionale — filtra i prodotti da includere) ──
+  var secLbl=document.createElement('div');
+  secLbl.style.cssText='font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;margin-bottom:6px';
+  secLbl.textContent='Settore merceologico (facoltativo)';
+  body.appendChild(secLbl);
+  var secRow=document.createElement('div');
+  secRow.style.cssText='display:flex;flex-wrap:wrap;gap:7px;margin-bottom:6px';
+  var selectedSectors={}; // nome settore -> true
+  ['Bar','Pasticceria','Cucina','Carta'].forEach(function(sec){
+    var p=document.createElement('button');p.className='pill';p.textContent=sec;
+    p.onclick=function(){
+      if(selectedSectors[sec]){delete selectedSectors[sec];p.className='pill';}
+      else{selectedSectors[sec]=true;p.className='pill on';}
+    };
+    secRow.appendChild(p);
+  });
+  body.appendChild(secRow);
+  var secSub=document.createElement('div');
+  secSub.style.cssText='font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.4';
+  secSub.textContent='Nessun settore selezionato = tutti i settori. Utile per mandare a un fornitore solo i prodotti che gli interessano (es. solo Carta), invece dell\'intero catalogo.';
+  body.appendChild(secSub);
+
   // ── Fornitori esistenti (multi-select a pill) ──
   var lbl=document.createElement('div');
   lbl.style.cssText='font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;margin-bottom:6px';
-  lbl.textContent='Fornitori (puoi selezionarne più di uno)';
+  lbl.textContent='Fornitori (puoi selezionarne più di uno, o nessuno)';
   body.appendChild(lbl);
   var supRow=document.createElement('div');
   supRow.style.cssText='display:flex;flex-wrap:wrap;gap:7px;margin-bottom:10px';
@@ -9425,6 +9643,10 @@ function openModelloFornitorePicker(){
   freeRow.appendChild(freeInp);freeRow.appendChild(freeAdd);
   body.appendChild(freeRow);
   body.appendChild(freeChips);
+  var freeSub=document.createElement('div');
+  freeSub.style.cssText='font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.4';
+  freeSub.textContent='Non selezionare né aggiungere nessun fornitore per scaricare un modello con una sola colonna prezzo vuota, da inviare a un potenziale fornitore ancora da decidere.';
+  body.appendChild(freeSub);
 
   var foot=document.createElement('div');
   foot.style.cssText='padding:12px 18px calc(12px + var(--safe-b));border-top:1px solid var(--border);flex-shrink:0';
@@ -9433,9 +9655,9 @@ function openModelloFornitorePicker(){
   dl.textContent='\uD83D\uDCE5 Scarica modello Excel';
   dl.onclick=function(){
     var names=Object.keys(selected).concat(Object.keys(freeNames));
-    if(!names.length){toast('Seleziona almeno un fornitore');return;}
+    var sectors=Object.keys(selectedSectors);
     document.body.removeChild(overlay);
-    scaricaModelloFornitore(names,withPrices);
+    scaricaModelloFornitore(names,withPrices,sectors);
   };
   foot.appendChild(dl);
   sheet.appendChild(handle);sheet.appendChild(hdr);sheet.appendChild(body);sheet.appendChild(foot);
@@ -9444,50 +9666,82 @@ function openModelloFornitorePicker(){
   document.body.appendChild(overlay);
 }
 
-function scaricaModelloFornitore(supplierNames,withPrices){
+function scaricaModelloFornitore(supplierNames,withPrices,sectors){
   if(typeof XLSX==='undefined'){toast('Libreria Excel non caricata — ricarica la pagina');return;}
-  var suppliers=(supplierNames&&supplierNames.length)?supplierNames.slice():S.suppliers.map(function(s){return s.name;});
+  // Nessun fornitore selezionato: modello "generico" con una sola colonna
+  // prezzo vuota, per un potenziale fornitore ancora da decidere (Valerio,
+  // 31/08: "dammi la possibilità di poter scegliere il fornitore... ma
+  // anche di non sceglierlo e lasciare un campo vuoto").
+  var suppliers=(supplierNames&&supplierNames.length)?supplierNames.slice():[];
+  var generico=!suppliers.length;
   var wb=XLSX.utils.book_new();
+
+  // Filtro per settore merceologico: se non ne è stato scelto nessuno,
+  // include tutti i prodotti (Valerio, 31/08: "vorrei che... avesse la
+  // possibilità di scaricare il catalogo per settore merceologico...
+  // inutile inviare tutto il catalogo sempre").
+  var secList=(sectors&&sectors.length)?sectors.slice():[];
+  var baseProds=secList.length?S.products.filter(function(p){return secList.indexOf(getSectorForProduct(p))>=0;}):S.products.slice();
 
   // ── Foglio 1: Listino prodotti da compilare (o già valorizzato) ──
   var headerRow=['DESCRIZIONE ARTICOLO','CONFEZIONE','CATEGORIA'];
-  suppliers.forEach(function(s){headerRow.push('PREZZO '+s.toUpperCase()+' (€ ivato)');});
+  if(generico){headerRow.push('PREZZO (\u20AC ivato)');}
+  else{suppliers.forEach(function(s){headerRow.push('PREZZO '+s.toUpperCase()+' (\u20AC ivato)');});}
   headerRow.push('NOTE');
 
   var rows=[headerRow];
   // Solo i prodotti che hanno già un prezzo per almeno uno dei fornitori selezionati.
-  // Fallback al catalogo completo se si tratta di un fornitore nuovo (zero prodotti).
-  var hasAnyPrice=suppliers.some(function(s){
-    return S.products.some(function(p){return gp(p,s)!==null;});
+  // Fallback al catalogo (già filtrato per settore) se nessun fornitore ha
+  // prezzo — es. fornitore nuovo, oppure nessun fornitore scelto.
+  var hasAnyPrice=!generico&&suppliers.some(function(s){
+    return baseProds.some(function(p){return gp(p,s)!==null;});
   });
   var prods=hasAnyPrice
-    ?S.products.filter(function(p){return suppliers.some(function(s){return gp(p,s)!==null;});})
-    :S.products.slice();
+    ?baseProds.filter(function(p){return suppliers.some(function(s){return gp(p,s)!==null;});})
+    :baseProds;
   prods.forEach(function(p){
     var row=[p.name,p.conf||'',p.cat||''];
-    suppliers.forEach(function(s){
-      if(withPrices){var pr=gp(p,s);row.push(pr!==null&&pr!==undefined?pr:'');}
-      else row.push('');
-    });
+    if(generico){row.push('');}
+    else{
+      suppliers.forEach(function(s){
+        if(withPrices){var pr=gp(p,s);row.push(pr!==null&&pr!==undefined?pr:'');}
+        else row.push('');
+      });
+    }
     row.push('');
     rows.push(row);
   });
 
   var ws=XLSX.utils.aoa_to_sheet(rows);
   var cols=[{wch:45},{wch:15},{wch:18}];
-  suppliers.forEach(function(){cols.push({wch:22});});
+  var numPriceCols=generico?1:suppliers.length;
+  (generico?[1]:suppliers).forEach(function(){cols.push({wch:22});});
   cols.push({wch:25});
   ws['!cols']=cols;
   ws['!freeze']={xSplit:0,ySplit:1};
+  // Forza l'esistenza esplicita di ogni cella prezzo (anche quando vuota),
+  // altrimenti SheetJS non scrive del tutto le celle vuote nell'XML e la
+  // protezione celle qui sotto non troverebbe nulla da sbloccare (Valerio,
+  // 31/08: "puoi creare un excel a celle bloccate... ma solo nelle celle
+  // della colonna prezzo ivato?").
+  var priceColIdxs=[];for(var pc=0;pc<numPriceCols;pc++)priceColIdxs.push(3+pc);
+  for(var pr2=1;pr2<rows.length;pr2++){
+    priceColIdxs.forEach(function(ci){
+      var addr=XLSX.utils.encode_cell({r:pr2,c:ci});
+      if(!ws[addr])ws[addr]={t:'s',v:''};
+    });
+  }
   XLSX.utils.book_append_sheet(wb,ws,'Listino');
 
   // ── Foglio 2: Istruzioni ──
-  var modeLine=withPrices?'Modalità: catalogo con i prezzi attuali (puoi correggerli/aggiornarli)':'Modalità: modello vuoto da far compilare al fornitore';
-  var supLine=suppliers.length===1?('Fornitore: '+suppliers[0]):('Fornitori: '+suppliers.join(', '));
+  var modeLine=withPrices&&!generico?'Modalità: catalogo con i prezzi attuali (puoi correggerli/aggiornarli)':'Modalità: modello vuoto da far compilare al fornitore';
+  var supLine=generico?'Fornitore: da definire':(suppliers.length===1?('Fornitore: '+suppliers[0]):('Fornitori: '+suppliers.join(', ')));
+  var secLine=secList.length?('Settore: '+secList.join(', ')):'Settore: tutti';
   var istr=[
     ['ISTRUZIONI — MODELLO LISTINO CERALDI',''],
     ['',''],
     [supLine,''],
+    [secLine,''],
     [modeLine,''],
     ['',''],
     ['Come compilare:',''],
@@ -9509,10 +9763,374 @@ function scaricaModelloFornitore(supplierNames,withPrices){
   XLSX.utils.book_append_sheet(wb,wsI,'Istruzioni');
 
   var today=new Date().toISOString().slice(0,10);
-  var safe=suppliers.length<=2?suppliers.join('_').replace(/[^A-Za-z0-9_\u00C0-\u017F-]+/g,'_'):suppliers.length+'fornitori';
-  XLSX.writeFile(wb,'Modello_Listino_'+safe+'_'+today+'.xlsx');
-  var prodLabel=prods.length+' prodotti'+(hasAnyPrice?'':' (fornitore nuovo — listino completo)');
-  toast(suppliers.length===1?('Modello per '+suppliers[0]+' scaricato \u2713 — '+prodLabel):('Modello per '+suppliers.length+' fornitori scaricato \u2713 — '+prodLabel));
+  var safe=generico?'nuovo_fornitore':(suppliers.length<=2?suppliers.join('_').replace(/[^A-Za-z0-9_\u00C0-\u017F-]+/g,'_'):suppliers.length+'fornitori');
+  var secSuf=secList.length?('_'+secList.map(function(s){return s.toLowerCase();}).join('-')):'';
+  var filename='Modello_Listino_'+safe+secSuf+'_'+today+'.xlsx';
+  var prodLabel=prods.length+' prodotti'+(secList.length?' ('+secList.join(', ')+')':'')+((!generico&&!hasAnyPrice)?' — fornitore nuovo, listino completo':'');
+  var whoLabel=generico?'Modello generico':(suppliers.length===1?('Modello per '+suppliers[0]):('Modello per '+suppliers.length+' fornitori'));
+
+  function scaricaBytes(bytes,protetto){
+    var blob=new Blob([bytes],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a');a.href=url;a.download=filename;
+    document.body.appendChild(a);a.click();document.body.removeChild(a);
+    setTimeout(function(){URL.revokeObjectURL(url);},5000);
+    toast(whoLabel+' scaricato \u2713 — '+prodLabel+(protetto?' · descrizione bloccata, solo prezzo modificabile':''));
+  }
+  // Blocca tutte le celle tranne la/le colonna/e prezzo (Valerio, 31/08).
+  // Se JSZip non riesce a caricarsi (CDN lento/bloccato), il file esce
+  // comunque, solo senza protezione — meglio un modello utilizzabile che
+  // nessun modello.
+  var wbBytes=XLSX.write(wb,{bookType:'xlsx',type:'array'});
+  _ensureJSZip(function(JSZipLib){
+    if(!JSZipLib){scaricaBytes(wbBytes,false);return;}
+    _lockExcelExceptColumns(wbBytes,'Listino',priceColIdxs,prods.length).then(function(locked){
+      scaricaBytes(locked||wbBytes,!!locked);
+    }).catch(function(e){
+      console.warn('[ModelloFornitore] protezione celle fallita:',e);
+      scaricaBytes(wbBytes,false);
+    });
+  });
+}
+
+/* ── IMPORTA LISTINO FORNITORE → aggiorna il catalogo Cloud ──────────────
+   Legge il file generato da "Scarica modello" (stessa intestazione
+   DESCRIZIONE ARTICOLO/CONFEZIONE/CATEGORIA/PREZZO.../NOTE) una volta
+   compilato dal fornitore. Per ogni prodotto: se trova un corrispondente a
+   catalogo aggiorna SOLO il prezzo di quel fornitore (previa conferma); se
+   non lo trova lo propone come prodotto nuovo, da confermare uno per uno
+   prima di aggiungerlo. Non tocca altri fornitori o prodotti (Valerio,
+   31/08: "mi va a miscelare i prodotti prezzi oppure mi aggiunge i
+   prodotti nuovi... fallo"). Legge solo CSV/Excel nel formato del modello
+   Ceraldi — per PDF o formati non standard, "Import da PDF preventivo"
+   (via AI) qui sotto resta lo strumento giusto. ───────────────────────── */
+function importaListinoFornitoreMerge(text,fornitoreHint){
+  text=text.replace(/\r/g,'');
+  var lines=text.split('\n').filter(function(l){return l.trim();});
+  if(!lines.length){toast('File vuoto');return;}
+  var sep=',';
+  for(var _d=0;_d<Math.min(5,lines.length);_d++){var _s=(lines[_d].match(/;/g)||[]).length,_c=(lines[_d].match(/,/g)||[]).length;if(_s>_c){sep=';';break;}if(_c>0){sep=',';break;}}
+  function pl(line){var result=[],cur='',inQ=false;for(var i=0;i<line.length;i++){var c=line[i];if(c=='"'){inQ=!inQ;}else if(c==sep&&!inQ){result.push(cur.trim());cur='';}else cur+=c;}result.push(cur.trim());return result;}
+  function normH(s){return s.toUpperCase().trim().replace(/[\u00C0-\u00C5\u00E0-\u00E5]/g,'A').replace(/[\u00C8-\u00CB\u00E8-\u00EB]/g,'E').replace(/[\u00CC-\u00CF\u00EC-\u00EF]/g,'I').replace(/[\u00D2-\u00D6\u00F2-\u00F6]/g,'O').replace(/[\u00D9-\u00DC\u00F9-\u00FC]/g,'U');}
+  var headerLineIdx=-1;
+  for(var hi=0;hi<Math.min(5,lines.length);hi++){
+    var testH=pl(lines[hi]).map(function(h){return normH(h);});
+    if(testH.indexOf('DESCRIZIONE ARTICOLO')>=0){headerLineIdx=hi;break;}
+  }
+  // Intestazione del modello Ceraldi non trovata: probabilmente è il listino
+  // del fornitore così com'è, in un formato/impaginazione qualunque — prova
+  // a farlo leggere e capire dall'AI invece di arrenderti subito (Valerio,
+  // 31/08: "puoi implementare anche con lettura file excel o csv che claude
+  // legge e capisce e io do conferma se il match non è sicuro al 100%?").
+  if(headerLineIdx<0){_importListinoMergeViaAI(text,fornitoreHint||null);return;}
+  lines=lines.slice(headerLineIdx);
+  var header=pl(lines[0]).map(function(h){return normH(h);});
+  var iN=header.indexOf('DESCRIZIONE ARTICOLO'),iC=header.indexOf('CONFEZIONE'),iCat=header.indexOf('CATEGORIA');
+  if(iN<0){_importListinoMergeViaAI(text,fornitoreHint||null);return;}
+  // Colonne prezzo: "PREZZO <FORNITORE> (...)" oppure generica "PREZZO (...)"
+  var priceCols=[]; // {index, fornitore: string|null}
+  header.forEach(function(h,i){
+    if(h.indexOf('PREZZO')!==0)return;
+    var rest=h.replace(/^PREZZO\s*/,'').replace(/\(.*$/,'').trim();
+    priceCols.push({index:i,fornitore:rest||null});
+  });
+  if(!priceCols.length){_importListinoMergeViaAI(text,fornitoreHint||null);return;}
+
+  function doImportMerge(){
+    // Normalizza ogni nome fornitore estratto dall'intestazione (o scelto
+    // per la colonna generica) sul nome CANONICO già in anagrafica — senza
+    // questo, "EUROPA" (dall'intestazione, maiuscolo) non troverebbe mai il
+    // prezzo esistente salvato sotto "Europa", scambiando ogni riga per un
+    // aggiornamento invece che vederla già uguale, e scrivendo poi una
+    // seconda chiave duplicata nel prodotto invece di aggiornare quella giusta.
+    priceCols.forEach(function(pc){
+      if(!pc.fornitore)return;
+      pc.fornitore=_canonSupplierName(pc.fornitore);
+    });
+    toast('Leggo il listino e confronto col catalogo...');
+    var dataLines=lines.slice(1).filter(function(l){return l.trim();});
+    var parsedRows=[]; // {name, conf, cat, prices:{fornitore:val}}
+    dataLines.forEach(function(line){
+      var cols=pl(line);
+      var name=cols[iN]?cols[iN].trim().toUpperCase():'';
+      if(!name||name==='DESCRIZIONE ARTICOLO')return;
+      var conf=iC>=0&&cols[iC]?cols[iC].trim():'';
+      var cat=iCat>=0&&cols[iCat]?cols[iCat].trim().toUpperCase():'';
+      var prices={};
+      priceCols.forEach(function(pc){
+        var raw=cols[pc.index];if(raw===undefined||raw===null||raw==='')return;
+        var v=parseFloat(String(raw).replace(',','.'));
+        if(!isNaN(v)&&v>0&&pc.fornitore)prices[pc.fornitore]=Math.round(v*100)/100;
+      });
+      if(Object.keys(prices).length)parsedRows.push({name:name,conf:conf,cat:cat,prices:prices});
+    });
+    if(!parsedRows.length){toast('Nessun prezzo compilato trovato nel file');return;}
+    _matchAndReviewListino(parsedRows);
+  }
+
+  // Colonna generica ("PREZZO (...)", senza nome fornitore nell'intestazione
+  // — file scaricato senza scegliere un fornitore, o un CSV/Excel esterno
+  // con una sola colonna prezzo senza intestazione col nome): usa il
+  // fornitore passato dal chiamante (es. il campo "Fornitore" della
+  // schermata Import preventivo), se c'è; altrimenti chiede.
+  var genericCol=priceCols.filter(function(c){return !c.fornitore;})[0];
+  if(genericCol){
+    if(fornitoreHint){genericCol.fornitore=fornitoreHint;doImportMerge();return;}
+    _askFornitoreGenerico(function(nome){genericCol.fornitore=nome;doImportMerge();});
+    return;
+  }
+  doImportMerge();
+}
+
+// Nome fornitore CANONICO come già in anagrafica (case-insensitive); se non
+// esiste ancora lo crea, coerente col comportamento già in uso altrove
+// (vedi importFromCSV) quando si scopre un fornitore nuovo da un'intestazione.
+function _canonSupplierName(rawName){
+  var canon=null;
+  S.suppliers.forEach(function(s){if(s.name.toUpperCase()===rawName.toUpperCase())canon=s.name;});
+  if(!canon){
+    canon=_titleCaseSupplier(rawName);
+    S.suppliers.push({name:canon,whatsapp:'',email:''});
+    ss();
+    if(typeof syncSuppliersToSupabase==='function')syncSuppliersToSupabase();
+  }
+  return canon;
+}
+
+// Confronta le righe già estratte (da qualunque fonte: formato standard o
+// AI) col catalogo — via match ibrido (esatto in locale, IA sulla zona
+// grigia se una API Key è impostata) — e apre la schermata di conferma.
+// Condivisa tra il percorso "formato standard" e quello AI, per non
+// duplicare la logica di confronto.
+function _matchAndReviewListino(parsedRows){
+  var apiKey=localStorage.getItem('ceraldi_apikey')||'';
+  var names=parsedRows.map(function(r){return r.name;});
+  _hybridMatchCatalog(names,S.products,apiKey,null).then(function(matchRes){
+    var aggiornamenti=[]; // {matchId,matchName,fornitore,vecchio,nuovo,matchTipo}
+    var nuoviMap={}; // "nome|conf" -> {name,conf,cat,prices:{}}
+    parsedRows.forEach(function(row,i){
+      var mr=matchRes[i];
+      var matched=(mr.matchTipo==='esatto'||mr.matchTipo==='probabile')&&mr.id!=null?S.products.find(function(p){return p.id===mr.id;}):null;
+      Object.keys(row.prices).forEach(function(fornitore){
+        var nuovo=row.prices[fornitore];
+        if(matched){
+          var vecchio=(matched.prices&&matched.prices[fornitore]!=null)?matched.prices[fornitore]:null;
+          if(vecchio!=null&&Math.abs(vecchio-nuovo)<0.01)return; // già uguale, niente da fare
+          aggiornamenti.push({matchId:matched.id,matchName:matched.name,fornitore:fornitore,vecchio:vecchio,nuovo:nuovo,matchTipo:mr.matchTipo});
+        }else{
+          var key=row.name+'|'+row.conf;
+          if(!nuoviMap[key])nuoviMap[key]={name:row.name,conf:row.conf,cat:row.cat,prices:{}};
+          nuoviMap[key].prices[fornitore]=nuovo;
+        }
+      });
+    });
+    var nuovi=Object.keys(nuoviMap).map(function(k){return nuoviMap[k];});
+    if(!aggiornamenti.length&&!nuovi.length){toast('Tutto già aggiornato — nessuna differenza col catalogo');return;}
+    _showListinoMergeReview(aggiornamenti,nuovi);
+  });
+}
+
+// Percorso AI: usato quando il file NON è nel formato del modello Ceraldi
+// (nessuna intestazione DESCRIZIONE ARTICOLO/PREZZO riconosciuta) — es. un
+// export gestionale del fornitore, o un listino incollato con struttura
+// libera. Riusa _listinoAIParse (già usato da "Importa listino locale" per
+// lo stesso motivo) per leggere il file con Claude, poi passa dallo stesso
+// confronto+conferma del percorso standard.
+async function _importListinoMergeViaAI(text,fornitoreOverride){
+  var aiResult=await _listinoAIParse(text,fornitoreOverride);
+  if(aiResult.rows.length){
+    // Fornitore riconosciuto (dato o dedotto dall'AI): righe già pronte.
+    var canon=_canonSupplierName(aiResult.sourceLabel);
+    aiResult.rows.forEach(function(r){
+      var v=r.prices[aiResult.sourceLabel];
+      if(v!=null){delete r.prices[aiResult.sourceLabel];r.prices[canon]=v;}
+    });
+    _matchAndReviewListino(aiResult.rows);
+    return;
+  }
+  if(aiResult.rawRows&&aiResult.rawRows.length&&!fornitoreOverride){
+    // L'AI ha letto prodotti e prezzi ma non è riuscita a capire a quale
+    // fornitore appartengono: chiede e riprova, senza richiamare l'AI da
+    // capo (rawRows è già la stessa estrazione, senza fornitore assegnato).
+    _askFornitoreGenerico(function(nome){
+      var canon=_canonSupplierName(nome);
+      var parsedRows=aiResult.rawRows.map(function(r){
+        var p={};p[canon]=r.price;
+        return{name:r.name,conf:r.conf,cat:'',prices:p};
+      });
+      _matchAndReviewListino(parsedRows);
+    });
+    return;
+  }
+  // Altrimenti _listinoAIParse ha già mostrato un toast specifico (PDF,
+  // file binario, API Key mancante, nessun prodotto trovato, ecc.)
+}
+
+
+function _askFornitoreGenerico(cb){
+  var overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:300;display:flex;align-items:flex-end';
+  var sheet=document.createElement('div');
+  sheet.style.cssText='background:var(--surface);border-radius:20px 20px 0 0;width:100%;max-height:70dvh;display:flex;flex-direction:column;padding:18px;box-sizing:border-box';
+  sheet.innerHTML='<div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">A quale fornitore appartengono questi prezzi?</div>'
+    +'<div style="font-size:12px;color:var(--muted);margin-bottom:12px">Il file non indica il fornitore nella colonna prezzo (modello scaricato senza sceglierne uno).</div>';
+  var row=document.createElement('div');row.style.cssText='display:flex;flex-wrap:wrap;gap:7px;margin-bottom:12px';
+  var chosen=null;
+  S.suppliers.forEach(function(s){
+    var p=document.createElement('button');p.className='pill';p.textContent=s.name;
+    p.onclick=function(){chosen=s.name;row.querySelectorAll('.pill').forEach(function(x){x.className='pill';});p.className='pill on';inp.value='';};
+    row.appendChild(p);
+  });
+  sheet.appendChild(row);
+  var inp=document.createElement('input');inp.type='text';inp.placeholder='...oppure scrivi un fornitore nuovo';
+  inp.style.cssText='width:100%;box-sizing:border-box;background:var(--bg);border:1.5px solid var(--border);border-radius:9px;padding:10px 13px;font-size:16px;color:var(--text);outline:none;margin-bottom:14px';
+  inp.oninput=function(){if(inp.value.trim()){chosen=null;row.querySelectorAll('.pill').forEach(function(x){x.className='pill';});}};
+  sheet.appendChild(inp);
+  var btnRow=document.createElement('div');btnRow.style.cssText='display:flex;gap:8px';
+  var cancelBtn=document.createElement('button');cancelBtn.textContent='Annulla';cancelBtn.style.cssText='flex:1;padding:12px;border-radius:11px;border:1.5px solid var(--border);background:transparent;color:var(--muted);font-size:14px;cursor:pointer';
+  cancelBtn.onclick=function(){document.body.removeChild(overlay);};
+  var okBtn=document.createElement('button');okBtn.textContent='Continua';okBtn.style.cssText='flex:2;padding:12px;border-radius:11px;border:none;background:var(--gold);color:#fff;font-size:14px;font-weight:700;cursor:pointer';
+  okBtn.onclick=function(){
+    var name=chosen||inp.value.trim();
+    if(!name){toast('Scegli o scrivi un fornitore');return;}
+    document.body.removeChild(overlay);
+    cb(name);
+  };
+  btnRow.appendChild(cancelBtn);btnRow.appendChild(okBtn);
+  sheet.appendChild(btnRow);
+  overlay.appendChild(sheet);
+  overlay.addEventListener('click',function(e){if(e.target===this)document.body.removeChild(overlay);});
+  document.body.appendChild(overlay);
+}
+
+function _showListinoMergeReview(aggiornamenti,nuovi){
+  var overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:300;display:flex;align-items:flex-end';
+  var sheet=document.createElement('div');
+  sheet.style.cssText='background:var(--surface);border-radius:20px 20px 0 0;width:100%;max-height:92dvh;display:flex;flex-direction:column';
+  var handle=document.createElement('div');handle.style.cssText='width:36px;height:4px;background:var(--border);border-radius:2px;margin:10px auto 0;flex-shrink:0';
+  var hdr=document.createElement('div');
+  hdr.style.cssText='display:flex;align-items:center;justify-content:space-between;padding:13px 18px 11px;border-bottom:1px solid var(--border);flex-shrink:0';
+  hdr.innerHTML='<span style="font-size:17px;font-weight:700;color:var(--text)">\uD83D\uDCCB Rivedi listino fornitore</span>';
+  var cls=document.createElement('button');cls.style.cssText='background:var(--border);border:none;border-radius:50%;width:28px;height:28px;color:var(--muted);font-size:13px;cursor:pointer';cls.textContent='\u2715';
+  cls.onclick=function(){document.body.removeChild(overlay);};
+  hdr.appendChild(cls);
+  var body=document.createElement('div');body.style.cssText='flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px 18px';
+
+  var updChecks=[];
+  if(aggiornamenti.length){
+    var updLbl=document.createElement('div');
+    updLbl.style.cssText='font-size:13px;font-weight:800;color:var(--text);margin-bottom:8px';
+    updLbl.textContent='\uD83D\uDCB0 Aggiornamenti prezzo ('+aggiornamenti.length+')';
+    body.appendChild(updLbl);
+    aggiornamenti.forEach(function(a){
+      var row=document.createElement('label');
+      row.style.cssText='display:flex;align-items:center;gap:10px;background:var(--bg);border:1.5px solid '+(a.matchTipo==='probabile'?'rgba(200,135,58,.5)':'var(--border)')+';border-radius:10px;padding:10px 12px;margin-bottom:7px;cursor:pointer';
+      // Match "esatto" (uguale in locale, o l'AI l'ha detto certo): spuntato
+      // di default. Match "probabile" (l'AI non era sicura): NON spuntato —
+      // tocca a Valerio confermarlo (Valerio, 31/08: "io do conferma se il
+      // match non è sicuro al 100%").
+      var cb=document.createElement('input');cb.type='checkbox';cb.checked=(a.matchTipo!=='probabile');cb.style.cssText='width:18px;height:18px;flex-shrink:0';
+      var info=document.createElement('div');info.style.cssText='flex:1;min-width:0';
+      var priceLine=a.vecchio!=null?('\u20AC'+a.vecchio.toFixed(2)+' \u2192 \u20AC'+a.nuovo.toFixed(2)):('nuovo: \u20AC'+a.nuovo.toFixed(2));
+      info.innerHTML='<div style="font-size:13px;font-weight:600;color:var(--text)">'+a.matchName+'</div>'
+        +'<div style="font-size:11.5px;color:var(--muted);margin-top:1px">'+a.fornitore+' \u00B7 '+priceLine+(a.matchTipo==='probabile'?' \u00B7 <span style="color:var(--gold)">match incerto, verifica</span>':'')+'</div>';
+      row.appendChild(cb);row.appendChild(info);
+      body.appendChild(row);
+      updChecks.push({cb:cb,item:a});
+    });
+  }
+
+  var newChecks=[];
+  if(nuovi.length){
+    var newLbl=document.createElement('div');
+    newLbl.style.cssText='font-size:13px;font-weight:800;color:var(--text);margin:'+(aggiornamenti.length?'16px':'0')+' 0 8px';
+    newLbl.textContent='\uD83C\uDD95 Prodotti nuovi trovati nel file ('+nuovi.length+')';
+    body.appendChild(newLbl);
+    var newSub=document.createElement('div');
+    newSub.style.cssText='font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.4';
+    newSub.textContent='Non erano a catalogo. Seleziona quelli da aggiungere.';
+    body.appendChild(newSub);
+    nuovi.forEach(function(n){
+      var row=document.createElement('label');
+      row.style.cssText='display:flex;align-items:center;gap:10px;background:var(--bg);border:1.5px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:7px;cursor:pointer';
+      var cb=document.createElement('input');cb.type='checkbox';cb.checked=false;cb.style.cssText='width:18px;height:18px;flex-shrink:0';
+      var info=document.createElement('div');info.style.cssText='flex:1;min-width:0';
+      var priceLine=Object.keys(n.prices).map(function(f){return f+': \u20AC'+n.prices[f].toFixed(2);}).join(' \u00B7 ');
+      info.innerHTML='<div style="font-size:13px;font-weight:600;color:var(--text)">'+n.name+(n.conf?' ('+n.conf+')':'')+'</div>'
+        +'<div style="font-size:11.5px;color:var(--muted);margin-top:1px">'+priceLine+'</div>';
+      row.appendChild(cb);row.appendChild(info);
+      body.appendChild(row);
+      newChecks.push({cb:cb,item:n});
+    });
+  }
+
+  var foot=document.createElement('div');
+  foot.style.cssText='padding:12px 18px calc(12px + var(--safe-b));border-top:1px solid var(--border);flex-shrink:0';
+  var applyBtn=document.createElement('button');
+  applyBtn.style.cssText='width:100%;padding:13px;border-radius:11px;border:none;background:var(--gold);color:#fff;font-size:15px;font-weight:700;cursor:pointer';
+  applyBtn.textContent='\u2713 Applica al catalogo';
+  applyBtn.onclick=function(){
+    var upd=updChecks.filter(function(u){return u.cb.checked;}).map(function(u){return u.item;});
+    var add=newChecks.filter(function(u){return u.cb.checked;}).map(function(u){return u.item;});
+    if(!upd.length&&!add.length){toast('Nessuna riga selezionata');return;}
+    applyBtn.disabled=true;applyBtn.textContent='Applico...';
+    _applyListinoMerge(upd,add).then(function(res){
+      document.body.removeChild(overlay);
+      toast('Catalogo aggiornato \u2713 — '+res.updated+' prezzi aggiornati'+(res.added?', '+res.added+' prodotti nuovi':''));
+      renderCatalog();
+    }).catch(function(e){
+      applyBtn.disabled=false;applyBtn.textContent='\u2713 Applica al catalogo';
+      toast('Errore: '+e.message);
+    });
+  };
+  foot.appendChild(applyBtn);
+  sheet.appendChild(handle);sheet.appendChild(hdr);sheet.appendChild(body);sheet.appendChild(foot);
+  overlay.appendChild(sheet);
+  overlay.addEventListener('click',function(e){if(e.target===this)document.body.removeChild(overlay);});
+  document.body.appendChild(overlay);
+}
+
+async function _applyListinoMerge(updates,adds){
+  var touched=[];
+  var touchedIds={};
+  updates.forEach(function(u){
+    var p=S.products.find(function(x){return x.id===u.matchId;});
+    if(!p)return;
+    if(!p.prices)p.prices={};
+    p.prices[u.fornitore]=u.nuovo;
+    if(!p.best_override){
+      var bv=Infinity,bn=p.best||'';
+      Object.keys(p.prices).forEach(function(s){if(p.prices[s]<bv){bv=p.prices[s];bn=s;}});
+      p.best=bn;
+    }
+    if(!touchedIds[p.id]){touchedIds[p.id]=true;touched.push(p);}
+  });
+  var addedCount=0;
+  if(adds.length){
+    var maxId=0;
+    try{
+      var r=await fetch(SUPABASE_URL+'/rest/v1/catalogo_ceraldi?select=id&order=id.desc&limit=1',{headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}});
+      var d=await r.json();
+      maxId=d&&d[0]?d[0].id:0;
+    }catch(e){maxId=Math.max.apply(null,S.products.map(function(p){return p.id;}).concat([0]));}
+    var nextId=maxId+1;
+    adds.forEach(function(n){
+      while(S.products.some(function(p){return p.id===nextId;}))nextId++;
+      var bv=Infinity,bn='';
+      Object.keys(n.prices).forEach(function(s){if(n.prices[s]<bv){bv=n.prices[s];bn=s;}});
+      var newProd={id:nextId,name:n.name,conf:n.conf||'',cat:n.cat||'ALTRO',prices:n.prices,best:bn};
+      BP.push(newProd);
+      touched.push(newProd);
+      addedCount++;
+      nextId++;
+    });
+    S.products=BP.concat(S.custom||[]);
+  }
+  var ok=true;
+  if(touched.length)ok=await saveCatalogToSupabase(touched);
+  if(!ok)throw new Error('salvataggio su Cloud non riuscito');
+  return {updated:updates.length,added:addedCount};
 }
 
 document.getElementById('srch').addEventListener('input',renderCatalog);
@@ -9541,13 +10159,15 @@ document.getElementById('cart-overlay').addEventListener('click',function(e){if(
 document.getElementById('addprod-overlay').addEventListener('click',function(e){if(e.target===this)closeOverlay('addprod-overlay');});
 document.getElementById('addprod-cls').addEventListener('click',function(){closeOverlay('addprod-overlay');});
 document.getElementById('ap-save').addEventListener('click',saveCustomProd);
-// NOTA: il pulsante "Importa listino" (ap-import-file) è gestito UNA sola volta
-// più sopra e importa SOLO nel listino locale (importListinoLocale).
-// Il catalogo si aggiorna col pulsante verde "Importa aggiornato"
-// (ap-import-catalogo-file -> importFromCSV). Il vecchio secondo listener che
-// agganciava importFromCSV allo STESSO input causava un doppio import (listino
-// + catalogo) sullo stesso file: il file del listino, letto col parser del
-// catalogo, generava prodotti a 0 euro. Rimosso.
+// NOTA (aggiornata 31/08): "Importa listino locale" (ap-import-file) importa
+// SOLO nel listino locale (importListinoLocale) — non tocca il catalogo Cloud.
+// "Importa listino" (ap-import-merge-file, bottone del blocco "Modello listino
+// per fornitori") ha ora un input dedicato e aggiorna davvero il catalogo
+// Cloud: vedi importaListinoFornitoreMerge. Il catalogo COMPLETO si
+// sostituisce invece col bottone verde "Importa aggiornato"
+// (ap-import-catalogo-file -> importFromCSV). Tre flussi, tre file input
+// distinti apposta — un input condiviso tra due bottoni con effetti diversi
+// aveva già causato un bug (vedi commit precedenti).
 
 document.getElementById('backup-modal-cls').addEventListener('click',function(){closeOverlay('backup-modal');});
 document.getElementById('backup-file-inp').addEventListener('change',function(e){
@@ -10309,11 +10929,37 @@ function _pdfImportInit(){
   uploadBtn.addEventListener('click',function(){
     var apiKey=localStorage.getItem('ceraldi_apikey')||'';
     if(!apiKey){toast('Imposta prima la API Key Anthropic nelle impostazioni');return;}
-    if(!document.getElementById('pdfimport-fornitore').value.trim()){toast('Seleziona prima il fornitore');return;}
+    // Il fornitore resta obbligatorio solo per il PDF (letto qui sotto, nel
+    // ramo PDF-specifico): un Excel/CSV spesso porta già il fornitore nelle
+    // intestazioni delle colonne, o lo si chiede al volo se serve — non ha
+    // senso bloccare la scelta del file per un campo che quel formato non
+    // richiede sempre (Valerio, 31/08: "nella sezione importa preventivo
+    // doveva leggere tutti i file").
     fileInp.click();
   });
   fileInp.addEventListener('change',async function(e){
     var file=e.target.files[0];if(!file)return;
+    var fname=file.name.toLowerCase();
+    // ── CSV / EXCEL: stesso percorso di lettura+conferma di "Importa
+    // listino", raggiungibile anche da qui perché un preventivo fornitore
+    // può arrivare in qualunque formato, non solo PDF. ──
+    if(fname.endsWith('.csv')||fname.endsWith('.xlsx')||fname.endsWith('.xls')){
+      var fornitoreHint=(document.getElementById('pdfimport-fornitore').value||'').trim()||null;
+      if(fname.endsWith('.xlsx')||fname.endsWith('.xls')){
+        if(typeof XLSX==='undefined'){toast('Libreria Excel non caricata — ricarica la pagina e riprova');e.target.value='';return;}
+        var rX=new FileReader();
+        rX.onload=function(ev){try{var data=new Uint8Array(ev.target.result);var wb=XLSX.read(data,{type:'array'});var ws=wb.Sheets[wb.SheetNames[0]];importaListinoFornitoreMerge(XLSX.utils.sheet_to_csv(ws,{rawNumbers:true}),fornitoreHint);}catch(ex){toast('Errore lettura Excel: '+ex.message);}};
+        rX.readAsArrayBuffer(file);
+      }else{
+        var rC=new FileReader();
+        rC.onload=function(ev){importaListinoFornitoreMerge(ev.target.result,fornitoreHint);};
+        rC.readAsText(file,'utf-8');
+      }
+      e.target.value='';
+      return;
+    }
+    // ── PDF: percorso invariato (lettura via AI vision + revisione dedicata) ──
+    if(!document.getElementById('pdfimport-fornitore').value.trim()){toast('Seleziona prima il fornitore');e.target.value='';return;}
     var statusEl=document.getElementById('pdfimport-status');
     statusEl.style.display='block';statusEl.style.color='var(--muted)';
     statusEl.textContent='Estrazione prodotti in corso...';
