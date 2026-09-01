@@ -402,7 +402,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.31.2</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.31.4</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -14062,6 +14062,18 @@ async function caricaMovimentiBanca(){
   }catch(e){
     console.warn('caricaMovimentiBanca: Numia dal database non caricato, si userà il calcolo locale come riserva:', e.message||e);
   }
+  // FIX 31/08 (richiesto da Valerio: "controllo incrociato con l'estratto
+  // conto del POS Numia") — terzo dato di riferimento, dal CSV che scarichi
+  // direttamente da Numia (Import POS). Uno scarto rispetto al dato banca è
+  // normale (le commissioni Numia vengono trattenute prima dell'accredito),
+  // non è di per sé un errore — ma così lo vedi sempre, per giudicare tu.
+  try{
+    const righeCsv = await sbFetch('v_numia_csv_per_giorno?select=data_vendita,totale_csv');
+    window._numiaCsvPerGiornoDB = {};
+    (righeCsv||[]).forEach(r => { window._numiaCsvPerGiornoDB[r.data_vendita] = parseFloat(r.totale_csv)||0; });
+  }catch(e){
+    console.warn('caricaMovimentiBanca: CSV Numia non caricato:', e.message||e);
+  }
   // Cache-first: mostra subito i dati locali
   try{
     const c = JSON.parse(localStorage.getItem(KBANCA)||'[]');
@@ -16003,8 +16015,15 @@ function renderRiconciliazione(){
   // locale resta come riserva SOLO per i giorni che il database non
   // conosce ancora (fuori dall'intervallo coperto dalla vista) o se, per
   // qualche motivo, il caricamento da database non fosse riuscito.
+  // FIX 31/08 bis (regressione trovata da Valerio: "vedo tutto l'anno
+  // anche se sono su agosto") — questa vista arriva da TUTTO l'anno (la
+  // vista sul database non ha filtro mese), quindi sovrascriveva
+  // posNumiaBanca per tutti e 183 i giorni conosciuti, ignorando del tutto
+  // il filtro mese ("mese", da bancaMese) che il resto della schermata
+  // rispetta. Ora si applica lo stesso filtro anche qui.
   if (window._numiaPerGiornoDB) {
     Object.keys(window._numiaPerGiornoDB).forEach(function(data){
+      if (mese && data.indexOf(mese) !== 0) return;
       var valoreDb = window._numiaPerGiornoDB[data];
       posNumiaBanca[data] = valoreDb;
       posNumiaBancaProv[data] = valoreDb;
@@ -16804,7 +16823,7 @@ function renderRiconciliazione(){
   // il 2025 non entra mai nel giro di riconciliazione POS. Reversibile, e
   // non tocca nulla di storico salvato.
   var _giorniPosTutti = Object.keys(Object.assign({}, posNumiaBanca, posSumupBancaProv,
-    (typeof chiusure!=='undefined' ? Object.fromEntries((chiusure||[]).filter(function(c){return c.pos_numia!=null || c.pos!=null;}).map(function(c){return [c.data,true];})) : {})))
+    (typeof chiusure!=='undefined' ? Object.fromEntries((chiusure||[]).filter(function(c){return (c.pos_numia!=null || c.pos!=null) && (!mese || (c.data||'').indexOf(mese)===0);}).map(function(c){return [c.data,true];})) : {})))
     .filter(function(data){ return data >= '2026-01-01'; });
   _giorniPosTutti.forEach(function(data){
     if(typeof chiusure==='undefined') return;
@@ -16939,6 +16958,9 @@ function renderRiconciliazione(){
     posManutenzioneNumia.forEach(function(p, i){
       html += '<div style="padding:9px 0;border-top:1px solid var(--sep);font-size:13px">';
       html += '<div style="font-weight:600;margin-bottom:4px">'+p.data+'</div>';
+      if (window._numiaCsvPerGiornoDB && window._numiaCsvPerGiornoDB[p.data] != null) {
+        html += '<div style="font-size:10.5px;color:var(--ink3);margin-bottom:4px">📇 Estratto CSV Numia: <b>'+fmt(window._numiaCsvPerGiornoDB[p.data])+'</b>'+(Math.abs(window._numiaCsvPerGiornoDB[p.data]-(window._numiaPerGiornoDB[p.data]||0))>0.50?' — diverso dalla banca, da capire perché':'')+'</div>';
+      }
       if(p.tipo==='conflitto'){
         html += '<div style="font-size:11px;color:var(--ink3);display:flex;flex-wrap:wrap;gap:10px;margin-bottom:6px">';
         html += '<span>✍️ Numia inserito a mano: <b>'+fmt(p.numiaManuale)+'</b></span>';
