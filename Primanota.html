@@ -403,7 +403,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.31.10</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.31.12</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -14111,8 +14111,25 @@ async function ricaricaBancaCompleta(){
       window._numiaPerGiornoDB = {};
       (righeNumia||[]).forEach(r => { window._numiaPerGiornoDB[r.data_vendita] = parseFloat(r.totale_numia)||0; });
     }catch(e2){ console.warn('ricaricaBancaCompleta: Numia dal database non aggiornato:', e2.message||e2); }
+    // BUG REALE (trovato 01/09, segnalato da Valerio: "Numia da confermare"
+    // per giorni dove pos_numia era già corretto su Supabase da SETTIMANE —
+    // verificato: updated_at 04/08, quasi un mese prima). Questo pulsante
+    // ricaricava SOLO _bancaMovimenti — mai `chiusure` (dove vive
+    // pos_numia), la tabella che questa sezione confronta davvero. Il
+    // telefono restava fermo su una copia di `chiusure` vecchia di
+    // settimane, e nessun sync incrementale la aggiornava mai (il cursore
+    // incrementale si basa sull'updated_at più recente GIÀ nella copia
+    // locale — se quella copia è troppo indietro per qualunque motivo,
+    // resta indietro per sempre). Ora questo stesso pulsante ricarica per
+    // intero ANCHE le chiusure, sostituendo la cache locale senza fidarsi
+    // del cursore incrementale.
+    try{
+      const righeChiusure = await sbFetchAll('chiusure_giornaliere?select=*&order=data.desc');
+      chiusure = (righeChiusure||[]).filter(function(r){return !r.deleted_at;});
+      if(typeof salvaChiusureLocale==='function') salvaChiusureLocale();
+    }catch(e3){ console.warn('ricaricaBancaCompleta: chiusure non ricaricate:', e3.message||e3); }
     if(typeof renderRiconciliazione==='function') renderRiconciliazione();
-    toast('✓ Ricaricati '+_bancaMovimenti.length+' movimenti — cache locale sostituita per intero');
+    toast('✓ Ricaricati '+_bancaMovimenti.length+' movimenti e '+chiusure.length+' chiusure — cache locale sostituita per intero');
   }catch(e){
     toast('⚠️ Errore: '+String(e.message||e).slice(0,60));
   }
@@ -15999,6 +16016,28 @@ function _setBancaConto(conto){
   renderRiconciliazione();
 }
 
+// ── SEZIONI COLLASSABILI dentro la riconciliazione banca (richiesto
+// esplicitamente da Valerio 01/09: "sono tanti dati e la lista è infinita")
+// — stato ricordato tra un ricaricamento e l'altro, come le altre
+// preferenze di visualizzazione dell'app.
+var _riconColl = {};
+try{ _riconColl = JSON.parse(localStorage.getItem('ceraldi_ricon_collassate')||'{}'); }catch(e){}
+function _riconIsColl(key){ return !!_riconColl[key]; }
+function _riconToggle(key){
+  _riconColl[key] = !_riconColl[key];
+  try{ localStorage.setItem('ceraldi_ricon_collassate', JSON.stringify(_riconColl)); }catch(e){}
+  renderRiconciliazione();
+}
+// Intestazione cliccabile in stile "chip" (stessa grafica dei pulsanti di
+// categoria già usati in "Da classificare"), con freccia che indica se la
+// sezione è aperta o chiusa.
+function _riconSezHeader(key, iconaTitolo, colore){
+  var chiusa = _riconIsColl(key);
+  return '<button onclick="_riconToggle(\''+key+'\')" style="width:100%;display:flex;justify-content:space-between;align-items:center;gap:8px;background:none;border:none;padding:0;margin:0;cursor:pointer;text-align:left;font-family:inherit">'
+    + '<span style="font-size:13px;font-weight:700;color:'+colore+'">'+iconaTitolo+'</span>'
+    + '<span style="font-size:12px;color:var(--ink3);flex-shrink:0">'+(chiusa?'▶ mostra':'▼ nascondi')+'</span>'
+    + '</button>';
+}
 function renderRiconciliazione(){
   var wrap = document.getElementById('bancaContenuto');
   if(!wrap) return;
@@ -17085,8 +17124,9 @@ function renderRiconciliazione(){
       html += '</div>';
     }
     html += '<div style="background:var(--surface);border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow);border-left:3px solid var(--orange)">';
-    html += '<div style="font-size:13px;font-weight:700;color:#b36a00">🔵 Numia da inserire o verificare ('+posManutenzioneNumia.length+')</div>';
-    html += '<div style="font-size:11px;color:var(--ink3);margin-top:2px;margin-bottom:10px">Inserito a mano a fine giornata, oppure trovato più tardi nell\'estratto banca — qui i giorni dove manca uno dei due, o dove i due non coincidono.</div>';
+    html += _riconSezHeader('numia', '🔵 Numia da inserire o verificare ('+posManutenzioneNumia.length+')', '#b36a00');
+    if(!_riconIsColl('numia')){
+    html += '<div style="font-size:11px;color:var(--ink3);margin-top:8px;margin-bottom:10px">Inserito a mano a fine giornata, oppure trovato più tardi nell\'estratto banca — qui i giorni dove manca uno dei due, o dove i due non coincidono.</div>';
     window._posManutenzioneNumia = posManutenzioneNumia;
     posManutenzioneNumia.forEach(function(p, i){
       html += '<div style="padding:9px 0;border-top:1px solid var(--sep);font-size:13px">';
@@ -17117,12 +17157,14 @@ function renderRiconciliazione(){
       }
       html += '</div>';
     });
+    }
     html += '</div>';
   }
   if(posScostamentoFiscale.length){
     html += '<div style="background:var(--surface);border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow);border-left:3px solid var(--red)">';
-    html += '<div style="font-size:13px;font-weight:700;color:var(--red)">⚠️ Fiscale non torna con Numia + SumUp ('+posScostamentoFiscale.length+')</div>';
-    html += '<div style="font-size:11px;color:var(--ink3);margin-top:2px;margin-bottom:10px">Il totale POS scritto in chiusura è diverso da quanto risulta transato — da controllare a mano, l\'app non può correggerlo da sola.</div>';
+    html += _riconSezHeader('fiscale', '⚠️ Fiscale non torna con Numia + SumUp ('+posScostamentoFiscale.length+')', 'var(--red)');
+    if(!_riconIsColl('fiscale')){
+    html += '<div style="font-size:11px;color:var(--ink3);margin-top:8px;margin-bottom:10px">Il totale POS scritto in chiusura è diverso da quanto risulta transato — da controllare a mano, l\'app non può correggerlo da sola.</div>';
     posScostamentoFiscale.forEach(function(p){
       var col = p.scostamento>0 ? '#1a7a3a' : 'var(--red)';
       html += '<div style="padding:8px 0;border-top:1px solid var(--sep);font-size:12px">';
@@ -17136,12 +17178,14 @@ function renderRiconciliazione(){
       html += '<div style="color:'+col+';font-weight:600;margin-top:2px">Scostamento: '+(p.scostamento>0?'+':'')+fmt(p.scostamento)+'</div>';
       html += '</div>';
     });
+    }
     html += '</div>';
   }
   if(posDiscrepanze.length){
     html += '<div style="background:var(--surface);border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow);border-left:3px solid var(--orange)">';
-    html += '<div style="font-size:13px;font-weight:700;color:#b36a00">💳 Estratto conto banca — da verificare ('+posDiscrepanze.length+')</div>';
-    html += '<div style="font-size:11px;color:var(--ink3);margin-top:2px;margin-bottom:10px">Il POS banca già salvato in passato è diverso da quello ricalcolato ora dall\'estratto conto</div>';
+    html += _riconSezHeader('banca', '💳 Estratto conto banca — da verificare ('+posDiscrepanze.length+')', '#b36a00');
+    if(!_riconIsColl('banca')){
+    html += '<div style="font-size:11px;color:var(--ink3);margin-top:8px;margin-bottom:10px">Il POS banca già salvato in passato è diverso da quello ricalcolato ora dall\'estratto conto</div>';
     window._posDiscrepanze = posDiscrepanze;
     posDiscrepanze.forEach(function(p, i){
       // Qui si confronta il totale banca GIÀ SALVATO con quello RICALCOLATO
@@ -17176,6 +17220,7 @@ function renderRiconciliazione(){
       html += '<button onclick="_correggiPOS('+i+')" style="padding:5px 10px;border:1px solid #0066cc;border-radius:6px;background:#e8f4fd;color:#0066cc;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;flex-shrink:0">💾 Salva POS banca</button>';
       html += '</div></div>';
     });
+    }
     html += '</div>';
   }
 
