@@ -1020,7 +1020,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div id="app" style="display:none">
 
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.219</span></div>
+    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.221</span></div>
     <span class="topbar-badge" id="role-badge"></span>
     <button class="btn-topbar" onclick="ricaricaApp()" title="Ricarica la pagina (per essere sicuro di avere l'ultima versione)" style="padding:6px 10px">🔄</button>
     <button id="btn-promemoria" class="btn-topbar" onclick="apriPromemoria()" style="display:none;position:relative;padding:6px 10px">
@@ -9221,7 +9221,15 @@ async function initAdmin() {
   // Controlla compleanni dipendenti oggi
   setTimeout(controllaBuonCompleanno, 1500);
   // Calcola promemoria e scadenze
-  setTimeout(aggiornaPromemoria, 1800);
+  // FIX 31/08 (richiesto da Valerio: "una finestra che si apre pochi
+  // secondi dopo aver aperto l'app per confermare o meno le richieste") —
+  // apre da sola il centro attività, ma SOLO se c'è qualcosa che richiede
+  // davvero una tua decisione (timbrature o richieste da approvare) — mai
+  // per promemoria solo informativi (compleanni, scadenze contratto), che
+  // resterebbero comunque visibili aprendo la campanella a mano. Incatenata
+  // con .then(), non un secondo setTimeout a tempo indovinato — così parte
+  // solo a dati davvero caricati, non prima.
+  setTimeout(() => { aggiornaPromemoria().then(apriPromemoriaSeCiSonoAzioniInSospeso); }, 1800);
   setTimeout(inviaRiepilogoPromemoriaTelegram, 2500);
   setTimeout(() => caricaAssenzaDaApprovare(), 1200); // controlla richieste ferie/assenza da approvare
   setTimeout(() => caricaCambioTurnoDaApprovareAdmin(), 3200); // controlla cambi turno da approvare
@@ -9436,6 +9444,18 @@ async function aggiornaPromemoria() {
     if (tot > 0) { badge.textContent = tot; badge.style.display = 'block'; }
     else badge.style.display = 'none';
   }
+}
+
+// FIX 31/08 (richiesto da Valerio: apertura automatica del centro attività
+// pochi secondi dopo l'avvio, ma solo per le voci che richiedono una
+// decisione — non per i soli promemoria informativi). I titoli qui elencati
+// sono esattamente quelli su cui apriPromemoria() mostra i bottoni
+// Approva/Rifiuta/Conferma — se un domani se ne aggiungono altri di questo
+// tipo, vanno aggiunti anche qui.
+const _TITOLI_PROMEMORIA_AZIONABILI = ['Richiesta da approvare', 'Timbratura da approvare', 'Timbratura da confermare'];
+function apriPromemoriaSeCiSonoAzioniInSospeso() {
+  const azionabili = (_promemoria||[]).filter(p => _TITOLI_PROMEMORIA_AZIONABILI.includes(p.titolo));
+  if (azionabili.length) apriPromemoria();
 }
 
 function apriPromemoria() {
@@ -14497,7 +14517,17 @@ async function confermaEsportaExcel() {
   const sceltePag = {};
   document.querySelectorAll('.fest-export-sel').forEach(s => { sceltePag[s.dataset.dt] = s.value; });
   const dipIdFiltro = $('exp-dip-sel') ? $('exp-dip-sel').value : '';
-  await generaExcelConsulente(sceltePag, dipIdFiltro || null, periodo);
+  // FIX 01/09 (segnalato da Valerio: "esce solo l'avviso ma non genera il
+  // file") — questa funzione non aveva NESSUN controllo errori: se
+  // qualcosa andava storto durante la generazione, l'eccezione spariva nel
+  // nulla e restava solo il messaggio "Preparazione Excel…" per sempre,
+  // senza dire cosa fosse successo. Ora l'errore vero si vede.
+  try {
+    await generaExcelConsulente(sceltePag, dipIdFiltro || null, periodo);
+  } catch (e) {
+    console.error('confermaEsportaExcel:', e);
+    toast('⚠️ Errore nella generazione: ' + String(e.message || e).slice(0, 80));
+  }
 }
 
 async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
