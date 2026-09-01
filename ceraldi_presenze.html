@@ -13728,15 +13728,29 @@ async function caricaStipendi() {
   const [{ data: dipendenti }, { data: presenze }, { data: accontiTutti }, { data: restituzioniTutte }, { data: ferieAnno }, { data: malattieAnno }, { data: liquidazTutte }, { data: presenzePrecedenti }, { data: cedoliniMese }, { data: acconti1314Storico }, { data: bonificiRiconciliatiMese }] = await Promise.all([
     sb.from('presenze_profili').select('*').eq('attivo',true).or('ruolo.eq.dipendente,percepisce_stipendio.eq.true').order('nome'),
     sb.from('presenze').select('*').gte('data',dal).lte('data',al),
-    sb.from('presenze_acconti').select('id,dipendente_id,importo,data,note,letto_dip,causale,saldato,mese_riferimento,anno_riferimento,periodo_anno_inizio,saldo_periodo').lte('data',al),
+    // FIX 01/09 (segnalato da Valerio: acconto dato oggi per il mese di
+    // agosto — visibile solo su settembre, con l'indicazione "vai su
+    // agosto", ma su agosto non compariva). Stesso identico bug, sulla
+    // stessa classe di query, già risolto per acconto_13/acconto_14 poco
+    // sotto: il .lte('data',al) tagliava fuori qualunque riga datata DOPO
+    // il mese che si sta guardando in questo momento — un acconto/
+    // arretrato dato oggi per un mese passato (mese_riferimento esplicito)
+    // spariva quando si tornava a sfogliare proprio quel mese. Qui sotto
+    // (righe 13812 e 13824) il filtro per mese_riferimento è già corretto:
+    // il problema era che la riga non arrivava nemmeno fino a lì. Ora si
+    // recupera la storia completa, come già per la 13a/14a — niente più
+    // limite di data.
+    sb.from('presenze_acconti').select('id,dipendente_id,importo,data,note,letto_dip,causale,saldato,mese_riferimento,anno_riferimento,periodo_anno_inizio,saldo_periodo'),
     // FIX (acconto "sdoppiato" tra mesi): un acconto non liquidato viene
     // riportato avanti nei mesi successivi (vedi acconti sotto), ma la
     // relativa restituzione veniva presa SOLO se caduta nel mese in corso
     // — quindi un acconto restituito a luglio ricompariva intero (senza la
     // restituzione che lo azzerava) nel calcolo di agosto, raddoppiando il
-    // debito. Ora si recuperano TUTTE le restituzioni fino a fine mese,
-    // con lo stesso identico criterio di riporto usato per gli acconti.
-    DB.safe(() => sb.from('presenze_restituzioni').select('id,dipendente_id,importo,data,note,mese_riferimento,anno_riferimento').lte('data',al), null),
+    // debito. Ora si recuperano TUTTE le restituzioni (stesso motivo del
+    // fix appena sopra: niente più limite di data, altrimenti una
+    // restituzione/arretrato dato oggi per un mese passato sparirebbe
+    // allo stesso modo).
+    DB.safe(() => sb.from('presenze_restituzioni').select('id,dipendente_id,importo,data,note,mese_riferimento,anno_riferimento'), null),
     sb.from('presenze_assenze').select('dipendente_id,data_inizio,data_fine,tipo')
       .eq('tipo','ferie').in('stato',['approvata','confermata'])
       .gte('data_inizio', y+'-01-01').lte('data_fine', y+'-12-31'),
