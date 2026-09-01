@@ -14872,9 +14872,14 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
   (assenze||[]).filter(a=>a.tipo!=='acconto').sort((a,b)=>(a.data_inizio<b.data_inizio?-1:1)).forEach(a => {
     let giorniRiga = '';
     if (a.data_inizio && a.data_fine) {
-      giorniRiga = a.tipo === 'ferie'
-        ? classificaGiorniFerieReale(a.data_inizio, a.data_fine, riposoFissoMap[a.dipendente_id], festSetAnno, workedSetPerDip[a.dipendente_id]||new Set(), malSetPerDip[a.dipendente_id]).goduti
-        : giorniNelMese(a.data_inizio,a.data_fine);
+      if (a.tipo === 'ferie') {
+        const profF3 = (dipendenti||[]).find(x => x.id === a.dipendente_id);
+        const wsDipF3 = new Set((presenze||[]).filter(p => p.dipendente_id === a.dipendente_id).map(p => p.data));
+        const malDipF3 = (assenze||[]).filter(x => x.dipendente_id === a.dipendente_id && x.tipo === 'malattia');
+        giorniRiga = classificaGiorniFerieReale(a.data_inizio, a.data_fine, profF3 ? profF3.turni_riposo_fisso : null, festSet, wsDipF3, _setGiorniDaPeriodi(malDipF3)).goduti;
+      } else {
+        giorniRiga = giorniNelMese(a.data_inizio,a.data_fine);
+      }
     }
     F3.push([
       nomeDi(a.dipendente_id),
@@ -18965,13 +18970,26 @@ async function calcolaPrevisioneCosto() {
 
   const righe = [];
   let tNetto=0, tLordo=0, tAzienda=0, tInpsDip=0, tIrpef=0, tAddiz=0;
+  let sociSaltati = [];
   for (const d of profili) {
     const isCoco0 = (d.tipo_contratto||'') === 'co.co.co';
-    let netto, giorni = 0, paga = 0;
-    if (isCoco0) {
+    // Soci amministratori (Valerio e Vincenzo Ceraldi): non timbrano, quindi
+    // le presenze non dicono nulla del loro compenso — prima venivano
+    // conteggiati con "giorni × paga_giornaliera" come un dipendente
+    // qualunque (o saltati del tutto se non avevano timbrature), falsando
+    // la previsione. Qui si chiede direttamente il netto del mese, una
+    // volta per ciascuno, e si stima l'F24 da quello — non dalle presenze.
+    const isSocioManuale = d.ruolo === 'admin' && ['valerio','vincenzo'].includes((d.nome||'').trim().toLowerCase());
+    let netto, giorni = 0, paga = 0, manuale = false;
+    if (isSocioManuale) {
+      const nomeCompleto = d.nome+(d.cognome?' '+d.cognome:'');
+      const inserito = prompt('Netto di '+nomeCompleto+' per '+MESI[mese]+' '+anno+' (€):');
+      const val = inserito !== null ? parseFloat(inserito.replace(',','.')) : NaN;
+      if (inserito === null || isNaN(val) || val <= 0) { sociSaltati.push(nomeCompleto); continue; }
+      netto = val; manuale = true;
+    } else if (isCoco0) {
       // Compenso fisso mensile, non legato alle presenze registrate.
-      // Default 1500€ se non impostato in anagrafica (Ceraldi Valerio e
-      // Vincenzo, amministratori con compenso mensile fisso).
+      // Default 1500€ se non impostato in anagrafica.
       netto = parseFloat(d.netto_fisso_mensile) || 1500;
     } else {
       giorni = new Set((presenze||[]).filter(p => p.dipendente_id === d.id).map(p => p.data)).size;
@@ -19021,7 +19039,7 @@ async function calcolaPrevisioneCosto() {
 
     tNetto += netto; tLordo += lordo; tAzienda += azienda;
     tInpsDip += inpsDip; tIrpef += irpef; tAddiz += addizionali;
-    righe.push({ nome: d.nome+(d.cognome?' '+d.cognome:''), giorni, paga, netto, lordo, azienda,
+    righe.push({ nome: d.nome+(d.cognome?' '+d.cognome:''), giorni, paga, manuale, netto, lordo, azienda,
                  inpsDip, irpef, addizionali, rapporto, fonte, fonteVoci });
   }
 
@@ -19045,10 +19063,13 @@ async function calcolaPrevisioneCosto() {
     + '<div style="font-size:10px;color:var(--muted);margin-top:2px">(INPS dipendenti + IRPEF + addizionali + INPS azienda)</div>'
     + '<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:8px"><span>Costo aziendale previsto (lordo + INPS azienda)</span><span>€ '+(tLordo+tAzienda).toFixed(2)+'</span></div>'
     + '</div>';
+  if (sociSaltati.length) {
+    html += '<div class="card" style="padding:10px 12px;margin-top:10px;background:rgba(200,120,40,.08);border-color:rgba(200,120,40,.3);font-size:12px">⚠ Netto non inserito per: '+esc(sociSaltati.join(', '))+' — non compresi nella previsione. Ripeti il calcolo per includerli.</div>';
+  }
   html += '<div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:16px 0 8px">Dettaglio per dipendente</div>';
   html += righe.map(r => '<div class="card" style="padding:10px 12px;margin-bottom:6px">'
     + '<div style="font-weight:700;font-size:13px;margin-bottom:4px">'+esc(r.nome)+'</div>'
-    + '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">'+(r.giorni ? r.giorni+' giorni × € '+r.paga.toFixed(2) : 'compenso fisso mensile')+'</div>'
+    + '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">'+(r.manuale ? 'netto inserito manualmente (socio, nessuna presenza)' : r.giorni ? r.giorni+' giorni × € '+r.paga.toFixed(2) : 'compenso fisso mensile')+'</div>'
     + riga('Netto da pagare', r.netto, true)
     + riga('Lordo previsto (×'+r.rapporto.toFixed(3)+')', r.lordo)
     + riga('INPS dipendente', r.inpsDip)

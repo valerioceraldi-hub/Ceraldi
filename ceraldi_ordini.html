@@ -9428,8 +9428,167 @@ async function importListinoLocale(text,fornitoreOverride){
       var mb=document.getElementById('listino-main-banner');if(mb)mb.style.display='block';
       idbListinoCount().then(function(tot){var lbl=document.getElementById('listino-count-lbl');if(lbl)lbl.textContent='('+tot+' prod. tot.)';});
       toast('Listino locale '+(listinoSourceLabel?'"'+listinoSourceLabel+'" ':'')+': '+np.length+' prodotti salvati');
+      // Confronto automatico col catalogo (disegno concordato 01/09): solo
+      // se il listino è di UN fornitore solo — un file con più fornitori
+      // insieme ("Fornitore1 + Fornitore2") resta fuori da questo confronto,
+      // il caso è raro e ambiguo su chi aggiornare.
+      if(listinoSourceLabel&&listinoSourceLabel.indexOf(' + ')<0){
+        confrontaListinoLocaleColCatalogo(_canonSupplierName(listinoSourceLabel),np);
+      }
     }
   });
+}
+
+/* ── CONFRONTA LISTINO LOCALE COL CATALOGO (disegno concordato 01/09) ────
+   DIVERSO dal flusso "Importa listino"/"Import preventivo": lì si parte dal
+   file (quali prodotti ci sono dentro), qui si parte dal CATALOGO — per un
+   dato fornitore, prende solo i suoi prodotti (per settore merceologico
+   assegnato al fornitore in Impostazioni→Fornitori; se il fornitore non ha
+   ancora un settore assegnato, considera l'intero catalogo, stesso
+   fallback già usato altrove nell'app) e li cerca uno per uno nel listino
+   locale appena caricato:
+   - nome identico, prezzo uguale → nessuna azione
+   - nome identico, prezzo diverso → propone l'aggiornamento (conferma richiesta)
+   - nome simile ma non identico → SEMPRE conferma manuale, mai automatico
+   - prezzo vuoto per questo fornitore, prodotto trovato nel listino → segnalato a parte
+   - prodotto non trovato nel listino → nessuna azione, non è "sparito"
+   Nessuna chiamata IA: il caso "nome simile" richiede comunque sempre una
+   conferma manuale, quindi la sola similarità locale (già usata altrove
+   nell'app, _localCandidates) basta per proporre i candidati. ───────────── */
+function confrontaListinoLocaleColCatalogo(fornitore,listinoRows){
+  if(!fornitore||!listinoRows||!listinoRows.length)return;
+  function norm(s){return String(s||'').trim().toUpperCase().replace(/\s+/g,' ');}
+  var secs=getSupplierSectors(fornitore);
+  var candidates=secs.length
+    ?S.products.filter(function(p){return secs.indexOf(getSectorForProduct(p))>=0;})
+    :S.products.slice();
+  if(!candidates.length)return;
+
+  var byName={};
+  listinoRows.forEach(function(r){var k=norm(r.name);if(!byName[k])byName[k]=r;});
+  function rowPrice(row){
+    if(!row)return null;
+    if(row.prices&&row.prices[fornitore]!=null)return Math.round(row.prices[fornitore]*100)/100;
+    var vals=row.prices?Object.keys(row.prices).map(function(k){return row.prices[k];}):[];
+    return vals.length?Math.round(vals[0]*100)/100:null;
+  }
+
+  var aggiornamenti=[]; // {matchId,matchName,fornitore,vecchio,nuovo} — nome identico, prezzo diverso
+  var daVerificare=[]; // {catalogId,catalogName,listinoName,nuovo,score} — nome simile, mai automatico
+  var daAggiungere=[]; // {matchId,matchName,fornitore,nuovo} — prezzo vuoto, trovato col nome identico
+
+  candidates.forEach(function(p){
+    var exact=byName[norm(p.name)];
+    var vecchio=(p.prices&&p.prices[fornitore]!=null)?p.prices[fornitore]:null;
+    if(exact){
+      var nuovo=rowPrice(exact);
+      if(nuovo==null)return;
+      if(vecchio==null){
+        daAggiungere.push({matchId:p.id,matchName:p.name,fornitore:fornitore,nuovo:nuovo});
+      }else if(Math.abs(vecchio-nuovo)>=0.01){
+        aggiornamenti.push({matchId:p.id,matchName:p.name,fornitore:fornitore,vecchio:vecchio,nuovo:nuovo});
+      }
+      // prezzo già uguale → nessuna azione
+      return;
+    }
+    // Nessun nome identico: prova la similarità locale (soglia moderata,
+    // qui serve solo a suggerire candidati plausibili da far verificare a
+    // Valerio — mai applicati senza conferma, quindi niente IA).
+    var best=_localCandidates(p.name,listinoRows,1,null,fornitore)[0];
+    if(best&&best.s>=40){
+      var nuovoSim=rowPrice(best.c);
+      if(nuovoSim!=null){
+        daVerificare.push({catalogId:p.id,catalogName:p.name,fornitore:fornitore,listinoName:best.c.name,nuovo:nuovoSim,score:best.s});
+      }
+    }
+    // altrimenti: non trovato nel listino → nessuna azione
+  });
+
+  if(!aggiornamenti.length&&!daVerificare.length&&!daAggiungere.length){
+    toast('Confronto con "'+fornitore+'": tutto già allineato, nessuna differenza');
+    return;
+  }
+  _showCatalogoVsListinoReview(fornitore,aggiornamenti,daVerificare,daAggiungere);
+}
+
+function _showCatalogoVsListinoReview(fornitore,aggiornamenti,daVerificare,daAggiungere){
+  var overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:300;display:flex;align-items:flex-end';
+  var sheet=document.createElement('div');
+  sheet.style.cssText='background:var(--surface);border-radius:20px 20px 0 0;width:100%;max-height:92dvh;display:flex;flex-direction:column';
+  var handle=document.createElement('div');handle.style.cssText='width:36px;height:4px;background:var(--border);border-radius:2px;margin:10px auto 0;flex-shrink:0';
+  var hdr=document.createElement('div');
+  hdr.style.cssText='display:flex;align-items:center;justify-content:space-between;padding:13px 18px 11px;border-bottom:1px solid var(--border);flex-shrink:0';
+  hdr.innerHTML='<span style="font-size:17px;font-weight:700;color:var(--text)">\uD83D\uDD0D Catalogo vs listino \u2014 '+fornitore+'</span>';
+  var cls=document.createElement('button');cls.style.cssText='background:var(--border);border:none;border-radius:50%;width:28px;height:28px;color:var(--muted);font-size:13px;cursor:pointer';cls.textContent='\u2715';
+  cls.onclick=function(){document.body.removeChild(overlay);};
+  hdr.appendChild(cls);
+  var body=document.createElement('div');body.style.cssText='flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px 18px';
+
+  function section(list,title,sub,defaultChecked,renderLine){
+    var checks=[];
+    if(!list.length)return checks;
+    var lbl=document.createElement('div');
+    lbl.style.cssText='font-size:13px;font-weight:800;color:var(--text);margin:'+(body.childElementCount?'16px':'0')+' 0 4px';
+    lbl.textContent=title+' ('+list.length+')';
+    body.appendChild(lbl);
+    if(sub){
+      var subEl=document.createElement('div');
+      subEl.style.cssText='font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.4';
+      subEl.textContent=sub;
+      body.appendChild(subEl);
+    }
+    list.forEach(function(item){
+      var row=document.createElement('label');
+      row.style.cssText='display:flex;align-items:center;gap:10px;background:var(--bg);border:1.5px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:7px;cursor:pointer';
+      var cb=document.createElement('input');cb.type='checkbox';cb.checked=defaultChecked;cb.style.cssText='width:18px;height:18px;flex-shrink:0';
+      var info=document.createElement('div');info.style.cssText='flex:1;min-width:0';
+      info.innerHTML=renderLine(item);
+      row.appendChild(cb);row.appendChild(info);
+      body.appendChild(row);
+      checks.push({cb:cb,item:item});
+    });
+    return checks;
+  }
+
+  var updChecks=section(aggiornamenti,'\uD83D\uDCB0 Aggiornamenti prezzo','Nome identico nel listino, prezzo diverso.',true,function(a){
+    return '<div style="font-size:13px;font-weight:600;color:var(--text)">'+a.matchName+'</div>'
+      +'<div style="font-size:11.5px;color:var(--muted);margin-top:1px">\u20AC'+a.vecchio.toFixed(2)+' \u2192 \u20AC'+a.nuovo.toFixed(2)+'</div>';
+  });
+  var addChecks=section(daAggiungere,'\uD83C\uDD95 Prezzo mancante trovato','Erano a catalogo senza prezzo per questo fornitore \u2014 il listino ce l\'ha.',true,function(a){
+    return '<div style="font-size:13px;font-weight:600;color:var(--text)">'+a.matchName+'</div>'
+      +'<div style="font-size:11.5px;color:var(--muted);margin-top:1px">nuovo prezzo: \u20AC'+a.nuovo.toFixed(2)+'</div>';
+  });
+  var verChecks=section(daVerificare,'\uD83D\uDD0E Da verificare','Nome simile ma non identico \u2014 controlla che sia davvero lo stesso prodotto prima di spuntarlo.',false,function(v){
+    return '<div style="font-size:13px;font-weight:600;color:var(--text)">'+v.catalogName+'</div>'
+      +'<div style="font-size:11.5px;color:var(--gold);margin-top:1px">nel listino: \u00AB'+v.listinoName+'\u00BB \u00B7 \u20AC'+v.nuovo.toFixed(2)+'</div>';
+  });
+
+  var foot=document.createElement('div');
+  foot.style.cssText='padding:12px 18px calc(12px + var(--safe-b));border-top:1px solid var(--border);flex-shrink:0';
+  var applyBtn=document.createElement('button');
+  applyBtn.style.cssText='width:100%;padding:13px;border-radius:11px;border:none;background:var(--gold);color:#fff;font-size:15px;font-weight:700;cursor:pointer';
+  applyBtn.textContent='\u2713 Applica al catalogo';
+  applyBtn.onclick=function(){
+    var upd=updChecks.filter(function(u){return u.cb.checked;}).map(function(u){return u.item;})
+      .concat(addChecks.filter(function(u){return u.cb.checked;}).map(function(u){return u.item;}))
+      .concat(verChecks.filter(function(u){return u.cb.checked;}).map(function(u){return {matchId:u.item.catalogId,matchName:u.item.catalogName,fornitore:u.item.fornitore,nuovo:u.item.nuovo};}));
+    if(!upd.length){toast('Nessuna riga selezionata');return;}
+    applyBtn.disabled=true;applyBtn.textContent='Applico...';
+    _applyListinoMerge(upd,[]).then(function(res){
+      document.body.removeChild(overlay);
+      toast('Catalogo aggiornato \u2713 — '+res.updated+' prezzi');
+      renderCatalog();
+    }).catch(function(e){
+      applyBtn.disabled=false;applyBtn.textContent='\u2713 Applica al catalogo';
+      toast('Errore: '+e.message);
+    });
+  };
+  foot.appendChild(applyBtn);
+  sheet.appendChild(handle);sheet.appendChild(hdr);sheet.appendChild(body);sheet.appendChild(foot);
+  overlay.appendChild(sheet);
+  overlay.addEventListener('click',function(e){if(e.target===this)document.body.removeChild(overlay);});
+  document.body.appendChild(overlay);
 }
 
 /* ── ESPORTA CATALOGO COMPLETO (per aggiornamento) ─────────── */
