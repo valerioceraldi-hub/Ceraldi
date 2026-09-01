@@ -403,7 +403,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.31.5</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.31.10</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -11436,6 +11436,23 @@ function setIncTab(t, btn){
     var bm = document.getElementById('bancaMese');
     if(bm && !bm.value) bm.value = new Date().toISOString().slice(0,7);
     renderRiconciliazione();
+    // BUG REALE (trovato 01/09, segnalato da Valerio: "Numia a zero euro"
+    // per giorni dove i dati sul Cloud erano corretti e verificati — capitava
+    // su TANTI giorni, non solo uno). Causa: toccando questo tab la
+    // schermata si disegnava SUBITO con quello che c'era già in memoria,
+    // che per il Numia-da-banca può essere il calcolo fatto in locale sul
+    // telefono (leggendo _bancaMovimenti, una copia che può essere
+    // incompleta) — MAI aspettando il dato vero dal database
+    // (window._numiaPerGiornoDB, caricato da caricaMovimentiBanca(), sempre
+    // corretto). Ora si ridisegna una seconda volta appena quel dato vero
+    // arriva, sovrascrivendo eventuali zero temporanei col numero giusto —
+    // stesso principio già corretto ieri sera per la sincronizzazione in
+    // background, qui applicato al tocco diretto del tab.
+    if(typeof caricaMovimentiBanca==='function'){
+      caricaMovimentiBanca().then(function(){
+        if(_incTabAttivo==='banca') renderRiconciliazione();
+      });
+    }
   }
   if(t==='carta'){
     var cm = document.getElementById('cartaMese');
@@ -16698,6 +16715,21 @@ function renderRiconciliazione(){
       } else {
         nonAbbinati.push(m);
       }
+
+    } else if(isPaypal){
+      // BUG REALE (trovato 01/09, segnalato da Valerio: "VOSTRO ASSEGNO
+      // N. 0208770987" e altri comparivano DUE VOLTE nella riconciliazione,
+      // in "Assegni" — dati reali su Supabase verificati: il movimento
+      // esisteva UNA sola volta nel database, il doppione lo creava questo
+      // stesso codice). Questo blocco PayPal (FIX 25/08) era incollato
+      // DENTRO il ramo "else if(isAssegno)" qui sopra, invece di essere un
+      // ramo a sé — quindi girava per OGNI assegno, non solo per i PayPal
+      // (isPaypal è sempre falso per un vero assegno: il testo "VOSTRO
+      // ASSEGNO N..." non contiene mai "paypal"). Se l'assegno non aveva
+      // candidati PayPal (praticamente sempre, non essendo un PayPal), lo
+      // spingeva una SECONDA volta in nonAbbinati — da cui il doppione in
+      // "Assegni" che vedevi tu. Ora è un ramo indipendente, attivato solo
+      // per i veri addebiti PayPal.
       // FIX 25/08 (Valerio: "Gli addebiti PayPal non mostrano il destinatario
       // della fattura"). Un addebito SDD PayPal riporta in causale solo
       // "PayPal Europe S.a.r.l. et Cie S.C.A" — cioè PayPal stesso, MAI il
@@ -16933,11 +16965,38 @@ function renderRiconciliazione(){
       }
     }
 
-    // 3) Banca già salvata vs banca ricalcolata ora (INVARIATO)
-    var totBanca = Math.round(((posNumiaBanca[data]||0) + (posSumupBancaProv[data]||0))*100)/100;
+    // 3) Banca già salvata vs banca ricalcolata ora
+    // BUG REALE (trovato 01/09, segnalato da Valerio: "13 agosto, dati
+    // incoerenti e contrastanti") — qui sotto si ricalcolava usando SOLO
+    // posNumiaBanca[data] (il Numia trovato nell'estratto conto), che è 0
+    // finché il versamento Numia non è ancora arrivato in banca (capita
+    // spesso: il POS deposita con qualche giorno di ritardo). Il risultato:
+    // un "ricalcolo" artificialmente basso che non corrispondeva affatto a
+    // quello (corretto) salvato in precedenza usando il Numia inserito a
+    // mano — la stessa identica giornata mostrava due totali diversi in due
+    // punti diversi dell'app, e il tasto "Salva POS banca" avrebbe
+    // sovrascritto il dato giusto con quello sbagliato, troppo basso.
+    // Stessa logica già usata al punto 2 qui sopra: preferisci il Numia
+    // confermato (manuale) quando c'è, usa quello di banca solo se non c'è
+    // ancora un valore manuale — così il ricalcolo qui e il confronto al
+    // punto 2 raccontano sempre la stessa storia per lo stesso giorno.
+    var totBanca = Math.round(((numiaScelto||0) + (posSumupBancaProv[data]||0))*100)/100;
     if(!ch) return;
     var posBancaSalvato = Math.round((ch.pos_banca||0)*100)/100;
-    if(posBancaSalvato > 0 && Math.abs(posBancaSalvato - totBanca) > 0.50){
+    // BUG REALE (trovato 01/09, Valerio: "perché Salva POS banca mi dà Numia
+    // a zero euro per agosto?") — quando il Numia del giorno non si sapeva
+    // da NESSUNA delle due fonti (né a mano né dalla banca — capita per i
+    // giorni più recenti, non ancora accreditati), numiaScelto restava
+    // null, e "|| 0" lo trasformava in uno zero silenzioso: il "ricalcolo"
+    // sembrava un vero importo (bassissimo, quasi sempre "più basso —
+    // verifica prima di correggere"), e il tasto "Salva POS banca" avrebbe
+    // scritto pos_numia=0 come se fosse un dato confermato, cancellando la
+    // distinzione tra "sappiamo che è zero" e "non lo sappiamo ancora".
+    // Ora, se il Numia non è noto da nessuna fonte, questa sezione non
+    // propone affatto una correzione per quel giorno — stessa cautela già
+    // usata sopra per "manca"/"conflitto": mai una cifra inventata spacciata
+    // per un dato reale.
+    if(numiaScelto!=null && posBancaSalvato > 0 && Math.abs(posBancaSalvato - totBanca) > 0.50){
       // ATTENZIONE: qui si confronta il valore di pos_banca già salvato in
       // precedenza con quello ricalcolato ORA dall'estratto conto — NON è
       // un confronto banca-vs-fiscale. Una differenza qui significa che sono
@@ -16946,7 +17005,7 @@ function renderRiconciliazione(){
       // movimenti banca è incompleta (vedi bottone "Ricarica tutti i
       // movimenti da zero" più sotto, se il numero nuovo sembra sbagliato
       // per difetto).
-      posDiscrepanze.push({data:data, totBanca:totBanca, posApp:posBancaSalvato, posFiscale:fiscale, posNumia:numiaBanca||0, posSumup:sumup, chiusura:ch});
+      posDiscrepanze.push({data:data, totBanca:totBanca, posApp:posBancaSalvato, posFiscale:fiscale, posNumia:numiaScelto||0, posSumup:sumup, chiusura:ch, fonteNumia: numiaManuale!=null?'manuale':'banca'});
     }
   });
 
@@ -17101,7 +17160,7 @@ function renderRiconciliazione(){
       // dettaglio compariva SOLO se entrambi erano diversi da zero; nei
       // giorni col bug (entrambi a zero) spariva, lasciando un numero
       // ambiguo senza dire a cosa si riferisce. Ora sempre visibile.
-      var breakdown = ' (Numia (BPM) '+fmt(p.posNumia)+' + SumUp '+fmt(p.posSumup)+')';
+      var breakdown = ' (Numia '+(p.fonteNumia==='manuale'?'a mano':'BPM')+' '+fmt(p.posNumia)+' + SumUp '+fmt(p.posSumup)+')';
       html += '<div style="padding:10px 0;border-top:1px solid var(--sep);font-size:13px">';
       html += '<div style="display:flex;justify-content:space-between;align-items:flex-start">';
       html += '<div style="flex:1"><div style="font-weight:600">'+p.data+'</div>';
