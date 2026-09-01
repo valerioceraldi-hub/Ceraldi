@@ -1363,6 +1363,19 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
         </div>
       </div>
 
+      <div class="card" style="margin-bottom:16px;padding:6px 16px">
+        <div class="sec-title" style="margin-top:12px;margin-bottom:2px">🧪 Simulazione organico (what-if)</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:4px">Studia se potresti lavorare bene con meno personale: genera un turno IPOTETICO ridotto e il risparmio stimato. Non tocca le presenze reali — è solo per uso tuo, per capire prima di decidere.</div>
+        <div class="cont-row" onclick="apriSimulazioneOrganico()" style="border-bottom:none">
+          <div class="cont-row-icon" style="background:rgba(43,74,203,.12);color:var(--accent)">🧪</div>
+          <div class="cont-row-body">
+            <div class="cont-row-title">Simula riduzione organico</div>
+            <div class="cont-row-desc">Turnazione ipotetica a -20/30/40% (o valore libero), con copertura giornaliera e risparmio stimato</div>
+          </div>
+          <div class="cont-row-chev">›</div>
+        </div>
+      </div>
+
       <div class="card" style="padding:6px 16px">
         <div class="sec-title" style="margin-top:12px;margin-bottom:2px">🏦 Riconciliazione bonifici</div>
         <div style="font-size:12px;color:var(--muted);margin-bottom:4px">Confronta ogni bonifico in banca con il cedolino corrispondente, per essere pronto in caso di controllo.</div>
@@ -2100,6 +2113,36 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     </div>
     <div class="sheet-foot">
       <button class="btn-primary" onclick="confermaEsportaExcel()">⬇ Genera file Excel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── SHEET: simulazione organico (what-if) — NON tocca dati reali ── -->
+<div class="overlay" id="sh-simOrganico">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-hdr"><span class="sheet-title">🧪 Simulazione organico</span><button class="sheet-cls" onclick="closeSheet('sh-simOrganico')">✕</button></div>
+    <div class="sheet-body">
+      <div style="background:rgba(200,120,40,.08);border:1.5px solid rgba(200,120,40,.3);border-radius:10px;padding:12px;margin-bottom:16px;font-size:12px;color:var(--muted);line-height:1.5">
+        ⚠️ È una <b>simulazione ipotetica</b>, costruita da zero per studiare la fattibilità — non legge né modifica in alcun modo le presenze reali. Il file generato è etichettato chiaramente "SIMULAZIONE" in ogni foglio: non va mai confuso con l'export reale per il commercialista.
+      </div>
+      <div class="field-lbl" style="margin-top:0">Riduzione organico</div>
+      <select class="field-inp" id="sim-perc" onchange="document.getElementById('sim-perc-custom-wrap').style.display = this.value==='custom' ? 'block' : 'none'">
+        <option value="0.2">-20%</option>
+        <option value="0.3" selected>-30%</option>
+        <option value="0.4">-40%</option>
+        <option value="custom">Altra percentuale…</option>
+      </select>
+      <div id="sim-perc-custom-wrap" style="display:none;margin-bottom:14px">
+        <input class="field-inp" type="number" id="sim-perc-custom" min="1" max="90" placeholder="es. 25" style="margin-bottom:0">
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-top:-8px;margin-bottom:16px">Percentuale di giornate lavorative in meno rispetto a un turno standard (1 riposo/settimana a testa). Il taglio viene distribuito il più possibile su tutto il mese e su tutti i dipendenti, non concentrato su pochi giorni o persone.</div>
+      <div class="field-lbl">Mese da simulare</div>
+      <select class="field-inp last" id="sim-mese-sel" style="margin-bottom:0"></select>
+      <div class="msg" id="sim-msg"></div>
+    </div>
+    <div class="sheet-foot">
+      <button class="btn-primary" onclick="confermaSimulazioneOrganico()">🧪 Genera simulazione (Excel)</button>
     </div>
   </div>
 </div>
@@ -14413,6 +14456,213 @@ function festivitaItaliane(anno){
 }
 
 // Apre il pannello di configurazione festività prima di generare il file
+// ═══════════════════════════════════════════════════════════════════════
+// SIMULAZIONE ORGANICO (what-if) — 01/09, richiesto da Valerio per capire
+// se con meno personale potrebbe comunque lavorare bene.
+//
+// IMPORTANTE: questa funzione NON legge le presenze reali e NON scrive
+// nulla nel database — costruisce da zero un turno IPOTETICO (1 riposo
+// fisso a settimana a testa, come punto di partenza standard) e applica
+// un taglio percentuale, distribuito il più possibile in modo uniforme su
+// tutto il mese e su tutti i dipendenti (non su pochi giorni/persone), per
+// stimare risparmio e copertura giornaliera risultante. Il file generato è
+// etichettato "SIMULAZIONE" in ogni foglio e nel nome: è uno strumento di
+// studio, non un documento reale — non va MAI mandato al commercialista o
+// usato come base per le buste paga.
+// ═══════════════════════════════════════════════════════════════════════
+function apriSimulazioneOrganico() {
+  if (typeof XLSX === 'undefined') { toast('Libreria Excel non caricata, riprova'); return; }
+  const sel = $('sim-mese-sel');
+  if (sel && sel.options.length === 0) {
+    const now = new Date();
+    let opts = '';
+    for (let i = 0; i < 12; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const val = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+      const lbl = d.toLocaleDateString('it-IT',{month:'long',year:'numeric'});
+      opts += `<option value="${val}">${lbl.charAt(0).toUpperCase()+lbl.slice(1)}</option>`;
+    }
+    sel.innerHTML = opts;
+  }
+  if ($('sim-perc')) $('sim-perc').value = '0.3';
+  if ($('sim-perc-custom-wrap')) $('sim-perc-custom-wrap').style.display = 'none';
+  hideMsg('sim-msg');
+  openSheet('sh-simOrganico');
+}
+
+async function confermaSimulazioneOrganico() {
+  const selVal = $('sim-perc').value;
+  let perc;
+  if (selVal === 'custom') {
+    const v = parseFloat($('sim-perc-custom').value);
+    if (!v || v <= 0 || v >= 100) { showMsg('sim-msg','Inserisci una percentuale valida (1-90)','err'); return; }
+    perc = v / 100;
+  } else {
+    perc = parseFloat(selVal);
+  }
+  const mese = $('sim-mese-sel').value;
+  if (!mese) { showMsg('sim-msg','Seleziona un mese','err'); return; }
+  closeSheet('sh-simOrganico');
+  try {
+    await generaSimulazioneOrganico(perc, mese);
+  } catch (e) {
+    console.error('confermaSimulazioneOrganico:', e);
+    toast('⚠️ Errore nella generazione: ' + String(e.message || e).slice(0, 80));
+  }
+}
+
+async function generaSimulazioneOrganico(percentuale, mese) {
+  toast('Preparazione simulazione…');
+  const [y, m] = mese.split('-');
+  const ultimoGg = new Date(parseInt(y), parseInt(m), 0).getDate();
+  const meseLbl = new Date(parseInt(y), parseInt(m)-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
+
+  const { data: dipendenti } = await sb.from('presenze_profili').select('id,nome,cognome,paga_giornaliera').eq('ruolo','dipendente').eq('attivo',true).order('nome');
+  const dip = (dipendenti||[]).filter(d => parseFloat(d.paga_giornaliera) > 0);
+  if (!dip.length) { toast('Nessun dipendente con paga giornaliera impostata in anagrafica'); return; }
+  const nomeDi = d => d.nome+(d.cognome?' '+d.cognome:'');
+
+  // Turno standard DA ZERO (non le presenze reali): 1 riposo fisso a
+  // settimana a testa, spalmato sui 7 giorni round-robin — così non tutti
+  // riposano lo stesso giorno e il locale resta coperto ogni giorno nel
+  // turno "normale" di partenza.
+  const riposoWeekday = {};
+  dip.forEach((d,i) => { riposoWeekday[d.id] = i % 7; });
+
+  const giorni = [];
+  for (let g = 1; g <= ultimoGg; g++) giorni.push(new Date(parseInt(y), parseInt(m)-1, g));
+
+  // Taglio calcolato PER SINGOLO DIPENDENTE sulla propria turnazione (non
+  // un unico elenco globale): un primo tentativo con un elenco unico
+  // spalmava bene sui giorni ma malissimo tra le persone (c'era chi si
+  // vedeva tagliare 4 giornate e chi 12, sulla stessa percentuale). Così
+  // invece ognuno perde la STESSA quota (stessa percentuale ± 1 giorno per
+  // arrotondamento), spalmata sul mese con indici equispaziati e uno
+  // sfasamento diverso per ciascuno (altrimenti tutti risulterebbero
+  // tagliati sempre negli stessi giorni della settimana). La copertura
+  // giornaliera che ne risulta resta comunque visibile per intero nel
+  // Foglio 2, per un giudizio reale sulla tenuta giorno per giorno.
+  const statoPerDip = {};
+  let baseManDays = 0, extraCutDays = 0;
+  dip.forEach((d,i) => {
+    statoPerDip[d.id] = {};
+    const loro = giorni.filter(g => g.getDay() !== riposoWeekday[d.id]);
+    giorni.filter(g => g.getDay() === riposoWeekday[d.id]).forEach(g => { statoPerDip[d.id][_isoDate(g)] = 'R'; });
+    const base = loro.length;
+    const target = Math.round(base * (1 - percentuale));
+    const cut = base - target;
+    baseManDays += base; extraCutDays += cut;
+    const idxTagliati = new Set();
+    if (cut > 0) {
+      const step = base / cut;
+      const offset = (i / dip.length) * step; // sfasamento diverso per ciascuno
+      for (let k = 0; k < cut; k++) idxTagliati.add(Math.floor(k*step + offset) % base);
+      for (let idx = 0; idxTagliati.size < cut && idx < base; idx++) idxTagliati.add(idx); // riempie eventuali buchi da arrotondamento/mod
+    }
+    loro.forEach((g,idx) => { statoPerDip[d.id][_isoDate(g)] = idxTagliati.has(idx) ? 'T' : 'P'; });
+  });
+  const targetManDays = baseManDays - extraCutDays;
+
+  let costoBase = 0, costoSim = 0;
+  const righeDip = dip.map(d => {
+    const paga = parseFloat(d.paga_giornaliera) || 0;
+    const stati = Object.values(statoPerDip[d.id]);
+    const ggP = stati.filter(s => s==='P').length, ggT = stati.filter(s => s==='T').length;
+    const ggBase = ggP+ggT;
+    costoBase += ggBase*paga; costoSim += ggP*paga;
+    return { dip: nomeDi(d), ggBase, ggSim: ggP, ggTagliati: ggT, costoBase: ggBase*paga, costoSim: ggP*paga, risparmio: ggT*paga };
+  });
+  const coperturaGiorni = giorni.map(g => {
+    const iso = _isoDate(g); let base=0, sim=0;
+    dip.forEach(d => { const s = statoPerDip[d.id][iso]; if (s==='P'||s==='T') base++; if (s==='P') sim++; });
+    return { iso, base, sim };
+  });
+  const percReale = baseManDays ? Math.round((extraCutDays/baseManDays)*1000)/10 : 0;
+  const dItLoc = iso => iso.slice(8,10)+'/'+iso.slice(5,7)+'/'+iso.slice(0,4);
+
+  const bordoSottile = { style:'thin', color:{rgb:'CBD5E1'} };
+  const bordoCella = { top:bordoSottile, bottom:bordoSottile, left:bordoSottile, right:bordoSottile };
+  const setSt = (ws,r,c,s) => { const ref = XLSX.utils.encode_cell({r,c}); if (!ws[ref]) ws[ref] = { t:'s', v:'' }; ws[ref].s = Object.assign({}, ws[ref].s, s); };
+  const stileAvviso = { font:{ bold:true, sz:13, color:{rgb:'FFFFFF'} }, fill:{ fgColor:{rgb:'C2410C'} }, alignment:{ horizontal:'center', vertical:'center', wrapText:true } };
+  const stileHeader = { font:{ bold:true, sz:11, color:{rgb:'FFFFFF'} }, fill:{ fgColor:{rgb:'2B4ACB'} }, alignment:{ horizontal:'center', vertical:'center', wrapText:true }, border:bordoCella };
+  const stileCella  = { border:bordoCella, alignment:{ vertical:'center', horizontal:'left', wrapText:true } };
+  const stileCellaAlt = Object.assign({}, stileCella, { fill:{ fgColor:{rgb:'F8FAFC'} } });
+  const stileNum = { border:bordoCella, alignment:{ vertical:'center', horizontal:'right' } };
+  const stileNumAlt = Object.assign({}, stileNum, { fill:{ fgColor:{rgb:'F8FAFC'} } });
+  const wb = XLSX.utils.book_new();
+
+  // ═══ Foglio 1: Riepilogo ═══
+  const F1 = [];
+  F1.push(['⚠️ SIMULAZIONE — DATI IPOTETICI, NON SONO PRESENZE REALI']);
+  F1.push(['Turno costruito da zero per studiare una riduzione organico del '+Math.round(percentuale*100)+'% — mese simulato: '+meseLbl.toUpperCase()+'. Non riflette né modifica le presenze effettive: è solo uno strumento di studio.']);
+  F1.push([]);
+  F1.push(['Riduzione richiesta', Math.round(percentuale*100)+'%']);
+  F1.push(['Riduzione realmente ottenuta (per arrotondamento)', percReale+'%']);
+  F1.push(['Giornate lavorative — turno standard (1 riposo/sett. a testa)', baseManDays]);
+  F1.push(['Giornate lavorative — simulazione', targetManDays]);
+  F1.push(['Giornate "tagliate" nella simulazione', extraCutDays]);
+  F1.push([]);
+  F1.push(['Costo standard stimato (€)', Math.round(costoBase*100)/100]);
+  F1.push(['Costo simulato stimato (€)', Math.round(costoSim*100)/100]);
+  F1.push(['Risparmio mensile stimato (€)', Math.round((costoBase-costoSim)*100)/100]);
+  F1.push([]);
+  F1.push(['Dipendente','Gg standard','Gg simulati','Gg tagliati','Costo standard (€)','Costo simulato (€)','Risparmio (€)']);
+  righeDip.forEach(r => F1.push([r.dip, r.ggBase, r.ggSim, r.ggTagliati, Math.round(r.costoBase*100)/100, Math.round(r.costoSim*100)/100, Math.round(r.risparmio*100)/100]));
+  const ws1 = XLSX.utils.aoa_to_sheet(F1);
+  ws1['!cols'] = [{wch:34},{wch:16},{wch:16},{wch:16},{wch:20},{wch:20},{wch:16}];
+  ws1['!merges'] = [{s:{r:0,c:0},e:{r:0,c:6}},{s:{r:1,c:0},e:{r:1,c:6}}];
+  for (let c=0;c<7;c++) setSt(ws1,0,c,stileAvviso);
+  ws1['!rows'] = [{hpx:26},{hpx:40}];
+  for (let c=0;c<7;c++) setSt(ws1,12,c,stileHeader);
+  for (let r=13; r<13+righeDip.length; r++) {
+    const alt = (r-13)%2===1;
+    for (let c=0;c<7;c++) setSt(ws1,r,c, c>=1 ? (alt?stileNumAlt:stileNum) : (alt?stileCellaAlt:stileCella));
+  }
+  XLSX.utils.book_append_sheet(wb, ws1, '⚠️ SIMULAZIONE Riepilogo');
+
+  // ═══ Foglio 2: Copertura giornaliera ═══
+  const F2 = [];
+  F2.push(['⚠️ SIMULAZIONE — COPERTURA GIORNALIERA IPOTETICA']);
+  F2.push(['Quante persone risulterebbero presenti ogni giorno: turno standard vs simulazione ridotta.']);
+  F2.push([]);
+  F2.push(['Data','Giorno','Presenti — standard','Presenti — simulazione','Differenza']);
+  coperturaGiorni.forEach(c => F2.push([dItLoc(c.iso), new Date(c.iso+'T12:00:00').toLocaleDateString('it-IT',{weekday:'long'}), c.base, c.sim, c.sim-c.base]));
+  const ws2 = XLSX.utils.aoa_to_sheet(F2);
+  ws2['!cols'] = [{wch:13},{wch:14},{wch:20},{wch:22},{wch:14}];
+  ws2['!merges'] = [{s:{r:0,c:0},e:{r:0,c:4}},{s:{r:1,c:0},e:{r:1,c:4}}];
+  for (let c=0;c<5;c++) setSt(ws2,0,c,stileAvviso);
+  ws2['!rows'] = [{hpx:26},{hpx:26}];
+  for (let c=0;c<5;c++) setSt(ws2,3,c,stileHeader);
+  coperturaGiorni.forEach((_,i) => { const r=4+i, alt=i%2===1; for (let c=0;c<5;c++) setSt(ws2,r,c, c>=2 ? (alt?stileNumAlt:stileNum) : (alt?stileCellaAlt:stileCella)); });
+  XLSX.utils.book_append_sheet(wb, ws2, '⚠️ SIMULAZIONE Copertura');
+
+  // ═══ Foglio 3: Turno ipotetico giorno per giorno ═══
+  const F3 = [];
+  F3.push(['⚠️ SIMULAZIONE — TURNO IPOTETICO GIORNO PER GIORNO  (P = presente simulato · T = taglio simulato · R = riposo normale, non è un taglio)']);
+  F3.push([]);
+  F3.push(['Dipendente', ...giorni.map(g => String(g.getDate()).padStart(2,'0'))]);
+  dip.forEach(d => F3.push([nomeDi(d), ...giorni.map(g => statoPerDip[d.id][_isoDate(g)])]));
+  const ws3 = XLSX.utils.aoa_to_sheet(F3);
+  ws3['!cols'] = [{wch:24}, ...giorni.map(()=>({wch:4}))];
+  ws3['!merges'] = [{s:{r:0,c:0},e:{r:0,c:giorni.length}}];
+  for (let c=0;c<=giorni.length;c++) setSt(ws3,0,c,stileAvviso);
+  ws3['!rows'] = [{hpx:30}];
+  for (let c=0;c<=giorni.length;c++) setSt(ws3,2,c,stileHeader);
+  dip.forEach((d,i) => {
+    const r = 3+i, alt = i%2===1;
+    setSt(ws3,r,0, alt?stileCellaAlt:stileCella);
+    giorni.forEach((g,ci) => {
+      const s = statoPerDip[d.id][_isoDate(g)];
+      const col = s==='T' ? {rgb:'FEE2E2'} : s==='R' ? {rgb:'F1F5F9'} : {rgb:'DCFCE7'};
+      setSt(ws3, r, ci+1, { border:bordoCella, alignment:{horizontal:'center',vertical:'center'}, fill:{fgColor:col}, font:{bold:true} });
+    });
+  });
+  XLSX.utils.book_append_sheet(wb, ws3, '⚠️ SIMULAZIONE Turno');
+
+  XLSX.writeFile(wb, 'SIMULAZIONE_organico_-'+Math.round(percentuale*100)+'pct_'+mese+'.xlsx');
+  toast('✓ Simulazione generata — ricorda: dati ipotetici, non reali');
+}
+
 function esportaPresenzeExcel() {
   if (typeof XLSX === 'undefined') { toast('Libreria Excel non caricata, riprova'); return; }
   // FIX 30/08 (spostato "Contabilità" in una pagina a parte da Stipendi):
