@@ -14301,28 +14301,47 @@ async function caricaStipendi() {
           <div style="font-size:10px;color:var(--muted);margin-top:6px">Calcolate sulla paga mensile stimata (paga gg × 26 ÷ 12 = €${ratei.pagaMensile.toFixed(2)}). Verificare con il consulente.</div>
         </div>` : ''}
         <!-- Ferie + periodi goduti -->
+        <!-- FIX 01/09 (segnalato da Valerio: "dal primo settembre mi
+             dovrei ritrovare per tutti le ferie a zero maturate" — qui
+             invece si sommavano TUTTE le ferie dell'intero anno solare e
+             si mostrava un residuo piatto 26-godute, senza alcun
+             azzeramento al 1° settembre né alcuna maturazione mensile: un
+             dipendente andato in ferie ad agosto restava "scalato" anche
+             col nuovo ciclo già iniziato. Ora usa la STESSA identica
+             calcolaFerieMaturate()+_cicloFerieInizioISO() già corretta e
+             già in uso altrove (Anagrafica, Report per il commercialista,
+             pannello acconto ferie) — non un secondo calcolo parallelo
+             che poteva divergere. Il residuo può risultare negativo (ferie
+             godute in anticipo sul maturato): si riassorbe da solo mese
+             dopo mese man mano che matura altro. -->
         ${(() => {
           const ferieAnn = d.ferie_annuali || 26;
-          const ferieGod = ferieGodute[d.id] || 0;
-          const ferieRes = Math.max(0, ferieAnn - ferieGod);
-          const pct = Math.min(100, Math.round(ferieGod/ferieAnn*100));
-          const col = pct > 80 ? 'var(--red)' : pct > 50 ? 'var(--yellow)' : 'var(--accent)';
-          // Periodi ferie goduti
-          const periodi = (feriePeriodi[d.id] || [])
-            .sort((a,b)=>a.dal.localeCompare(b.dal))
-            .map(p => {
-              const fmtD = dt => new Date(dt+'T12:00:00').toLocaleDateString('it-IT',{day:'2-digit',month:'short'});
-              return fmtD(p.dal)+(p.dal===p.al?'':' – '+fmtD(p.al))+' ('+p.gg+'gg)';
-            }).join(' · ');
+          const cicloIso = _cicloFerieInizioISO();
+          // Stessa lista feriePeriodi già calcolata sopra per la busta paga
+          // (necessaria a cavallo di più anni per il lordo mensile), qui
+          // filtrata sul solo ciclo corrente — stesso criterio (dal >=
+          // inizio ciclo) usato dal pannello "Acconto ferie non godute".
+          const periodiCiclo = (feriePeriodi[d.id] || []).filter(p => !cicloIso || p.dal >= cicloIso);
+          const ferieGodCiclo = periodiCiclo.reduce((s,p) => s + p.gg, 0);
+          const calc = calcolaFerieMaturate(d.data_assunzione, ferieAnn, ferieGodCiclo, d.ferie_godute_extra);
+          const pct = Math.min(100, Math.round((calc.godute / Math.max(1,calc.maturate)) * 100));
+          const negativo = calc.residue < 0;
+          const col = negativo ? 'var(--red)' : (pct > 80 ? 'var(--red)' : pct > 50 ? 'var(--yellow)' : 'var(--accent)');
+          const fmtD = dt => new Date(dt+'T12:00:00').toLocaleDateString('it-IT',{day:'2-digit',month:'short',year:'numeric'});
+          const periodiTxt = periodiCiclo.slice().sort((a,b)=>a.dal.localeCompare(b.dal))
+            .map(p => fmtD(p.dal)+(p.dal===p.al?'':' – '+fmtD(p.al))+' ('+p.gg+'gg)').join(' · ');
+          const periodoLbl = cicloIso ? ('dal '+fmtD(cicloIso)+' ad oggi') : ('anno '+y);
           return '<div style="border:1px solid var(--border);border-radius:10px;padding:10px">'
-            +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">'
-            +'<span style="font-size:12px;font-weight:600;color:var(--muted)">&#x1F334; Ferie '+y+'</span>'
-            +'<span style="font-size:12px;color:var(--muted)">'+ferieGod+' goduti &middot; <b style="color:'+col+'">'+ferieRes+' residui</b> / '+ferieAnn+'</span>'
+            +'<div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:2px">&#x1F334; Ferie — '+periodoLbl+'</div>'
+            +'<div style="font-size:11px;color:var(--muted);margin-bottom:7px">Spettanti '+ferieAnn+' gg/anno · maturate ad oggi <b style="color:var(--accent)">'+calc.maturate+' gg</b> ('+calc.mesiMaturati+' mes'+(calc.mesiMaturati===1?'e':'i')+' dal 1° settembre)</div>'
+            +'<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:5px">'
+            +'<span>'+calc.godute+' godute</span>'
+            +'<span><b style="color:'+col+'">'+calc.residue+' residue</b>'+(negativo ? ' <span style="color:var(--red);font-weight:600">(anticipate sul maturando)</span>' : '')+'</span>'
             +'</div>'
-            +'<div style="height:4px;background:var(--border);border-radius:3px;margin-bottom:'+(periodi?'6px':'0')+'">'
-            +'<div style="height:100%;width:'+pct+'%;background:'+col+';border-radius:3px"></div>'
+            +'<div style="height:4px;background:var(--border);border-radius:3px;margin-bottom:'+(periodiTxt?'6px':'0')+'">'
+            +'<div style="height:100%;width:'+Math.min(100,Math.max(0,pct))+'%;background:'+col+';border-radius:3px"></div>'
             +'</div>'
-            +(periodi ? '<div style="font-size:11px;color:var(--muted);line-height:1.6">'+periodi+'</div>' : '')
+            +(periodiTxt ? '<div style="font-size:11px;color:var(--muted);line-height:1.6">'+periodiTxt+'</div>' : '')
             +'</div>';
         })()}
       </div>
@@ -14593,31 +14612,77 @@ async function generaExcelPresenzeSintetico(dipIdFiltro, periodo) {
     : new Date(periodo.y, periodo.m-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
   toast('Preparazione Excel…');
 
-  let qProfili  = sb.from('presenze_profili').select('id,nome,cognome').eq('ruolo','dipendente').eq('attivo',true).order('nome');
-  let qPresenze = sb.from('presenze').select('dipendente_id,data').gte('data',dal).lte('data',al).order('data');
-  let qAssenze  = sb.from('presenze_assenze').select('dipendente_id,tipo,data_inizio,data_fine,note').in('stato',['approvata','confermata']).or(`and(data_inizio.lte.${al},data_fine.gte.${dal})`);
+  // FIX 01/09 (segnalato da Valerio: la colonna Ferie deve indicare il
+  // periodo, i giorni totali del periodo, quelli imputati al calcolo/da
+  // scalare dal monte ferie, e il saldo maturate/godute/residue). Per
+  // calcolare tutto questo con la STESSA logica (non un secondo calcolo
+  // parallelo che diverge) servono, oltre al periodo esportato, anche i
+  // dati del ciclo ferie corrente (dal 1° settembre a oggi) — che possono
+  // ricadere fuori da [dal,al] se si esporta un mese passato. Le query
+  // sotto quindi coprono l'unione dei due intervalli.
+  const cicloIso = _cicloFerieInizioISO();
+  const oggiIso = todayISO();
+  const dalDati = (cicloIso && cicloIso < dal) ? cicloIso : dal;
+  const alDati  = (oggiIso > al) ? oggiIso : al;
+
+  let qProfili  = sb.from('presenze_profili').select('id,nome,cognome,turni_riposo_fisso,ferie_annuali,data_assunzione,ferie_godute_extra').eq('ruolo','dipendente').eq('attivo',true).order('nome');
+  let qPresenze = sb.from('presenze').select('dipendente_id,data').gte('data',dalDati).lte('data',alDati).order('data');
+  let qAssenze  = sb.from('presenze_assenze').select('dipendente_id,tipo,data_inizio,data_fine,note').in('stato',['approvata','confermata']).or(`and(data_inizio.lte.${alDati},data_fine.gte.${dalDati})`);
   if (dipIdFiltro) { qProfili = qProfili.eq('id',dipIdFiltro); qPresenze = qPresenze.eq('dipendente_id',dipIdFiltro); qAssenze = qAssenze.eq('dipendente_id',dipIdFiltro); }
   const [{ data: dipendenti }, { data: presenze }, { data: assenze }] = await Promise.all([qProfili, qPresenze, qAssenze]);
 
-  // Raccoglie, per ogni dipendente, le date di ogni categoria.
+  let fest = {};
+  for (let a2 = parseInt(dalDati.slice(0,4)); a2 <= parseInt(alDati.slice(0,4)); a2++) Object.assign(fest, festivitaItaliane(a2));
+  const festSet = new Set(Object.keys(fest));
+
+  // Raccoglie, per ogni dipendente, le date di ogni categoria DENTRO IL
+  // PERIODO ESPORTATO (per le colonne lavorato/malattia/permesso, come
+  // prima) — la Ferie viene invece trattata a parte qui sotto perché
+  // serve la classificazione reale (goduti/riposo/festività), non solo il
+  // conteggio a calendario.
   const perDip = {};
-  const ensure = id => perDip[id] = perDip[id] || { lavorato:[], ferie:[], malattia:[], altro:[], note:new Set() };
-  (presenze||[]).forEach(p => ensure(p.dipendente_id).lavorato.push(p.data));
-  (assenze||[]).filter(a => a.tipo !== 'acconto').forEach(a => {
-    const bucket = a.tipo === 'ferie' ? 'ferie' : a.tipo === 'malattia' ? 'malattia' : 'altro';
+  const ensure = id => perDip[id] = perDip[id] || { lavorato:[], malattia:[], altro:[], note:new Set() };
+  (presenze||[]).filter(p => p.data >= dal && p.data <= al).forEach(p => ensure(p.dipendente_id).lavorato.push(p.data));
+  (assenze||[]).filter(a => a.tipo !== 'acconto' && a.tipo !== 'ferie' && a.data_inizio <= al && a.data_fine >= dal).forEach(a => {
+    const bucket = a.tipo === 'malattia' ? 'malattia' : 'altro';
     const e = ensure(a.dipendente_id);
     let c = new Date((a.data_inizio > dal ? a.data_inizio : dal)+'T12:00:00');
     const fine = new Date((a.data_fine < al ? a.data_fine : al)+'T12:00:00');
     while (c <= fine) { e[bucket].push(_isoDate(c)); c.setDate(c.getDate()+1); }
     if (a.note) e.note.add(a.note);
   });
-
   const cellaCategoria = arr => { const u = [...new Set(arr)]; return u.length ? (u.length+' gg: '+_formattaDateCompatte(u)) : '—'; };
+
   const righe = (dipendenti||[]).map(d => {
-    const e = perDip[d.id] || { lavorato:[], ferie:[], malattia:[], altro:[], note:new Set() };
+    const e = perDip[d.id] || { lavorato:[], malattia:[], altro:[], note:new Set() };
+    const workedSetDip = new Set((presenze||[]).filter(p => p.dipendente_id === d.id).map(p => p.data));
+    const ferieDip = (assenze||[]).filter(a => a.dipendente_id === d.id && a.tipo === 'ferie');
+    const malDip   = (assenze||[]).filter(a => a.dipendente_id === d.id && a.tipo === 'malattia');
+    const malSetDip = _setGiorniDaPeriodi(malDip);
+
+    // Periodi di ferie che ricadono (almeno in parte) nel periodo esportato.
+    const periodiEsportati = ferieDip.filter(a => a.data_inizio <= al && a.data_fine >= dal);
+    let ferieTotaliPeriodo = 0, ferieImputatePeriodo = 0;
+    const periodiTxt = periodiEsportati.map(a => {
+      const cls = classificaGiorniFerieReale(a.data_inizio, a.data_fine, d.turni_riposo_fisso, festSet, workedSetDip, malSetDip);
+      const totCal = Math.round((new Date(a.data_fine)-new Date(a.data_inizio))/86400000)+1;
+      ferieTotaliPeriodo += totCal; ferieImputatePeriodo += cls.goduti;
+      return fmtIt(a.data_inizio)+(a.data_inizio===a.data_fine?'':' – '+fmtIt(a.data_fine))+' ('+totCal+' gg totali, '+cls.goduti+' gg imputati/scalati)';
+    }).join(' | ');
+
+    // Saldo del ciclo ferie corrente (dal 1° settembre a oggi) — stessa
+    // logica di calcolaFerieMaturate() usata nella scheda Stipendi, non un
+    // secondo conteggio scollegato.
+    const periodiCiclo = ferieDip.filter(a => !cicloIso || a.data_inizio >= cicloIso);
+    const ferieGodCiclo = periodiCiclo.reduce((s,a) => s + classificaGiorniFerieReale(a.data_inizio, a.data_fine, d.turni_riposo_fisso, festSet, workedSetDip, malSetDip).goduti, 0);
+    const calcFerie = calcolaFerieMaturate(d.data_assunzione, d.ferie_annuali||26, ferieGodCiclo, d.ferie_godute_extra);
+
+    const ferieCella = (periodiTxt ? ('Periodo: '+periodiTxt+' — totale periodo: '+ferieTotaliPeriodo+' gg, imputati/scalati dal monte ferie: '+ferieImputatePeriodo+' gg\n') : 'Nessuna ferie nel periodo esportato.\n')
+      + 'Ciclo dal '+fmtIt(cicloIso||dal)+' ad oggi: maturate '+calcFerie.maturate+' gg · godute '+calcFerie.godute+' gg · residue '+calcFerie.residue+' gg'+(calcFerie.residue<0?' (anticipate sul maturando)':'');
+
     return {
       dip: d.nome+(d.cognome?' '+d.cognome:''),
-      lavorato: cellaCategoria(e.lavorato), ferie: cellaCategoria(e.ferie),
+      lavorato: cellaCategoria(e.lavorato), ferie: ferieCella,
       malattia: cellaCategoria(e.malattia), altro: cellaCategoria(e.altro),
       note: [...e.note].join('; '),
     };
@@ -14625,14 +14690,14 @@ async function generaExcelPresenzeSintetico(dipIdFiltro, periodo) {
 
   const F = [];
   F.push(['PRESENZE SINTETICHE — '+periodoLbl.toUpperCase()]);
-  F.push(['Una riga per dipendente. I giorni sono raggruppati in intervalli (es. "01/08-08/08" = dall\'1 all\'8 agosto compresi).']);
+  F.push(['Una riga per dipendente. Ferie: giorni totali del periodo vs giorni imputati al calcolo/scalati dal monte ferie (esclusi riposo settimanale e festività), più il saldo del ciclo ferie corrente (dal 1° settembre, azzerato ogni anno).']);
   F.push([]);
   F.push(['Dipendente','Giorni lavorati','Ferie','Malattia','Permesso/Altro','Note']);
   righe.forEach(r => F.push([r.dip, r.lavorato, r.ferie, r.malattia, r.altro, r.note]));
   if (!righe.length) F.push(['Nessun dato nel periodo','','','','','']);
 
   const ws = XLSX.utils.aoa_to_sheet(F);
-  ws['!cols'] = [{wch:22},{wch:34},{wch:26},{wch:22},{wch:22},{wch:38}];
+  ws['!cols'] = [{wch:22},{wch:30},{wch:52},{wch:20},{wch:20},{wch:34}];
   ws['!merges'] = [{s:{r:0,c:0},e:{r:0,c:5}},{s:{r:1,c:0},e:{r:1,c:5}}];
   ws['!freeze'] = { xSplit:1, ySplit:4 };
   // Margini stretti: aiutano a stare su una pagina quando si stampa (vedi
@@ -14647,10 +14712,12 @@ async function generaExcelPresenzeSintetico(dipIdFiltro, periodo) {
   ws['!rows'] = ws['!rows'] || [];
   ws['!rows'][3] = { hpx: 30 };
   const ultimaRiga = 3 + Math.max(righe.length,1);
+  // La cella Ferie è più densa delle altre (fino a 2 righe di testo con
+  // \n) — riga un po' più alta di prima per restare leggibile.
   for (let r=4;r<=ultimaRiga;r++) {
     const alt = (r-4) % 2 === 1;
     for (let c=0;c<6;c++) setSt(r,c, Object.assign({ border:bordoCella, alignment:{ vertical:'center', horizontal:'left', wrapText:true } }, alt ? { fill:{ fgColor:{rgb:'F8FAFC'} } } : {}));
-    ws['!rows'][r] = { hpx: 32 };
+    ws['!rows'][r] = { hpx: 48 };
   }
   ws['!autofilter'] = { ref: XLSX.utils.encode_range({s:{r:3,c:0}, e:{r:ultimaRiga, c:5}}) };
 
