@@ -8327,8 +8327,60 @@ function mostraRisultatiFattura(data){
       btnIgn2.textContent='Ignora';
       btnIgn2.onclick=function(){card.style.opacity='.35';card.style.pointerEvents='none';};
 
-      acts.appendChild(btnAdd);acts.appendChild(btnIgn2);
+      // Bottone: È già in catalogo — cerca e associa (Valerio, 01/09: "dammi
+      // la possibilità di dire che è presente nel listino se il match non
+      // l'ha capito, così associo io il prezzo nuovo al prodotto che è
+      // presente nel catalogo"). Stesso pattern di ricerca inline già usato
+      // in "Import prodotti da preventivo".
+      var btnAssoc=document.createElement('button');
+      btnAssoc.style.cssText='padding:6px 12px;border-radius:8px;border:1.5px solid var(--accent);background:transparent;color:var(--accent);font-size:11px;font-weight:700;cursor:pointer';
+      btnAssoc.textContent='\uD83D\uDD17 È già in catalogo';
+      var assocBox=document.createElement('div');
+      assocBox.style.cssText='display:none;margin-top:8px;background:var(--bg);border-radius:9px;padding:9px';
+      var assocInput=document.createElement('input');
+      assocInput.type='search';assocInput.placeholder='Cerca prodotto nel catalogo...';
+      assocInput.style.cssText='width:100%;box-sizing:border-box;padding:8px 10px;border-radius:7px;border:1.5px solid var(--border);font-size:12.5px;background:var(--card);color:var(--text)';
+      var assocResults=document.createElement('div');
+      assocResults.style.cssText='margin-top:6px;max-height:190px;overflow-y:auto';
+      assocInput.oninput=(function(prod,ivato,fornForCard){return function(){
+        var q=assocInput.value.trim().toUpperCase();
+        assocResults.innerHTML='';
+        if(q.length<2)return;
+        var matches=(S.products||[]).filter(function(pr){return pr.name&&pr.name.toUpperCase().indexOf(q)>=0;}).slice(0,25);
+        if(!matches.length){assocResults.innerHTML='<div style="font-size:11.5px;color:var(--muted);padding:4px">Nessun prodotto trovato</div>';return;}
+        matches.forEach(function(pr){
+          var row=document.createElement('div');
+          row.style.cssText='padding:7px 8px;border-bottom:1px solid var(--border);cursor:pointer;font-size:12.5px;color:var(--text)';
+          var prezzoAttuale=(pr.prices&&pr.prices[fornForCard]!=null)?pr.prices[fornForCard]:null;
+          row.innerHTML='<b>'+pr.name+'</b>'+(prezzoAttuale!=null?' <span style="color:var(--muted)">(era \u20ac'+prezzoAttuale.toFixed(2)+')</span>':'');
+          row.onclick=function(){
+            var newPrices=Object.assign({},pr.prices||{});
+            newPrices[fornForCard]=ivato;
+            var bv=Infinity,bn=pr.best||'';Object.keys(newPrices).forEach(function(s){if(newPrices[s]<bv){bv=newPrices[s];bn=s;}});
+            fetch(SUPABASE_URL+'/rest/v1/catalogo_ceraldi?id=eq.'+pr.id,{
+              method:'PATCH',headers:{'Content-Type':'application/json','apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN,'Prefer':'return=minimal'},
+              body:JSON.stringify({prices:newPrices,best:bn})
+            }).then(function(r){
+              if(!r.ok)throw new Error('HTTP '+r.status);
+              pr.prices=newPrices;pr.best=bn; // stesso riferimento in BP/S.products
+              try{_saveCatalogCache(BP);}catch(e){}
+              btnAssoc.style.display='none';btnAdd.style.display='none';btnIgn2.style.display='none';assocBox.style.display='none';
+              var doneMsg=document.createElement('div');
+              doneMsg.style.cssText='font-size:11.5px;font-weight:700;color:var(--green)';
+              doneMsg.textContent='\u2713 Associato a: '+pr.name+' \u2014 prezzo aggiornato a \u20ac'+ivato.toFixed(2);
+              acts.appendChild(doneMsg);
+              toast('Associato a "'+pr.name+'" \u2713');
+            }).catch(function(e){toast('Errore salvataggio: '+e.message);});
+          };
+          assocResults.appendChild(row);
+        });
+      };})(p,_pi,p.fornitore_catalogo||fatturaSupplierName);
+      assocBox.appendChild(assocInput);assocBox.appendChild(assocResults);
+      btnAssoc.onclick=function(){assocBox.style.display=(assocBox.style.display==='none')?'block':'none';if(assocBox.style.display==='block')assocInput.focus();};
+
+      acts.appendChild(btnAdd);acts.appendChild(btnAssoc);acts.appendChild(btnIgn2);
       card.appendChild(acts);
+      card.appendChild(assocBox);
       res.appendChild(card);
     });
   }
