@@ -10058,7 +10058,7 @@ function openModelloFornitorePicker(){
   body.appendChild(modeRow);
   var modeSub=document.createElement('div');
   modeSub.style.cssText='font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.4';
-  modeSub.textContent='Vuoto: colonna prezzo libera da far compilare al fornitore. Con prezzi attuali: scarica il catalogo già valorizzato per il/i fornitori scelti.';
+  modeSub.textContent='Vuoto: colonna prezzo libera da far compilare al fornitore. Con prezzi attuali: scarica il catalogo già valorizzato per il/i fornitori scelti — se non scegli nessun fornitore, li include tutti (del settore scelto, se ne hai scelto uno).';
   body.appendChild(modeSub);
 
   // ── Settore merceologico (opzionale — filtra i prodotti da includere) ──
@@ -10165,20 +10165,31 @@ function openModelloFornitorePicker(){
 
 function scaricaModelloFornitore(supplierNames,withPrices,sectors){
   if(typeof XLSX==='undefined'){toast('Libreria Excel non caricata — ricarica la pagina');return;}
-  // Nessun fornitore selezionato: modello "generico" con una sola colonna
-  // prezzo vuota, per un potenziale fornitore ancora da decidere (Valerio,
-  // 31/08: "dammi la possibilità di poter scegliere il fornitore... ma
-  // anche di non sceglierlo e lasciare un campo vuoto").
-  var suppliers=(supplierNames&&supplierNames.length)?supplierNames.slice():[];
-  var generico=!suppliers.length;
-  var wb=XLSX.utils.book_new();
-
   // Filtro per settore merceologico: se non ne è stato scelto nessuno,
   // include tutti i prodotti (Valerio, 31/08: "vorrei che... avesse la
   // possibilità di scaricare il catalogo per settore merceologico...
   // inutile inviare tutto il catalogo sempre").
   var secList=(sectors&&sectors.length)?sectors.slice():[];
   var baseProds=secList.length?S.products.filter(function(p){return secList.indexOf(getSectorForProduct(p))>=0;}):S.products.slice();
+
+  var suppliers=(supplierNames&&supplierNames.length)?supplierNames.slice():[];
+  // FIX (02/09, Valerio: "se seleziono con prezzi attuali... e invece del
+  // fornitore inserisco il settore, non mi inserisce i vari fornitori con
+  // i relativi prezzi"): nessun fornitore scelto NON deve sempre voler
+  // dire "colonna vuota generica" — ha senso solo in modalità "vuoto da
+  // compilare" (per un fornitore ancora da decidere). In modalità "con
+  // prezzi attuali" senza un fornitore specifico, l'aspettativa è vedere
+  // TUTTI i fornitori del settore scelto (o di tutti i settori, se nessuno
+  // scelto) coi rispettivi prezzi — non una colonna vuota inutile visto
+  // che i prezzi già ci sono.
+  if(!suppliers.length&&withPrices){
+    var supForSector=secList.length
+      ?S.suppliers.filter(function(s){var ss=getSupplierSectors(s.name);return !ss.length||secList.some(function(sec){return ss.indexOf(sec)>=0;});})
+      :S.suppliers.slice();
+    suppliers=(supForSector.length?supForSector:S.suppliers).map(function(s){return s.name;});
+  }
+  var generico=!suppliers.length;
+  var wb=XLSX.utils.book_new();
 
   // ── Foglio 1: Listino prodotti da compilare (o già valorizzato) ──
   var headerRow=['DESCRIZIONE ARTICOLO','CONFEZIONE','CATEGORIA'];
