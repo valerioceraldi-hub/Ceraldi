@@ -403,7 +403,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.34.0</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.35.0</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -1033,6 +1033,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     <button class="chip" id="inctab-lista" onclick="setIncTab('lista',this)">📋 Storico</button>
     <button class="chip" id="inctab-banca" onclick="setIncTab('banca',this)">🏦 Riconciliazione</button>
     <button class="chip" id="inctab-carta" onclick="setIncTab('carta',this)">💳 Carta</button>
+    <button class="chip" id="inctab-paypal" onclick="setIncTab('paypal',this)">🅿️ PayPal</button>
   </div>
 
   <!-- SEZIONE: CHIUSURA GIORNALIERA -->
@@ -1291,6 +1292,19 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
       <input type="month" id="cartaMese" onchange="renderRiconciliazioneCarta()" style="width:100%;padding:10px;border:1.5px solid var(--sep);border-radius:10px;font-size:14px;font-family:inherit;background:var(--surface2);margin-bottom:12px;-webkit-appearance:none">
       <div id="cartaRiepilogoStorico" style="margin-bottom:12px"></div>
       <div id="cartaContenuto"></div>
+    </div>
+  </div>
+
+  <!-- RICONCILIAZIONE PAYPAL — 02/09, richiesta da Valerio: come la Carta,
+       ma i dati arrivano dall'API di PayPal invece che da un PDF importato. -->
+  <div id="inc-paypal" class="inc-sec" style="display:none">
+    <div style="background:var(--surface);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);margin-bottom:12px">
+      <div style="font-size:16px;font-weight:700;margin-bottom:2px">🅿️ PayPal</div>
+      <div style="font-size:12px;color:var(--ink3);margin-bottom:12px">In banca i movimenti PayPal mostrano solo "PayPal Europe S.a.r.l." — qui, interrogando PayPal direttamente, si vede il vero destinatario di ciascun pagamento e si abbina alla fattura giusta.</div>
+      <button onclick="sincronizzaPaypal()" id="paypalSyncBtn" class="btn btn-s" style="width:100%;padding:12px;color:var(--blue);margin-bottom:12px">🔄 Sincronizza il mese selezionato</button>
+      <input type="month" id="paypalMese" onchange="renderRiconciliazionePaypal()" style="width:100%;padding:10px;border:1.5px solid var(--sep);border-radius:10px;font-size:14px;font-family:inherit;background:var(--surface2);margin-bottom:12px;-webkit-appearance:none">
+      <div id="paypalSyncInfo" style="font-size:12px;color:var(--ink3);text-align:center;margin-bottom:8px"></div>
+      <div id="paypalContenuto"></div>
     </div>
   </div>
 </div>
@@ -1907,6 +1921,26 @@ function setFornitoreAbbinato(fornitore,valore){
 const getApiKey = ()=>localStorage.getItem('fatture_apikey')||'';
 const AI_HEADERS = ()=>({'Content-Type':'application/json','x-api-key':getApiKey(),'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'});
 
+// BUG REALE (trovato 02/09, segnalato da Valerio: l'assistente "resta così
+// per tanto tempo" su "⏳ …", senza mai un errore) — nessuna delle chiamate
+// esterne dell'assistente (Claude, PayPal) aveva un timeout: se una si
+// blocca in rete (comune su mobile, wifi che cade a metà richiesta), il
+// fetch resta appeso per sempre e la Promise non si risolve né rifiuta mai
+// — il messaggio "⏳" non cambia più perché nel codice non succede più
+// nulla, non perché stia ancora lavorando. Ora ogni fetch esterno ha un
+// tetto massimo: oltre quel tempo, fallisce con un errore chiaro invece di
+// restare bloccato in silenzio.
+function _fetchConTimeout(url, opts, timeoutMs){
+  var controller = new AbortController();
+  var timer = setTimeout(function(){ controller.abort(); }, timeoutMs||25000);
+  return fetch(url, Object.assign({}, opts||{}, {signal: controller.signal}))
+    .catch(function(e){
+      if(e.name==='AbortError') throw new Error('Timeout — nessuna risposta entro '+Math.round((timeoutMs||25000)/1000)+' secondi');
+      throw e;
+    })
+    .finally(function(){ clearTimeout(timer); });
+}
+
 // ── LANCIO RAPIDO SCRIPT SCRIPTABLE (import chiusure da RT) ──
 // Non è possibile eseguire davvero lo script DENTRO questa app: Scriptable usa
 // API sue (Request, Alert...) non disponibili in un browser, e il registratore
@@ -2006,14 +2040,14 @@ async function _paypalOttieniToken(){
   if(_paypalTokenCache && _paypalTokenCache.scadeIl > Date.now()+30000){
     return _paypalTokenCache.token;
   }
-  var res = await fetch('https://api-m.paypal.com/v1/oauth2/token', {
+  var res = await _fetchConTimeout('https://api-m.paypal.com/v1/oauth2/token', {
     method: 'POST',
     headers: {
       'Authorization': 'Basic ' + btoa(cid+':'+sec),
       'Content-Type': 'application/x-www-form-urlencoded'
     },
     body: 'grant_type=client_credentials'
-  });
+  }, 15000);
   if(!res.ok){ throw new Error('PayPal login fallito: HTTP '+res.status); }
   var data = await res.json();
   _paypalTokenCache = { token: data.access_token, scadeIl: Date.now() + (data.expires_in||32000)*1000 };
@@ -2035,7 +2069,7 @@ async function _aiLeggiPaypal(input){
     var endDate = dataA+'T23:59:59-0000';
     var url = 'https://api-m.paypal.com/v1/reporting/transactions?start_date='+encodeURIComponent(startDate)+
       '&end_date='+encodeURIComponent(endDate)+'&fields=all&page_size=100';
-    var res = await fetch(url, { headers: { 'Authorization': 'Bearer '+token } });
+    var res = await _fetchConTimeout(url, { headers: { 'Authorization': 'Bearer '+token } }, 20000);
     if(!res.ok){
       var errBody = await res.text();
       return JSON.stringify({errore:'PayPal HTTP '+res.status, dettaglio: errBody.slice(0,300)});
@@ -2249,11 +2283,14 @@ async function inviaAiAssistente(){
 async function _aiCicloConStrumenti(systemPrompt, bollaRisposta){
   var messages = (window._aiHistory||[]).slice();
   for(var iter=0; iter<8; iter++){
-    var res = await fetch('https://api.anthropic.com/v1/messages',{
+    var res = await _fetchConTimeout('https://api.anthropic.com/v1/messages',{
       method:'POST', headers: AI_HEADERS(),
       body: JSON.stringify({model:'claude-sonnet-4-5', max_tokens:1500, system: systemPrompt, tools: AI_TOOLS, messages: messages})
-    });
-    if(!res.ok){ throw new Error('HTTP '+res.status); }
+    }, 30000);
+    if(!res.ok){
+      var corpoErr = await res.text().catch(function(){ return ''; });
+      throw new Error('HTTP '+res.status+(corpoErr?' — '+corpoErr.slice(0,150):''));
+    }
     var data = await res.json();
     var content = data.content||[];
     messages.push({role:'assistant', content: content});
@@ -11804,6 +11841,12 @@ function setIncTab(t, btn){
     renderRiconciliazioneCarta();
     _renderRiepilogoStoricoCarta();
   }
+  if(t==='paypal'){
+    var pm = document.getElementById('paypalMese');
+    if(pm && !pm.value) pm.value = new Date().toISOString().slice(0,7);
+    _caricaPaypalLocale();
+    renderRiconciliazionePaypal();
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -15347,6 +15390,283 @@ async function _abbinaCarta(movId, fattId){
     alert('⚠️ Errore nel salvare l\'abbinamento: '+(e.message||e));
   }
   renderRiconciliazioneCarta();
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ── RICONCILIAZIONE PAYPAL (02/09, richiesta di Valerio: come la Carta, ma
+// i dati arrivano dall'API di PayPal — mai da un file caricato a mano) ──
+// ══════════════════════════════════════════════════════════════════════════
+var _paypalTransazioni = []; // cache locale delle transazioni scaricate, per mese
+
+function _paypalCacheKey(mese){ return 'ceraldi_paypal_tx_'+mese; }
+function _caricaPaypalLocale(){
+  var mese = (document.getElementById('paypalMese')||{}).value || new Date().toISOString().slice(0,7);
+  try{
+    var c = JSON.parse(localStorage.getItem(_paypalCacheKey(mese))||'[]');
+    _paypalTransazioni = Array.isArray(c) ? c : [];
+  }catch(e){ _paypalTransazioni = []; }
+}
+function _salvaPaypalLocale(mese){
+  try{ localStorage.setItem(_paypalCacheKey(mese), JSON.stringify(_paypalTransazioni)); }catch(e){}
+}
+
+function _paypalIgnoratiSet(){
+  try{ return new Set(JSON.parse(localStorage.getItem('ceraldi_paypal_ignorati')||'[]')); }catch(e){ return new Set(); }
+}
+function _paypalSalvaIgnorati(set){
+  try{ localStorage.setItem('ceraldi_paypal_ignorati', JSON.stringify(Array.from(set))); }catch(e){}
+}
+function _ignoraPaypal(txId){
+  var set = _paypalIgnoratiSet();
+  set.add(txId);
+  _paypalSalvaIgnorati(set);
+  toast('🚫 Transazione ignorata');
+  renderRiconciliazionePaypal();
+}
+function _riattivaPaypal(txId){
+  var set = _paypalIgnoratiSet();
+  set.delete(txId);
+  _paypalSalvaIgnorati(set);
+  renderRiconciliazionePaypal();
+}
+
+async function sincronizzaPaypal(){
+  var mese = (document.getElementById('paypalMese')||{}).value;
+  if(!mese){ toast('⚠️ Scegli prima un mese'); return; }
+  var btn = document.getElementById('paypalSyncBtn');
+  var info = document.getElementById('paypalSyncInfo');
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ Sincronizzo…'; }
+  try{
+    var primoGiorno = mese+'-01';
+    var ultimoGiorno = new Date(parseInt(mese.slice(0,4),10), parseInt(mese.slice(5,7),10), 0).toISOString().slice(0,10);
+    var risultato = await _aiLeggiPaypal({data_da: primoGiorno, data_a: ultimoGiorno});
+    var parsed = JSON.parse(risultato);
+    if(parsed.errore){ throw new Error(parsed.errore); }
+    _paypalTransazioni = (parsed.transazioni||[]).filter(function(t){ return t.id_transazione_paypal; }).map(function(t){
+      return {
+        id: t.id_transazione_paypal, data: t.data, importo: t.importo,
+        controparteNome: t.controparte_nome, controparteEmail: t.controparte_email,
+        nota: t.nota_o_oggetto
+      };
+    });
+    _salvaPaypalLocale(mese);
+    if(info) info.textContent = '✓ '+_paypalTransazioni.length+' transazioni scaricate per '+mese;
+    renderRiconciliazionePaypal();
+  }catch(e){
+    if(info) info.textContent = '❌ '+String(e.message||e).slice(0,150);
+    toast('⚠️ Sincronizzazione fallita: '+String(e.message||e).slice(0,80));
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '🔄 Sincronizza il mese selezionato'; }
+  }
+}
+
+function renderRiconciliazionePaypal(){
+  var wrap = document.getElementById('paypalContenuto');
+  if(!wrap) return;
+  if(!localStorage.getItem('ceraldi_paypal_client_id') || !localStorage.getItem('ceraldi_paypal_secret')){
+    wrap.innerHTML = '<div style="text-align:center;padding:24px;color:var(--ink3);font-size:13px">🅿️ Configura prima le credenziali in Impostazioni → PayPal</div>';
+    return;
+  }
+  if(!_paypalTransazioni.length){
+    wrap.innerHTML = '<div style="text-align:center;padding:24px;color:var(--ink3);font-size:13px">Nessuna transazione caricata per questo mese — tocca "Sincronizza" qui sopra</div>';
+    return;
+  }
+
+  var ignorati = _paypalIgnoratiSet();
+  // "Abbinata" si scopre guardando le fatture: se una fattura ha già
+  // riconciliazione.movId === 'paypal:'+id, questa transazione è già
+  // sistemata — la fattura stessa è la prova, niente da tenere sincronizzato
+  // a parte.
+  var mapAbbinate = {};
+  (fatture||[]).forEach(function(f){
+    if(f.riconciliazione && typeof f.riconciliazione.movId==='string' && f.riconciliazione.movId.indexOf('paypal:')===0){
+      mapAbbinate[f.riconciliazione.movId.slice(7)] = f;
+    }
+  });
+
+  var nonAbbinate = _paypalTransazioni.filter(function(t){ return !mapAbbinate[t.id] && !ignorati.has(t.id); });
+  var abbinate    = _paypalTransazioni.filter(function(t){ return mapAbbinate[t.id]; });
+  var ignorate    = _paypalTransazioni.filter(function(t){ return ignorati.has(t.id) && !mapAbbinate[t.id]; });
+
+  // Stesso principio già usato per la Carta (08/08): l'importo esatto è un
+  // segnale forte, il nome del beneficiario PayPal può differire dal nome
+  // fornitore in fattura (es. "HP Italy" in fattura, un dominio email su PayPal).
+  var _fattUsateSugg = {};
+  var consigliate = [];
+  var daAbbinareVere = [];
+  window._paypalNonAbbinate = nonAbbinate;
+  nonAbbinate.forEach(function(t){
+    var imp = Math.abs(t.importo||0);
+    var candidati = fatture.filter(function(f){
+      return f.tipo==='fattura' && !f.riconciliata && !_fattUsateSugg[f.id]
+        && Math.abs((f.importo||0) - imp) < 0.02;
+    });
+    if(candidati.length === 1){
+      _fattUsateSugg[candidati[0].id] = true;
+      consigliate.push({tx:t, fatt:candidati[0]});
+    } else {
+      t._nCandidatiStessoImporto = candidati.length;
+      daAbbinareVere.push(t);
+    }
+  });
+
+  var tot = _paypalTransazioni.reduce(function(s,t){return s+Math.abs(t.importo||0);},0);
+  var html = '<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--ink3);margin-bottom:12px;padding:0 2px">'
+    + '<span>Transazioni nel mese: <b>'+_paypalTransazioni.length+'</b></span><span>Totale: <b>'+fmt(tot)+'</b></span></div>';
+
+  if(consigliate.length){
+    html += '<div style="background:var(--surface);border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow);border-left:3px solid var(--blue)">';
+    html += '<div style="font-size:13px;font-weight:700;color:var(--blue);margin-bottom:8px">🎯 Abbinamenti consigliati ('+consigliate.length+') — stesso importo esatto</div>';
+    window._paypalConsigliate = consigliate;
+    consigliate.forEach(function(d,idx){
+      html += '<div style="padding:9px 0;border-top:1px solid var(--sep)">';
+      html += '<div style="font-size:11px;color:var(--ink3)">'+esc(d.tx.data)+(d.tx.controparteNome?' · '+esc(d.tx.controparteNome):(d.tx.controparteEmail?' · '+esc(d.tx.controparteEmail):''))+'</div>';
+      html += '<div style="font-size:12px;font-weight:600;margin:2px 0">→ '+esc(d.fatt.fornitore)+' N°'+esc(d.fatt.numero||'')+'</div>';
+      var scost = Math.abs(Math.abs(d.tx.importo||0) - (d.fatt.importo||0));
+      var identici = scost < 0.005;
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;margin-bottom:4px">'
+        + '<span style="color:var(--ink3)">Transazione PayPal</span><b>'+fmt(Math.abs(d.tx.importo||0))+'</b></div>';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;margin-bottom:6px">'
+        + '<span style="color:var(--ink3)">Importo fattura</span><b>'+fmt(d.fatt.importo||0)+'</b></div>';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">';
+      html += identici
+        ? '<span style="font-size:12px;font-weight:700;color:var(--blue)">✓ Importi identici</span>'
+        : '<span style="font-size:12px;font-weight:700;color:#b36a00">⚠️ Differenza di '+fmt(scost)+' — ricontrolla</span>';
+      html += '<div style="display:flex;gap:6px">';
+      var hasDoc = (d.fatt.fatturaAllegata&&d.fatt.fatturaAllegata.length>0)||(d.fatt.xmlGithubPath&&d.fatt.xmlGithubPath.length>0)||(d.fatt.source==='aruba')||d.fatt.hasAllegata;
+      if(hasDoc) html += '<button onclick="event.stopPropagation();aprifatturaAllegata('+d.fatt.id+')" style="padding:6px 8px;border:1px solid var(--blue);border-radius:6px;background:var(--blue-light);color:var(--blue);font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">📄</button>';
+      html += '<button onclick="_confermaPaypalConsigliato('+idx+')" style="padding:6px 10px;border:none;border-radius:6px;background:var(--blue);color:#fff;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">✓ Conferma</button>';
+      html += '<button onclick="_apriPickerAbbinamentoPaypal(_paypalNonAbbinate.indexOf(_paypalConsigliate['+idx+'].tx))" style="padding:6px 10px;border:1px solid var(--ink3);border-radius:6px;background:transparent;color:var(--ink2);font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">Altra</button>';
+      html += '</div></div></div>';
+    });
+    html += '</div>';
+  }
+
+  if(daAbbinareVere.length){
+    html += '<div style="background:var(--surface);border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow);border-left:3px solid #FFB800">';
+    html += '<div style="font-size:13px;font-weight:700;color:#b36a00;margin-bottom:8px">❓ Da abbinare ('+daAbbinareVere.length+')</div>';
+    daAbbinareVere.forEach(function(t){
+      var idx = nonAbbinate.indexOf(t);
+      html += '<div style="padding:9px 0;border-top:1px solid var(--sep)">';
+      html += '<div style="font-size:11px;color:var(--ink3)">'+esc(t.data)+(t.controparteNome?' · '+esc(t.controparteNome):(t.controparteEmail?' · '+esc(t.controparteEmail):' · beneficiario non fornito da PayPal'))+'</div>';
+      html += '<div style="font-size:12px;font-weight:600;margin:2px 0">'+esc(t.nota||'—')+'</div>';
+      if(t._nCandidatiStessoImporto>1) html += '<div style="font-size:11px;color:#b36a00;margin-bottom:3px">⚠️ '+t._nCandidatiStessoImporto+' fatture non pagate hanno lo stesso importo — scegli quella giusta a mano</div>';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">';
+      html += '<span style="font-size:13px;font-weight:700">'+fmt(Math.abs(t.importo||0))+'</span>';
+      html += '<div style="display:flex;gap:6px">';
+      html += '<button onclick="_apriPickerAbbinamentoPaypal('+idx+')" style="padding:6px 10px;border:1px solid var(--blue);border-radius:6px;background:var(--blue-light);color:var(--blue);font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">🔍 Abbina</button>';
+      html += '<button onclick="_ignoraPaypal(\''+esc(t.id)+'\')" style="padding:6px 10px;border:1px solid var(--ink3);border-radius:6px;background:transparent;color:var(--ink2);font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">🚫 Ignora</button>';
+      html += '</div></div></div>';
+    });
+    html += '</div>';
+  }
+
+  if(abbinate.length){
+    html += '<div style="background:var(--surface);border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow);border-left:3px solid #1a7a3a">';
+    html += '<div style="font-size:13px;font-weight:700;color:#1a7a3a;margin-bottom:8px">✓ Abbinate ('+abbinate.length+')</div>';
+    abbinate.forEach(function(t){
+      var f = mapAbbinate[t.id];
+      html += '<div style="padding:7px 0;border-top:1px solid var(--sep);font-size:12px">';
+      html += esc(t.data)+' · '+fmt(Math.abs(t.importo||0))+' → '+esc(f.fornitore||'')+' N°'+esc(f.numero||'');
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  if(ignorate.length){
+    html += '<div style="background:var(--surface);border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow);border-left:3px solid var(--ink3)">';
+    html += '<div style="font-size:13px;font-weight:700;color:var(--ink3);margin-bottom:8px">🚫 Ignorate ('+ignorate.length+')</div>';
+    ignorate.forEach(function(t){
+      html += '<div style="padding:7px 0;border-top:1px solid var(--sep);font-size:12px;display:flex;justify-content:space-between;align-items:center">';
+      html += '<span>'+esc(t.data)+' · '+fmt(Math.abs(t.importo||0))+'</span>';
+      html += '<button onclick="_riattivaPaypal(\''+esc(t.id)+'\')" style="padding:4px 8px;border:1px solid var(--sep);border-radius:6px;background:none;color:var(--ink3);font-family:inherit;font-size:11px;cursor:pointer">↩️ Ripristina</button>';
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  wrap.innerHTML = html;
+}
+
+async function _confermaPaypalConsigliato(idx){
+  var d = (window._paypalConsigliate||[])[idx];
+  if(!d) return;
+  await _abbinaPaypal(d.tx, d.fatt.id);
+}
+
+async function _abbinaPaypal(tx, fattId){
+  var f = fatture.find(function(x){ return String(x.id)===String(fattId); });
+  if(!tx || !f) return;
+  var nomeBenef = tx.controparteNome || tx.controparteEmail || 'beneficiario sconosciuto';
+  _impostaDatiRiconciliazione(f, {
+    id: 'paypal:'+tx.id, data: tx.data, importo: Math.abs(tx.importo||0),
+    descrizione: 'PayPal → '+nomeBenef+(tx.nota?' ('+tx.nota+')':'')
+  }, false);
+  f.riconciliata = true;
+  if(f.stato!=='pagata'){ f.stato = 'pagata'; f.dataPagamento = tx.data; }
+  if(!f.pagamento || f.pagamento==='bonifico') f.pagamento = 'sdd';
+  try{
+    if(typeof dbUpdate==='function') await dbUpdate(f);
+    toast('✓ Abbinato: '+(f.fornitore||''));
+  }catch(e){
+    console.warn('_abbinaPaypal:', e);
+    alert('⚠️ Errore nel salvare l\'abbinamento: '+(e.message||e));
+  }
+  renderRiconciliazionePaypal();
+}
+
+// Picker di abbinamento manuale — stesso schema del picker della Carta.
+function _apriPickerAbbinamentoPaypal(idx){
+  var t = (window._paypalNonAbbinate||[])[idx];
+  if(!t) return;
+  var existing = document.getElementById('paypalAbbMo');
+  if(existing) existing.remove();
+
+  var mo = document.createElement('div');
+  mo.id = 'paypalAbbMo';
+  mo.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:900;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px)';
+  var sheet = document.createElement('div');
+  sheet.style.cssText = 'background:var(--bg);border-radius:20px 20px 0 0;width:100%;max-width:500px;max-height:80vh;display:flex;flex-direction:column;animation:slideUp .3s cubic-bezier(.32,.72,0,1)';
+
+  var hdr = document.createElement('div');
+  hdr.style.cssText = 'padding:16px 20px 10px;border-bottom:1px solid var(--sep);display:flex;align-items:center;justify-content:space-between;flex-shrink:0';
+  hdr.innerHTML = '<div><div style="font-size:17px;font-weight:700">🔍 Abbina a una fattura</div><div style="font-size:12px;color:var(--ink3)">'+esc(t.controparteNome||t.controparteEmail||'PayPal')+' · '+fmt(Math.abs(t.importo||0))+'</div></div>';
+  var closeBtn = document.createElement('button');
+  closeBtn.innerHTML = '&#215;';
+  closeBtn.style.cssText = 'background:var(--surface2);border:none;border-radius:99px;width:32px;height:32px;font-size:18px;cursor:pointer';
+  closeBtn.onclick = function(){ mo.remove(); };
+  hdr.appendChild(closeBtn);
+  sheet.appendChild(hdr);
+
+  var sw = document.createElement('div');
+  sw.style.cssText = 'padding:10px 16px;flex-shrink:0';
+  sw.innerHTML = '<input type="text" id="paypalAbbSearch" placeholder="🔍 Cerca fornitore, numero o importo..." style="width:100%;padding:10px 14px;border:1.5px solid var(--sep);border-radius:99px;font-size:14px;font-family:Inter,-apple-system,sans-serif;background:var(--surface)">';
+  sheet.appendChild(sw);
+
+  var lista = document.createElement('div');
+  lista.id = 'paypalAbbLista';
+  lista.style.cssText = 'overflow-y:auto;flex:1;padding:0 16px 20px';
+  sheet.appendChild(lista);
+  mo.appendChild(sheet);
+  mo.onclick = function(e){ if(e.target===mo) mo.remove(); };
+  document.body.appendChild(mo);
+
+  window._paypalTxCorrente = t;
+  function render(filtro){
+    var s = (filtro||'').toLowerCase();
+    var candidati = fatture.filter(function(f){
+      return f.tipo==='fattura' && _fattMatchTestoImporto(f, s);
+    }).sort(function(a,b){ return (b.data||'').localeCompare(a.data||''); }).slice(0,40);
+    lista.innerHTML = candidati.map(function(f){
+      return '<div onclick="_abbinaPaypal(window._paypalTxCorrente,\''+f.id+'\');document.getElementById(\'paypalAbbMo\').remove()" '
+        + 'style="padding:10px 8px;border-bottom:1px solid var(--sep);cursor:pointer">'
+        + '<div style="font-size:13px;font-weight:600">'+esc(f.fornitore||'')+' N°'+esc(f.numero||'')+'</div>'
+        + '<div style="font-size:11px;color:var(--ink3)">'+esc(f.data||'')+' · '+fmt(f.importo||0)+(f.riconciliata?' · già riconciliata':'')+'</div>'
+        + '</div>';
+    }).join('') || '<div style="text-align:center;padding:20px;color:var(--ink3);font-size:13px">Nessuna fattura trovata</div>';
+  }
+  render('');
+  document.getElementById('paypalAbbSearch').oninput = function(e){ render(e.target.value); };
 }
 
 // ── ELIMINA UN ESTRATTO CARICATO PER ERRORE (08/08, richiesta esplicita di
