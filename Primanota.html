@@ -403,7 +403,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.37.0</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.39.0</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -1403,7 +1403,19 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
         <span>&#128202; Spesa per fornitore</span>
         <span id="fornChartArrow" style="transition:transform .2s">&#9656;</span>
       </div>
-      <div id="fornChart" style="margin-bottom:18px;display:none"></div>
+      <div id="fornChartBody" style="display:none">
+        <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
+          <button onclick="_fornChartPresetAnno()" style="flex:1;min-width:90px;padding:8px;border:1.5px solid var(--sep);border-radius:8px;background:var(--surface2);font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;color:var(--ink)">Anno corrente</button>
+          <button onclick="_fornChartPresetTutto()" style="flex:1;min-width:90px;padding:8px;border:1.5px solid var(--sep);border-radius:8px;background:var(--surface2);font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;color:var(--ink)">Da sempre</button>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+          <input type="date" id="fornChartDataDa" onchange="renderFornChart()" style="flex:1;min-width:0;padding:9px 8px;border:1.5px solid var(--sep);border-radius:8px;font-family:inherit;font-size:13px;background:var(--surface);color:var(--ink);box-sizing:border-box">
+          <span style="color:var(--ink3);font-size:12px;flex-shrink:0">→</span>
+          <input type="date" id="fornChartDataA" onchange="renderFornChart()" style="flex:1;min-width:0;padding:9px 8px;border:1.5px solid var(--sep);border-radius:8px;font-family:inherit;font-size:13px;background:var(--surface);color:var(--ink);box-sizing:border-box">
+        </div>
+        <div id="fornChartTotale" style="font-size:13px;font-weight:600;color:var(--ink2);margin-bottom:10px"></div>
+        <div id="fornChart" style="margin-bottom:18px"></div>
+      </div>
       </div>
       <div style="border-top:1px solid var(--sep);padding-top:14px;margin-bottom:14px">
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--ink3);margin-bottom:10px">&#128295; Manutenzione</div>
@@ -4781,6 +4793,25 @@ async function segnaTutteFattureFornitorePagate(nomeFornitore){
 }
 
 // Dropdown fornitori per il campo Pagamento Default (apertura al click ovunque nel campo)
+// Modifica diretta di un default già configurato — richiesto da Valerio
+// (02/09): la lista aveva solo "Applica a tutte" e "elimina", nessun modo
+// di cambiare il valore senza cancellarlo e reinserirlo da capo. Apre la
+// stessa schermata di scelta metodo/stato usata per un nuovo default, ma
+// saltando direttamente lì invece di passare dal picker del fornitore.
+function _modificaPagDefault(fornitore){
+  const existing = document.getElementById('pagDefDropdownMo');
+  if(existing) existing.remove();
+  const mo = document.createElement('div');
+  mo.id = 'pagDefDropdownMo';
+  mo.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:800;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px)';
+  const sheet = document.createElement('div');
+  sheet.style.cssText = 'background:var(--bg);border-radius:20px 20px 0 0;width:100%;max-width:500px;max-height:75vh;overflow-y:auto;animation:slideUp .3s cubic-bezier(.32,.72,0,1)';
+  mo.appendChild(sheet);
+  mo.onclick = e=>{ if(e.target===mo) mo.remove(); };
+  document.body.appendChild(mo);
+  _mostraStep2PagDefault(mo, sheet, fornitore);
+}
+
 function apriDropdownPagDefault(){
   const inp = document.getElementById('pagDefaultForn');
   if(!inp) return;
@@ -5635,8 +5666,15 @@ function _rigaEsportCompleta(f){
   let imponibile, ivaVal, aliquotaTxt;
   if(f.ivaBreakdown && Object.keys(f.ivaBreakdown).length){
     // Dato reale letto dall'XML — più affidabile di qualunque calcolo.
-    ivaVal = Object.values(f.ivaBreakdown).reduce((s,v)=>s+Number(v||0),0);
-    imponibile = imp - ivaVal;
+    // BUG REALE (trovato 02/09, segnalato da Valerio: "NaN" al posto
+    // dell'importo in tutto l'export): la struttura vera è annidata,
+    // {"22":{imposta:X,imponibile:Y}} per ciascuna aliquota — non
+    // {"22":importo} come avevo scritto qui. Sommare l'oggetto intero con
+    // Number(v||0) dà NaN sempre, per ogni fattura con IVA da XML — cioè la
+    // maggior parte delle righe.
+    const voci = Object.values(f.ivaBreakdown);
+    ivaVal = voci.reduce((s,v)=>s+Number((v&&v.imposta)||0),0);
+    imponibile = voci.reduce((s,v)=>s+Number((v&&v.imponibile)||0),0);
     aliquotaTxt = Object.keys(f.ivaBreakdown).join('+')+'%';
   } else if(Number(f.iva||0) > 0){
     const aliq = Number(f.iva);
@@ -5651,18 +5689,30 @@ function _rigaEsportCompleta(f){
     imponibile = null; ivaVal = null; aliquotaTxt = '';
   }
 
-  // Riferimento pagamento: il dato più specifico disponibile, in ordine di
-  // affidabilità — riconciliazione bancaria (contiene sempre una
-  // descrizione leggibile, anche per SDD/PayPal/carta) prima di tutto,
-  // poi gli estremi inseriti a mano (assegno/IBAN).
-  let riferimento = '';
-  if(f.riconciliazione && f.riconciliazione.descrizione) riferimento = f.riconciliazione.descrizione;
-  else if(f.pagamento==='assegno' && f.assegno) riferimento = 'Assegno n° '+f.assegno+(f.assInt?' ('+f.assInt+')':'');
-  else if(f.pagamento==='bonifico' && f.bonIban) riferimento = 'Bonifico IBAN '+f.bonIban;
+  // Riferimento pagamento: prima gli estremi inseriti a mano (assegno/IBAN
+  // — sono il dato "primario", quello che Valerio ha digitato lui stesso),
+  // POI la descrizione della riconciliazione bancaria come conferma/dettaglio
+  // aggiuntivo — MAI l'uno al posto dell'altro. BUG REALE (segnalato da
+  // Valerio: un numero assegno inserito a mano spariva dall'export non
+  // appena la fattura veniva anche riconciliata con l'estratto conto,
+  // perché qui la descrizione di riconciliazione ("Pagamento di gruppo: 2
+  // fatture...") sostituiva completamente il numero assegno invece di
+  // affiancarlo.
+  let pezziRiferimento = [];
+  if(f.pagamento==='assegno' && f.assegno) pezziRiferimento.push('Assegno n° '+f.assegno+(f.assInt?' ('+f.assInt+')':''));
+  else if(f.pagamento==='bonifico' && f.bonIban) pezziRiferimento.push('Bonifico IBAN '+f.bonIban);
+  if(f.riconciliazione && f.riconciliazione.descrizione) pezziRiferimento.push(f.riconciliazione.descrizione);
+  let riferimento = pezziRiferimento.join(' — ');
 
-  const dettaglioRiconc = f.riconciliata
-    ? 'Riconciliata'+(f.riconciliazione&&f.riconciliazione.data?' il '+f.riconciliazione.data:'')+(f.riconciliazione&&f.riconciliazione.parziale?' (parziale)':'')
-    : (f.stato==='pagata' ? 'Pagata ma non riconciliata con l\'estratto conto' : 'Non riconciliata');
+  // Per i pagamenti in contanti non ha senso parlare di "riconciliazione"
+  // (non esiste un movimento bancario con cui confrontarli per definizione)
+  // — segnalato da Valerio: meglio dire chiaramente quando è stato pagato,
+  // non ripetere un'etichetta di "non riconciliata" che qui è fuori luogo.
+  const dettaglioRiconc = f.pagamento==='contanti'
+    ? ('Pagata in contanti'+(f.dataPagamento?' il '+f.dataPagamento:(f.data?' (data pagamento non registrata, fattura del '+f.data+')':'')))
+    : (f.riconciliata
+        ? 'Riconciliata'+(f.riconciliazione&&f.riconciliazione.data?' il '+f.riconciliazione.data:'')+(f.riconciliazione&&f.riconciliazione.parziale?' (parziale)':'')
+        : (f.stato==='pagata' ? 'Pagata ma non riconciliata con l\'estratto conto' : 'Non riconciliata'));
 
   return {
     tipo: f.tipo==='ddt'?'DDT':(f.tipo==='nota_credito'?'Nota di credito':'Fattura'),
@@ -7558,6 +7608,20 @@ async function importaMassivoXml(input){
 
       // Ottieni pagamento default del fornitore se non specificato
       const defForn = getPagDefault(fornitore) || {};
+      // BUG REALE (trovato 02/09, segnalato da Valerio su VARRIALE SALVATORE:
+      // anagrafica impostata "sempre pagato alla consegna" + contanti, ma la
+      // fattura importata da XML risultava "bonifico") — lo stato rispettava
+      // già il default del fornitore quando "sempre pagato" era attivo
+      // (stato: defForn.stato || 'da_pagare', sotto), ma il pagamento no: dava
+      // sempre precedenza a quello scritto nell'XML, anche quando Valerio
+      // aveva esplicitamente detto "fidati della mia impostazione, non del
+      // documento" per questo fornitore. Ora, se "sempre pagato alla
+      // consegna" è attivo (defForn.stato==='pagata') E c'è un metodo di
+      // pagamento configurato, quello vince — altrimenti resta come prima
+      // (l'XML vince, il default è solo un suggerimento di riserva).
+      const _pagDaXmlOSuggerito = (defForn.stato==='pagata' && defForn.pagamento)
+        ? defForn.pagamento
+        : (pagamento || defForn.pagamento || '');
 
       // Crea nuova fattura
       const nuova = {
@@ -7568,7 +7632,7 @@ async function importaMassivoXml(input){
         fattNum: '', numDdt: numDdt,
         data: data || '',
         importo,
-        pagamento: pagamento || defForn.pagamento || '',
+        pagamento: _pagDaXmlOSuggerito,
         pagamentoOrigine: 'xml',
         bonIban: iban || '',
         bonCaus: '', bonData: '', bonRif: '',
@@ -7767,6 +7831,7 @@ function renderPagDefault(){
         <div style="font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(k)}</div>
         <div style="font-size:12px;color:var(--ink3);margin-top:2px">${pagStr} · ${stStr}</div>
       </div>
+      <button onclick="_modificaPagDefault('${esc(k)}')" style="border:none;background:var(--surface);color:var(--ink2);border-radius:8px;padding:6px 9px;font-size:12px;font-weight:600;cursor:pointer;flex-shrink:0" title="Modifica questo default">✏️</button>
       <button onclick="applicaPagDefaultFornitore('${esc(k)}')" style="border:none;background:var(--blue-light);color:var(--blue);border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;cursor:pointer;flex-shrink:0;white-space:nowrap">Applica a tutte</button>
       <button onclick="eliminaPagDefault('${esc(k)}')" style="border:none;background:var(--red-light);color:var(--red);border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;cursor:pointer;flex-shrink:0">✕</button>
     </div>`;
@@ -10340,16 +10405,33 @@ async function _eseguiAggancioXml(fattManuale, fattConXml){
 
 // ── GRAFICO FORNITORI ──
 function renderFornChart(){
-  const rows=getFiltered();
+  // FIX 02/09 (richiesto da Valerio: "sempre filtrabile per data, default 1
+  // gennaio di ogni anno in poi") — prima usava getFiltered(), che segue
+  // qualunque filtro sia attivo nel Registro in quel momento (spesso
+  // scollegato da quello che si vuole vedere qui). Ora ha il suo intervallo
+  // indipendente, con lo stesso default richiesto.
+  const dataDaEl = document.getElementById('fornChartDataDa');
+  const dataAEl = document.getElementById('fornChartDataA');
+  const dataDa = dataDaEl ? dataDaEl.value : '';
+  const dataA = dataAEl ? dataAEl.value : '';
+  const rows = (fatture||[]).filter(f=>{
+    if(f.tipo==='ddt') return false;
+    if(dataDa && (!f.data || f.data < dataDa)) return false;
+    if(dataA && (!f.data || f.data > dataA)) return false;
+    return true;
+  });
   const map={};
   rows.forEach(f=>{const k=f.fornitore||'—';map[k]=(map[k]||0)+(f.importo||0);});
   const sorted=Object.entries(map).sort((a,b)=>b[1]-a[1]);
   const max=sorted[0]?sorted[0][1]:1;
+  const totale = sorted.reduce((s,[,v])=>s+v,0);
   const el=document.getElementById('fornChart');
   if(!el) return;
   const sub=document.getElementById('rsub-fornitori');
   if(sub) sub.textContent=sorted.length+' fornitor'+(sorted.length!==1?'i':'e');
-  if(!sorted.length){el.innerHTML='<p style="text-align:center;color:var(--ink3);padding:12px">Nessun dato</p>';return;}
+  const totEl = document.getElementById('fornChartTotale');
+  if(totEl) totEl.textContent = 'Totale fatturato'+(dataDa||dataA?' nel periodo':'')+': '+fmt(totale)+' su '+sorted.length+' fornitor'+(sorted.length!==1?'i':'e');
+  if(!sorted.length){el.innerHTML='<p style="text-align:center;color:var(--ink3);padding:12px">Nessuna fattura nell\'intervallo scelto</p>';return;}
   el.innerHTML=sorted.map(([nome,tot])=>`
     <div class="forn-bar-row">
       <div class="forn-bar-label" title="${esc(nome)}">${esc(nome)}</div>
@@ -15459,7 +15541,8 @@ async function _abbinaCarta(movId, fattId){
   m.fatturaLabel = (f.fornitore||'') + ' N°' + (f.numero||'');
   _impostaDatiRiconciliazione(f, {id:'carta:'+m.id, data:m.data, importo:m.importo, descrizione:'Carta di credito: '+m.descrizione, banca:'Nexi'}, false);
   f.riconciliata = true;
-  if(f.stato!=='pagata'){ f.stato = 'pagata'; f.dataPagamento = m.data; if(!f.pagamento) f.pagamento = 'carta'; }
+  if(f.stato!=='pagata'){ f.stato = 'pagata'; f.dataPagamento = m.data; }
+  _impostaPagamentoDaRiconciliazione(f, 'carta');
   try{
     if(typeof dbUpdate==='function') await dbUpdate(f);
     await salvaMovimentoCarta(m);
@@ -15794,7 +15877,7 @@ async function _abbinaPaypalFattureMultiple(tx, fattIds){
     }, false);
     f.riconciliata = true;
     if(f.stato!=='pagata'){ f.stato = 'pagata'; f.dataPagamento = tx.data; }
-    if(!f.pagamento || f.pagamento==='bonifico') f.pagamento = 'sdd';
+    _impostaPagamentoDaRiconciliazione(f, 'sdd');
     try{ if(typeof dbUpdate==='function') await dbUpdate(f); }
     catch(e){ console.warn('_abbinaPaypalFattureMultiple:', e); errori.push(f.fornitore||f.id); }
   }
@@ -15819,7 +15902,7 @@ async function _abbinaPaypalTransazioniMultiple(txArray, fattId){
   }, false);
   f.riconciliata = true;
   if(f.stato!=='pagata'){ f.stato = 'pagata'; f.dataPagamento = txArray[txArray.length-1].data; }
-  if(!f.pagamento || f.pagamento==='bonifico') f.pagamento = 'sdd';
+  _impostaPagamentoDaRiconciliazione(f, 'sdd');
   try{
     if(typeof dbUpdate==='function') await dbUpdate(f);
     toast('✓ '+txArray.length+' transazioni abbinate a '+(f.fornitore||''));
@@ -19527,8 +19610,8 @@ function _cfMultiplo(){
         if(f.stato==='pagata') f.dataPagamento=m.data;
       } else {
         f.stato='pagata'; f.dataPagamento=m.data;
-        if(!f.pagamento) f.pagamento='bonifico';
       }
+      _impostaPagamentoDaRiconciliazione(f, 'bonifico');
       // Salvataggi uno alla volta e ATTESI — prima partivano tutti insieme
       // senza aspettare né controllare l'esito, e con più fatture insieme
       // capitava che una o più aggiornassero il collegamento ma non lo stato
@@ -19558,6 +19641,22 @@ function _cfMultiplo(){
   _buildOverlay();
   if(selezionate.length) _updateDynamic();
 }
+// FIX 02/09 (segnalato da Valerio: fatture con "pagamento: bonifico" ma
+// riconciliate con SDD/carta/PayPal — dati che si contraddicono, "non fanno
+// avere fiducia da parte di chi legge"). Regola esplicita, ora uguale
+// ovunque nell'app: quando una fattura viene riconciliata con un movimento
+// bancario vero, il metodo di pagamento DEVE riflettere quel movimento —
+// sempre, anche se prima c'era scritto qualcos'altro (documento, default
+// fornitore, o perfino una scelta manuale precedente). La riconciliazione è
+// una prova; nessun'altra fonte può contraddirla. Prima, 6 punti diversi
+// dell'app scrivevano il pagamento solo "se era vuoto" — mai per CORREGGERE
+// un valore già presente ma sbagliato, che è esattamente il caso che
+// produceva l'incoerenza segnalata.
+function _impostaPagamentoDaRiconciliazione(f, metodo){
+  f.pagamento = metodo;
+  f.pagamentoOrigine = 'riconciliazione';
+}
+
 function _impostaDatiRiconciliazione(f, mov, isParziale, importoSpecifico){
   // Prima questi dati finivano come testo tra parentesi quadre dentro le note
   // (es. "[Estratto 12/06/2026 · € 45,00] descrizione...") — utile da leggere
@@ -19647,17 +19746,19 @@ function _cfAbbina(movIdx, fattId, isParziale){
   }
   // Marca la fattura come riconciliata con estratto (indipendente dallo stato pagamento)
   f.riconciliata = true;
+  var _metodoDaMov = /assegno/i.test(m.sottotipo||'')?'assegno':'bonifico';
   if(isParziale){
     var np=(f.parzPagato||0)+imp;
     f.parzPagato=np; f.stato=np>=impF-0.50?'pagata':'parziale';
     if(f.stato==='pagata') f.dataPagamento=m.data;
+    _impostaPagamentoDaRiconciliazione(f, _metodoDaMov);
     if(typeof dbUpdate==='function') dbUpdate(f);
     toast('Parziale: '+fmt(np)+'/'+fmt(impF)+' — '+f.fornitore);
   } else {
     if(f.stato!=='pagata'){
       f.stato='pagata'; f.dataPagamento=m.data;
-      if(!f.pagamento) f.pagamento=/assegno/i.test(m.sottotipo||'')?'assegno':'bonifico';
     }
+    _impostaPagamentoDaRiconciliazione(f, _metodoDaMov);
     if(typeof dbUpdate==='function') dbUpdate(f);
     try{
       var app={};
@@ -20413,7 +20514,7 @@ async function _applicaCambioAbbinamentoMultiplo(mov, vecchiaFattura, fattureSce
     f.parzPagato = Math.round(((f.parzPagato||0) + daApplicare) * 100) / 100;
     f.stato = (f.parzPagato >= (f.importo||0) - 0.01) ? 'pagata' : 'parziale';
     if(f.stato==='pagata' && !f.dataPagamento) f.dataPagamento = mov.data;
-    if(!f.pagamento) f.pagamento = /assegno/i.test(mov.sottotipo||'')?'assegno':'bonifico';
+    _impostaPagamentoDaRiconciliazione(f, /assegno/i.test(mov.sottotipo||'')?'assegno':'bonifico');
     _impostaDatiRiconciliazione(f, mov, f.stato==='parziale', daApplicare);
     if(typeof dbUpdate==='function') await dbUpdate(f);
 
@@ -21038,12 +21139,36 @@ function _parseCorrisXml(xmlText){
 
 
 function _toggleSpesaForn(){
-  var ch = document.getElementById('fornChart');
+  var ch = document.getElementById('fornChartBody');
   var ar = document.getElementById('fornChartArrow');
   if(!ch) return;
   var open = ch.style.display !== 'none';
   ch.style.display = open ? 'none' : 'block';
   if(ar) ar.style.transform = open ? '' : 'rotate(90deg)';
+  if(!open){
+    // Prima apertura: precompila l'intervallo con il default richiesto da
+    // Valerio (02/09) — dal 1° gennaio dell'anno corrente a oggi — solo se i
+    // campi sono ancora vuoti, per non azzerare un intervallo che l'utente
+    // ha già scelto lui in una sessione precedente.
+    var da = document.getElementById('fornChartDataDa');
+    var a = document.getElementById('fornChartDataA');
+    var oggi = new Date().toISOString().slice(0,10);
+    if(da && !da.value) da.value = oggi.slice(0,4)+'-01-01';
+    if(a && !a.value) a.value = oggi;
+    renderFornChart();
+  }
+}
+
+function _fornChartPresetAnno(){
+  var oggi = new Date().toISOString().slice(0,10);
+  document.getElementById('fornChartDataDa').value = oggi.slice(0,4)+'-01-01';
+  document.getElementById('fornChartDataA').value = oggi;
+  renderFornChart();
+}
+function _fornChartPresetTutto(){
+  document.getElementById('fornChartDataDa').value = '';
+  document.getElementById('fornChartDataA').value = '';
+  renderFornChart();
 }
 
 
