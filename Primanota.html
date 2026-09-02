@@ -403,7 +403,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.33.0</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.34.0</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -1992,6 +1992,75 @@ function _aiChiediConferma(titolo, dettaglio){
   });
 }
 
+// ── PAYPAL — lettura transazioni reali (richiesto da Valerio 01/09: la banca
+// mostra solo "PayPal Europe S.a.r.l." come beneficiario, mai chi ha davvero
+// ricevuto il pagamento; qui si interroga direttamente PayPal per saperlo).
+// Stesso principio del resto dell'app: solo lettura diretta, nessuna
+// scrittura — l'abbinamento alla fattura passa comunque da
+// proponi_correzione_fattura, quindi da una conferma esplicita di Valerio.
+var _paypalTokenCache = null; // {token, scadeIl}
+async function _paypalOttieniToken(){
+  var cid = localStorage.getItem('ceraldi_paypal_client_id')||'';
+  var sec = localStorage.getItem('ceraldi_paypal_secret')||'';
+  if(!cid || !sec) throw new Error('Credenziali PayPal non configurate (Impostazioni → PayPal)');
+  if(_paypalTokenCache && _paypalTokenCache.scadeIl > Date.now()+30000){
+    return _paypalTokenCache.token;
+  }
+  var res = await fetch('https://api-m.paypal.com/v1/oauth2/token', {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Basic ' + btoa(cid+':'+sec),
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: 'grant_type=client_credentials'
+  });
+  if(!res.ok){ throw new Error('PayPal login fallito: HTTP '+res.status); }
+  var data = await res.json();
+  _paypalTokenCache = { token: data.access_token, scadeIl: Date.now() + (data.expires_in||32000)*1000 };
+  return _paypalTokenCache.token;
+}
+
+async function _aiLeggiPaypal(input){
+  try{
+    var dataDa = input.data_da, dataA = input.data_a;
+    if(!dataDa || !dataA) return JSON.stringify({errore:'data_da e data_a sono obbligatori (formato YYYY-MM-DD).'});
+    // Controlla l'intervallo PRIMA di provare ad accedere a PayPal — inutile
+    // (e fuorviante, se le credenziali sono anche sbagliate) tentare il
+    // login per una richiesta che verrebbe comunque rifiutata.
+    var giorni = (new Date(dataA) - new Date(dataDa)) / 86400000;
+    if(giorni > 31) return JSON.stringify({errore:'Intervallo troppo lungo ('+Math.round(giorni)+' giorni) — PayPal accetta al massimo 31 giorni per chiamata. Dividi la ricerca in più intervalli.'});
+    var token = await _paypalOttieniToken();
+    // PayPal vuole date-time ISO con orario; prendo l'intera giornata.
+    var startDate = dataDa+'T00:00:00-0000';
+    var endDate = dataA+'T23:59:59-0000';
+    var url = 'https://api-m.paypal.com/v1/reporting/transactions?start_date='+encodeURIComponent(startDate)+
+      '&end_date='+encodeURIComponent(endDate)+'&fields=all&page_size=100';
+    var res = await fetch(url, { headers: { 'Authorization': 'Bearer '+token } });
+    if(!res.ok){
+      var errBody = await res.text();
+      return JSON.stringify({errore:'PayPal HTTP '+res.status, dettaglio: errBody.slice(0,300)});
+    }
+    var data = await res.json();
+    var righe = (data.transaction_details||[]).map(function(t){
+      var ti = t.transaction_info||{};
+      var pi = t.payer_info||{};
+      return {
+        data: (ti.transaction_initiation_date||'').slice(0,10),
+        importo: ti.transaction_amount ? parseFloat(ti.transaction_amount.value) : null,
+        valuta: ti.transaction_amount ? ti.transaction_amount.currency_code : null,
+        stato: ti.transaction_status,
+        nota_o_oggetto: ti.transaction_subject || ti.transaction_note || null,
+        controparte_nome: pi.payer_name ? [pi.payer_name.given_name,pi.payer_name.surname].filter(Boolean).join(' ') || pi.payer_name.alternate_full_name : null,
+        controparte_email: pi.email_address || null,
+        id_transazione_paypal: ti.transaction_id
+      };
+    });
+    return JSON.stringify({trovate: righe.length, transazioni: righe});
+  }catch(e){
+    return JSON.stringify({errore: String(e.message||e).slice(0,200)});
+  }
+}
+
 // ── STRUMENTI dell'assistente — stesso principio di "leggi liberamente,
 // scrivi solo con conferma" già seguito in tutto il resto dell'app. Legge
 // dagli stessi array già in memoria (fatture, _bancaMovimenti, chiusure),
@@ -2034,6 +2103,14 @@ var AI_TOOLS = [
       titolo: {type:'string', description:'Riassunto breve mostrato a Valerio, es. "Ricollegare FC0013060364 al SDD del 2/2".'},
       campi: {type:'object', description:'Coppie campo:valore da scrivere sulla fattura, es. {"stato":"pagata","riconciliata":true,"riconciliazione":{...},"data_pagamento":"2026-02-02"}.'}
     }, required:['fattura_id','titolo','campi']}
+  },
+  {
+    name: 'leggi_transazioni_paypal',
+    description: 'Interroga DIRETTAMENTE PayPal (non la banca) per sapere chi ha davvero ricevuto un pagamento — utile perché in banca i movimenti PayPal mostrano solo "PayPal Europe S.a.r.l." come beneficiario, mai il vero destinatario. Restituisce data, importo, stato, nota/oggetto della transazione, e nome/email della controparte quando PayPal li fornisce. Richiede le credenziali PayPal configurate da Valerio nelle Impostazioni — se lo strumento restituisce un errore di credenziali mancanti, dillo a Valerio invece di inventare un risultato. L\'intervallo massimo per chiamata è 31 giorni: per periodi più lunghi richiama lo strumento più volte con intervalli diversi.',
+    input_schema: {type:'object', properties:{
+      data_da: {type:'string', description:'YYYY-MM-DD, inizio intervallo (obbligatorio).'},
+      data_a: {type:'string', description:'YYYY-MM-DD, fine intervallo (obbligatorio, massimo 31 giorni dopo data_da).'}
+    }, required:['data_da','data_a']}
   }
 ];
 
@@ -2114,6 +2191,7 @@ async function _aiEseguiStrumento(toolUse){
   if(name==='leggi_movimenti_banca') return _aiLeggiMovimenti(input);
   if(name==='leggi_chiusure') return _aiLeggiChiusure(input);
   if(name==='proponi_correzione_fattura') return await _aiProponiCorrezione(input);
+  if(name==='leggi_transazioni_paypal') return await _aiLeggiPaypal(input);
   return JSON.stringify({errore:'Strumento sconosciuto: '+name});
 }
 
@@ -2121,7 +2199,8 @@ var AI_STATI_STRUMENTI = {
   leggi_fatture: '🔍 Sto controllando le fatture…',
   leggi_movimenti_banca: '🏦 Sto controllando l\'estratto conto…',
   leggi_chiusure: '💰 Sto controllando le chiusure di cassa…',
-  proponi_correzione_fattura: '✍️ Sto preparando una correzione…'
+  proponi_correzione_fattura: '✍️ Sto preparando una correzione…',
+  leggi_transazioni_paypal: '🅿️ Sto chiedendo a PayPal chi ha ricevuto il pagamento…'
 };
 
 // Trova il fornitore più probabile citato nella domanda, riusando lo stesso tipo
@@ -2150,10 +2229,11 @@ async function inviaAiAssistente(){
   window._aiHistory.push({role:'user', content: domanda});
 
   var oggi = new Date().toISOString().slice(0,10);
-  var systemPrompt = 'Sei l\'assistente della app "Fatture" di Caffetteria Ceraldi, con accesso in lettura a fatture, movimenti banca e chiusure di cassa tramite gli strumenti disponibili, e la possibilità di proporre correzioni (mai applicate senza conferma esplicita di Valerio).\n'+
+  var systemPrompt = 'Sei l\'assistente della app "Fatture" di Caffetteria Ceraldi, con accesso in lettura a fatture, movimenti banca e chiusure di cassa tramite gli strumenti disponibili, la possibilità di interrogare PayPal direttamente per sapere chi ha davvero ricevuto un pagamento, e la possibilità di proporre correzioni (mai applicate senza conferma esplicita di Valerio).\n'+
     'Oggi è: '+oggi+'.\n'+
     'Rispondi sempre in italiano, breve e diretto. Usa gli strumenti di lettura per verificare i dati reali invece di supporre — non inventare mai numeri, date o importi.\n'+
     'Quando indaghi discrepanze di riconciliazione (es. un pagamento SDD collegato alla fattura sbagliata), confronta la data del movimento con la scadenza della fattura quando disponibile (di norma l\'addebito avviene entro pochi giorni dalla scadenza); se la scadenza manca, cerca uno schema regolare nella storia di quel fornitore prima di proporre una correzione.\n'+
+    'I movimenti bancari con "PayPal" nella descrizione non mostrano MAI il vero beneficiario (solo "PayPal Europe S.a.r.l."): per questi, usa leggi_transazioni_paypal con una finestra di qualche giorno intorno alla data del movimento bancario per scoprire chi ha ricevuto i soldi, poi cerca con leggi_fatture una fattura di quel fornitore con importo e data compatibili.\n'+
     'Prima di proporre una correzione con proponi_correzione_fattura, spiega in una frase perché — Valerio deve poter capire il ragionamento prima di confermare, non solo vedere il risultato.\n'+
     'Se i dati non bastano per essere sicuro, dillo chiaramente invece di proporre una correzione incerta.';
 
@@ -3806,6 +3886,7 @@ function _impRenderHome(){
   const temaAttuale = localStorage.getItem('fatture_theme')||'light';
   const temaLabel = {light:'Chiaro',dark:'Scuro',auto:'Auto'}[temaAttuale]||'Chiaro';
   const hasKey = !!localStorage.getItem('fatture_apikey');
+  const hasPaypalKeys = !!localStorage.getItem('ceraldi_paypal_client_id') && !!localStorage.getItem('ceraldi_paypal_secret');
 
   document.getElementById('impBody').innerHTML = `
     <div style="padding:16px 20px 20px">
@@ -3814,6 +3895,7 @@ function _impRenderHome(){
       <div class="imp-group-label">Intelligenza artificiale</div>
       <div class="imp-group">
         ${_impRow('🧠','API Key Anthropic', hasKey?'Configurata':'Non configurata', "_impRenderSub('apikey')")}
+        ${_impRow('🅿️','PayPal (per riconciliazione)', hasPaypalKeys?'Configurato':'Non configurato', "_impRenderSub('paypal')")}
         ${_impRow('🗑️','Cancella apprendimento AI', aiSub, "if(confirm('Cancellare tutte le correzioni memorizzate dall\\'AI?')){resetMemoriaAI();_impRenderHome();}")}
       </div>
 
@@ -3863,6 +3945,24 @@ function _impRenderSub(key){
         </div>
         <button onclick="salvaApiKey()" style="width:100%;padding:13px;border:none;border-radius:var(--radius-sm);background:var(--blue);color:#fff;font-size:15px;font-weight:600;cursor:pointer;font-family:'Inter',-apple-system,sans-serif">Salva</button>
       </div>`;
+  } else if(key==='paypal'){
+    body.innerHTML = _impBack('PayPal') + `
+      <div style="padding:4px 20px 24px">
+        <div style="font-size:12px;color:var(--ink3);margin-bottom:10px">Serve per far leggere all'Assistente chi hai pagato davvero tramite PayPal (in banca compare solo "PayPal Europe S.a.r.l.", mai il vero destinatario) e proporre l'abbinamento con la fattura giusta.</div>
+        <div style="font-size:11px;font-weight:700;color:var(--ink3);margin-bottom:4px">CLIENT ID</div>
+        <input type="text" id="paypalClientIdInput" placeholder="AZ..." autocomplete="off" spellcheck="false"
+          value="${(localStorage.getItem('ceraldi_paypal_client_id')||'').replace(/"/g,'&quot;')}"
+          style="width:100%;padding:12px 14px;border:1.5px solid var(--sep);border-radius:var(--radius-sm);font-size:14px;font-family:'Inter',-apple-system,sans-serif;background:var(--surface2);box-sizing:border-box;margin-bottom:12px;color:var(--ink)">
+        <div style="font-size:11px;font-weight:700;color:var(--ink3);margin-bottom:4px">SECRET</div>
+        <input type="password" id="paypalSecretInput" placeholder="EL..." autocomplete="off" spellcheck="false"
+          value="${(localStorage.getItem('ceraldi_paypal_secret')||'').replace(/"/g,'&quot;')}"
+          style="width:100%;padding:12px 14px;border:1.5px solid var(--sep);border-radius:var(--radius-sm);font-size:14px;font-family:'Inter',-apple-system,sans-serif;background:var(--surface2);box-sizing:border-box;margin-bottom:8px;color:var(--ink)">
+        <div style="font-size:12px;color:var(--ink3);margin-bottom:8px">Li trovi su <strong>developer.paypal.com</strong> → Apps &amp; Credentials → il tuo account PayPal reale (non sandbox) → App REST → Client ID e Secret</div>
+        <div style="font-size:12px;color:#b36a00;background:var(--orange-light);border-radius:8px;padding:9px 11px;margin-bottom:18px;line-height:1.4">
+          ⚠️ <strong>Avviso sicurezza:</strong> salvati solo su questo dispositivo (localStorage), come la chiave Anthropic. Non condividere il file HTML con altri se li contiene.
+        </div>
+        <button onclick="salvaPaypalKeys()" style="width:100%;padding:13px;border:none;border-radius:var(--radius-sm);background:var(--blue);color:#fff;font-size:15px;font-weight:600;cursor:pointer;font-family:'Inter',-apple-system,sans-serif">Salva</button>
+      </div>`;
   } else if(key==='aspetto'){
     body.innerHTML = _impBack('Aspetto') + `
       <div style="padding:4px 20px 24px">
@@ -3889,6 +3989,16 @@ function salvaApiKey(){
   const k=document.getElementById('apiKeyInput').value.trim();
   if(k){localStorage.setItem('fatture_apikey',k);}
   else{localStorage.removeItem('fatture_apikey');}
+  toast('Impostazioni salvate ✓');
+  _impRenderHome();
+}
+
+function salvaPaypalKeys(){
+  const cid=document.getElementById('paypalClientIdInput').value.trim();
+  const sec=document.getElementById('paypalSecretInput').value.trim();
+  if(cid) localStorage.setItem('ceraldi_paypal_client_id',cid); else localStorage.removeItem('ceraldi_paypal_client_id');
+  if(sec) localStorage.setItem('ceraldi_paypal_secret',sec); else localStorage.removeItem('ceraldi_paypal_secret');
+  _paypalTokenCache = null; // forza un nuovo login la prossima volta che serve
   toast('Impostazioni salvate ✓');
   _impRenderHome();
 }
