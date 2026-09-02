@@ -3243,10 +3243,14 @@ function _rsbFinestraMese(mese, anno){
 }
 
 // Calcola (senza scrivere nulla) i match proposti per ogni cedolino caricato
-// di ogni dipendente pagato con IBAN. Ritorna un array di risultati, uno per
-// coppia dipendente/mese che ha almeno un movimento candidato.
+// di ogni dipendente pagato con IBAN. Ritorna { risultati, nonAssociati }:
+// risultati è un array, uno per coppia dipendente/mese che ha almeno un
+// movimento candidato; nonAssociati sono i "beneficiari vari" che non hanno
+// trovato corrispondenza con nessun cedolino (richiesto da Valerio: vanno
+// mostrati comunque, potrebbero essere fornitori o altro — decide lui).
 async function presenzeCalcolaRiconciliazioneBonifici(){
   const risultati = [];
+  const vuoto = { risultati, nonAssociati: [] };
   try {
     const { data: dips } = await sb.from('presenze_profili')
       .select('id,nome,cognome,iban').eq('attivo',true);
@@ -3264,13 +3268,13 @@ async function presenzeCalcolaRiconciliazioneBonifici(){
     // cedolini caricati e bonifici veri in banca (verificato). Tolto anche
     // questo filtro, per lo stesso motivo: chi non ha un cedolino non compare
     // comunque più sotto, nessun rischio a includere tutti gli attivi.
-    if (!dips || !dips.length) return risultati;
+    if (!dips || !dips.length) return vuoto;
     const dipIds = dips.map(d => d.id);
 
     const { data: cedolini } = await sb.from('presenze_documenti')
       .select('dipendente_id,mese,anno,netto_busta').eq('categoria','busta_paga')
       .not('netto_busta','is',null).in('dipendente_id', dipIds);
-    if (!cedolini || !cedolini.length) return risultati;
+    if (!cedolini || !cedolini.length) return vuoto;
 
     // Periodo complessivo da coprire: dal mese più vecchio al 25 del mese
     // successivo al più recente, per non scaricare tutto movimenti_banca.
@@ -3292,6 +3296,15 @@ async function presenzeCalcolaRiconciliazioneBonifici(){
     const movsUtili = (movs||[]).filter(m => !_rsbECommissione(m.descrizione) && !assegnatiSet.has(m.id));
 
     const dipMap = {}; dips.forEach(d => { dipMap[d.id] = d; });
+    // Richiesto da Valerio: i movimenti "beneficiari vari" che NON
+    // corrispondono a nessun residuo di nessun cedolino non devono sparire
+    // nel nulla — potrebbero essere fornitori o altro, ma potrebbero anche
+    // essere uno stipendio che l'automatismo non è riuscito a collegare
+    // (es. importo diverso per un piccolo arrotondamento, o competenza di
+    // un mese fuori dalla finestra cercata). Si tiene traccia di ogni
+    // movimento "beneficiari vari" USATO come candidato (per nome o come
+    // extra) — quello che resta fuori va mostrato a parte, per decisione manuale.
+    const usatiIds = new Set();
 
     cedolini.forEach(c => {
       const dip = dipMap[c.dipendente_id];
@@ -3301,6 +3314,7 @@ async function presenzeCalcolaRiconciliazioneBonifici(){
       const inFinestra = m => m.data >= fin.dal && m.data <= fin.al;
 
       const candNome = movsUtili.filter(m => inFinestra(m) && _rsbNomeMatchaDescrizione(m.descrizione, nomeCompleto));
+      candNome.forEach(m => usatiIds.add(m.id));
       const sommaNome = candNome.reduce((s,m) => s + Math.abs(m.importo), 0);
       const netto = parseFloat(c.netto_busta);
       const restante = Math.round((netto - sommaNome) * 100) / 100;
@@ -3315,6 +3329,7 @@ async function presenzeCalcolaRiconciliazioneBonifici(){
           !candNome.includes(m) && Math.abs(Math.abs(m.importo) - restante) <= 0.5
         ).slice(0, 1); // una sola proposta, non ambigua
       }
+      extra.forEach(m => usatiIds.add(m.id));
 
       const tutti = candNome.concat(extra);
       if (!tutti.length) return; // nessun candidato per questo cedolino, niente da proporre
@@ -3332,10 +3347,21 @@ async function presenzeCalcolaRiconciliazioneBonifici(){
         }))
       });
     });
+
+    // Tutti i "beneficiari vari" nella finestra complessiva mai proposti per
+    // nessun cedolino: descrizione troppo generica per saperlo con certezza
+    // — vanno mostrati così com'è, la decisione (fornitore, o stipendio che
+    // l'automatismo non ha agganciato) spetta a Valerio.
+    const nonAssociati = movsUtili
+      .filter(m => _rsbEBeneficiariVari(m.descrizione) && !usatiIds.has(m.id))
+      .map(m => ({ id: m.id, data: m.data, importo: Math.abs(m.importo), descrizione: m.descrizione }))
+      .sort((a,b) => b.data.localeCompare(a.data));
+
+    return { risultati, nonAssociati };
   } catch (e) {
     console.warn('presenzeCalcolaRiconciliazioneBonifici:', e.message || e);
   }
-  return risultati;
+  return vuoto;
 }
 
 // Scrive in presenze_bonifici_stipendio i movimenti indicati (di norma solo
@@ -12911,6 +12937,7 @@ async function apriControlloMensile() {
 
 // ── Riconciliazione bonifici stipendi (28/08) — UI di revisione ──
 let _rbRisultati = [];
+let _rbNonAssociati = [];
 const MESI_LBL = ['','Gen','Feb','Mar','Apr','Mag','Giu','Lug','Ago','Set','Ott','Nov','Dic'];
 function fmtQ(n){ return (n||0).toLocaleString('it-IT',{minimumFractionDigits:0,maximumFractionDigits:0}); }
 
@@ -13307,14 +13334,16 @@ async function cnrUsaPortafoglio(idx){
 async function apriRiconciliazioneBonifici(){
   openSheet('sh-riconcBonifici');
   $('rb-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Analisi in corso…</div>';
-  _rbRisultati = await presenzeCalcolaRiconciliazioneBonifici();
+  const calc = await presenzeCalcolaRiconciliazioneBonifici();
+  _rbRisultati = calc.risultati; _rbNonAssociati = calc.nonAssociati;
   await rbRenderLista();
 }
 
 async function rbRenderLista(){
   const el = $('rb-lista');
   if (!_rbRisultati.length) {
-    el.innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Nessun bonifico da riconciliare al momento — tutto già confermato o nessun candidato trovato nell\'estratto conto.</div>';
+    el.innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Nessun bonifico da riconciliare al momento — tutto già confermato o nessun candidato trovato nell\'estratto conto.</div>'
+      + rbHtmlNonAssociati();
     return;
   }
   await _caricaCedoliniUrlMap();
@@ -13422,7 +13451,27 @@ async function rbRenderLista(){
       ${righeMov}
       ${azione}
     </div>`;
-  }).join('');
+  }).join('') + rbHtmlNonAssociati();
+}
+
+// Richiesto da Valerio: i bonifici "beneficiari vari" che non corrispondono
+// a nessun cedolino non devono sparire — potrebbero essere fornitori
+// (descrizione troppo generica per saperlo), ma potrebbero anche essere uno
+// stipendio che l'automatismo non è riuscito ad agganciare da solo. Si
+// mostrano qui per intero, con un link diretto a "Cercalo manualmente" per
+// deciderli uno per uno, senza dover ricordare data/importo a memoria.
+function rbHtmlNonAssociati(){
+  if (!_rbNonAssociati || !_rbNonAssociati.length) return '';
+  const righe = _rbNonAssociati.map(m => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid var(--border)">
+      <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">${m.data} — € ${m.importo.toFixed(2)}</div><div style="font-size:11px;color:var(--muted);word-break:break-word">${esc(m.descrizione)}</div></div>
+      <button class="btn-sm" style="white-space:nowrap;margin-left:8px" onclick="apriAgganciaManuale()">🔍 Assegna</button>
+    </div>`).join('');
+  return `<div style="margin-top:${_rbRisultati.length?'22px':'0'}">
+    <div style="font-size:13px;font-weight:800;color:#b36a00;margin-bottom:4px">🔍 "Beneficiari vari" senza corrispondenza (${_rbNonAssociati.length})</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Descrizione troppo generica per saperlo con certezza: potrebbero essere fornitori, oppure uno stipendio che qui non è stato agganciato in automatico (es. importo diverso dal cedolino). Verificali tu — "Assegna" apre la ricerca manuale per collegarli a un dipendente/mese se sono davvero uno stipendio.</div>
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:4px 12px">${righe}</div>
+  </div>`;
 }
 
 async function rbConfermaTutto(idx, registraEccedenza){
@@ -13700,7 +13749,8 @@ async function rbConfermaSingolo(idx, movIdx){
   await presenzeConfermaMatchStipendio(r, [m]);
   toast('✓ Movimento confermato per ' + r.nome);
   // Ricalcola da capo questo risultato (potrebbe restare un altro pezzo da confermare)
-  _rbRisultati = await presenzeCalcolaRiconciliazioneBonifici();
+  const calc = await presenzeCalcolaRiconciliazioneBonifici();
+  _rbRisultati = calc.risultati; _rbNonAssociati = calc.nonAssociati;
   await rbRenderLista();
 }
 

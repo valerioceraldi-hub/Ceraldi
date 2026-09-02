@@ -403,7 +403,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.31.12</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.32.1</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -7752,19 +7752,53 @@ async function apriRiconciliaStipendioSingolo(movId, data, importo, descrizione)
   let dipendenti = [];
   try{ dipendenti = await sbFetch('presenze_profili?select=id,nome,cognome&attivo=eq.true&order=cognome'); }
   catch(e){ toast('⚠️ Impossibile leggere i dipendenti: '+String(e.message||e).slice(0,60)); return; }
+  // FIX 01/09 — CORREZIONE (Valerio: "un bonifico stipendio copre un solo
+  // dipendente, la versione con più righe è inutile, la funzione andava
+  // ripristinata a singola scelta"). Il problema vero non era "un bonifico
+  // può coprire più persone" — è che con una descrizione generica
+  // ("Beneficiari Vari") non c'è modo di sapere QUALE dipendente sia, senza
+  // provarli tutti a caso. netto_fisso_mensile (il campo pensato apposta
+  // per questo) è vuoto per tutti in Presenze, e lo storico reale mostra
+  // stipendi che cambiano tanto ogni mese (part-time/turni variabili) — non
+  // c'è un importo fisso affidabile su cui basare un abbinamento certo.
+  // Quello che si può fare onestamente: recuperare le ultime cifre
+  // confermate per ciascuno e ordinare la lista mettendo per primi quelli
+  // il cui storico recente è più vicino a questo bonifico — un indizio, non
+  // una certezza, dichiarato come tale.
+  let storico = [];
+  try{ storico = await sbFetch('presenze_bonifici_stipendio?select=dipendente_id,importo,data_movimento&order=data_movimento.desc&limit=200'); }
+  catch(e){ storico = []; }
+  var storicoPerDip = {};
+  (storico||[]).forEach(function(r){
+    if(!storicoPerDip[r.dipendente_id]) storicoPerDip[r.dipendente_id] = [];
+    if(storicoPerDip[r.dipendente_id].length < 3) storicoPerDip[r.dipendente_id].push(parseFloat(r.importo));
+  });
+  dipendenti.forEach(function(d){
+    d._storico = storicoPerDip[d.id] || [];
+    d._diffMin = d._storico.length ? Math.min.apply(null, d._storico.map(function(v){return Math.abs(v-importo);})) : Infinity;
+  });
+  dipendenti.sort(function(a,b){ return a._diffMin - b._diffMin; });
+
+  window._rssMov = {movId:movId, data:data, importo:importo, descrizione:descrizione};
+  window._rssDipendenti = dipendenti;
   const ov = document.createElement('div');
   ov.id = 'rssOv';
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:960;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px)';
   const oggi = new Date();
   const meseDef = oggi.getFullYear()+'-'+String(oggi.getMonth()+1).padStart(2,'0');
-  let hh = '<div style="background:var(--bg);border-radius:20px 20px 0 0;width:100%;max-width:500px;padding:20px">';
+  let hh = '<div style="background:var(--bg);border-radius:20px 20px 0 0;width:100%;max-width:500px;padding:20px;max-height:85vh;overflow-y:auto">';
   hh += '<div style="font-size:16px;font-weight:700;margin-bottom:4px">🔗 Riconcilia questo bonifico</div>';
-  hh += '<div style="font-size:12px;color:var(--ink3);margin-bottom:12px">'+data+' — '+fmt(importo)+'<br>'+esc(descrizione)+'</div>';
+  hh += '<div style="font-size:12px;color:var(--ink3);margin-bottom:4px">'+data+' — '+fmt(importo)+'<br>'+esc(descrizione)+'</div>';
+  hh += '<div style="font-size:11px;color:var(--ink3);margin-bottom:12px">Nessun nome nella causale — qui sotto trovi lo storico recente di ciascuno come riferimento (NON una certezza), i più vicini a '+fmt(importo)+' per primi.</div>';
   hh += '<select id="rssDip" style="width:100%;padding:10px;border:1.5px solid var(--sep);border-radius:8px;margin-bottom:10px;font-family:inherit;font-size:14px"><option value="">— scegli il dipendente —</option>'
-    + dipendenti.map(function(d){ return '<option value="'+d.id+'">'+esc(d.nome)+' '+esc(d.cognome||'')+'</option>'; }).join('') + '</select>';
+    + dipendenti.map(function(d){
+        var lbl = esc(d.nome)+' '+esc(d.cognome||'');
+        if(d._storico.length) lbl += ' — ultimi: '+d._storico.map(function(v){return fmt(v);}).join(', ');
+        return '<option value="'+d.id+'">'+lbl+'</option>';
+      }).join('') + '</select>';
   hh += '<div style="font-size:11px;color:var(--ink3);margin:6px 0 2px">Mese di competenza</div>';
   hh += '<input type="month" id="rssMese" value="'+meseDef+'" style="width:100%;padding:10px;border:1.5px solid var(--sep);border-radius:8px;margin-bottom:14px;font-family:inherit;font-size:14px">';
-  hh += '<button onclick="_confermaRiconciliaStipendioSingolo(\''+movId+'\',\''+data+'\','+importo+',\''+esc(descrizione).replace(/\'/g,"\\'")+'\')" style="width:100%;padding:12px;border:none;border-radius:10px;background:#1a7a3a;color:#fff;font-family:inherit;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:8px">✓ Conferma</button>';
+  hh += '<button onclick="_confermaRiconciliaStipendioSingolo()" style="width:100%;padding:12px;border:none;border-radius:10px;background:#1a7a3a;color:#fff;font-family:inherit;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:8px">✓ Conferma</button>';
   hh += '<button onclick="document.getElementById(\'rssOv\').remove()" style="width:100%;padding:10px;border:1px solid var(--sep);border-radius:8px;background:var(--surface);color:var(--ink3);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">Annulla</button>';
   hh += '</div>';
   ov.innerHTML = hh;
@@ -7772,17 +7806,18 @@ async function apriRiconciliaStipendioSingolo(movId, data, importo, descrizione)
   document.body.appendChild(ov);
 }
 
-async function _confermaRiconciliaStipendioSingolo(movId, data, importo, descrizione){
+async function _confermaRiconciliaStipendioSingolo(){
+  var mov = window._rssMov;
   const dipId = document.getElementById('rssDip').value;
   const meseVal = document.getElementById('rssMese').value;
   if(!dipId){ toast('⚠️ Scegli un dipendente'); return; }
   const [anno, mese] = meseVal.split('-').map(Number);
   try{
     await sbFetch('presenze_bonifici_stipendio', {method:'POST', headers:{'Prefer':'return=minimal'}, body: JSON.stringify({
-      dipendente_id: dipId, movimento_banca_id: movId,
+      dipendente_id: dipId, movimento_banca_id: mov.movId,
       mese_riferimento: mese, anno_riferimento: anno,
-      importo, confermato: true, fonte_copertura: 'bonifico',
-      descrizione_movimento: descrizione, data_movimento: data
+      importo: mov.importo, confermato: true, fonte_copertura: 'bonifico',
+      descrizione_movimento: mov.descrizione, data_movimento: mov.data
     })});
     const ov = document.getElementById('rssOv'); if(ov) ov.remove();
     toast('✓ Riconciliato — visibile anche in Ceraldi Presenze');
@@ -17502,6 +17537,7 @@ function renderRiconciliazione(){
       htmlClassificare += '<div style="font-size:11px;font-weight:500;line-height:1.4;word-break:break-word;white-space:pre-wrap;color:var(--ink);margin-bottom:8px">'+esc(m.descrizione||'')+'</div>';
       htmlClassificare += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
       htmlClassificare += '<button onclick="_cercaFatturaPerMovimento('+origIdx+')" style="flex:1;min-width:100px;padding:7px 10px;border:1px solid var(--blue);border-radius:6px;background:var(--blue-light);color:var(--blue);font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">🔍 Cerca fattura</button>';
+      htmlClassificare += '<button onclick="_spostaCategoriaMov(\''+esc(m.id)+'\',\'stipendio\')" style="padding:7px 10px;border:1px solid #6b46c1;border-radius:6px;background:#f0ebfd;color:#6b46c1;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">💼 Forse stipendio</button>';
       htmlClassificare += '<button onclick="_segnaIgnora('+origIdx+')" style="padding:7px 10px;border:1px solid var(--sep);border-radius:6px;background:var(--surface);color:var(--ink3);font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">Ignora</button>';
       htmlClassificare += '</div></div></div>';
     });
@@ -17989,7 +18025,10 @@ function _cfRender(mostraTutte, filtro){
     :'IMPORTO SIMILE ('+lista.length+')';
 
   var hh='<div style="background:#fff;border-radius:16px 16px 0 0;padding:20px 16px;width:100%;max-height:85vh;overflow-y:auto;font-family:inherit">';
-  hh+='<div style="font-size:15px;font-weight:700;margin-bottom:3px">Abbina a una fattura</div>';
+  hh+='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:3px">';
+  hh+='<div style="font-size:15px;font-weight:700">Abbina a una fattura</div>';
+  hh+='<button onclick="document.getElementById(\'_cfOv\').remove()" style="background:var(--surface2,#f0f0f0);border:none;border-radius:99px;width:30px;height:30px;font-size:16px;font-weight:700;color:var(--ink3);cursor:pointer;flex-shrink:0;line-height:1">✕</button>';
+  hh+='</div>';
   hh+='<div style="font-size:12px;color:var(--ink3);margin-bottom:3px">Banca: <b>'+fmt(imp)+'</b> del '+m.data+'</div>';
   hh+='<div style="font-size:11px;color:var(--ink2);margin-bottom:12px;word-break:break-word;white-space:pre-wrap">'+esc(m.descrizione||'')+'</div>';
   // Sezione "trovata dal numero fattura" (25/08) — massima priorità visiva,
@@ -18037,12 +18076,22 @@ function _cfRender(mostraTutte, filtro){
         var iF=nettoFattura(f);
         return s+(f.stato==='parziale'?Math.max(0,iF-(f.parzPagato||0)):iF);
       },0);
-      var combaciaTotale = Math.abs(totaleNudi-imp)<0.02;
+      var diffNudi = Math.round((totaleNudi-imp)*100)/100;
+      var combaciaTotale = Math.abs(diffNudi)<0.02;
+      // Richiesto da Valerio (01/09): non solo "combacia sì/no", ma quanto
+      // manca o quanto è in eccesso, con un colore diverso per ciascuno dei
+      // tre casi — non due soli colori genericamente "ok/non ok".
+      var colTotale = combaciaTotale ? '#1a7a3a' : (diffNudi<0 ? 'var(--red)' : '#b36a00');
+      var etichettaTotale = combaciaTotale
+        ? ' ✓ combacia col movimento'
+        : (diffNudi<0
+            ? ' — mancano '+fmt(Math.abs(diffNudi))+' rispetto al movimento ('+fmt(imp)+'): verifica se manca un\'altra fattura'
+            : ' — '+fmt(diffNudi)+' in eccesso rispetto al movimento ('+fmt(imp)+'): verifica se una fattura non c\'entra');
       hh+='<div style="font-size:11px;font-weight:700;color:#1a7a3a;margin-bottom:6px">🎯 Trovati '+matchNudi.length+' numeri fattura nella descrizione</div>';
       matchNudi.forEach(function(f){
         hh+='<div style="font-size:12px;padding:4px 0;border-bottom:1px solid #d8f3e0">N°'+esc(f.numero||'')+' — '+fmt(nettoFattura(f))+' · '+esc(f.data)+'</div>';
       });
-      hh+='<div style="font-size:12px;font-weight:700;margin:8px 0;color:'+(combaciaTotale?'#1a7a3a':'#b36a00')+'">Totale: '+fmt(totaleNudi)+(combaciaTotale?' ✓ combacia col movimento':' — il movimento è '+fmt(imp)+', verifica prima di confermare')+'</div>';
+      hh+='<div style="font-size:12px;font-weight:700;margin:8px 0;color:'+colTotale+'">Totale: '+fmt(totaleNudi)+etichettaTotale+'</div>';
       hh+='<button onclick="_cfAbbinaGruppoNudi('+idx+')" style="width:100%;padding:8px;border:none;border-radius:6px;background:#34c759;color:#fff;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;margin-bottom:6px">✓ Abbina tutte e '+matchNudi.length+' insieme a questo movimento</button>';
       window._cfMatchNudiCorrente = matchNudi;
       window._cfMovCorrente = m;
@@ -18063,7 +18112,7 @@ function _cfRender(mostraTutte, filtro){
   }
   hh+='<button onclick="_cfMultiplo()" style="padding:8px 10px;border:1.5px solid var(--orange);border-radius:8px;background:#fff8ec;color:#b36a00;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer" title="Abbina a più fatture">+2</button>';
   hh+='<button onclick="_cfCercaCombinazioni()" style="padding:8px 10px;border:1.5px solid var(--blue);border-radius:8px;background:var(--blue-light);color:var(--blue);font-family:inherit;font-size:11px;font-weight:600;cursor:pointer" title="Cerca automaticamente una combinazione di più fatture che sommi a questo importo">🧮</button>';
-  hh+='<button onclick="document.getElementById(\'_cfOv\').remove()" style="padding:8px 14px;border:1px solid var(--sep);border-radius:8px;background:var(--surface);color:var(--ink3);font-family:inherit;font-size:12px;font-weight:600;cursor:pointer">X</button>';
+  hh+='<button onclick="document.getElementById(\'_cfOv\').remove()" style="padding:8px 14px;border:1.5px solid var(--red);border-radius:8px;background:#fdeaea;color:var(--red);font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">✕ Chiudi</button>';
   hh+='</div>';
   // Campo ricerca con oninput che aggiorna SOLO la lista, non l'intero overlay
   if(mostraTutte){
