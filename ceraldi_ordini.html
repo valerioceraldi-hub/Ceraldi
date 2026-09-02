@@ -7278,15 +7278,26 @@ async function eliminaFornitoreConCestino(sup){
   var snapshotEsclusivi=esclusivi.map(function(p){return JSON.parse(JSON.stringify(p));});
   var snapshotModificati=condivisi.map(function(p){return{id:p.id,prices:JSON.parse(JSON.stringify(p.prices)),best:p.best};});
   var fornitoreMeta={name:sup.name,whatsapp:sup.whatsapp||'',email:sup.email||'',settori:getSupplierSectors(sup.name)||[]};
+  // FIX (02/09, Valerio: "ho eliminato Emilio Cristiani... mica compare
+  // nel file visto che è ancora nel cestino?"): controllando su Supabase,
+  // l'eliminazione NON era mai avvenuta — il fornitore era ancora intero
+  // in anagrafica e sui prezzi, e nemmeno nel cestino. Causa trovata: la
+  // policy della tabella richiede una sessione autenticata valida in quel
+  // preciso istante, e qui si usava fetch() semplice senza il retry
+  // automatico già introdotto altrove per le sessioni scadute — quindi se
+  // il token era scaduto la scrittura falliva e basta. In più, i passaggi
+  // di cancellazione vera e propria (DELETE/PATCH) non controllavano
+  // affatto se fossero andati a buon fine, quindi anche un fallimento lì
+  // sarebbe passato inosservato e l'app avrebbe comunque detto "fatto".
   try{
-    var rIns=await fetch(SUPABASE_URL+'/rest/v1/fornitori_cestino',{
+    var rIns=await _fetchAuthRetry(SUPABASE_URL+'/rest/v1/fornitori_cestino',{
       method:'POST',
       headers:{'Content-Type':'application/json','apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN,'Prefer':'return=minimal'},
       body:JSON.stringify([{fornitore:fornitore,fornitore_meta:fornitoreMeta,prodotti_eliminati:snapshotEsclusivi,prodotti_modificati:snapshotModificati}])
     });
     if(!rIns.ok){
       var et=await rIns.text();
-      toast('⚠️ Impossibile creare la copia di recupero — nulla è stato eliminato. Verifica che la tabella "fornitori_cestino" esista su Supabase.');
+      toast('⚠️ Impossibile creare la copia di recupero — nulla è stato eliminato: '+et.slice(0,120));
       console.warn('[Cestino fornitori] insert fallito:',et);
       return false;
     }
@@ -7294,52 +7305,60 @@ async function eliminaFornitoreConCestino(sup){
     toast('⚠️ Errore di rete — nulla è stato eliminato: '+e.message);
     return false;
   }
-  // Copia di recupero salvata: ora si può procedere con l'eliminazione vera.
+  // Copia di recupero salvata: ora si può procedere con l'eliminazione vera,
+  // controllando ogni singola chiamata prima di considerarla riuscita.
   try{
     if(esclusivi.length){
       var idsEsclusivi=esclusivi.map(function(p){return p.id;});
-      await fetch(SUPABASE_URL+'/rest/v1/catalogo_ceraldi?id=in.('+idsEsclusivi.join(',')+')',{
+      var rDel=await _fetchAuthRetry(SUPABASE_URL+'/rest/v1/catalogo_ceraldi?id=in.('+idsEsclusivi.join(',')+')',{
         method:'DELETE',headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}
       });
+      if(!rDel.ok){var etD=await rDel.text();throw new Error('cancellazione prodotti esclusivi fallita: '+etD.slice(0,150));}
     }
     for(var i=0;i<condivisi.length;i++){
       var p=condivisi[i];
       var newPrices=Object.assign({},p.prices);delete newPrices[fornitore];
       var bv=Infinity,bn='';Object.keys(newPrices).forEach(function(s){if(newPrices[s]<bv){bv=newPrices[s];bn=s;}});
-      await fetch(SUPABASE_URL+'/rest/v1/catalogo_ceraldi?id=eq.'+p.id,{
+      var rPatch=await _fetchAuthRetry(SUPABASE_URL+'/rest/v1/catalogo_ceraldi?id=eq.'+p.id,{
         method:'PATCH',headers:{'Content-Type':'application/json','apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN,'Prefer':'return=minimal'},
         body:JSON.stringify({prices:newPrices,best:bn})
       });
+      if(!rPatch.ok){var etP=await rPatch.text();throw new Error('aggiornamento prezzo su "'+p.name+'" fallito: '+etP.slice(0,150));}
       p.prices=newPrices;p.best=bn; // aggiorna anche l'oggetto locale, stesso riferimento in BP/S.products
     }
+    var rRow=await _sbDeleteFornitoreRowOnly(fornitore);
+    if(!rRow)throw new Error('cancellazione riga anagrafica fornitore fallita');
     var idxEsclusivi={};esclusivi.forEach(function(p){idxEsclusivi[p.id]=true;});
     BP=BP.filter(function(p){return !idxEsclusivi[p.id];});
     S.products=BP.concat(S.custom||[]);
     var supIdx=S.suppliers.indexOf(sup);
     if(supIdx>=0)S.suppliers.splice(supIdx,1);
     saveState();
-    await _sbDeleteFornitoreRowOnly(fornitore);
     try{_saveCatalogCache(BP);}catch(e){}
     toast('"'+fornitore+'" spostato nel cestino ✓ — recuperabile per '+FORNITORI_CESTINO_GIORNI+' giorni');
     return true;
   }catch(e){
-    toast('⚠️ Copia di recupero salvata, ma l\'eliminazione ha avuto un problema: '+e.message+' — riprova, i dati sono al sicuro nel cestino');
+    toast('⚠️ Eliminazione NON completata: '+e.message+' — la copia è comunque al sicuro nel cestino, riprova');
     return false;
   }
 }
 // Rimuove solo la riga anagrafica fornitore (fornitori_ordini) — i prezzi
 // sono già stati gestiti a monte in eliminaFornitoreConCestino, quindi qui
 // non serve (e sarebbe sbagliato) rifare anche il cascade sui prezzi.
+// Ritorna true/false: il chiamante deve saperlo, non può più essere
+// "best-effort silenzioso" come prima (vedi nota sul fix qui sopra).
 async function _sbDeleteFornitoreRowOnly(name){
   try{
-    await fetch(SUPABASE_URL+'/rest/v1/fornitori_ordini?nome=eq.'+encodeURIComponent(name),{
+    var r=await _fetchAuthRetry(SUPABASE_URL+'/rest/v1/fornitori_ordini?nome=eq.'+encodeURIComponent(name),{
       method:'DELETE',headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}
     });
-  }catch(e){console.warn('[Fornitori] delete riga fallito:',e.message);}
+    if(!r.ok)console.warn('[Fornitori] delete riga fallito:',await r.text());
+    return r.ok;
+  }catch(e){console.warn('[Fornitori] delete riga fallito:',e.message);return false;}
 }
 async function caricaCestinoFornitori(){
   try{
-    var r=await fetch(SUPABASE_URL+'/rest/v1/fornitori_cestino?order=deleted_at.desc',
+    var r=await _fetchAuthRetry(SUPABASE_URL+'/rest/v1/fornitori_cestino?order=deleted_at.desc',
       {headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}});
     if(!r.ok)return null; // tabella non ancora creata o altro errore — gestito dal chiamante
     return await r.json();
@@ -7358,7 +7377,7 @@ async function purgaCestinoFornitoriScaduto(rows){
   });
   for(var i=0;i<scaduti.length;i++){
     try{
-      await fetch(SUPABASE_URL+'/rest/v1/fornitori_cestino?id=eq.'+scaduti[i].id,{
+      await _fetchAuthRetry(SUPABASE_URL+'/rest/v1/fornitori_cestino?id=eq.'+scaduti[i].id,{
         method:'DELETE',headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}
       });
     }catch(e){console.warn('[Cestino fornitori] purga fallita per id '+scaduti[i].id,e.message);}
@@ -7372,7 +7391,7 @@ async function ripristinaFornitoreDaCestino(row){
     var esclusivi=row.prodotti_eliminati||[];
     var modificati=row.prodotti_modificati||[];
     if(esclusivi.length){
-      var rIns=await fetch(SUPABASE_URL+'/rest/v1/catalogo_ceraldi',{
+      var rIns=await _fetchAuthRetry(SUPABASE_URL+'/rest/v1/catalogo_ceraldi',{
         method:'POST',
         headers:{'Content-Type':'application/json','apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN,'Prefer':'resolution=merge-duplicates,return=minimal'},
         body:JSON.stringify(esclusivi)
@@ -7381,10 +7400,11 @@ async function ripristinaFornitoreDaCestino(row){
     }
     for(var i=0;i<modificati.length;i++){
       var m=modificati[i];
-      await fetch(SUPABASE_URL+'/rest/v1/catalogo_ceraldi?id=eq.'+m.id,{
+      var rP=await _fetchAuthRetry(SUPABASE_URL+'/rest/v1/catalogo_ceraldi?id=eq.'+m.id,{
         method:'PATCH',headers:{'Content-Type':'application/json','apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN,'Prefer':'return=minimal'},
         body:JSON.stringify({prices:m.prices,best:m.best})
       });
+      if(!rP.ok){var etP=await rP.text();throw new Error('Ripristino prezzo su prodotto id '+m.id+' fallito: '+etP);}
     }
     // Fornitore in anagrafica, se non è già stato ri-creato nel frattempo
     if(!S.suppliers.some(function(s){return s.name===meta.name;})){
@@ -7393,9 +7413,10 @@ async function ripristinaFornitoreDaCestino(row){
       saveState();
     }
     await _sbUpsertFornitore({name:meta.name,whatsapp:meta.whatsapp,email:meta.email},S.suppliers.length-1);
-    await fetch(SUPABASE_URL+'/rest/v1/fornitori_cestino?id=eq.'+row.id,{
+    var rDelTrash=await _fetchAuthRetry(SUPABASE_URL+'/rest/v1/fornitori_cestino?id=eq.'+row.id,{
       method:'DELETE',headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}
     });
+    if(!rDelTrash.ok)console.warn('[Cestino fornitori] pulizia riga cestino dopo ripristino fallita:',await rDelTrash.text());
     await loadCatalogFromSupabase(true);
     buildCats();renderCatalog();renderSettings();
     toast('"'+meta.name+'" ripristinato ✓ — '+esclusivi.length+' prodotti, '+modificati.length+' prezzi');
@@ -7408,9 +7429,10 @@ async function ripristinaFornitoreDaCestino(row){
 async function eliminaDefinitivamenteDaCestino(row){
   if(!confirm('Eliminare definitivamente "'+row.fornitore+'" dal cestino? I prodotti esclusivi già rimossi non saranno più recuperabili.'))return false;
   try{
-    await fetch(SUPABASE_URL+'/rest/v1/fornitori_cestino?id=eq.'+row.id,{
+    var r=await _fetchAuthRetry(SUPABASE_URL+'/rest/v1/fornitori_cestino?id=eq.'+row.id,{
       method:'DELETE',headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}
     });
+    if(!r.ok){var et=await r.text();throw new Error(et);}
     toast('Eliminato definitivamente');
     return true;
   }catch(e){toast('Errore: '+e.message);return false;}
@@ -10251,16 +10273,23 @@ function scaricaModelloFornitore(supplierNames,withPrices,sectors){
   // compilare" (per un fornitore ancora da decidere). In modalità "con
   // prezzi attuali" senza un fornitore specifico, l'aspettativa è vedere
   // i fornitori coi rispettivi prezzi.
-  // FIX (02/09, Valerio: "mi deve esportare solo i fornitori che hanno i
-  // prezzi"): non basta che un fornitore sia assegnato al settore — deve
-  // avere DAVVERO almeno un prezzo su un prodotto di quel settore,
-  // altrimenti si portava dietro colonne di fornitori senza nessun prezzo
-  // dentro (es. assegnati al settore ma mai valorizzati).
   if(!suppliers.length&&withPrices){
-    var supConPrezzi=S.suppliers.filter(function(s){
-      return baseProds.some(function(p){return gp(p,s.name)!=null;});
-    });
-    suppliers=supConPrezzi.map(function(s){return s.name;});
+    suppliers=S.suppliers.map(function(s){return s.name;});
+  }
+  // FIX (02/09, Valerio, secondo giro — "la stragrande maggioranza sono
+  // senza prezzi, non serve"): il filtro "solo chi ha prezzi" prima
+  // scattava SOLO quando non avevi scelto nessun fornitore. Se invece li
+  // selezionavi tu a mano dalla lista, uscivano tutte le colonne spuntate,
+  // vuote comprese. Ora vale sempre, in modalità "con prezzi attuali",
+  // indipendentemente da come si è arrivati alla lista dei fornitori: se
+  // per il settore/i prodotti scelti quel fornitore non ha NESSUN prezzo,
+  // la sua colonna non serve e viene tolta.
+  if(withPrices&&suppliers.length){
+    var conPrezzo=suppliers.filter(function(s){return baseProds.some(function(p){return gp(p,s)!=null;});});
+    if(conPrezzo.length)suppliers=conPrezzo;
+    // se NESSUNO dei fornitori scelti ha prezzo su questi prodotti, meglio
+    // lasciare la selezione originale (si vede comunque dalle colonne
+    // vuote) che svuotarla del tutto facendo scattare "generico" a sorpresa.
   }
   var generico=!suppliers.length;
   var wb=XLSX.utils.book_new();
