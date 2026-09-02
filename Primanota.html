@@ -403,7 +403,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.35.0</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.35.1</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -15442,15 +15442,48 @@ async function sincronizzaPaypal(){
     var risultato = await _aiLeggiPaypal({data_da: primoGiorno, data_a: ultimoGiorno});
     var parsed = JSON.parse(risultato);
     if(parsed.errore){ throw new Error(parsed.errore); }
-    _paypalTransazioni = (parsed.transazioni||[]).filter(function(t){ return t.id_transazione_paypal; }).map(function(t){
+    var grezze = (parsed.transazioni||[]).filter(function(t){ return t.id_transazione_paypal; }).map(function(t){
       return {
         id: t.id_transazione_paypal, data: t.data, importo: t.importo,
         controparteNome: t.controparte_nome, controparteEmail: t.controparte_email,
         nota: t.nota_o_oggetto
       };
     });
+    // FIX 02/09 (segnalato da Valerio: "molti movimenti mi dice che il
+    // beneficiario non viene fornito da PayPal", sempre in coppia con un
+    // movimento identico — stessa data, stesso importo — che invece il nome
+    // ce l'ha). PayPal registra un pagamento finanziato da bonifico
+    // istantaneo con DUE righe collegate: quella vera verso il fornitore, e
+    // una di "rifornimento" del saldo PayPal che non ha (né può avere) un
+    // beneficiario, perché è solo un trasferimento interno verso te stesso.
+    // Qui si tengono insieme per data+importo e si scarta la gemella senza
+    // nome quando l'altra metà della coppia un nome ce l'ha — altrimenti
+    // ogni pagamento reale comparirebbe due volte, una utile e una vuota.
+    var gruppi = {};
+    grezze.forEach(function(t){
+      var chiave = t.data+'|'+Math.round(Math.abs(t.importo||0)*100);
+      if(!gruppi[chiave]) gruppi[chiave] = [];
+      gruppi[chiave].push(t);
+    });
+    var scartate = 0;
+    _paypalTransazioni = [];
+    Object.keys(gruppi).forEach(function(chiave){
+      var g = gruppi[chiave];
+      var conNome = g.filter(function(t){ return t.controparteNome || t.controparteEmail; });
+      var senzaNome = g.filter(function(t){ return !t.controparteNome && !t.controparteEmail; });
+      if(conNome.length && senzaNome.length){
+        // Coppia riconosciuta: tieni solo quella/e con nome, scarta le gemelle vuote.
+        _paypalTransazioni = _paypalTransazioni.concat(conNome);
+        scartate += senzaNome.length;
+      } else {
+        // Nessuna coppia — o sono tutte senza nome (PayPal non l'ha fornito
+        // per nessuna) o sono tutte con nome: si tengono tutte, non c'è
+        // ambiguità da risolvere.
+        _paypalTransazioni = _paypalTransazioni.concat(g);
+      }
+    });
     _salvaPaypalLocale(mese);
-    if(info) info.textContent = '✓ '+_paypalTransazioni.length+' transazioni scaricate per '+mese;
+    if(info) info.textContent = '✓ '+_paypalTransazioni.length+' transazioni scaricate per '+mese+(scartate?' (scartate '+scartate+' righe di rifornimento saldo, senza beneficiario)':'');
     renderRiconciliazionePaypal();
   }catch(e){
     if(info) info.textContent = '❌ '+String(e.message||e).slice(0,150);
