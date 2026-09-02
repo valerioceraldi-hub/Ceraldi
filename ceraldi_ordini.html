@@ -387,6 +387,10 @@ input[type="search"],input[type="text"],input[type="number"],input[type="time"],
             <button class="btn-em" id="ex-modello-btn" style="background:rgba(0,122,255,.08);color:var(--accent);border-color:rgba(0,122,255,.25)">&#128229; Scarica modello</button>
             <button class="btn-em" id="ap-import-btn" style="background:rgba(0,122,255,.05);color:var(--accent);border-color:rgba(0,122,255,.2)">&#128228; Importa listino</button>
           </div>
+          <div class="send-row" style="margin-top:8px">
+            <button class="btn-em" id="ex-modello-nuovo-btn" style="background:rgba(47,138,92,.08);color:var(--green);border-color:rgba(47,138,92,.25);width:100%">&#128274; Modello per fornitore NUOVO (per settore)</button>
+          </div>
+          <div class="export-block-sub" style="margin-top:4px;font-size:11px">Solo settore, senza nessun fornitore: il file non contiene né nomi né prezzi degli altri fornitori — sicuro da dare a un potenziale fornitore nuovo.</div>
           <input type="file" id="ap-import-merge-file" accept=".csv,.xlsx,.xls" style="display:none">
         </div>
 
@@ -9308,6 +9312,7 @@ document.getElementById('ap-import-catalogo-file').addEventListener('change',fun
 
 // ── MODELLO FORNITORE (scarica modello / importa listino fornitore → aggiorna Cloud) ──
 document.getElementById('ex-modello-btn').addEventListener('click',openModelloFornitorePicker);
+document.getElementById('ex-modello-nuovo-btn').addEventListener('click',openModelloNuovoFornitorePicker);
 document.getElementById('ap-import-btn').addEventListener('click',function(){document.getElementById('ap-import-merge-file').click();});
 document.getElementById('ap-import-merge-file').addEventListener('change',function(e){
   var file=e.target.files&&e.target.files[0];if(!file)return;
@@ -10024,6 +10029,72 @@ function esportaCSVCatalogo(sectors){
 /* ── MODELLO EXCEL PER FORNITORI ────────────────────────────────── */
 // Picker: seleziona uno o più fornitori esistenti (multi-pill) + fornitori liberi (nuovi),
 // e scegli se il file deve uscire vuoto (da far compilare) o con i prezzi attuali (download catalogo fornitore).
+// Modello per un fornitore NUOVO, sicuro da dare in giro: solo settore,
+// mai la scelta del fornitore né la modalità "con prezzi attuali" — così
+// il file non può mai rivelare per errore gli altri fornitori con cui
+// lavori (Valerio, 02/09: "inserisci la voce per esportare il settore
+// merceologico, ma senza nessun fornitore, così da darlo al nuovo
+// fornitore senza che lui possa leggere tutti i fornitori che abbiamo").
+function openModelloNuovoFornitorePicker(){
+  var overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:300;display:flex;align-items:flex-end';
+  var sheet=document.createElement('div');
+  sheet.style.cssText='background:var(--surface);border-radius:20px 20px 0 0;width:100%;max-height:80dvh;display:flex;flex-direction:column';
+  var handle=document.createElement('div');
+  handle.style.cssText='width:36px;height:4px;background:var(--border);border-radius:2px;margin:10px auto 0;flex-shrink:0';
+  var hdr=document.createElement('div');
+  hdr.style.cssText='display:flex;align-items:center;justify-content:space-between;padding:13px 18px 11px;border-bottom:1px solid var(--border);flex-shrink:0';
+  var cls=document.createElement('button');
+  cls.style.cssText='background:var(--border);border:none;border-radius:50%;width:28px;height:28px;color:var(--muted);font-size:13px;cursor:pointer';
+  cls.textContent='\u2715';
+  cls.onclick=function(){document.body.removeChild(overlay);};
+  hdr.innerHTML='<span style="font-size:17px;font-weight:700;color:var(--text)">\uD83D\uDD12 Modello per fornitore nuovo</span>';
+  hdr.appendChild(cls);
+  var body=document.createElement('div');
+  body.style.cssText='flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px 18px';
+
+  var infoBox=document.createElement('div');
+  infoBox.style.cssText='background:rgba(47,138,92,.08);border:1.5px solid rgba(47,138,92,.25);border-radius:10px;padding:10px 12px;margin-bottom:16px;font-size:12px;color:var(--green);line-height:1.4;font-weight:600';
+  infoBox.textContent='Questo file ha solo i nomi prodotto e una colonna prezzo vuota — nessun fornitore esistente, nessun prezzo attuale. Puoi darlo tranquillamente a un fornitore nuovo.';
+  body.appendChild(infoBox);
+
+  var secLbl=document.createElement('div');
+  secLbl.style.cssText='font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;margin-bottom:6px';
+  secLbl.textContent='Settore merceologico (facoltativo)';
+  body.appendChild(secLbl);
+  var secRow=document.createElement('div');
+  secRow.style.cssText='display:flex;flex-wrap:wrap;gap:7px;margin-bottom:6px';
+  var selectedSectors={};
+  ['Bar','Pasticceria','Cucina','Carta'].forEach(function(sec){
+    var p=document.createElement('button');p.className='pill';p.textContent=sec;
+    p.onclick=function(){
+      if(selectedSectors[sec]){delete selectedSectors[sec];p.className='pill';}
+      else{selectedSectors[sec]=true;p.className='pill on';}
+    };
+    secRow.appendChild(p);
+  });
+  body.appendChild(secRow);
+  var secSub=document.createElement('div');
+  secSub.style.cssText='font-size:12px;color:var(--muted);margin-bottom:4px;line-height:1.4';
+  secSub.textContent='Nessun settore selezionato = tutto il catalogo.';
+  body.appendChild(secSub);
+
+  var foot=document.createElement('div');
+  foot.style.cssText='padding:12px 18px calc(12px + var(--safe-b));border-top:1px solid var(--border);flex-shrink:0';
+  var dl=document.createElement('button');
+  dl.style.cssText='width:100%;padding:13px;border-radius:11px;border:none;background:var(--green);color:#fff;font-size:15px;font-weight:700;cursor:pointer';
+  dl.textContent='\uD83D\uDCE5 Scarica modello Excel';
+  dl.onclick=function(){
+    var sectors=Object.keys(selectedSectors);
+    document.body.removeChild(overlay);
+    scaricaModelloFornitore([],false,sectors);
+  };
+  foot.appendChild(dl);
+  sheet.appendChild(handle);sheet.appendChild(hdr);sheet.appendChild(body);sheet.appendChild(foot);
+  overlay.appendChild(sheet);
+  overlay.addEventListener('click',function(e){if(e.target===this)document.body.removeChild(overlay);});
+  document.body.appendChild(overlay);
+}
 function openModelloFornitorePicker(){
   var overlay=document.createElement('div');
   overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:300;display:flex;align-items:flex-end';
@@ -10179,14 +10250,17 @@ function scaricaModelloFornitore(supplierNames,withPrices,sectors){
   // dire "colonna vuota generica" — ha senso solo in modalità "vuoto da
   // compilare" (per un fornitore ancora da decidere). In modalità "con
   // prezzi attuali" senza un fornitore specifico, l'aspettativa è vedere
-  // TUTTI i fornitori del settore scelto (o di tutti i settori, se nessuno
-  // scelto) coi rispettivi prezzi — non una colonna vuota inutile visto
-  // che i prezzi già ci sono.
+  // i fornitori coi rispettivi prezzi.
+  // FIX (02/09, Valerio: "mi deve esportare solo i fornitori che hanno i
+  // prezzi"): non basta che un fornitore sia assegnato al settore — deve
+  // avere DAVVERO almeno un prezzo su un prodotto di quel settore,
+  // altrimenti si portava dietro colonne di fornitori senza nessun prezzo
+  // dentro (es. assegnati al settore ma mai valorizzati).
   if(!suppliers.length&&withPrices){
-    var supForSector=secList.length
-      ?S.suppliers.filter(function(s){var ss=getSupplierSectors(s.name);return !ss.length||secList.some(function(sec){return ss.indexOf(sec)>=0;});})
-      :S.suppliers.slice();
-    suppliers=(supForSector.length?supForSector:S.suppliers).map(function(s){return s.name;});
+    var supConPrezzi=S.suppliers.filter(function(s){
+      return baseProds.some(function(p){return gp(p,s.name)!=null;});
+    });
+    suppliers=supConPrezzi.map(function(s){return s.name;});
   }
   var generico=!suppliers.length;
   var wb=XLSX.utils.book_new();
