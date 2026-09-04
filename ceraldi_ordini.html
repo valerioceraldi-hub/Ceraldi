@@ -8690,7 +8690,7 @@ function importaDaWA(){
 
 
 /* ── IMPORTA RICHIESTA COLLABORATORE ─────────────────────────────── */
-function importaRichiesta(jsonText, onDone){
+async function importaRichiesta(jsonText, onDone){
   var payload;
   try{ payload=JSON.parse(jsonText); }
   catch(e){ toast('File non valido'); return; }
@@ -8717,49 +8717,45 @@ function importaRichiesta(jsonText, onDone){
   var dipNote=payload.nota?' — 📝 '+payload.nota:'';
   document.getElementById('rich-title').textContent='📋 '+dipNome+(dipData?' · '+dipData:'')+dipNote;
   var body=document.getElementById('rich-body');
-  body.innerHTML='';
+  body.innerHTML='<div style="text-align:center;padding:24px;color:var(--muted);font-size:13px">Verifico corrispondenze con il catalogo…</div>';
 
-  // For each item, try to match in catalog
+  // Per ogni item della richiesta, trova il prodotto di catalogo corrispondente.
+  // FIX (04/09, Valerio con screenshot reali: Glenfiddich 12 e Oban abbinati
+  // entrambi a "WHISKY J&B..."): la vecchia logica qui era una terza
+  // implementazione di matching per sole parole in comune (mai aggiornata
+  // con le protezioni su marca/formato introdotte altrove), e in particolare
+  // il suo "fuzzy inverso" dava match pieno quando TUTTE le parole del
+  // prodotto di catalogo — spesso solo parole di categoria come "WHISKY"/
+  // "SCOTCH" per un nome di catalogo corto — comparivano nel nome della
+  // richiesta: qualunque whisky scansionato ci finiva dentro. Ora si riusa
+  // _hybridMatchCatalog (stesso motore già corretto per Da Fatture/Import
+  // preventivo/Importa listino), che pesa la marca esplicitamente e azzera
+  // il punteggio se i formati/volumi riconosciuti sono diversi.
   var richItems=[]; // {item, matchedProduct, qty, include}
-  // Normalizza stringa: rimuovi accenti, uppercase
-  function normStr(s){
-    return s.toUpperCase()
-      .replace(/[ÀÁÂÃ]/g,'A').replace(/[ÈÉÊË]/g,'E').replace(/[ÌÍÎÏ]/g,'I')
-      .replace(/[ÒÓÔÕ]/g,'O').replace(/[ÙÚÛÜ]/g,'U').replace(/[Ç]/g,'C')
-      .replace(/[^A-Z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
-  }
-  payload.items.forEach(function(it){
-    var match=null;
-    var nameNorm=normStr(it.name);
-    // 1. Match esatto normalizzato
-    S.products.forEach(function(p){if(!match&&normStr(p.name)===nameNorm)match=p;});
-    // 2. Fuzzy: tutte le parole del nome richiesta presenti nel prodotto catalogo
-    if(!match){
-      var words=nameNorm.split(' ').filter(function(w){return w.length>=3;});
-      if(words.length){
-        var best=null,bestScore=0;
-        S.products.forEach(function(p){
-          var pn=normStr(p.name);
-          var matched2=words.filter(function(w){return pn.indexOf(w)>=0;}).length;
-          var score=matched2/words.length;
-          if(score>bestScore&&score>=0.7){bestScore=score;best=p;}
-        });
-        if(best)match=best;
-      }
+  var prelim=payload.items.map(function(it){
+    // Se l'item arriva già collegato a un id di catalogo reale (prodotto
+    // scelto dal listino in Richieste, non un item "custom" scritto/scansionato
+    // a mano), usa quell'id direttamente — nessun bisogno di indovinare per nome.
+    if(it.custom===false && it.id!=null){
+      var p=S.products.find(function(x){return String(x.id)===String(it.id);});
+      if(p) return {item:it,match:p,qty:it.qty||1,include:true,isCustom:false};
     }
-    // 3. Fuzzy inverso: parole del catalogo nel nome richiesta (per nomi corti come "Caffe")
-    if(!match){
-      var best2=null,bestScore2=0;
-      S.products.forEach(function(p){
-        var pWords=normStr(p.name).split(' ').filter(function(w){return w.length>=4;});
-        if(!pWords.length)return;
-        var matched3=pWords.filter(function(w){return nameNorm.indexOf(w)>=0;}).length;
-        var score2=matched3/pWords.length;
-        if(score2>bestScore2&&score2>=0.5&&matched3>=1){bestScore2=score2;best2=p;}
-      });
-      if(best2)match=best2;
-    }
-    richItems.push({item:it,match:match,qty:it.qty||1,include:!!match,isCustom:it.custom||false});
+    return null; // da risolvere sotto col match testuale/IA
+  });
+  var namesToMatch=[],mapIdx=[];
+  payload.items.forEach(function(it,i){
+    if(prelim[i]) return;
+    namesToMatch.push(it.name);
+    mapIdx.push(i);
+  });
+  var apiKeyRich=localStorage.getItem('ceraldi_apikey')||'';
+  var hybridRes=namesToMatch.length?await _hybridMatchCatalog(namesToMatch,S.products,apiKeyRich,null):[];
+  payload.items.forEach(function(it,i){
+    if(prelim[i]){ richItems.push(prelim[i]); return; }
+    var hi=mapIdx.indexOf(i);
+    var r=hybridRes[hi];
+    var p=(r&&r.id!=null)?S.products.find(function(x){return String(x.id)===String(r.id);}):null;
+    richItems.push({item:it,match:p||null,qty:it.qty||1,include:!!p,isCustom:it.custom||false});
   });
 
   // Ricerca inline riusabile (catalogo + listino locale), usata sia da "Cambia" che dai prodotti senza match
@@ -8906,6 +8902,7 @@ function importaRichiesta(jsonText, onDone){
       }
       // se no match: gestito sotto
     }
+  body.innerHTML='';
   richItems.forEach(function(ri,idx){
     var row=document.createElement('div');
     // Prodotti custom con match automatico, o senza scorta minima impostata: bordo arancione (richiede attenzione)
@@ -8960,6 +8957,26 @@ function importaRichiesta(jsonText, onDone){
     qp.onclick=(function(i){return function(){richItems[i].qty++;this.parentNode.querySelector('.qty-val').textContent=richItems[i].qty;};})(idx);
     qrow.appendChild(ql);qrow.appendChild(qm);qrow.appendChild(qv);qrow.appendChild(qp);
 
+    // Prodotto senza scorta minima: spunta facoltativa per usare la
+    // quantità scelta qui sopra anche come scorta minima predefinita da
+    // quel momento in poi (Valerio, 02/09: "mi fai spuntare se vuoi che
+    // sia la quantità di scorta minima da impostare come default...
+    // dopo torna tutto come adesso" — cioè non automatico, solo se lo
+    // spunto io, e solo la prima volta perché una volta impostata il
+    // prodotto non rientra più in questo caso).
+    if(ri.item.needsScortaMin&&!ri.match._unlisted){
+      var smRow=document.createElement('label');
+      smRow.style.cssText='display:flex;align-items:center;gap:7px;margin-top:6px;cursor:pointer';
+      var smChk=document.createElement('input');smChk.type='checkbox';smChk.style.cssText='width:16px;height:16px;flex-shrink:0';
+      smChk.onchange=(function(i){return function(){richItems[i].setAsScortaMin=smChk.checked;};})(idx);
+      var smLbl=document.createElement('span');
+      smLbl.style.cssText='font-size:11px;color:var(--muted)';
+      smLbl.textContent='Imposta questa quantità come scorta minima predefinita';
+      smRow.appendChild(smChk);smRow.appendChild(smLbl);
+      // Aggiunta più sotto, subito dopo qrow, così compare visivamente
+      // sotto lo stepper della quantità invece che prima del nome prodotto.
+    }
+
     // Funzione che aggiorna la matchZone per questo item (riutilizzata da "Cambia")
 
     if(!matched){
@@ -8987,6 +9004,7 @@ function importaRichiesta(jsonText, onDone){
     })(idx,row,matchZone,chk);
 
     row.appendChild(header);row.appendChild(qrow);
+    if(ri.item.needsScortaMin&&!ri.match._unlisted)row.appendChild(smRow);
     body.appendChild(row);
   });
 
@@ -9007,16 +9025,18 @@ function importaRichiesta(jsonText, onDone){
 
   document.getElementById('rich-add-btn').onclick=function(){
     var added=0;var merged=0;
-    // Prodotti senza scorta minima impostata: la quantità che Valerio decide
-    // qui diventa la scorta minima salvata sul catalogo, così ai prossimi
-    // ordini Richieste la trova già impostata e calcola da sola la quantità
-    // (Valerio, 30/08: "quando arriva un prodotto senza scorta minima
-    // impostato solo la prima volta me lo fai inserire e lo salvi").
+    // Prodotti senza scorta minima impostata: la quantità diventa la
+    // scorta minima salvata sul catalogo SOLO se Valerio ha spuntato
+    // l'apposita casella — non più in automatico (Valerio, 02/09: "mi fai
+    // spuntare se vuoi che sia la quantità di scorta minima da impostare
+    // come default... una volta fatto la prima volta si lega a quel
+    // prodotto e dopo torna tutto come adesso"). Se non spunta, la
+    // richiesta va comunque avanti come sempre, senza toccare il catalogo.
     var scortaMinDaSalvare=[];
     richItems.forEach(function(ri){
       if(!ri.include||!ri.match)return;
       var pid=ri.match.id;
-      if(ri.item.needsScortaMin&&!ri.match._unlisted&&ri.match.scorta_min==null&&ri.qty>0){
+      if(ri.item.needsScortaMin&&ri.setAsScortaMin&&!ri.match._unlisted&&ri.match.scorta_min==null&&ri.qty>0){
         ri.match.scorta_min=ri.qty;
         scortaMinDaSalvare.push(ri.match);
       }
