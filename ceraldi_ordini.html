@@ -1621,7 +1621,7 @@ async function loadAliasProdotti(){
   try{
     var r=await fetch(SUPABASE_URL+'/rest/v1/ceraldi_alias_prodotti?select=alias_norm,product_id',
       {headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}});
-    if(!r.ok)return;
+    if(!r.ok){ console.warn('[Alias] caricamento fallito: HTTP '+r.status+' — probabile tabella ceraldi_alias_prodotti mancante su Supabase'); return; }
     var rows=await r.json();
     ALIAS_MAP={};
     rows.forEach(function(row){ ALIAS_MAP[row.alias_norm]=row.product_id; });
@@ -1635,7 +1635,12 @@ function salvaAliasProdotto(nomeOriginale,productId){
     method:'POST',
     headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=minimal'},
     body:JSON.stringify({alias_norm:key,product_id:productId})
-  }).catch(function(e){console.warn('[Alias] salvataggio fallito:',e.message);});
+  }).then(function(r){
+    if(!r.ok) return r.text().then(function(t){throw new Error('HTTP '+r.status+' — '+t);});
+  }).catch(function(e){
+    console.warn('[Alias] salvataggio fallito:',e.message);
+    toast('⚠️ Apprendimento nome non salvato (manca la tabella ceraldi_alias_prodotti su Supabase?)',3500);
+  });
 }
 // Collega un codice a barre scansionato (arrivato da Ceraldi Richieste senza
 // riconoscimento) al prodotto di catalogo appena confermato — sia che il
@@ -1650,7 +1655,12 @@ function salvaBarcodeSuProdotto(barcode,productId){
     method:'PATCH',
     headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN,'Content-Type':'application/json'},
     body:JSON.stringify({barcode:barcode})
-  }).catch(function(e){console.warn('[Barcode] salvataggio fallito:',e.message);});
+  }).then(function(r){
+    if(!r.ok) return r.text().then(function(t){throw new Error('HTTP '+r.status+' — '+t);});
+  }).catch(function(e){
+    console.warn('[Barcode] salvataggio fallito:',e.message);
+    toast('⚠️ Barcode non salvato sul prodotto: '+e.message,4000);
+  });
 }
 // ── MATCH PER "DA EVADERE" (richieste dei dipendenti) ──────────────
 // A differenza di _hybridMatchCatalog (usato per Da Fatture, dove alcuni
@@ -11048,7 +11058,7 @@ function updateStatoSettingsUI(){
 /* ── FINE STATO CONDIVISO ─────────────────────────────────────── */
 
 // ── AVVIO: carica Cloud poi inizializza tutto ─────────────
-var BUILD_VERSION='62 (Valerio: collegare il codice a barre scansionato in Richieste al prodotto di catalogo, sia che esista già senza barcode sia che vada creato ex novo) — il barcode ora viaggia insieme all\'item della richiesta fino a qui, e si salva sul prodotto di catalogo in tre momenti: alla conferma di un match automatico su un prodotto esistente, quando si collega un provvisorio a un prodotto esistente (Trova nel listino), o quando lo si crea da zero (Aggiungi al listino) — da quel momento lo scanner in Richieste lo riconosce direttamente.';
+var BUILD_VERSION='63 (Valerio: il salvataggio del barcode sul prodotto sembrava non funzionare) — trovato il motivo: fetch() non genera un errore per risposte HTTP fallite (400/403/404), quindi se la colonna "barcode" non esiste ancora su Supabase il salvataggio falliva del tutto in silenzio, senza nessun avviso, nemmeno in console. Ora ogni salvataggio (barcode su prodotto, alias appreso) controlla lo stato della risposta e mostra un toast visibile se fallisce, invece di fallire senza dirlo a nessuno.';
 // BUG CORRETTO (09/08, segnalato da Valerio: "mi dice di aggiornare ma è già
 // l'ultima, e con l'avviso non riesco a fare l'ordine") — il controllo
 // confrontava l'INTERO testo descrittivo di BUILD_VERSION, carattere per
