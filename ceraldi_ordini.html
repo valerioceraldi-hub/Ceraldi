@@ -1674,34 +1674,18 @@ function salvaBarcodeSuProdotto(barcode,productId){
 // solo se c'è una API Key impostata) lasciava troppi prodotti scritti in
 // modo leggermente diverso finire come "provvisorio — non a listino"
 // invece di essere proposti.
-async function _matchForRichieste(names,catalogList,apiKey,extras){
-  var results=new Array(names.length);
-  var toAI=[];
-  names.forEach(function(name,idx){
-    var ex=(extras&&extras[idx])||{};
-    var cands=_localCandidates(name,catalogList,8,ex.codArt,ex.fornitore);
-    var best=cands[0];
-    if(best&&best.s>=88){
-      results[idx]={matchTipo:'esatto',id:best.c.id,name:best.c.name};
-    }else if(best&&best.s>=55){
-      // Probabile ma non certo: proposto comunque, la conferma la fa Valerio in UI.
-      results[idx]={matchTipo:'probabile',id:best.c.id,name:best.c.name};
-    }else if(!best||best.s<15){
-      results[idx]={matchTipo:'nessuno',id:null,name:null};
-    }else{
-      toAI.push({idx:idx,name:name});
-    }
-  });
-  if(toAI.length){
-    // Zona ancora ambigua (15-55): stessa logica di _hybridMatchCatalog,
-    // che ricalcola da sé i candidati locali e prova la IA se c'è una key.
-    var aiNames=toAI.map(function(t){return t.name;});
-    var aiExtras=toAI.map(function(t){return (extras&&extras[t.idx])||{};});
-    var aiRes=await _hybridMatchCatalog(aiNames,catalogList,apiKey,aiExtras);
-    toAI.forEach(function(t,i){ results[t.idx]=aiRes[i]; });
-  }
-  return results;
-}
+// ── MATCH PER "DA EVADERE" (richieste dei dipendenti) ──────────────
+// PROVATO E RIPORTATO INDIETRO (Valerio, 04/09, con caso reale): una prima
+// versione qui proponeva un match locale già da un punteggio di 55 (senza
+// passare dalla IA), ragionando che tanto la conferma è sempre manuale — ma
+// un punteggio 55-88 di pura somiglianza testuale (senza il controllo
+// marca/formato che fa la IA) produce ESATTAMENTE lo stesso tipo di falso
+// positivo per cui era stata introdotta la IA (prodotto nuovo proposto come
+// uguale a uno esistente solo per parole di categoria in comune) — un
+// operatore di fretta può confermarlo senza accorgersene. Tornato quindi a
+// usare _hybridMatchCatalog così com'è (esatto solo ≥88, il resto passa
+// dalla IA se c'è una API Key, altrimenti nessun match — vedi il suo stesso
+// commento più sotto sul perché).
 async function _hybridMatchCatalog(names,catalogList,apiKey,extras){
   var results=new Array(names.length);
   var toAI=[];
@@ -8861,7 +8845,7 @@ async function importaRichiesta(jsonText, onDone){
     mapIdx.push(i);
   });
   var apiKeyRich=localStorage.getItem('ceraldi_apikey')||'';
-  var hybridRes=namesToMatch.length?await _matchForRichieste(namesToMatch,S.products,apiKeyRich,null):[];
+  var hybridRes=namesToMatch.length?await _hybridMatchCatalog(namesToMatch,S.products,apiKeyRich,null):[];
   payload.items.forEach(function(it,i){
     if(prelim[i]){ richItems.push(prelim[i]); return; }
     var hi=mapIdx.indexOf(i);
@@ -8995,11 +8979,20 @@ async function importaRichiesta(jsonText, onDone){
           +'<div style="font-size:10px;color:var(--muted);margin-top:5px">Aggiunto al carrello — verificalo/cambialo da lì quando vuoi</div>';
         var btnIgnoreCustom=document.createElement('button');
         btnIgnoreCustom.style.cssText='margin-top:7px;padding:4px 11px;border-radius:7px;border:1.5px solid var(--border);background:transparent;color:var(--muted);font-size:11px;cursor:pointer';
-        btnIgnoreCustom.textContent='Ignora questo prodotto';
-        btnIgnoreCustom.onclick=(function(i,rrow2){return function(){
-          richItems[i].include=false;
-          rrow2.style.display='none';
-        };})(ridx,rrow);
+        btnIgnoreCustom.textContent='Non è questo — cerca/aggiungi';
+        btnIgnoreCustom.onclick=(function(i,rrow2,rMatchZone2,rChk2){return function(){
+          // FIX (Valerio, 04/09: "il codice a barre non viene mai salvato")
+          // — prima "Ignora" faceva SPARIRE la riga (include=false, riga
+          // nascosta): l'item non entrava più nel carrello in nessuna forma
+          // e il barcode scansionato andava perso con lei. Ora il match
+          // sbagliato viene tolto ma l'item resta, come provvisorio — stessa
+          // sorte di un prodotto mai trovato, con le stesse opzioni (cerca
+          // nel listino o aggiungilo) e lo stesso barcode ancora agganciato.
+          var tmpId=-(Date.now()%1000000+i+1);
+          richItems[i].match={id:tmpId,name:richItems[i].item.name.toUpperCase(),conf:richItems[i].item.conf||'',cat:'ALTRO',prices:{},best:'',_unlisted:true};
+          richItems[i].include=true;richItems[i].needsReview=false;
+          renderMatchZone(i,rrow2,rMatchZone2,rChk2);
+        };})(ridx,rrow,rMatchZone,rChk);
         proposta.appendChild(btnIgnoreCustom);
         rMatchZone.appendChild(proposta);
 
@@ -11058,7 +11051,7 @@ function updateStatoSettingsUI(){
 /* ── FINE STATO CONDIVISO ─────────────────────────────────────── */
 
 // ── AVVIO: carica Cloud poi inizializza tutto ─────────────
-var BUILD_VERSION='63 (Valerio: il salvataggio del barcode sul prodotto sembrava non funzionare) — trovato il motivo: fetch() non genera un errore per risposte HTTP fallite (400/403/404), quindi se la colonna "barcode" non esiste ancora su Supabase il salvataggio falliva del tutto in silenzio, senza nessun avviso, nemmeno in console. Ora ogni salvataggio (barcode su prodotto, alias appreso) controlla lo stato della risposta e mostra un toast visibile se fallisce, invece di fallire senza dirlo a nessuno.';
+var BUILD_VERSION='64 (Valerio, con caso reale: "esce un match sbagliato e poi il barcode non si salva mai") — due bug concatenati trovati: 1) la soglia abbassata a 55 per proporre un match senza IA nella schermata Da evadere reintroduceva lo stesso falso positivo di brand/categoria per cui la IA era stata introdotta — tornato alla soglia sicura (solo ≥88 automatico, il resto via IA se c\'è una API Key). 2) Più grave: quando il match proposto era sbagliato, il bottone "Ignora questo prodotto" faceva SPARIRE l\'intera riga dalla richiesta (include=false, riga nascosta) — l\'item, e il suo codice a barre, andavano persi del tutto invece di diventare un provvisorio da collegare come i prodotti mai trovati. Ora "Ignora" trasforma l\'item in provvisorio (stesse opzioni cerca/aggiungi al listino, barcode ancora agganciato) invece di cancellarlo.';
 // BUG CORRETTO (09/08, segnalato da Valerio: "mi dice di aggiornare ma è già
 // l'ultima, e con l'avviso non riesco a fare l'ordine") — il controllo
 // confrontava l'INTERO testo descrittivo di BUILD_VERSION, carattere per
