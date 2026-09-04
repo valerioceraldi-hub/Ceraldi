@@ -1637,6 +1637,61 @@ function salvaAliasProdotto(nomeOriginale,productId){
     body:JSON.stringify({alias_norm:key,product_id:productId})
   }).catch(function(e){console.warn('[Alias] salvataggio fallito:',e.message);});
 }
+// Collega un codice a barre scansionato (arrivato da Ceraldi Richieste senza
+// riconoscimento) al prodotto di catalogo appena confermato — sia che il
+// prodotto esistesse già senza barcode, sia che sia stato scelto ora: da qui
+// in poi lo scanner in Richieste lo riconosce direttamente.
+function salvaBarcodeSuProdotto(barcode,productId){
+  if(!barcode||productId==null)return;
+  var p=S.products.find(function(x){return String(x.id)===String(productId);});
+  if(p&&p.barcode===barcode)return; // già collegato, non serve riscrivere
+  if(p)p.barcode=barcode; // aggiorna la cache locale subito
+  fetch(SUPABASE_URL+'/rest/v1/catalogo_ceraldi?id=eq.'+productId,{
+    method:'PATCH',
+    headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN,'Content-Type':'application/json'},
+    body:JSON.stringify({barcode:barcode})
+  }).catch(function(e){console.warn('[Barcode] salvataggio fallito:',e.message);});
+}
+// ── MATCH PER "DA EVADERE" (richieste dei dipendenti) ──────────────
+// A differenza di _hybridMatchCatalog (usato per Da Fatture, dove alcuni
+// esiti possono essere applicati automaticamente), qui l'esito passa SEMPRE
+// da una conferma visibile di Valerio (il box arancione "Match automatico"
+// con "Ignora questo prodotto") prima di finire nel carrello — quindi si
+// può proporre un candidato anche con una soglia locale più bassa, senza
+// dover passare dalla IA per la zona intermedia: chi copre il rischio di un
+// abbinamento sbagliato è la conferma manuale, non l'algoritmo. Senza
+// questo la soglia di _hybridMatchCatalog (88 per "esatto", IA per il resto
+// solo se c'è una API Key impostata) lasciava troppi prodotti scritti in
+// modo leggermente diverso finire come "provvisorio — non a listino"
+// invece di essere proposti.
+async function _matchForRichieste(names,catalogList,apiKey,extras){
+  var results=new Array(names.length);
+  var toAI=[];
+  names.forEach(function(name,idx){
+    var ex=(extras&&extras[idx])||{};
+    var cands=_localCandidates(name,catalogList,8,ex.codArt,ex.fornitore);
+    var best=cands[0];
+    if(best&&best.s>=88){
+      results[idx]={matchTipo:'esatto',id:best.c.id,name:best.c.name};
+    }else if(best&&best.s>=55){
+      // Probabile ma non certo: proposto comunque, la conferma la fa Valerio in UI.
+      results[idx]={matchTipo:'probabile',id:best.c.id,name:best.c.name};
+    }else if(!best||best.s<15){
+      results[idx]={matchTipo:'nessuno',id:null,name:null};
+    }else{
+      toAI.push({idx:idx,name:name});
+    }
+  });
+  if(toAI.length){
+    // Zona ancora ambigua (15-55): stessa logica di _hybridMatchCatalog,
+    // che ricalcola da sé i candidati locali e prova la IA se c'è una key.
+    var aiNames=toAI.map(function(t){return t.name;});
+    var aiExtras=toAI.map(function(t){return (extras&&extras[t.idx])||{};});
+    var aiRes=await _hybridMatchCatalog(aiNames,catalogList,apiKey,aiExtras);
+    toAI.forEach(function(t,i){ results[t.idx]=aiRes[i]; });
+  }
+  return results;
+}
 async function _hybridMatchCatalog(names,catalogList,apiKey,extras){
   var results=new Array(names.length);
   var toAI=[];
@@ -3394,6 +3449,9 @@ function openReplaceProduct(oldPid,oldItem){
     var oldEntry=S.cart[parseInt(oldPid,10)];
     var newQty=oldEntry?oldEntry.qty:1;
     var newSources=oldEntry&&oldEntry._sources?oldEntry._sources:[];
+    // Se l'item provvisorio portava con sé un codice a barre scansionato in
+    // Richieste, collegalo ora al prodotto di catalogo appena scelto.
+    if(oldEntry&&oldEntry._barcode) salvaBarcodeSuProdotto(oldEntry._barcode,product.id);
     delete S.cart[parseInt(oldPid,10)];
     delete S.orderSupOverride[parseInt(oldPid,10)];
     S.cart[product.id]={product:product,qty:newQty,_sources:newSources};
@@ -3730,6 +3788,9 @@ function renderCart(){
           e2.stopPropagation();
           openAddToListino({name:item.product.name,conf:item.product.conf||''},function(newProd){
             var qty=item.qty,sources=item._sources||[];
+            // Se l'item provvisorio portava con sé un codice a barre
+            // scansionato in Richieste, collegalo al prodotto appena creato.
+            if(item._barcode) salvaBarcodeSuProdotto(item._barcode,newProd.id);
             delete S.cart[pid];delete S.orderSupOverride[pid];
             S.cart[newProd.id]={product:newProd,qty:qty,_sources:sources};
             updateBadge();renderCart();
@@ -8790,7 +8851,7 @@ async function importaRichiesta(jsonText, onDone){
     mapIdx.push(i);
   });
   var apiKeyRich=localStorage.getItem('ceraldi_apikey')||'';
-  var hybridRes=namesToMatch.length?await _hybridMatchCatalog(namesToMatch,S.products,apiKeyRich,null):[];
+  var hybridRes=namesToMatch.length?await _matchForRichieste(namesToMatch,S.products,apiKeyRich,null):[];
   payload.items.forEach(function(it,i){
     if(prelim[i]){ richItems.push(prelim[i]); return; }
     var hi=mapIdx.indexOf(i);
@@ -9080,7 +9141,14 @@ async function importaRichiesta(jsonText, onDone){
       // Apprendimento alias: il prodotto arrivava come testo scritto/scansionato
       // (item.custom) e qui è stato confermato/collegato a un prodotto reale —
       // salva la coppia così le prossime volte non richiede più conferma.
-      if(ri.item.custom&&!ri.match._unlisted) salvaAliasProdotto(ri.item.name,pid);
+      if(ri.item.custom&&!ri.match._unlisted){
+        salvaAliasProdotto(ri.item.name,pid);
+        // Se l'item porta con sé un codice a barre (scansionato in Richieste
+        // e non riconosciuto lì), collegalo ora al prodotto di catalogo
+        // appena confermato — che il prodotto esistesse già senza barcode o
+        // sia stato appena scelto, da qui in poi lo scanner lo riconosce.
+        if(ri.item.barcode) salvaBarcodeSuProdotto(ri.item.barcode,pid);
+      }
       if(ri.item.needsScortaMin&&ri.setAsScortaMin&&!ri.match._unlisted&&ri.match.scorta_min==null&&ri.qty>0){
         ri.match.scorta_min=ri.qty;
         scortaMinDaSalvare.push(ri.match);
@@ -9093,7 +9161,7 @@ async function importaRichiesta(jsonText, onDone){
         if(S.cart[pid]._sources.indexOf(_dipNome)<0)S.cart[pid]._sources.push(_dipNome);
         merged++;
       } else {
-        S.cart[pid]={product:ri.match,qty:ri.qty,_sources:[_dipNome],_needsReview:!!ri.needsReview,_reqName:ri.item.name+(ri.item.conf?' ('+ri.item.conf+')':''),_giacenza:ri.item.giacenza,_scortaMin:ri.item.scortaMin,_needsScortaMin:!!ri.item.needsScortaMin};
+        S.cart[pid]={product:ri.match,qty:ri.qty,_sources:[_dipNome],_needsReview:!!ri.needsReview,_reqName:ri.item.name+(ri.item.conf?' ('+ri.item.conf+')':''),_giacenza:ri.item.giacenza,_scortaMin:ri.item.scortaMin,_needsScortaMin:!!ri.item.needsScortaMin,_barcode:ri.item.barcode||null};
         added++;
       }
     });
@@ -10980,7 +11048,7 @@ function updateStatoSettingsUI(){
 /* ── FINE STATO CONDIVISO ─────────────────────────────────────── */
 
 // ── AVVIO: carica Cloud poi inizializza tutto ─────────────
-var BUILD_VERSION='60 (Valerio: match automatico "Da evadere" abbinava prodotti diversi tra loro — la funzione di matching lì era una terza implementazione mai aggiornata con le protezioni su marca/formato già presenti altrove, ora riusa _hybridMatchCatalog come Da Fatture/Import preventivo. Aggiunta memoria di apprendimento: una volta collegato un nome scritto o scansionato a un prodotto di catalogo, le prossime volte lo riconosce da solo senza richiedere conferma ogni volta.';
+var BUILD_VERSION='62 (Valerio: collegare il codice a barre scansionato in Richieste al prodotto di catalogo, sia che esista già senza barcode sia che vada creato ex novo) — il barcode ora viaggia insieme all\'item della richiesta fino a qui, e si salva sul prodotto di catalogo in tre momenti: alla conferma di un match automatico su un prodotto esistente, quando si collega un provvisorio a un prodotto esistente (Trova nel listino), o quando lo si crea da zero (Aggiungi al listino) — da quel momento lo scanner in Richieste lo riconosce direttamente.';
 // BUG CORRETTO (09/08, segnalato da Valerio: "mi dice di aggiornare ma è già
 // l'ultima, e con l'avviso non riesco a fare l'ordine") — il controllo
 // confrontava l'INTERO testo descrittivo di BUILD_VERSION, carattere per
