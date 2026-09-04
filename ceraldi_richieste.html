@@ -69,8 +69,17 @@ input,button{font-family:inherit;-webkit-appearance:none;appearance:none}
 #scan-frame{position:absolute;top:42%;left:50%;transform:translate(-50%,-50%);width:92%;max-width:400px;height:170px;border:2.5px solid rgba(255,255,255,.9);border-radius:18px;box-shadow:0 0 0 2000px rgba(0,0,0,.35)}
 #scan-status{position:absolute;top:calc(42% + 100px);left:20px;right:20px;text-align:center;color:#fff;font-size:13px;font-weight:600;text-shadow:0 1px 3px rgba(0,0,0,.6);z-index:2}
 #scan-quickadd{display:none;position:absolute;left:12px;right:12px;bottom:calc(var(--safe-b)+14px);background:rgba(22,24,30,.94);backdrop-filter:blur(8px);border-radius:18px;padding:14px;z-index:3;box-shadow:0 6px 24px rgba(0,0,0,.4)}
-#qa-nome{width:100%;background:rgba(255,255,255,.1);border:1.5px solid rgba(255,255,255,.28);border-radius:10px;padding:10px 12px;font-size:14px;font-weight:700;color:#fff;outline:none;text-transform:uppercase;margin-bottom:10px}
+#qa-nome-wrap{position:relative;margin-bottom:10px}
+#qa-nome{width:100%;background:rgba(255,255,255,.1);border:1.5px solid rgba(255,255,255,.28);border-radius:10px;padding:10px 12px;font-size:14px;font-weight:700;color:#fff;outline:none;text-transform:uppercase;margin-bottom:0}
+#qa-nome[readonly]{background:rgba(0,122,255,.18);border-color:rgba(0,122,255,.5)}
+#qa-suggest{display:none;position:absolute;left:0;right:0;top:calc(100% + 4px);background:#1c1e24;border:1.5px solid rgba(255,255,255,.2);border-radius:10px;max-height:170px;overflow-y:auto;-webkit-overflow-scrolling:touch;z-index:6;box-shadow:0 8px 22px rgba(0,0,0,.45)}
+.qa-suggest-item{padding:9px 12px;font-size:13px;font-weight:700;color:#fff;border-bottom:1px solid rgba(255,255,255,.08);cursor:pointer;text-transform:uppercase}
+.qa-suggest-item:last-child{border-bottom:none}
+.qa-suggest-item:active{background:rgba(255,255,255,.08)}
+.qa-suggest-item small{display:block;font-size:10px;font-weight:600;color:rgba(255,255,255,.5);text-transform:none;margin-top:2px}
 #qa-row{display:flex;align-items:center;gap:8px}
+#qa-qty-wrap{display:flex;flex-direction:column;align-items:center;flex-shrink:0}
+#qa-qty-lbl{font-size:9px;font-weight:800;letter-spacing:.4px;color:rgba(255,255,255,.6);text-transform:uppercase;margin-bottom:3px}
 #qa-qty{width:64px;text-align:center;background:rgba(255,255,255,.1);border:1.5px solid rgba(255,255,255,.28);border-radius:10px;padding:11px 4px;font-size:21px;font-weight:800;color:#fff;outline:none;flex-shrink:0}
 #qa-tipo-row{display:flex;gap:5px;flex:1;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
 #qa-tipo-row::-webkit-scrollbar{display:none}
@@ -242,9 +251,15 @@ input,button{font-family:inherit;-webkit-appearance:none;appearance:none}
   <div id="scan-frame"></div>
   <div id="scan-status">Inquadra il codice a barre</div>
   <div id="scan-quickadd">
-    <input id="qa-nome" type="text" placeholder="NOME PRODOTTO">
+    <div id="qa-nome-wrap">
+      <input id="qa-nome" type="text" placeholder="NOME PRODOTTO" autocomplete="off" autocorrect="off">
+      <div id="qa-suggest"></div>
+    </div>
     <div id="qa-row">
-      <input id="qa-qty" type="number" inputmode="numeric" pattern="[0-9]*" value="1">
+      <div id="qa-qty-wrap">
+        <div id="qa-qty-lbl">Giacenza</div>
+        <input id="qa-qty" type="number" inputmode="numeric" pattern="[0-9]*" placeholder="0">
+      </div>
       <div id="qa-tipo-row">
         <button class="qa-tipo-chip on" data-tipo="Pezzo" onclick="qaSelTipo(this)">🔹 Pezzo</button>
         <button class="qa-tipo-chip" data-tipo="Bottiglia" onclick="qaSelTipo(this)">🍾 Bottiglia</button>
@@ -252,9 +267,10 @@ input,button{font-family:inherit;-webkit-appearance:none;appearance:none}
         <button class="qa-tipo-chip" data-tipo="Confezione" onclick="qaSelTipo(this)">🛍 Confezione</button>
       </div>
     </div>
-    <button id="qa-add-btn" onclick="quickAddConfirm()">✓ Aggiungi e continua a scansionare</button>
+    <button id="qa-add-btn" onclick="quickAddConfirm()">✓ Conferma e continua a scansionare</button>
     <button id="qa-skip" onclick="skipQuickAdd()">Salta questo codice</button>
   </div>
+
 </div>
 <input type="file" id="cat-file" accept="application/json,.json" style="display:none">
 <div id="shortcuts-row" style="display:none;flex-shrink:0;gap:8px;padding:9px 14px;overflow-x:auto;-webkit-overflow-scrolling:touch;border-bottom:1px solid var(--border)"></div>
@@ -744,9 +760,15 @@ async function loadCatalogFromSupabase(){
   var overlay=document.getElementById('supabase-loading');
   if(overlay)overlay.style.display='flex';
   try{
-    var r=await fetch(SUPABASE_URL+'/rest/v1/catalogo_ceraldi?select=id,name,conf,cat,subcat,settore,giacenza,scorta_min&order=id',{
+    var r=await fetch(SUPABASE_URL+'/rest/v1/catalogo_ceraldi?select=id,name,conf,cat,subcat,settore,giacenza,scorta_min,barcode&order=id',{
       headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+SUPABASE_KEY}
     });
+    if(!r.ok){
+      // fallback: la colonna "barcode" potrebbe non esistere ancora su Supabase
+      r=await fetch(SUPABASE_URL+'/rest/v1/catalogo_ceraldi?select=id,name,conf,cat,subcat,settore,giacenza,scorta_min&order=id',{
+        headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+SUPABASE_KEY}
+      });
+    }
     if(!r.ok)throw new Error('HTTP '+r.status);
     var data=await r.json();
     if(data&&data.length){
@@ -1127,8 +1149,30 @@ function renderShortcutsAdmin(){
 
 // ── SCANNER CODICE A BARRE ───────────────────────────────────
 var zxReader_=null, quickAddOpen_=false, lastCode_=null, lastCodeTime_=0, scanCartCount_=0, qaTipo_='Pezzo';
-var scanStream_=null, scanLoopTimer_=null, scanBaseCanvas_=null;
+var scanStream_=null, scanLoopTimer_=null, scanBaseCanvas_=null, scanAudioCtx_=null;
+var pendingBarcode_=null, pendingMatchedProduct_=null;
 var SCAN_MAX_W=720; // larghezza a cui viene ridotto ogni fotogramma prima della lettura (bilancia nitidezza/velocità)
+// ── Fix layout iOS: la tastiera che si apre/chiude ripetutamente sopra la
+// fotocamera a schermo intero a volte lascia Safari con misure di viewport
+// sbagliate (la vista camera resta "raccorciata", sotto compare nero) —
+// ricalcoliamo esplicitamente le dimensioni dell'overlay ad ogni cambio di
+// viewport invece di fidarci solo del CSS (inset:0/100dvh).
+function _scanFitViewport(){
+  var ov=document.getElementById('scan-ov');
+  if(!ov||!ov.classList.contains('on'))return;
+  var vv=window.visualViewport;
+  if(vv){
+    ov.style.height=vv.height+'px';
+    ov.style.top=vv.offsetTop+'px';
+  }else{
+    ov.style.height='';
+    ov.style.top='';
+  }
+}
+if(window.visualViewport){
+  window.visualViewport.addEventListener('resize',_scanFitViewport);
+  window.visualViewport.addEventListener('scroll',_scanFitViewport);
+}
 function openScanner(){
   if(typeof ZXing==='undefined'){toast('Libreria scanner non caricata, controlla la connessione');return;}
   quickAddOpen_=false; lastCode_=null; lastCodeTime_=0; scanCartCount_=0;
@@ -1136,6 +1180,8 @@ function openScanner(){
   document.getElementById('scan-quickadd').style.display='none';
   document.getElementById('scan-status').textContent='Inquadra il codice a barre';
   document.getElementById('scan-ov').className='on';
+  _scanFitViewport();
+  initBeep(); // creato/sbloccato qui perché siamo dentro un tap dell'utente (necessario su iPhone)
   var hints=new Map();
   hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[
     ZXing.BarcodeFormat.EAN_13,ZXing.BarcodeFormat.EAN_8,
@@ -1156,6 +1202,26 @@ function openScanner(){
     console.warn('scanner:',e);
     document.getElementById('scan-status').textContent='Fotocamera non disponibile su questo dispositivo/browser';
   });
+}
+// ── Beep di conferma lettura (Web Audio, nessun file audio necessario) ──
+function initBeep(){
+  try{
+    scanAudioCtx_=scanAudioCtx_||new (window.AudioContext||window.webkitAudioContext)();
+    if(scanAudioCtx_.state==='suspended') scanAudioCtx_.resume();
+  }catch(e){}
+}
+function playBeep(){
+  if(!scanAudioCtx_) return;
+  try{
+    var ctx=scanAudioCtx_;
+    var o=ctx.createOscillator(), g=ctx.createGain();
+    o.type='sine'; o.frequency.value=1600;
+    g.gain.setValueAtTime(0.0001,ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.35,ctx.currentTime+0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001,ctx.currentTime+0.14);
+    o.connect(g); g.connect(ctx.destination);
+    o.start(); o.stop(ctx.currentTime+0.15);
+  }catch(e){}
 }
 function scanTick(){
   if(quickAddOpen_) return;
@@ -1195,6 +1261,7 @@ function onScanResult(result){
   var codice=result.getText();
   if(codice===lastCode_ && (Date.now()-lastCodeTime_)<2500) return; // evita di leggere due volte di fila lo stesso codice
   lastCode_=codice; lastCodeTime_=Date.now();
+  playBeep(); // segnala subito che la lettura è riuscita, prima ancora di cercare il prodotto
   handleScannedCode(codice);
 }
 function closeScanner(){stopScanner();document.getElementById('scan-ov').className='';}
@@ -1206,6 +1273,11 @@ function stopScanner(){
 }
 async function handleScannedCode(codice){
   quickAddOpen_=true;
+  // 1) Il codice è già collegato a un prodotto del catalogo? (colonna "barcode" su catalogo_ceraldi)
+  var matched=CATALOG.find(function(p){ return p.barcode && String(p.barcode)===String(codice); });
+  if(matched){ openQuickAddCatalog(matched); return; }
+  // 2) Non è a catalogo: proviamo a riconoscere il nome tramite le banche dati pubbliche,
+  //    ma il prodotto resta comunque da collegare più avanti da Valerio (vedi salvaBarcodeSconosciuto)
   document.getElementById('scan-status').textContent='Ricerca prodotto...';
   var nomeCompleto='';
   try{
@@ -1218,20 +1290,39 @@ async function handleScannedCode(codice){
       nomeCompleto=(marca&&nome&&nome.toLowerCase().indexOf(marca.toLowerCase())===-1)?(marca+' '+nome):(nome||marca);
     }
   }catch(e){console.warn('handleScannedCode:',e);}
-  openQuickAdd(nomeCompleto);
+  openQuickAddNuovo(nomeCompleto,codice);
 }
-function openQuickAdd(nome){
-  document.getElementById('qa-nome').value=nome?nome.toUpperCase():'';
-  document.getElementById('qa-qty').value=1;
+// ── Pannello di conferma: prodotto GIÀ a catalogo (barcode riconosciuto) ──
+function openQuickAddCatalog(p){
+  pendingMatchedProduct_=p; pendingBarcode_=null;
+  var nomeEl=document.getElementById('qa-nome');
+  nomeEl.value=p.name; nomeEl.setAttribute('readonly','readonly');
+  document.getElementById('qa-suggest').style.display='none';
+  document.getElementById('qa-suggest').innerHTML='';
+  document.getElementById('qa-tipo-row').style.display='none';
+  document.getElementById('qa-qty').value='';
+  document.getElementById('scan-quickadd').style.display='block';
+  document.getElementById('scan-status').textContent='Prodotto a catalogo ✓ — inserisci la giacenza';
+  setTimeout(function(){ var q=document.getElementById('qa-qty'); q.focus(); q.select(); },120);
+}
+// ── Pannello di conferma: prodotto NON a catalogo (barcode sconosciuto) ──
+function openQuickAddNuovo(nome,codice){
+  pendingMatchedProduct_=null; pendingBarcode_=codice;
+  var nomeEl=document.getElementById('qa-nome');
+  nomeEl.removeAttribute('readonly'); nomeEl.value=nome?nome.toUpperCase():'';
+  document.getElementById('qa-suggest').style.display='none';
+  document.getElementById('qa-suggest').innerHTML='';
+  document.getElementById('qa-tipo-row').style.display='flex';
+  document.getElementById('qa-qty').value='';
   qaTipo_='Pezzo';
   document.querySelectorAll('.qa-tipo-chip').forEach(function(b){b.className='qa-tipo-chip'+(b.getAttribute('data-tipo')==='Pezzo'?' on':'');});
   document.getElementById('scan-quickadd').style.display='block';
-  document.getElementById('scan-status').textContent=nome?'Prodotto trovato ✓':'Non riconosciuto — scrivi il nome';
+  document.getElementById('scan-status').textContent=nome?'Non a catalogo — verifica il nome':'Non riconosciuto — scrivi il nome';
   setTimeout(function(){
     var q=document.getElementById('qa-qty');
     if(nome){q.focus();q.select();}
     else document.getElementById('qa-nome').focus();
-  },150);
+  },120);
 }
 function qaSelTipo(btn){
   document.querySelectorAll('.qa-tipo-chip').forEach(function(b){b.className='qa-tipo-chip';});
@@ -1239,26 +1330,89 @@ function qaSelTipo(btn){
   qaTipo_=btn.getAttribute('data-tipo');
 }
 function quickAddConfirm(){
-  var nome=document.getElementById('qa-nome').value.trim();
-  var qty=parseInt(document.getElementById('qa-qty').value,10)||1;
-  if(!nome){toast('Inserisci il nome del prodotto');document.getElementById('qa-nome').focus();return;}
-  var tl=_tipoLabel(qaTipo_,qty);
-  var key='cx'+Date.now();
-  lista[key]={name:nome.toUpperCase(),conf:tl,qty:qty,custom:true};
-  saveLista();updBadge();
-  scanCartCount_++;
-  document.getElementById('scan-cart-count').textContent=scanCartCount_;
-  toast(qty+' '+tl+' — '+nome.toUpperCase()+' ✓',1300);
+  var giac=parseInt(document.getElementById('qa-qty').value,10);
+  if(isNaN(giac)||giac<0){toast('Inserisci la giacenza');document.getElementById('qa-qty').focus();document.getElementById('qa-qty').select();return;}
+  if(pendingMatchedProduct_){
+    // Prodotto già a catalogo: stesso meccanismo giacenza→quantità usato per gli altri prodotti,
+    // la quantità da ordinare la calcola Ceraldi Ordini dalla scorta minima già impostata.
+    var p=pendingMatchedProduct_, key='p'+p.id;
+    lista[key]={name:p.name,conf:p.conf||'',qty:1,custom:false,id:p.id,giacenza:giac};
+    saveLista();updBadge();renderCatalog();
+    scanCartCount_++; document.getElementById('scan-cart-count').textContent=scanCartCount_;
+    toast('Giacenza '+giac+' — '+p.name+' ✓',1300);
+  }else{
+    var nome=document.getElementById('qa-nome').value.trim();
+    if(!nome){toast('Inserisci il nome del prodotto');document.getElementById('qa-nome').focus();return;}
+    var tl=_tipoLabel(qaTipo_,giac||1);
+    var key='cx'+Date.now();
+    lista[key]={name:nome.toUpperCase(),conf:tl,qty:giac||1,custom:true};
+    saveLista();updBadge();
+    scanCartCount_++; document.getElementById('scan-cart-count').textContent=scanCartCount_;
+    toast('Giacenza '+giac+' — '+nome.toUpperCase()+' ✓',1300);
+    // Registra il barcode non riconosciuto: Valerio lo collegherà al prodotto giusto da Ceraldi Ordini
+    salvaBarcodeSconosciuto(pendingBarcode_,nome.toUpperCase(),giac);
+  }
   closeQuickAdd();
+}
+function salvaBarcodeSconosciuto(barcode,nomeSuggerito,giacenza){
+  if(!barcode) return;
+  sbFetch('/rest/v1/ceraldi_barcode_sconosciuti',{method:'POST',body:JSON.stringify({
+    barcode:barcode,
+    nome_suggerito:nomeSuggerito,
+    giacenza:giacenza,
+    dipendente:(currentUser&&currentUser.nome)||null,
+    stato:'pending'
+  })}).catch(function(e){console.warn('barcode sconosciuto, salvataggio fallito:',e.message);});
 }
 function skipQuickAdd(){closeQuickAdd();}
 function closeQuickAdd(){
+  document.getElementById('qa-qty').blur();
+  document.getElementById('qa-nome').blur();
+  document.getElementById('qa-suggest').style.display='none';
+  document.getElementById('qa-suggest').innerHTML='';
   document.getElementById('scan-quickadd').style.display='none';
   document.getElementById('scan-status').textContent='Inquadra il prossimo codice';
   quickAddOpen_=false;
+  pendingMatchedProduct_=null; pendingBarcode_=null;
+  setTimeout(_scanFitViewport,350); // dopo che l'animazione di chiusura tastiera è finita
 }
 document.getElementById('qa-qty').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();quickAddConfirm();}});
 document.getElementById('qa-nome').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();document.getElementById('qa-qty').focus();document.getElementById('qa-qty').select();}});
+// ── Ricerca predittiva nel catalogo mentre scrivi il nome a mano (solo
+// quando il barcode non era già collegato a un prodotto — in quel caso il
+// nome è readonly e questa ricerca non serve) ──
+document.getElementById('qa-nome').addEventListener('input',function(){
+  if(pendingMatchedProduct_) return;
+  var box=document.getElementById('qa-suggest');
+  var q=this.value.trim();
+  if(q.length<2){ box.style.display='none'; box.innerHTML=''; return; }
+  var qn=norm(q);
+  var matches=CATALOG.filter(function(p){ return norm(p.name).indexOf(qn)>=0; }).slice(0,6);
+  if(!matches.length){ box.style.display='none'; box.innerHTML=''; return; }
+  box.innerHTML='';
+  matches.forEach(function(p){
+    var row=document.createElement('div');
+    row.className='qa-suggest-item';
+    row.innerHTML=p.name+(p.conf?'<small>'+p.conf+'</small>':'');
+    row.onclick=function(){ qaPickSuggestion(p); };
+    box.appendChild(row);
+  });
+  box.style.display='block';
+});
+function qaPickSuggestion(p){
+  document.getElementById('qa-suggest').style.display='none';
+  document.getElementById('qa-suggest').innerHTML='';
+  var codiceDaCollegare=pendingBarcode_; // openQuickAddCatalog lo azzera, salvalo prima
+  openQuickAddCatalog(p);
+  if(codiceDaCollegare){
+    // Scelta esplicita del dipendente dal catalogo reale (non un guess
+    // automatico): collega subito il barcode a questo prodotto, così i
+    // prossimi scan lo riconoscono senza passare da Valerio.
+    p.barcode=codiceDaCollegare; // aggiorna la cache locale per questa sessione
+    sbFetch('/rest/v1/catalogo_ceraldi?id=eq.'+p.id,{method:'PATCH',body:JSON.stringify({barcode:codiceDaCollegare})})
+      .catch(function(e){console.warn('collegamento barcode fallito:',e.message);});
+  }
+}
 
 // ── NUOVO ─────────────────────────────────────────────────────
 var npQ_=1;
