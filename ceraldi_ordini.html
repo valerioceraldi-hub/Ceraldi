@@ -266,7 +266,7 @@ input[type="search"],input[type="text"],input[type="number"],input[type="time"],
 </div>
 <div id="app">
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Ordini</em></div>
+    <div id="logo">Ceraldi <em>Ordini</em> <span id="build-badge" style="font-size:10px;font-weight:700;color:var(--muted);vertical-align:middle"></span></div>
     <button id="addprod-btn" title="Aggiungi prodotto / Gestisci listino">&#43;</button>
     <button id="rich-pending-btn" style="display:none;position:relative" title="Richieste da evadere">&#128276; <span id="rich-pending-badge" style="background:#e74c3c;color:#fff;border-radius:10px;padding:1px 6px;font-size:11px;font-weight:700;margin-left:2px">0</span></button>
     <button id="topbar-sync-btn" title="Risincronizza tutto dal Cloud" style="background:none;border:none;font-size:19px;cursor:pointer;padding:4px 6px;flex-shrink:0;line-height:1">&#128260;</button>
@@ -1603,6 +1603,39 @@ function _localCandidates(name, catalogList, topN, codArt, fornitore){
     return {c:c,s:Math.min(100,Math.round(s*10)/10)};
   }).sort(function(a,b){return b.s-a.s;});
   return scored.slice(0,topN);
+}
+// ── APPRENDIMENTO ALIAS (04/09, Valerio: "aggiungiamo anche una funzione
+// di apprendimento così non esce ogni volta il match") — una volta che un
+// nome scritto a mano o arrivato da un barcode scansionato viene collegato
+// (manualmente o accettando il match automatico) a un prodotto di
+// catalogo, la coppia si salva; le prossime volte che arriva quello stesso
+// nome, il collegamento è già noto e non richiede più conferma.
+var ALIAS_MAP={}; // _aliasNorm(nome) -> id prodotto catalogo
+function _aliasNorm(s){
+  return String(s||'').toUpperCase()
+    .replace(/[ÀÁÂÃ]/g,'A').replace(/[ÈÉÊË]/g,'E').replace(/[ÌÍÎÏ]/g,'I')
+    .replace(/[ÒÓÔÕ]/g,'O').replace(/[ÙÚÛÜ]/g,'U').replace(/[Ç]/g,'C')
+    .replace(/[^A-Z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
+}
+async function loadAliasProdotti(){
+  try{
+    var r=await fetch(SUPABASE_URL+'/rest/v1/ceraldi_alias_prodotti?select=alias_norm,product_id',
+      {headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}});
+    if(!r.ok)return;
+    var rows=await r.json();
+    ALIAS_MAP={};
+    rows.forEach(function(row){ ALIAS_MAP[row.alias_norm]=row.product_id; });
+  }catch(e){console.warn('[Alias] caricamento fallito:',e.message);}
+}
+function salvaAliasProdotto(nomeOriginale,productId){
+  var key=_aliasNorm(nomeOriginale);
+  if(!key||productId==null||ALIAS_MAP[key]===productId)return; // già noto, non serve riscrivere
+  ALIAS_MAP[key]=productId;
+  fetch(SUPABASE_URL+'/rest/v1/ceraldi_alias_prodotti',{
+    method:'POST',
+    headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=minimal'},
+    body:JSON.stringify({alias_norm:key,product_id:productId})
+  }).catch(function(e){console.warn('[Alias] salvataggio fallito:',e.message);});
 }
 async function _hybridMatchCatalog(names,catalogList,apiKey,extras){
   var results=new Array(names.length);
@@ -8740,6 +8773,14 @@ async function importaRichiesta(jsonText, onDone){
       var p=S.products.find(function(x){return String(x.id)===String(it.id);});
       if(p) return {item:it,match:p,qty:it.qty||1,include:true,isCustom:false};
     }
+    // Alias già imparato in passato per questo identico nome scritto/scansionato?
+    // Se sì, è un collegamento già confermato una volta — nessun bisogno di
+    // richiedere conferma di nuovo ogni volta (vedi salvaAliasProdotto).
+    var aliasId=ALIAS_MAP[_aliasNorm(it.name)];
+    if(aliasId!=null){
+      var pa=S.products.find(function(x){return String(x.id)===String(aliasId);});
+      if(pa) return {item:it,match:pa,qty:it.qty||1,include:true,isCustom:false};
+    }
     return null; // da risolvere sotto col match testuale/IA
   });
   var namesToMatch=[],mapIdx=[];
@@ -9036,6 +9077,10 @@ async function importaRichiesta(jsonText, onDone){
     richItems.forEach(function(ri){
       if(!ri.include||!ri.match)return;
       var pid=ri.match.id;
+      // Apprendimento alias: il prodotto arrivava come testo scritto/scansionato
+      // (item.custom) e qui è stato confermato/collegato a un prodotto reale —
+      // salva la coppia così le prossime volte non richiede più conferma.
+      if(ri.item.custom&&!ri.match._unlisted) salvaAliasProdotto(ri.item.name,pid);
       if(ri.item.needsScortaMin&&ri.setAsScortaMin&&!ri.match._unlisted&&ri.match.scorta_min==null&&ri.qty>0){
         ri.match.scorta_min=ri.qty;
         scortaMinDaSalvare.push(ri.match);
@@ -10935,7 +10980,7 @@ function updateStatoSettingsUI(){
 /* ── FINE STATO CONDIVISO ─────────────────────────────────────── */
 
 // ── AVVIO: carica Cloud poi inizializza tutto ─────────────
-var BUILD_VERSION='59 (Valerio: "ad ogni avvio c\'è sempre da dare autorizzazione a Google Drive, diventa scomodo") — rimosso Google Drive del tutto: i token OAuth duravano ~1 ora e Safari iOS blocca il rinnovo silenzioso, costringendo a riautorizzare di continuo, senza soluzione possibile senza un server dedicato. Verificato insieme cosa viveva ancora solo su Drive (fornitori/storico/catalogo erano già su Supabase da tempo): carrello, preferiti, note, ordini ricorrenti, promemoria, tema, e il listino locale importato. Spostati tutti su Supabase, condivisi tra i dispositivi (Valerio: "condividi") — due nuove tabelle, ceraldi_stato_condiviso e ceraldi_listino_locale. Nessuna autorizzazione da dare mai più; sync automatica ogni 30s in background, più immediata dopo ogni ordine inviato o import listino.';
+var BUILD_VERSION='60 (Valerio: match automatico "Da evadere" abbinava prodotti diversi tra loro — la funzione di matching lì era una terza implementazione mai aggiornata con le protezioni su marca/formato già presenti altrove, ora riusa _hybridMatchCatalog come Da Fatture/Import preventivo. Aggiunta memoria di apprendimento: una volta collegato un nome scritto o scansionato a un prodotto di catalogo, le prossime volte lo riconosce da solo senza richiedere conferma ogni volta.';
 // BUG CORRETTO (09/08, segnalato da Valerio: "mi dice di aggiornare ma è già
 // l'ultima, e con l'avviso non riesco a fare l'ordine") — il controllo
 // confrontava l'INTERO testo descrittivo di BUILD_VERSION, carattere per
@@ -10946,6 +10991,7 @@ var BUILD_VERSION='59 (Valerio: "ad ogni avvio c\'è sempre da dare autorizzazio
 // versione funzionale. Ora si confronta solo il NUMERO di versione (prima
 // della parentesi), stabile finché non cambia davvero qualcosa di funzionale.
 var BUILD_NUM = (BUILD_VERSION.match(/^(\S+)/) || [null, BUILD_VERSION])[1];
+document.getElementById('build-badge').textContent='v'+BUILD_NUM;
 console.log('[Ceraldi Ordini] versione caricata: '+BUILD_VERSION+' — '+new Date().toISOString());
 // ── AUTO-CHECK VERSIONE ─────────────────────────────────────────────
 // CAUSA REALE del "un prodotto c'è su un browser e non su un altro":
@@ -11055,6 +11101,7 @@ async function _bootApp(){
   _loadPendingWrites();
   // Carica catalogo da Cloud
   await loadCatalogFromSupabase();
+  loadAliasProdotti(); // non bloccante: mappa nomi imparati → prodotto, per "Da evadere"
   // Invia eventuali modifiche fatte offline
   if(_pendingWrites.length){await _flushPendingWrites();}
   _renderCatalogPreserveScroll();
