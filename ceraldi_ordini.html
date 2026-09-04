@@ -1629,14 +1629,19 @@ async function loadAliasProdotti(){
 }
 function salvaAliasProdotto(nomeOriginale,productId){
   var key=_aliasNorm(nomeOriginale);
-  if(!key||productId==null||ALIAS_MAP[key]===productId)return; // già noto, non serve riscrivere
-  ALIAS_MAP[key]=productId;
+  if(!key||productId==null||ALIAS_MAP[key]===productId)return; // già confermato in precedenza, non serve riscrivere
   fetch(SUPABASE_URL+'/rest/v1/ceraldi_alias_prodotti',{
     method:'POST',
     headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=minimal'},
     body:JSON.stringify({alias_norm:key,product_id:productId})
   }).then(function(r){
     if(!r.ok) return r.text().then(function(t){throw new Error('HTTP '+r.status+' — '+t);});
+    // FIX (Valerio, 04/09: durante il blocco egress la cache locale si
+    // aggiornava PRIMA di sapere se il salvataggio era davvero riuscito —
+    // se poi falliva sul serve, il codice pensava per sempre "già fatto" e
+    // non riprovava mai più, in silenzio totale. Ora si aggiorna solo qui,
+    // dopo la conferma reale.
+    ALIAS_MAP[key]=productId;
   }).catch(function(e){
     console.warn('[Alias] salvataggio fallito:',e.message);
     toast('⚠️ Apprendimento nome non salvato (manca la tabella ceraldi_alias_prodotti su Supabase?)',3500);
@@ -1649,14 +1654,17 @@ function salvaAliasProdotto(nomeOriginale,productId){
 function salvaBarcodeSuProdotto(barcode,productId){
   if(!barcode||productId==null)return;
   var p=S.products.find(function(x){return String(x.id)===String(productId);});
-  if(p&&p.barcode===barcode)return; // già collegato, non serve riscrivere
-  if(p)p.barcode=barcode; // aggiorna la cache locale subito
+  if(p&&p.barcode===barcode)return; // già confermato in precedenza, non serve riscrivere
   fetch(SUPABASE_URL+'/rest/v1/catalogo_ceraldi?id=eq.'+productId,{
     method:'PATCH',
     headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN,'Content-Type':'application/json'},
     body:JSON.stringify({barcode:barcode})
   }).then(function(r){
     if(!r.ok) return r.text().then(function(t){throw new Error('HTTP '+r.status+' — '+t);});
+    // Stesso fix di salvaAliasProdotto sopra: la cache si aggiorna SOLO dopo
+    // la conferma reale del salvataggio, mai prima.
+    if(p)p.barcode=barcode;
+    toast('🔗 Barcode collegato a '+(p?p.name:'prodotto #'+productId),2200);
   }).catch(function(e){
     console.warn('[Barcode] salvataggio fallito:',e.message);
     toast('⚠️ Barcode non salvato sul prodotto: '+e.message,4000);
@@ -11051,7 +11059,7 @@ function updateStatoSettingsUI(){
 /* ── FINE STATO CONDIVISO ─────────────────────────────────────── */
 
 // ── AVVIO: carica Cloud poi inizializza tutto ─────────────
-var BUILD_VERSION='64 (Valerio, con caso reale: "esce un match sbagliato e poi il barcode non si salva mai") — due bug concatenati trovati: 1) la soglia abbassata a 55 per proporre un match senza IA nella schermata Da evadere reintroduceva lo stesso falso positivo di brand/categoria per cui la IA era stata introdotta — tornato alla soglia sicura (solo ≥88 automatico, il resto via IA se c\'è una API Key). 2) Più grave: quando il match proposto era sbagliato, il bottone "Ignora questo prodotto" faceva SPARIRE l\'intera riga dalla richiesta (include=false, riga nascosta) — l\'item, e il suo codice a barre, andavano persi del tutto invece di diventare un provvisorio da collegare come i prodotti mai trovati. Ora "Ignora" trasforma l\'item in provvisorio (stesse opzioni cerca/aggiungi al listino, barcode ancora agganciato) invece di cancellarlo.';
+var BUILD_VERSION='65 (Valerio: quota egress Supabase esaurita durante tutta la sessione di test di oggi, risolta passando a piano Pro — spiega perché nessun salvataggio sembrava funzionare) — trovato anche un bug reale indipendente: salvaAliasProdotto/salvaBarcodeSuProdotto aggiornavano la cache locale (ALIAS_MAP, product.barcode) PRIMA di sapere se il salvataggio su Supabase fosse davvero riuscito. Con l\'egress bloccato, il salvataggio falliva sul serve ma la cache diceva già "fatto" — ai tentativi successivi (anche dopo aver risolto il piano) il codice si fermava subito pensando non ci fosse nulla da fare, senza nessun errore né conferma. Ora la cache si aggiorna solo dopo la conferma reale, e aggiunta una conferma visibile anche sul successo (prima c\'era silenzio pure quando funzionava).';
 // BUG CORRETTO (09/08, segnalato da Valerio: "mi dice di aggiornare ma è già
 // l'ultima, e con l'avviso non riesco a fare l'ordine") — il controllo
 // confrontava l'INTERO testo descrittivo di BUILD_VERSION, carattere per
