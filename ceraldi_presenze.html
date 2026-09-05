@@ -129,7 +129,7 @@ input[type="email"],input[type="password"],input[type="text"],input[type="time"]
 .priv-check-lbl b{color:var(--text)}
 .priv-check-lbl span{font-size:11px;color:var(--muted);display:block;margin-top:3px}
 /* ── LOGIN PAGE ──────────────────────────────────────── */
-#pg-login{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100dvh;padding:24px 20px;background:var(--bg);overflow-y:auto;-webkit-overflow-scrolling:touch}
+#pg-login{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100dvh;padding:24px 20px;background:var(--bg)}
 .login-hero{text-align:center;margin-bottom:32px}
 .login-hero h1{font-size:26px;font-weight:800;letter-spacing:-.5px;color:var(--text)}
 .login-hero h1 em{font-style:normal;color:var(--accent)}
@@ -183,10 +183,10 @@ input[type="email"],input[type="password"],input[type="text"],input[type="time"]
 
 /* ── TABLE presenze ──────────────────────────────────── */
 .presenza-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:13px 14px;margin-bottom:8px}
-.pc-top{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.pc-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .pc-nome{font-size:14px;font-weight:700;color:var(--text)}
 .pc-orari{font-size:12px;color:var(--muted);margin-top:3px}
-.pc-actions{display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
+.pc-actions{display:flex;gap:6px;flex-shrink:0}
 
 /* ── FILTER BAR ──────────────────────────────────────── */
 .filter-bar{display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
@@ -6168,23 +6168,6 @@ async function salvaCertMalattia() {
 async function rispondiAssenza(stato) {
   const nota = $('det-nota') ? $('det-nota').value.trim() : '';
   const assInfo = await DB.safe(() => DB.assenze.byId(_detAssenzaId), null);
-
-  // Blocco: non si può approvare una ferie/malattia se il dipendente
-  // risulta già avere una presenza timbrata in una data compresa nel
-  // periodo richiesto (segnalato: richiesta approvata per un giorno in
-  // cui esisteva già una timbratura). Controllo solo in approvazione
-  // (il rifiuto non crea nessun conflitto) e solo per ferie/malattia.
-  if (assInfo && stato === 'approvata' && (assInfo.tipo === 'ferie' || assInfo.tipo === 'malattia')) {
-    const { data: presenzaConflitto } = await sb.from('presenze')
-      .select('data').eq('dipendente_id', assInfo.dipendente_id)
-      .gte('data', assInfo.data_inizio).lte('data', assInfo.data_fine)
-      .limit(1).maybeSingle();
-    if (presenzaConflitto) {
-      toast('⚠ Non approvabile: risulta già una presenza il '+new Date(presenzaConflitto.data).toLocaleDateString('it-IT')+' — elimina prima quella timbratura');
-      return;
-    }
-  }
-
   const ok = await DB.safe(
     () => DB.assenze.rispondi(_detAssenzaId, stato, { nota_admin: nota || null }),
     'Errore durante il salvataggio'
@@ -13143,6 +13126,19 @@ async function apriStoricoRiconciliazioni(){
   srFiltraLista();
 }
 
+// Richiesto da Valerio ("non si capisce niente"): le causali dei movimenti
+// portafoglio sono codici tecnici (es. "eccedenza_bonifico_03_2026") pensati
+// per il database, non per essere letti — qui si traducono in una frase.
+function srLabelCausale(causale){
+  if (!causale) return 'Movimento manuale';
+  let mm = causale.match(/^eccedenza_bonifico_(\d{2})_(\d{4})$/);
+  if (mm) return 'Eccedenza bonifico ' + MESI_LBL[parseInt(mm[1])] + ' ' + mm[2];
+  mm = causale.match(/^utilizzo_stipendio_(\d{2})_(\d{4})$/);
+  if (mm) return 'Usato per lo stipendio di ' + MESI_LBL[parseInt(mm[1])] + ' ' + mm[2];
+  if (causale === 'eccedenza_bonifico') return 'Eccedenza bonifico';
+  return causale;
+}
+
 function srFiltraLista(){
   const dipFiltro = $('sr-dip-filtro') ? $('sr-dip-filtro').value : '';
   const btnQuadro = $('sr-btn-quadro');
@@ -13151,14 +13147,66 @@ function srFiltraLista(){
   const righe = dipFiltro ? tutte.filter(r => r.dipId === dipFiltro) : tutte;
   window._srRighe = righe;
   if (!righe.length) { $('sr-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Nessuna riconciliazione registrata ancora.</div>'; return; }
-  $('sr-lista').innerHTML = righe.slice(0,100).map((r,idx) => `
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid var(--border)">
-      <div style="flex:1;min-width:0">
-        <div style="font-size:13px;font-weight:600">${esc(r.dip)} — ${esc(r.label)} ${r.mese ? _iconaCedolino(r.dipId, r.mese, r.anno) : ''}</div>
-        <div style="font-size:11px;color:var(--muted)">€ ${r.importo.toFixed(2)} · ${esc(r.fonte)}</div>
-      </div>
-      <button class="btn-sm" style="white-space:nowrap;margin-left:8px;color:var(--red)" onclick="srAnnulla(${idx})">🗑 Annulla</button>
-    </div>`).join('');
+
+  // Richiesto da Valerio ("è poco chiaro, non si capisce niente... come la
+  // visione quadro completo dipendente"): prima era un elenco piatto di
+  // tutti i movimenti mescolati, con causali illeggibili tipo
+  // "eccedenza_bonifico_03_2026". Ora: un blocco per dipendente, dentro un
+  // riquadro per ogni mese di stipendio (come nel Quadro completo) con
+  // tutti i movimenti che lo coprono, e a parte i movimenti portafoglio non
+  // legati a un mese specifico, con la causale tradotta in italiano.
+  const perDip = {};
+  righe.forEach((r, idx) => {
+    if (!perDip[r.dipId]) perDip[r.dipId] = { dipId: r.dipId, nome: r.dip, mesi: {}, portafoglio: [] };
+    if (r.tipo === 'bonifico' && r.mese) {
+      const k = r.anno + '-' + String(r.mese).padStart(2,'0');
+      if (!perDip[r.dipId].mesi[k]) perDip[r.dipId].mesi[k] = { mese: r.mese, anno: r.anno, movimenti: [] };
+      perDip[r.dipId].mesi[k].movimenti.push({ ...r, idx });
+    } else {
+      perDip[r.dipId].portafoglio.push({ ...r, idx });
+    }
+  });
+
+  const gruppi = Object.values(perDip).sort((a,b) => a.nome.localeCompare(b.nome));
+  $('sr-lista').innerHTML = gruppi.map(g => {
+    const mesi = Object.values(g.mesi).sort((a,b) => (b.anno*12+b.mese) - (a.anno*12+a.mese));
+    const htmlMesi = mesi.map(mo => {
+      const tot = mo.movimenti.reduce((s,m) => s+m.importo, 0);
+      return `<div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="font-size:13px;font-weight:700">${MESI_LBL[mo.mese]} ${mo.anno} ${_iconaCedolino(g.dipId, mo.mese, mo.anno)}</div>
+          <div style="font-size:13px;font-weight:700;color:#1a7a3a">€ ${tot.toFixed(2)}</div>
+        </div>
+        ${mo.movimenti.map(m => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid var(--border);margin-top:6px">
+            <div style="flex:1;min-width:0"><div style="font-size:12px">${esc(m.fonte)}</div></div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <div style="font-size:13px;font-weight:600">€ ${m.importo.toFixed(2)}</div>
+              <button class="btn-sm" style="white-space:nowrap;color:var(--red)" onclick="srAnnulla(${m.idx})">🗑</button>
+            </div>
+          </div>`).join('')}
+      </div>`;
+    }).join('');
+    const htmlPortaf = g.portafoglio.length ? `
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px">
+        <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:4px">🐷 Movimenti portafoglio (non legati a un mese specifico)</div>
+        ${g.portafoglio.map(p => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid var(--border)">
+            <div style="flex:1;min-width:0">
+              <div style="font-size:12px;font-weight:600">${esc(p.label)}</div>
+              <div style="font-size:11px;color:var(--muted)">${esc(p.quando||'')} · ${esc(srLabelCausale(p.fonte))}</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <div style="font-size:13px;font-weight:600;color:${p.importo>=0?'#1a7a3a':'#c0392b'}">€ ${p.importo.toFixed(2)}</div>
+              <button class="btn-sm" style="white-space:nowrap;color:var(--red)" onclick="srAnnulla(${p.idx})">🗑</button>
+            </div>
+          </div>`).join('')}
+      </div>` : '';
+    return `<div style="margin-bottom:18px">
+      <div style="font-size:14px;font-weight:800;margin-bottom:6px">${esc(g.nome)}</div>
+      ${htmlMesi}${htmlPortaf}
+    </div>`;
+  }).join('');
 }
 
 function srApriQuadroSelezionato(){
@@ -13792,7 +13840,7 @@ async function caricaStipendi() {
   // Ora si recuperano TUTTI gli acconti fino a fine mese selezionato, e si
   // segna quali mesi risultano già liquidati (quindi già "chiusi"), per
   // riportare in avanti solo quelli davvero ancora in sospeso.
-  const [{ data: dipendenti }, { data: presenze }, { data: accontiTutti }, { data: restituzioniTutte }, { data: ferieAnno }, { data: malattieAnno }, { data: liquidazTutte }, { data: presenzePrecedenti }, { data: cedoliniMese }, { data: acconti1314Storico }, { data: bonificiRiconciliatiMese }] = await Promise.all([
+  const [{ data: dipendentiGrezzi }, { data: presenze }, { data: accontiTutti }, { data: restituzioniTutte }, { data: ferieAnno }, { data: malattieAnno }, { data: liquidazTutte }, { data: presenzePrecedenti }, { data: cedoliniMese }, { data: acconti1314Storico }, { data: bonificiRiconciliatiMese }] = await Promise.all([
     sb.from('presenze_profili').select('*').eq('attivo',true).or('ruolo.eq.dipendente,percepisce_stipendio.eq.true').order('nome'),
     sb.from('presenze').select('*').gte('data',dal).lte('data',al),
     // FIX 01/09 (segnalato da Valerio: acconto dato oggi per il mese di
@@ -13908,6 +13956,20 @@ async function caricaStipendi() {
     }
     return r.data >= dal && r.data <= al;
   });
+
+  // FIX 04/09 (richiesto da Valerio: "Vincenzo e Valerio Ceraldi vengono
+  // liquidati giorno per giorno, non conteggiarli qui altrimenti risultano
+  // sempre da liquidare"): per i due soci amministratori il calcolo
+  // mensile giorni×paga non ha senso — non passano dal ciclo acconto/
+  // cedolino/liquidazione come i dipendenti, vengono pagati giorno per
+  // giorno direttamente dal portafoglio (movimenti visibili in "Storico
+  // riconciliazioni"). Qui venivano comunque inclusi (percepisce_stipendio
+  // = true li fa passare il filtro sopra) e il calcolo giorni×paga -
+  // acconti/liquidazioni risultava sempre positivo, perché i loro prelievi
+  // giornalieri dal portafoglio non vengono mai sottratti in questo
+  // conteggio — un "da liquidare" fantasma che cresce ogni mese. Esclusi
+  // per TUTTI i mesi (passati compresi), non solo da oggi in poi.
+  const dipendenti = (dipendentiGrezzi||[]).filter(d => !(d.ruolo === 'admin' && ['valerio','vincenzo'].includes((d.nome||'').trim().toLowerCase())));
 
   if (!dipendenti || !dipendenti.length) {
     wrap.innerHTML = '<div class="empty"><div class="empty-txt">Nessun dipendente attivo</div></div>';
@@ -17791,32 +17853,7 @@ async function eliminaTimbratura() {
     return;
   }
   if (btn) { delete btn.dataset.arm; btn.innerHTML = '&#x1F5D1;'; }
-  const pres = await DB.safe(() => DB.presenze.byId(_corrId, 'dipendente_id,nome_dipendente,tipo_timbratura,confermata_dip'), null);
-
-  // Se la timbratura è manuale e il dipendente non l'ha ancora confermata,
-  // non c'è nulla da fargli confermare per eliminarla: dal suo punto di
-  // vista quella presenza non è mai diventata definitiva. Si elimina
-  // subito, senza passare dal ciclo richiesta/conferma (che resta
-  // obbligatorio solo per una timbratura già confermata dal dipendente,
-  // dove eliminare significa davvero annullare qualcosa che lui ha
-  // riconosciuto come avvenuto).
-  const nonAncoraConfermata = pres
-    && (pres.tipo_timbratura === 'manuale' || pres.tipo_timbratura === 'manuale_dip')
-    && pres.confermata_dip === false;
-  if (nonAncoraConfermata) {
-    const ok = await DB.safe(() => DB.presenze.remove(_corrId), 'Errore durante l\u2019eliminazione');
-    if (!ok) return;
-    await DB.safe(() => DB.correzioni.logga({
-      presenza_id: _corrId, dipendente_id: pres?pres.dipendente_id:null,
-      azione: 'eliminazione_diretta_non_confermata', motivo, dati_prima: _corrDatiPrima, eseguita_da: ME.id
-    }), null);
-    toast('\u2713 Timbratura eliminata');
-    closeSheet('sh-correggi');
-    await caricaOggi(); await caricaStorico(); await caricaPresenzeTeam(); await aggiornaStats();
-    await aggiornaPromemoria();
-    return;
-  }
-
+  const pres = await DB.safe(() => DB.presenze.byId(_corrId, 'dipendente_id,nome_dipendente'), null);
   const ok = await DB.safe(() => DB.presenze.update(_corrId, {
     richiesta_tipo: 'elimina',
     richiesta_nuovi_dati: null,
