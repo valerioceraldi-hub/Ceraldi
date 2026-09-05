@@ -1401,7 +1401,7 @@ async function loadCatalogFromSupabase(){
 
     if(isFullLoad){
       // ── PRIMO CARICAMENTO: scarica tutto ──
-      var r=await fetch(SUPABASE_URL+'/rest/v1/catalogo_ceraldi?select=id,name,conf,cat,subcat,iva,prices,best,settore,updated_at,qty_min,nota_ordine,best_override,giacenza,scorta_min&order=id&limit=100000',
+      var r=await fetch(SUPABASE_URL+'/rest/v1/catalogo_ceraldi?select=id,name,conf,cat,subcat,iva,prices,best,settore,updated_at,qty_min,nota_ordine,best_override,giacenza,scorta_min,barcode&order=id&limit=100000',
         {headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}});
       if(!r.ok)throw new Error('HTTP '+r.status);
       var data=await r.json();
@@ -1417,7 +1417,7 @@ async function loadCatalogFromSupabase(){
     } else {
       // ── DELTA SYNC: scarica solo righe cambiate ──
       var rChanged=await fetch(
-        SUPABASE_URL+'/rest/v1/catalogo_ceraldi?select=id,name,conf,cat,subcat,iva,prices,best,settore,updated_at,qty_min,nota_ordine,best_override,giacenza,scorta_min&updated_at=gt.'+encodeURIComponent(cachedAt)+'&order=updated_at&limit=100000',
+        SUPABASE_URL+'/rest/v1/catalogo_ceraldi?select=id,name,conf,cat,subcat,iva,prices,best,settore,updated_at,qty_min,nota_ordine,best_override,giacenza,scorta_min,barcode&updated_at=gt.'+encodeURIComponent(cachedAt)+'&order=updated_at&limit=100000',
         {headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}});
       if(!rChanged.ok)throw new Error('HTTP '+rChanged.status);
       var changed=await rChanged.json();
@@ -1470,7 +1470,7 @@ async function loadCatalogFromSupabase(){
             for(var mi=0;mi<missing.length;mi+=120){
               var chunk=missing.slice(mi,mi+120);
               try{
-                var rM=await fetch(SUPABASE_URL+'/rest/v1/catalogo_ceraldi?select=id,name,conf,cat,subcat,iva,prices,best,settore,updated_at,qty_min,nota_ordine,best_override,giacenza,scorta_min&id=in.('+chunk.join(',')+')&limit=100000',
+                var rM=await fetch(SUPABASE_URL+'/rest/v1/catalogo_ceraldi?select=id,name,conf,cat,subcat,iva,prices,best,settore,updated_at,qty_min,nota_ordine,best_override,giacenza,scorta_min,barcode&id=in.('+chunk.join(',')+')&limit=100000',
                   {headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+AUTH_TOKEN}});
                 if(rM.ok){(await rM.json()).forEach(function(row){cacheMap[String(row.id)]=row;});}
               }catch(e){console.warn('[Catalogo] self-heal chunk fallito:',e.message);}
@@ -6159,6 +6159,7 @@ function openEditProduct(prod) {
 
   field('Nome prodotto', 'ep-name', prod.name, 'text', 'Nome prodotto');
   field('Confezione', 'ep-conf', prod.conf, 'text', 'Es. CT, BT, PZ');
+  field('Codice a barre', 'ep-barcode', prod.barcode||'', 'text', 'Es. 8001234567890 — collegato dallo scanner in Richieste');
 
   // ── Mappa settore → categorie (stessa di rapf) ───────────────
   var EP_SECTOR_CATS={
@@ -6210,7 +6211,7 @@ function openEditProduct(prod) {
   epBuildCats(getSectorForProduct(prod), currentCatVal);
 
   // Rigenera categorie quando cambia settore
-  secSel3.onchange=function(){ epBuildCats(this.value,''); newCatWrap.style.display='none'; };
+  secSel3.onchange=function(){ epBuildCats(this.value,''); newCatWrap.style.display='none'; epBuildPrices(this.value); };
 
   // New cat input (hidden)
   var newCatWrap = document.createElement('div'); newCatWrap.style.cssText = 'display:none;margin-top:-6px;margin-bottom:10px';
@@ -6219,11 +6220,30 @@ function openEditProduct(prod) {
   newCatWrap.appendChild(newCatInp);
   catSel.onchange = function() { newCatWrap.style.display = this.value==='__new__'?'block':'none'; };
   body.appendChild(catLbl); body.appendChild(catSel); body.appendChild(newCatWrap);
-  // Prices
-  S.suppliers.forEach(function(sup) {
-    var price = prod.prices ? (prod.prices[sup.name] || '') : '';
-    field('Prezzo ' + sup.name + ' (EUR)', 'ep-price-' + sup.name.replace(/\s+/g, '_'), price, 'number', '0.00');
-  });
+  // Prices — FIX (Valerio, 04/09: "QWERTY ha settore Bar ma si vedono tutti
+  // i fornitori, non solo quelli del Bar") — prima non filtrava affatto per
+  // settore (a differenza della scheda "Aggiungi al listino", che invece lo
+  // fa correttamente). Ora filtra come lì, e si aggiorna anche se cambi il
+  // settore dal menu a tendina qui sopra.
+  var pricesWrap=document.createElement('div'); pricesWrap.id='ep-prices-wrap';
+  body.appendChild(pricesWrap);
+  function epBuildPrices(sector){
+    pricesWrap.innerHTML='';
+    var relevantSuppliers=S.suppliers.filter(function(sup){ return getSupplierSectors(sup.name).indexOf(sector)>=0; });
+    relevantSuppliers.forEach(function(sup) {
+      var price = prod.prices ? (prod.prices[sup.name] || '') : '';
+      var lbl=document.createElement('div');
+      lbl.style.cssText='font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;margin-bottom:4px';
+      lbl.textContent='Prezzo '+sup.name+' (EUR)';
+      var inp=document.createElement('input');
+      inp.type='number';inp.id='ep-price-'+sup.name.replace(/\s+/g,'_');inp.value=price;inp.placeholder='0.00';
+      inp.style.cssText='width:100%;background:var(--bg);border:1.5px solid var(--border);border-radius:9px;padding:10px 13px;font-size:16px;color:var(--text);outline:none;margin-bottom:10px;font-family:inherit';
+      inp.onfocus=function(){this.style.borderColor='var(--gold)';};
+      inp.onblur=function(){this.style.borderColor='var(--border)';};
+      pricesWrap.appendChild(lbl);pricesWrap.appendChild(inp);
+    });
+  }
+  epBuildPrices(getSectorForProduct(prod));
 
   // ── STORICO PREZZI (grafico) ────────────────────────────────
   var storicoLbl=document.createElement('div');
@@ -6289,6 +6309,7 @@ function openEditProduct(prod) {
     var name = document.getElementById('ep-name').value.trim().toUpperCase();
     if (!name) { toast('Inserisci il nome'); return; }
     var conf = document.getElementById('ep-conf').value.trim();
+    var barcodeEp = document.getElementById('ep-barcode').value.trim();
     var catSel2 = document.getElementById('ep-cat');
     var cat;
     if(catSel2.value==='__new__'){
@@ -6316,7 +6337,7 @@ function openEditProduct(prod) {
     if(epSecVal==='Pasticceria'||epSecVal==='Carta'){finalCat=epSecVal.toUpperCase();finalSubcat=cat;}
     var ci = S.custom.findIndex(function(p) { return p.id === prod.id; });
     if (ci >= 0) {
-      var upd={name:name,conf:conf,cat:finalCat,prices:prices,best:best,settore:chosenSector};
+      var upd={name:name,conf:conf,cat:finalCat,prices:prices,best:best,settore:chosenSector,barcode:barcodeEp||null};
       if(finalSubcat!==undefined)upd.subcat=finalSubcat;
       S.custom[ci] = Object.assign({}, S.custom[ci], upd);
       sc2();
@@ -6324,7 +6345,7 @@ function openEditProduct(prod) {
       // Update in BP
       var bi = BP.findIndex(function(p) { return p.id === prod.id; });
       if (bi >= 0) {
-        var bupd={name:name,conf:conf,cat:finalCat,prices:prices,best:best,settore:chosenSector};
+        var bupd={name:name,conf:conf,cat:finalCat,prices:prices,best:best,settore:chosenSector,barcode:barcodeEp||null};
         if(finalSubcat!==undefined)bupd.subcat=finalSubcat;
         BP[bi] = Object.assign({}, BP[bi], bupd);
       }
@@ -11074,7 +11095,7 @@ function updateStatoSettingsUI(){
 /* ── FINE STATO CONDIVISO ─────────────────────────────────────── */
 
 // ── AVVIO: carica Cloud poi inizializza tutto ─────────────
-var BUILD_VERSION='66 (Valerio, con dati reali da Supabase: il barcode non si salvava MAI su "Aggiungi al listino", in modo riproducibile — non era un problema di piattaforma) — trovata una race condition vera: saveCatalogToSupabase() (che crea il nuovo prodotto) è asincrona ma non veniva aspettata prima di procedere; il PATCH del barcode partiva subito dopo, quando il prodotto poteva non esistere ancora su Supabase — PostgREST in quel caso risponde comunque "200 OK, zero righe modificate", senza nessun errore, quindi sembrava tutto a posto mentre non si scriveva nulla. In più saveCatalogToSupabase() costruisce la riga scegliendo i campi uno per uno per nome, e "barcode" non era nell\'elenco — sarebbe stato scartato in silenzio comunque. Corretto entrambi: barcode incluso nel salvataggio del prodotto, e il salvataggio viene aspettato per davvero prima di procedere. Corretti a mano anche i tre prodotti di test di oggi (QWERTY, CERRI MERRY, CALABRO) rimasti senza barcode per questo bug.';
+var BUILD_VERSION='68 (Valerio: "QWERTY ha settore Bar ma si vedono tutti i fornitori, non solo quelli del Bar") — la scheda Modifica prodotto non filtrava mai i fornitori per settore nei campi prezzo (a differenza di Aggiungi al listino, che lo fa correttamente). Ora filtra allo stesso modo, e si aggiorna anche cambiando il settore dal menu a tendina senza dover riaprire la scheda.';
 // BUG CORRETTO (09/08, segnalato da Valerio: "mi dice di aggiornare ma è già
 // l'ultima, e con l'avviso non riesco a fare l'ordine") — il controllo
 // confrontava l'INTERO testo descrittivo di BUILD_VERSION, carattere per
