@@ -17791,7 +17791,32 @@ async function eliminaTimbratura() {
     return;
   }
   if (btn) { delete btn.dataset.arm; btn.innerHTML = '&#x1F5D1;'; }
-  const pres = await DB.safe(() => DB.presenze.byId(_corrId, 'dipendente_id,nome_dipendente'), null);
+  const pres = await DB.safe(() => DB.presenze.byId(_corrId, 'dipendente_id,nome_dipendente,tipo_timbratura,confermata_dip'), null);
+
+  // Se la timbratura è manuale e il dipendente non l'ha ancora confermata,
+  // non c'è nulla da fargli confermare per eliminarla: dal suo punto di
+  // vista quella presenza non è mai diventata definitiva. Si elimina
+  // subito, senza passare dal ciclo richiesta/conferma (che resta
+  // obbligatorio solo per una timbratura già confermata dal dipendente,
+  // dove eliminare significa davvero annullare qualcosa che lui ha
+  // riconosciuto come avvenuto).
+  const nonAncoraConfermata = pres
+    && (pres.tipo_timbratura === 'manuale' || pres.tipo_timbratura === 'manuale_dip')
+    && pres.confermata_dip === false;
+  if (nonAncoraConfermata) {
+    const ok = await DB.safe(() => DB.presenze.remove(_corrId), 'Errore durante l\u2019eliminazione');
+    if (!ok) return;
+    await DB.safe(() => DB.correzioni.logga({
+      presenza_id: _corrId, dipendente_id: pres?pres.dipendente_id:null,
+      azione: 'eliminazione_diretta_non_confermata', motivo, dati_prima: _corrDatiPrima, eseguita_da: ME.id
+    }), null);
+    toast('\u2713 Timbratura eliminata');
+    closeSheet('sh-correggi');
+    await caricaOggi(); await caricaStorico(); await caricaPresenzeTeam(); await aggiornaStats();
+    await aggiornaPromemoria();
+    return;
+  }
+
   const ok = await DB.safe(() => DB.presenze.update(_corrId, {
     richiesta_tipo: 'elimina',
     richiesta_nuovi_dati: null,
