@@ -183,10 +183,10 @@ input[type="email"],input[type="password"],input[type="text"],input[type="time"]
 
 /* ── TABLE presenze ──────────────────────────────────── */
 .presenza-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:13px 14px;margin-bottom:8px}
-.pc-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.pc-top{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
 .pc-nome{font-size:14px;font-weight:700;color:var(--text)}
 .pc-orari{font-size:12px;color:var(--muted);margin-top:3px}
-.pc-actions{display:flex;gap:6px;flex-shrink:0}
+.pc-actions{display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
 
 /* ── FILTER BAR ──────────────────────────────────────── */
 .filter-bar{display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
@@ -6168,6 +6168,23 @@ async function salvaCertMalattia() {
 async function rispondiAssenza(stato) {
   const nota = $('det-nota') ? $('det-nota').value.trim() : '';
   const assInfo = await DB.safe(() => DB.assenze.byId(_detAssenzaId), null);
+
+  // Blocco: non si può approvare una ferie/malattia se il dipendente
+  // risulta già avere una presenza timbrata in una data compresa nel
+  // periodo richiesto (segnalato: richiesta approvata per un giorno in
+  // cui esisteva già una timbratura). Controllo solo in approvazione
+  // (il rifiuto non crea nessun conflitto) e solo per ferie/malattia.
+  if (assInfo && stato === 'approvata' && (assInfo.tipo === 'ferie' || assInfo.tipo === 'malattia')) {
+    const { data: presenzaConflitto } = await sb.from('presenze')
+      .select('data').eq('dipendente_id', assInfo.dipendente_id)
+      .gte('data', assInfo.data_inizio).lte('data', assInfo.data_fine)
+      .limit(1).maybeSingle();
+    if (presenzaConflitto) {
+      toast('⚠ Non approvabile: risulta già una presenza il '+new Date(presenzaConflitto.data).toLocaleDateString('it-IT')+' — elimina prima quella timbratura');
+      return;
+    }
+  }
+
   const ok = await DB.safe(
     () => DB.assenze.rispondi(_detAssenzaId, stato, { nota_admin: nota || null }),
     'Errore durante il salvataggio'
