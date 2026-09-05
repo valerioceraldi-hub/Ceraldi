@@ -3455,7 +3455,7 @@ async function presenzeCalcolaPartitario(dipId){
       dataCedolino: c.anno+'-'+String(c.mese).padStart(2,'0')+'-01',
       dare, avereTotale, diff,
       stato: Math.abs(diff) <= 0.5 ? 'saldato' : (diff < 0 ? 'aperto' : 'eccedenza'),
-      bonifici: reali.map(b => ({ data: b.data_movimento, importo: parseFloat(b.importo)||0, descrizione: b.descrizione_movimento || '' })),
+      bonifici: reali.map(b => ({ id: b.id, data: b.data_movimento, importo: parseFloat(b.importo)||0, descrizione: b.descrizione_movimento || '' })),
       nota: note.join(' · ')
     };
   }).sort((a,b) => (a.anno*100+a.mese) - (b.anno*100+b.mese));
@@ -13148,63 +13148,25 @@ function srFiltraLista(){
   window._srRighe = righe;
   if (!righe.length) { $('sr-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Nessuna riconciliazione registrata ancora.</div>'; return; }
 
-  // Richiesto da Valerio ("è poco chiaro, non si capisce niente... come la
-  // visione quadro completo dipendente"): prima era un elenco piatto di
-  // tutti i movimenti mescolati, con causali illeggibili tipo
-  // "eccedenza_bonifico_03_2026". Ora: un blocco per dipendente, dentro un
-  // riquadro per ogni mese di stipendio (come nel Quadro completo) con
-  // tutti i movimenti che lo coprono, e a parte i movimenti portafoglio non
-  // legati a un mese specifico, con la causale tradotta in italiano.
-  const perDip = {};
-  righe.forEach((r, idx) => {
-    if (!perDip[r.dipId]) perDip[r.dipId] = { dipId: r.dipId, nome: r.dip, mesi: {}, portafoglio: [] };
-    if (r.tipo === 'bonifico' && r.mese) {
-      const k = r.anno + '-' + String(r.mese).padStart(2,'0');
-      if (!perDip[r.dipId].mesi[k]) perDip[r.dipId].mesi[k] = { mese: r.mese, anno: r.anno, movimenti: [] };
-      perDip[r.dipId].mesi[k].movimenti.push({ ...r, idx });
-    } else {
-      perDip[r.dipId].portafoglio.push({ ...r, idx });
-    }
-  });
-
-  const gruppi = Object.values(perDip).sort((a,b) => a.nome.localeCompare(b.nome));
-  $('sr-lista').innerHTML = gruppi.map(g => {
-    const mesi = Object.values(g.mesi).sort((a,b) => (b.anno*12+b.mese) - (a.anno*12+a.mese));
-    const htmlMesi = mesi.map(mo => {
-      const tot = mo.movimenti.reduce((s,m) => s+m.importo, 0);
-      return `<div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px">
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <div style="font-size:13px;font-weight:700">${MESI_LBL[mo.mese]} ${mo.anno} ${_iconaCedolino(g.dipId, mo.mese, mo.anno)}</div>
-          <div style="font-size:13px;font-weight:700;color:#1a7a3a">€ ${tot.toFixed(2)}</div>
-        </div>
-        ${mo.movimenti.map(m => `
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid var(--border);margin-top:6px">
-            <div style="flex:1;min-width:0"><div style="font-size:12px">${esc(m.fonte)}</div></div>
-            <div style="display:flex;align-items:center;gap:8px">
-              <div style="font-size:13px;font-weight:600">€ ${m.importo.toFixed(2)}</div>
-              <button class="btn-sm" style="white-space:nowrap;color:var(--red)" onclick="srAnnulla(${m.idx})">🗑</button>
-            </div>
-          </div>`).join('')}
-      </div>`;
-    }).join('');
-    const htmlPortaf = g.portafoglio.length ? `
-      <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px">
-        <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:4px">🐷 Movimenti portafoglio (non legati a un mese specifico)</div>
-        ${g.portafoglio.map(p => `
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid var(--border)">
-            <div style="flex:1;min-width:0">
-              <div style="font-size:12px;font-weight:600">${esc(p.label)}</div>
-              <div style="font-size:11px;color:var(--muted)">${esc(p.quando||'')} · ${esc(srLabelCausale(p.fonte))}</div>
-            </div>
-            <div style="display:flex;align-items:center;gap:8px">
-              <div style="font-size:13px;font-weight:600;color:${p.importo>=0?'#1a7a3a':'#c0392b'}">€ ${p.importo.toFixed(2)}</div>
-              <button class="btn-sm" style="white-space:nowrap;color:var(--red)" onclick="srAnnulla(${p.idx})">🗑</button>
-            </div>
-          </div>`).join('')}
-      </div>` : '';
-    return `<div style="margin-bottom:18px">
-      <div style="font-size:14px;font-weight:800;margin-bottom:6px">${esc(g.nome)}</div>
-      ${htmlMesi}${htmlPortaf}
+  // Richiesto da Valerio: raggruppare per mese come nel Quadro Completo
+  // rendeva questa schermata un doppione di quella — e il Quadro Completo,
+  // ora arricchito con l'annulla per movimento e i movimenti portafoglio,
+  // copre già quel bisogno per un singolo dipendente. Lo Storico torna alla
+  // sua funzione propria e diversa: un log cronologico di TUTTE le attività
+  // recenti (su tutti i dipendenti insieme), per un controllo veloce e per
+  // annullare un errore appena fatto senza dover sapere di chi/quale mese.
+  $('sr-lista').innerHTML = righe.slice(0,150).map((r,idx) => {
+    const isPortafoglio = r.tipo === 'portafoglio';
+    const causaleLbl = isPortafoglio ? srLabelCausale(r.fonte) : r.fonte;
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid var(--border)">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600">${esc(r.dip)} — ${esc(r.label)} ${r.mese ? _iconaCedolino(r.dipId, r.mese, r.anno) : ''}</div>
+        <div style="font-size:11px;color:var(--muted)">${esc(r.quando||'')} · ${esc(causaleLbl)}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-left:8px">
+        <div style="font-size:13px;font-weight:700;color:${r.importo>=0?'#1a7a3a':'#c0392b'}">€ ${r.importo.toFixed(2)}</div>
+        <button class="btn-sm" style="white-space:nowrap;color:var(--red)" onclick="srAnnulla(${idx})">🗑</button>
+      </div>
     </div>`;
   }).join('');
 }
@@ -13301,12 +13263,17 @@ async function apriQuadroCompleto(dipId, nome){
     $('qc-titolo').textContent = '👁 Quadro completo — ' + nome;
     $('qc-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Caricamento…</div>';
     openSheet('sh-quadroCompleto');
-    const righe = await presenzeCalcolaPartitario(dipId);
+    window._qcDipId = dipId; window._qcNome = nome;
+    const [righe, { data: bonificiTutti }, { data: portaf }] = await Promise.all([
+      presenzeCalcolaPartitario(dipId),
+      sb.from('presenze_bonifici_stipendio').select('*').eq('dipendente_id',dipId),
+      sb.from('presenze_portafoglio_movimenti').select('*').eq('dipendente_id',dipId).order('data',{ascending:false})
+    ]);
     await _caricaCedoliniUrlMap();
     if (!righe.length) { $('qc-lista').innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px">Nessun cedolino caricato per questo dipendente.</div>'; return; }
     const badgeStato = { saldato:'✅', aperto:'⚠️', eccedenza:'🔵' };
     const colStato = { saldato:'#1a7a3a', aperto:'#b36a00', eccedenza:'#2b4acb' };
-    $('qc-lista').innerHTML = righe.map(r => `
+    const htmlMesi = righe.map(r => `
       <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px">
         <div style="display:flex;justify-content:space-between;align-items:center">
           <div style="font-size:13px;font-weight:700">${MESI_LBL[r.mese]} ${r.anno} ${_iconaCedolino(dipId, r.mese, r.anno)}</div>
@@ -13320,16 +13287,72 @@ async function apriQuadroCompleto(dipId, nome){
           <div style="flex:1;min-width:0;background:var(--surface);border-radius:8px;padding:8px${r.stato!=='saldato'?';cursor:pointer;border:1.5px dashed #b36a00':''}"${r.stato!=='saldato' ? ` onclick="apriCnrCandidatiDaQuadro('${dipId}','${esc(nome)}',${r.mese},${r.anno},${r.dare},${r.avereTotale})"` : ''}>
             <div style="font-size:9px;color:var(--muted);text-transform:uppercase">🏦 Bonifico (avere)${r.stato!=='saldato' ? ' · tocca per agganciare' : ''}</div>
             <div style="font-size:15px;font-weight:700">€ ${r.avereTotale.toFixed(2)}</div>
-            ${r.bonifici.map(b=>`<div style="font-size:10px;color:var(--muted);word-break:break-word">${b.data||'?'} — €${b.importo.toFixed(2)}</div>`).join('')}
+            ${r.bonifici.map(b=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-top:2px"><div style="font-size:10px;color:var(--muted);word-break:break-word;flex:1;min-width:0">${b.data||'?'} — €${b.importo.toFixed(2)}</div><button class="btn-sm" style="padding:1px 6px;font-size:10px;color:var(--red)" onclick="event.stopPropagation();qcAnnullaBonifico('${b.id}')">🗑</button></div>`).join('')}
           </div>
         </div>
         ${r.nota ? `<div style="font-size:10.5px;color:var(--muted);margin-top:6px;font-style:italic;word-break:break-word">${esc(r.nota)}</div>` : ''}
         <div style="font-size:11px;color:var(--muted);margin-top:6px;text-align:right">saldo progressivo: <b style="color:${r.saldoProgressivo>=0?'#1a7a3a':'#c0392b'}">€ ${r.saldoProgressivo.toFixed(2)}</b></div>
       </div>`).join('');
+
+    // Movimenti portafoglio di questo dipendente non ancora coperti sopra —
+    // stessa vista che prima serviva "Storico riconciliazioni" per vedere
+    // (richiesto da Valerio: le due schermate erano ridondanti, meglio
+    // tenerne una sola completa). Include sia i depositi/prelievi diretti
+    // sia i bonifici coperti "dal portafoglio" (fonte_copertura), ciascuno
+    // con l'annulla.
+    const portafoglioBonifici = (bonificiTutti||[]).filter(b => b.fonte_copertura === 'portafoglio').map(b => ({
+      tipo:'copertura', id:b.id, portafoglioMovId:b.portafoglio_movimento_id, importo:-parseFloat(b.importo||0),
+      label:'Usato per coprire ' + MESI_LBL[b.mese_riferimento] + ' ' + b.anno_riferimento, quando:b.data_movimento||b.creato_il
+    }));
+    const portafoglioMovs = (portaf||[]).map(p => ({
+      tipo:'movimento', id:p.id, importo:parseFloat(p.importo||0),
+      label: parseFloat(p.importo)>=0 ? '🐷 Deposito nel portafoglio' : '🐷 Prelievo dal portafoglio',
+      causale: p.causale, quando: p.data||p.creato_il
+    }));
+    const tuttiPortaf = portafoglioBonifici.concat(portafoglioMovs).sort((a,b)=>(b.quando||'').localeCompare(a.quando||''));
+    const htmlPortaf = tuttiPortaf.length ? `
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px">
+        <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:4px">🐷 Movimenti portafoglio</div>
+        ${tuttiPortaf.map(p => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid var(--border)">
+            <div style="flex:1;min-width:0">
+              <div style="font-size:12px;font-weight:600">${esc(p.label)}</div>
+              <div style="font-size:11px;color:var(--muted)">${esc(p.quando||'')}${p.causale?' · '+esc(srLabelCausale(p.causale)):''}</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <div style="font-size:13px;font-weight:600;color:${p.importo>=0?'#1a7a3a':'#c0392b'}">€ ${p.importo.toFixed(2)}</div>
+              <button class="btn-sm" style="white-space:nowrap;color:var(--red)" onclick="${p.tipo==='copertura' ? `qcAnnullaBonifico('${p.id}')` : `qcAnnullaPortafoglioMov('${p.id}')`}">🗑</button>
+            </div>
+          </div>`).join('')}
+      </div>` : '';
+
+    $('qc-lista').innerHTML = htmlMesi + htmlPortaf;
   } catch (e) {
     console.warn('apriQuadroCompleto:', e.message || e);
     $('qc-lista').innerHTML = '<div style="text-align:center;color:var(--red);padding:20px">⚠️ Errore nel caricamento: ' + esc(String(e.message||e)) + '</div>';
   }
+}
+
+async function qcAnnullaBonifico(id){
+  if (!confirm('Annullare questo movimento?')) return;
+  try {
+    const { data: row } = await sb.from('presenze_bonifici_stipendio').select('portafoglio_movimento_id').eq('id',id).maybeSingle();
+    await sb.from('presenze_bonifici_stipendio').delete().eq('id', id);
+    // Un prelievo dal portafoglio ha generato QUESTA copertura: cancellata
+    // la copertura, il prelievo stesso non ha più senso — va tolto anche lui.
+    if (row && row.portafoglio_movimento_id) await sb.from('presenze_portafoglio_movimenti').delete().eq('id', row.portafoglio_movimento_id);
+    toast('✓ Movimento annullato');
+    apriQuadroCompleto(window._qcDipId, window._qcNome);
+  } catch (e) { toast('⚠️ Errore: ' + (e.message||e)); }
+}
+
+async function qcAnnullaPortafoglioMov(id){
+  if (!confirm('Annullare questo movimento portafoglio?')) return;
+  try {
+    await sb.from('presenze_portafoglio_movimenti').delete().eq('id', id);
+    toast('✓ Movimento annullato');
+    apriQuadroCompleto(window._qcDipId, window._qcNome);
+  } catch (e) { toast('⚠️ Errore: ' + (e.message||e)); }
 }
 
 // FIX 30/08 (richiesto da Valerio: "cliccando in bonifico avere fai in modo
