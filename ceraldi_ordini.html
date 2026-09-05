@@ -2609,6 +2609,11 @@ async function saveCatalogToSupabase(items){
     // Includi prezzi e best direttamente nel record catalogo
     if(p.prices&&Object.keys(p.prices).length)row.prices=p.prices;
     if(p.best)row.best=p.best;
+    // Codice a barre collegato dallo scanner in Ceraldi Richieste (vedi
+    // salvaBarcodeSuProdotto) — va incluso anche qui, non solo nel PATCH
+    // separato, perché un prodotto NUOVO (creato da "Aggiungi al listino")
+    // passa proprio da questa funzione per il suo primo salvataggio.
+    if(p.barcode)row.barcode=p.barcode;
     // Q.minima, nota d'ordine e fornitore pinnato: prima locali (S.defaults), ora
     // colonne del catalogo su Cloud — sincronizzate tra tutti i dispositivi.
     row.qty_min=(p.qty_min!=null&&p.qty_min!=='')?p.qty_min:null;
@@ -3788,15 +3793,15 @@ function renderCart(){
         unlAddBtn.textContent='📋 Aggiungi al listino';
         unlAddBtn.onclick=(function(pid,item){return function(e2){
           e2.stopPropagation();
-          openAddToListino({name:item.product.name,conf:item.product.conf||''},function(newProd){
+          openAddToListino({name:item.product.name,conf:item.product.conf||'',barcode:item._barcode||null},function(newProd){
             var qty=item.qty,sources=item._sources||[];
-            // Se l'item provvisorio portava con sé un codice a barre
-            // scansionato in Richieste, collegalo al prodotto appena creato.
-            if(item._barcode) salvaBarcodeSuProdotto(item._barcode,newProd.id);
+            // Il barcode è già stato incluso nel salvataggio atomico del
+            // nuovo prodotto qui sopra (vedi openAddToListino) — non serve
+            // più un PATCH separato per questo caso specifico.
             delete S.cart[pid];delete S.orderSupOverride[pid];
             S.cart[newProd.id]={product:newProd,qty:qty,_sources:sources};
             updateBadge();renderCart();
-            toast('📋 '+newProd.name+' aggiunto al listino e collegato');
+            toast('📋 '+newProd.name+' aggiunto al listino'+(item._barcode?' e collegato':''));
           });
         };})(e.pid,e.item);
         unlActions.appendChild(unlSearchBtn);unlActions.appendChild(unlAddBtn);
@@ -6024,7 +6029,7 @@ function openAddToListino(item, onSaved) {
   var saveBtn = document.createElement('button');
   saveBtn.style.cssText = 'flex:2;padding:12px;border-radius:11px;border:none;background:var(--green);color:#fff;font-size:14px;font-weight:700;cursor:pointer';
   saveBtn.textContent = '✓ Salva nel listino';
-  saveBtn.onclick = function() {
+  saveBtn.onclick = async function() {
     var name = document.getElementById('al-name').value.trim().toUpperCase();
     if (!name) { toast('Inserisci il nome'); return; }
     var conf = document.getElementById('al-conf').value.trim();
@@ -6050,7 +6055,7 @@ function openAddToListino(item, onSaved) {
     // Nuovo ID univoco (sopra 500 per non collidere con BP esistente)
     var newId = 500;
     while (S.products.some(function(p) { return p.id === newId; }) || BP.some(function(p) { return p.id === newId; })) newId++;
-    var newProd = { id: newId, name: name, conf: conf, cat: catVal, subcat: catVal, prices: prices, best: best, settore: sector, custom: false };
+    var newProd = { id: newId, name: name, conf: conf, cat: catVal, subcat: catVal, prices: prices, best: best, settore: sector, custom: false, barcode: item.barcode || null };
     // Salva settore
     if (!S.productSectors) S.productSectors = {};
     S.productSectors[newId] = sector;
@@ -6059,7 +6064,17 @@ function openAddToListino(item, onSaved) {
     BP.push(newProd);
     saveOverride(newProd);
     _saveCatalogCache(BP);
-    saveCatalogToSupabase([newProd]);
+    // FIX (Valerio, 04/09, con caso reale + log Supabase: barcode collegato
+    // a un prodotto "Aggiungi al listino" non risultava mai salvato) — qui
+    // sotto la chiamata NON veniva aspettata: onSaved(newProd) partiva subito
+    // dopo, prima ancora che il prodotto esistesse davvero su Supabase. Il
+    // PATCH del barcode (fatto dal chiamante dentro onSaved) arrivava quindi
+    // su un id che non esisteva ancora — PostgREST risponde comunque "200 OK,
+    // zero righe modificate" in quel caso, senza nessun errore visibile,
+    // quindi sembrava tutto a posto mentre in realtà non si scriveva nulla.
+    // Ora si aspetta la conferma reale prima di procedere, e il barcode è
+    // comunque incluso direttamente in questo stesso salvataggio (vedi sopra).
+    await saveCatalogToSupabase([newProd]);
     S.products = BP.concat(S.custom);
     buildCats(); renderCatalog(); saveAutoBackup(); updateBackupInfo();
     document.body.removeChild(overlay);
@@ -11059,7 +11074,7 @@ function updateStatoSettingsUI(){
 /* ── FINE STATO CONDIVISO ─────────────────────────────────────── */
 
 // ── AVVIO: carica Cloud poi inizializza tutto ─────────────
-var BUILD_VERSION='65 (Valerio: quota egress Supabase esaurita durante tutta la sessione di test di oggi, risolta passando a piano Pro — spiega perché nessun salvataggio sembrava funzionare) — trovato anche un bug reale indipendente: salvaAliasProdotto/salvaBarcodeSuProdotto aggiornavano la cache locale (ALIAS_MAP, product.barcode) PRIMA di sapere se il salvataggio su Supabase fosse davvero riuscito. Con l\'egress bloccato, il salvataggio falliva sul serve ma la cache diceva già "fatto" — ai tentativi successivi (anche dopo aver risolto il piano) il codice si fermava subito pensando non ci fosse nulla da fare, senza nessun errore né conferma. Ora la cache si aggiorna solo dopo la conferma reale, e aggiunta una conferma visibile anche sul successo (prima c\'era silenzio pure quando funzionava).';
+var BUILD_VERSION='66 (Valerio, con dati reali da Supabase: il barcode non si salvava MAI su "Aggiungi al listino", in modo riproducibile — non era un problema di piattaforma) — trovata una race condition vera: saveCatalogToSupabase() (che crea il nuovo prodotto) è asincrona ma non veniva aspettata prima di procedere; il PATCH del barcode partiva subito dopo, quando il prodotto poteva non esistere ancora su Supabase — PostgREST in quel caso risponde comunque "200 OK, zero righe modificate", senza nessun errore, quindi sembrava tutto a posto mentre non si scriveva nulla. In più saveCatalogToSupabase() costruisce la riga scegliendo i campi uno per uno per nome, e "barcode" non era nell\'elenco — sarebbe stato scartato in silenzio comunque. Corretto entrambi: barcode incluso nel salvataggio del prodotto, e il salvataggio viene aspettato per davvero prima di procedere. Corretti a mano anche i tre prodotti di test di oggi (QWERTY, CERRI MERRY, CALABRO) rimasti senza barcode per questo bug.';
 // BUG CORRETTO (09/08, segnalato da Valerio: "mi dice di aggiornare ma è già
 // l'ultima, e con l'avviso non riesco a fare l'ordine") — il controllo
 // confrontava l'INTERO testo descrittivo di BUILD_VERSION, carattere per
