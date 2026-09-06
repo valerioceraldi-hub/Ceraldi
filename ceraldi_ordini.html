@@ -1524,8 +1524,17 @@ async function loadCatalogFromSupabase(){
 // Token-based string similarity (Jaccard sui token alfanumerici 3+)
 function _tokens(s){
   if(!s)return new Set();
-  var clean=String(s).toLowerCase()
-    .replace(/[^a-z0-9àèéìòù\s]/g,' ')
+  // FIX (Valerio, 05/09, caso reale: "PASSOÁ" scritto con l'accento acuto
+  // non veniva riconosciuto uguale a "PASSOA" in catalogo) — prima si
+  // toglievano gli accenti con un elenco scritto a mano (àèéìòù) che non
+  // copriva "á" (acuto) né altri accenti meno comuni; qualsiasi carattere
+  // fuori da quell'elenco veniva silenziosamente sostituito con uno spazio,
+  // spezzando la parola in due. Ora si usa la normalizzazione Unicode NFD
+  // per staccare QUALSIASI accento dalla lettera base (é→e, á→a, ó→o, ñ→n,
+  // ecc.) in un colpo solo, invece di elencarli a mano uno per uno.
+  var clean=String(s).normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g,' ')
     .replace(/\s+/g,' ').trim();
   return new Set(clean.split(' ').filter(function(t){return t.length>=3;}));
 }
@@ -1544,6 +1553,22 @@ function _extractVolumeMl(name){
   if(mMl){var v2=mMl[1]||mMl[2];return parseInt(v2,10);}
   return null;
 }
+// Parole "di categoria" (whisky, liquore, acqua...) o pure indicazioni di
+// formato/unità (100, cl, cl100...): contano ma pesano meno delle parole
+// distintive (marca/nome) nel punteggio di somiglianza — condividere solo
+// queste non basta a far scattare un match (vedi caso reale 04/09:
+// "GLENFIDDICH...SCOTCH WHISKY" abbinato per errore a "WHISKY J&B...SCOTCH
+// WHISKY" solo perché condividevano le parole di categoria). Il formato
+// vero e proprio resta comunque gestito a parte da _extractVolumeMl qui
+// sotto (se i formati sono chiaramente diversi, punteggio a zero).
+var _GENERIC_WORDS=new Set(['whisky','scotch','liquore','liquori','vino','vini','birra','birre','acqua','acque','succo','succhi','gin','rum','vodka','grappa','amaro','amari','sciroppo','sciroppi','minerale','naturale','frizzante','gassata','gassato','analcolico','bevanda','bevande','spumante','cognac','brandy','the','caffe','original']);
+function _tokenWeight(t){
+  if(/^\d+$/.test(t)) return 0; // numero puro (es. "100", "70": il volume è già gestito a parte)
+  if(/^(cl|lt|ml|kg|gr|pz|ct|bt)$/.test(t)) return 0; // unità/confezione isolata
+  if(/^\d+(cl|lt|ml|kg|gr)$|^(cl|lt|ml|kg|gr)\d+$/.test(t)) return 0; // unità e numero uniti (cl100, 100cl)
+  if(_GENERIC_WORDS.has(t)) return 0.3;
+  return 1;
+}
 function _similarity(a,b){
   var ta=_tokens(a), tb=_tokens(b);
   if(!ta.size||!tb.size)return 0;
@@ -1558,9 +1583,23 @@ function _similarity(a,b){
   // serve nemmeno passare dall'IA per deciderlo.
   var va=_extractVolumeMl(a),vb=_extractVolumeMl(b);
   if(va!=null&&vb!=null&&Math.abs(va-vb)>5)return 0;
-  var inter=0;ta.forEach(function(t){if(tb.has(t))inter++;});
-  var union=new Set([].concat(Array.from(ta),Array.from(tb))).size;
-  return union?inter/union*100:0;
+  // FIX (Valerio, 05/09, caso reale: "BAILEYS ORIGINAL IRISH CREAM" scritto
+  // senza formato non veniva riconosciuto uguale a "BAILEYS ORIGINAL IRISH
+  // CREAM CL.100" già a catalogo) — prima ogni parola in comune o mancante
+  // pesava allo stesso modo, quindi un prodotto scritto senza il formato
+  // perdeva punti come se fosse un prodotto diverso. Ora le parole di puro
+  // formato/unità non contano nel punteggio testuale (il formato vero e
+  // proprio resta comunque controllato sopra), e le parole di categoria
+  // generica pesano meno di quelle distintive.
+  var allTokens=new Set([].concat(Array.from(ta),Array.from(tb)));
+  var interW=0,unionW=0;
+  allTokens.forEach(function(t){
+    var w=_tokenWeight(t);
+    if(w<=0)return;
+    unionW+=w;
+    if(ta.has(t)&&tb.has(t))interW+=w;
+  });
+  return unionW?interW/unionW*100:0;
 }
 
 // Match una riga fattura (descrizione+codArt) con un prodotto del catalogo
@@ -1694,6 +1733,48 @@ function salvaBarcodeSuProdotto(barcode,productId){
 // usare _hybridMatchCatalog così com'è (esatto solo ≥88, il resto passa
 // dalla IA se c'è una API Key, altrimenti nessun match — vedi il suo stesso
 // commento più sotto sul perché).
+// ── MATCH PER "DA EVADERE" (richieste dei dipendenti) ──────────────
+// A differenza di _hybridMatchCatalog (usato per Da Fatture, dove alcuni
+// esiti possono essere applicati automaticamente), qui l'esito passa SEMPRE
+// da una conferma visibile di Valerio (il box arancione "Match automatico"
+// con "Non è questo — cerca/aggiungi") prima di finire nel carrello — quindi
+// si può proporre un candidato anche con una soglia locale più bassa, senza
+// dover passare dalla IA per la zona intermedia: il rischio di un
+// abbinamento sbagliato lo copre la conferma manuale, non l'algoritmo.
+// RIPROVATO (05/09) dopo il primo tentativo andato male con una soglia di
+// 55 sul punteggio NON pesato (Glenfiddich/Oban abbinati a "WHISKY J&B" solo
+// per parole di categoria in comune) — questa volta la soglia si appoggia al
+// punteggio PESATO di _similarity (v69), che già spinge quel genere di falso
+// positivo molto più in basso (13 invece di 50+): con margine reale tra i
+// casi buoni (es. "LIQUORE STREGA" ~57) e quelli cattivi, riproporre una
+// soglia intermedia qui è sicuro.
+async function _matchForRichieste(names,catalogList,apiKey,extras){
+  var results=new Array(names.length);
+  var toAI=[];
+  names.forEach(function(name,idx){
+    var ex=(extras&&extras[idx])||{};
+    var cands=_localCandidates(name,catalogList,8,ex.codArt,ex.fornitore);
+    var best=cands[0];
+    if(best&&best.s>=88){
+      results[idx]={matchTipo:'esatto',id:best.c.id,name:best.c.name};
+    }else if(best&&best.s>=50){
+      results[idx]={matchTipo:'probabile',id:best.c.id,name:best.c.name};
+    }else if(!best||best.s<15){
+      results[idx]={matchTipo:'nessuno',id:null,name:null};
+    }else{
+      toAI.push({idx:idx,name:name});
+    }
+  });
+  if(toAI.length){
+    // Zona ancora ambigua (15-50): stessa logica di _hybridMatchCatalog,
+    // che ricalcola da sé i candidati locali e prova la IA se c'è una key.
+    var aiNames=toAI.map(function(t){return t.name;});
+    var aiExtras=toAI.map(function(t){return (extras&&extras[t.idx])||{};});
+    var aiRes=await _hybridMatchCatalog(aiNames,catalogList,apiKey,aiExtras);
+    toAI.forEach(function(t,i){ results[t.idx]=aiRes[i]; });
+  }
+  return results;
+}
 async function _hybridMatchCatalog(names,catalogList,apiKey,extras){
   var results=new Array(names.length);
   var toAI=[];
@@ -8889,7 +8970,7 @@ async function importaRichiesta(jsonText, onDone){
     mapIdx.push(i);
   });
   var apiKeyRich=localStorage.getItem('ceraldi_apikey')||'';
-  var hybridRes=namesToMatch.length?await _hybridMatchCatalog(namesToMatch,S.products,apiKeyRich,null):[];
+  var hybridRes=namesToMatch.length?await _matchForRichieste(namesToMatch,S.products,apiKeyRich,null):[];
   payload.items.forEach(function(it,i){
     if(prelim[i]){ richItems.push(prelim[i]); return; }
     var hi=mapIdx.indexOf(i);
@@ -11095,7 +11176,7 @@ function updateStatoSettingsUI(){
 /* ── FINE STATO CONDIVISO ─────────────────────────────────────── */
 
 // ── AVVIO: carica Cloud poi inizializza tutto ─────────────
-var BUILD_VERSION='68 (Valerio: "QWERTY ha settore Bar ma si vedono tutti i fornitori, non solo quelli del Bar") — la scheda Modifica prodotto non filtrava mai i fornitori per settore nei campi prezzo (a differenza di Aggiungi al listino, che lo fa correttamente). Ora filtra allo stesso modo, e si aggiorna anche cambiando il settore dal menu a tendina senza dover riaprire la scheda.';
+var BUILD_VERSION='70 (Valerio: "se sono simili deve dare il match trovato o consigliato, non ignorarlo del tutto") — reintrodotta una soglia più permissiva per PROPORRE un candidato (non solo per il match esatto) nella schermata Da evadere, dove la conferma è comunque sempre manuale. Un primo tentativo di questo tipo (04/09) era stato annullato perché basato sul punteggio NON pesato, che dava falsi positivi (Glenfiddich/Oban proposti come "WHISKY J&B" solo per parole di categoria in comune). Questa volta la soglia si appoggia al punteggio PESATO corretto in v69, verificato sui dati reali: "LIQUORE STREGA" (57) e "CAMPARI BITTER" (67) ora vengono proposti, mentre Glenfiddich (13) e Oban (17) restano correttamente esclusi — margine ampio tra i due gruppi, nessun ritorno al problema di prima.';
 // BUG CORRETTO (09/08, segnalato da Valerio: "mi dice di aggiornare ma è già
 // l'ultima, e con l'avviso non riesco a fare l'ordine") — il controllo
 // confrontava l'INTERO testo descrittivo di BUILD_VERSION, carattere per
