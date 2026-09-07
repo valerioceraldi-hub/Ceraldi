@@ -18105,7 +18105,15 @@ async function apriLiquidaConCedolino(dipId, nome, mese, anno, giorni, paga, acc
   await openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, presDaValidare, restituzioni, giorniFestivoLav, totaleFestivoLav, giorniFestivoNonLav, totaleFestivoNonLav, giorniFerie, totaleFerie);
   if (_liqDati && _liqDati.cedolinoNetto != null) {
     $('liq-bonifico').value = _liqDati.cedolinoNetto.toFixed(2);
-    $('liq-contanti').value = '';
+    // Precompila anche i contanti con la differenza tra il netto reale
+    // (da presenze/acconti) e il netto del cedolino, così bonifico+contanti
+    // coprono subito l'intero dovuto — evita che il pagamento risulti
+    // "parziale" (e quindi un acconto) solo perché il cedolino da solo non
+    // copriva tutto il netto. Se il cedolino è pari o superiore al netto
+    // reale non c'è differenza da aggiungere in contanti (resta 0, gestito
+    // come eccedenza da salvaLiquidazione). Resta comunque modificabile.
+    const diffCedolino = _liqDati.netto - _liqDati.cedolinoNetto;
+    $('liq-contanti').value = diffCedolino > 0.01 ? diffCedolino.toFixed(2) : '';
     verificaPagamentoLiquida();
     // Ricordato per la notifica: questo pagamento nasce dal cedolino, non
     // da una liquidazione "a mano" — cambia la dicitura del messaggio al
@@ -21065,6 +21073,51 @@ function classificaGiorniFerieReale(dalISO, alISO, riposoFisso, festSet, workedS
   return { goduti, riposo, festivi };
 }
 
+// Classifica, giorno per giorno: usata dalla scheda "Storico" (Presenze
+// Team → scheda singolo dipendente) per mostrare quali giorni di un
+// periodo ferie contano davvero nel calcolo delle ferie maturate — stessa
+// identica logica di classificaGiorniFerieReale sopra, ma restituisce la
+// mappa giorno→tipo ('goduto'|'riposo'|'festivo') invece del solo totale,
+// così il chiamante può sommare solo i giorni che cadono nel mese
+// visualizzato. Duplicata (non refactorizzata dentro classificaGiorniFerieReale)
+// per non rischiare di toccare quella già verificata sui calcoli di libro paga.
+function classificaGiorniFerieRealeMappa(dalISO, alISO, riposoFisso, festSet, workedSet, occupatiNonRiposoSet) {
+  const riposoIdx = (riposoFisso !== null && riposoFisso !== undefined && riposoFisso !== '') ? parseInt(riposoFisso) : null;
+  const occupati = occupatiNonRiposoSet || new Set();
+  const inizio = new Date(dalISO+'T12:00:00');
+  const fine = new Date(alISO+'T12:00:00');
+  const mappa = {};
+  let cursoreSett = new Date(inizio);
+  cursoreSett.setDate(cursoreSett.getDate() - ((cursoreSett.getDay()+6)%7));
+  while (cursoreSett <= fine) {
+    const giorniSett = [];
+    for (let i=0; i<7; i++) { const d = new Date(cursoreSett); d.setDate(d.getDate()+i); giorniSett.push(d); }
+    let riposoGiaPreso = false;
+    giorniSett.forEach(d => {
+      if (d >= inizio && d <= fine) return;
+      const iso = _isoDate(d);
+      if (occupati.has(iso)) return;
+      if (!festSet.has(iso) && !workedSet.has(iso)) riposoGiaPreso = true;
+    });
+    let giornoRiposoScelto = null;
+    if (!riposoGiaPreso) {
+      const giorniFerieSett = giorniSett.filter(d => d >= inizio && d <= fine);
+      let scelto = riposoIdx !== null ? (giorniFerieSett.find(d => (d.getDay()+6)%7 === riposoIdx) || null) : null;
+      if (!scelto) scelto = giorniFerieSett.find(d => (d.getDay()+6)%7 === 6) || giorniFerieSett[giorniFerieSett.length-1] || null;
+      if (scelto) giornoRiposoScelto = _isoDate(scelto);
+    }
+    giorniSett.forEach(d => {
+      if (d < inizio || d > fine) return;
+      const iso = _isoDate(d);
+      if (festSet.has(iso)) mappa[iso] = 'festivo';
+      else if (iso === giornoRiposoScelto) mappa[iso] = 'riposo';
+      else mappa[iso] = 'goduto';
+    });
+    cursoreSett.setDate(cursoreSett.getDate()+7);
+  }
+  return mappa;
+}
+
 // Classifica, giorno per giorno, un periodo di ferie: quanti giorni sono
 // effettivamente "goduti" (lavorativi, da pagare come giornata normale —
 // Art. 2109 c.c.), quanti cadono nel riposo settimanale fisso del
@@ -21429,7 +21482,35 @@ async function caricaPresenzeTeam() {
     if (!dipId) { wrap.innerHTML = '<div class="empty"><div class="empty-txt">Seleziona un dipendente per vedere la sua scheda</div></div>'; return; }
     const dip = dipendenti.find(d => d.id === dipId);
     if (!dip) { wrap.innerHTML = '<div class="empty"><div class="empty-txt">Dipendente non attivo in questo mese</div></div>'; return; }
-    renderSchedaDipendentePT(dip, stato[dipId]||{}, ultimoGg, anno, meseNum);
+    // I periodi di ferie di questo dipendente che ricadono in questo mese
+    // (date NON troncate, servono per capire correttamente in quale
+    // giorno cade il riposo settimanale anche quando il periodo è più
+    // lungo del mese visualizzato).
+    const feriePeriodiMese = (assenze||[]).filter(a => a.dipendente_id===dipId && a.tipo==='ferie');
+    // Per distinguere, tra questi giorni di ferie, quelli che contano
+    // davvero nel calcolo delle ferie maturate (esclusi riposo settimanale
+    // e festività — stessa logica già usata in Stipendi/export) serve la
+    // storia completa di presenze/malattie del dipendente, non solo il
+    // mese in corso: recuperata qui, solo per lui, solo se ha ferie da
+    // classificare in questo mese.
+    let extraFerie = null;
+    if (feriePeriodiMese.length) {
+      let presenzeStoriche = [], assenzeAltroStoriche = [];
+      try {
+        const [rP, rA] = await Promise.all([
+          sb.from('presenze').select('data').eq('dipendente_id', dipId),
+          sb.from('presenze_assenze').select('tipo,data_inizio,data_fine').eq('dipendente_id', dipId).in('stato',['approvata','confermata']).neq('tipo','ferie')
+        ]);
+        presenzeStoriche = rP.data || [];
+        assenzeAltroStoriche = rA.data || [];
+      } catch(e) { console.warn('[Storico] dati extra ferie:', e); }
+      const workedSet = new Set(presenzeStoriche.map(p=>p.data));
+      const malSet = _setGiorniDaPeriodi(assenzeAltroStoriche);
+      let fest = {};
+      [anno-1, anno, anno+1].forEach(a => Object.assign(fest, festivitaItaliane(a)));
+      extraFerie = { workedSet, malSet, festSet: new Set(Object.keys(fest)) };
+    }
+    renderSchedaDipendentePT(dip, stato[dipId]||{}, ultimoGg, anno, meseNum, feriePeriodiMese, extraFerie);
   }
 }
 
@@ -21463,7 +21544,7 @@ function renderCartellonePresenze(dipendenti, stato, giorniInMese, anno, mese) {
   <div style="font-size:11px;color:var(--muted);margin-top:8px">&#x2190; Scorri per vedere tutti i giorni del mese</div>`;
 }
 
-function renderSchedaDipendentePT(dip, statoGiorni, giorniInMese, anno, mese) {
+function renderSchedaDipendentePT(dip, statoGiorni, giorniInMese, anno, mese, feriePeriodiMese, extraFerie) {
   const wrap = $('pt-content');
   const nomeCompleto = dip.nome + (dip.cognome ? ' '+dip.cognome : '');
 
@@ -21472,9 +21553,26 @@ function renderSchedaDipendentePT(dip, statoGiorni, giorniInMese, anno, mese) {
     const c = statoGiorni[g] ? statoGiorni[g].cod : null;
     if (c==='P'||c==='PA') nP++; else if (c==='F') nF++; else if (c==='M') nM++; else if (c==='A') nA++; else nVuoti++;
   }
+  // Dei giorni di ferie mostrati sopra (calendario grezzo), quanti contano
+  // davvero nel calcolo delle ferie maturate — esclusi riposo settimanale e
+  // festività cadute nel periodo (stessa logica già usata in Stipendi/
+  // export storico). Somma solo la porzione di ogni periodo che cade in
+  // QUESTO mese, anche se il periodo si estende oltre.
+  let nFCalcolate = nF;
+  if (extraFerie && feriePeriodiMese && feriePeriodiMese.length) {
+    const dalMese = anno+'-'+String(mese).padStart(2,'0')+'-01';
+    const alMese  = anno+'-'+String(mese).padStart(2,'0')+'-'+String(giorniInMese).padStart(2,'0');
+    nFCalcolate = 0;
+    feriePeriodiMese.forEach(periodo => {
+      const mappa = classificaGiorniFerieRealeMappa(periodo.data_inizio, periodo.data_fine, dip.turni_riposo_fisso, extraFerie.festSet, extraFerie.workedSet, extraFerie.malSet);
+      Object.keys(mappa).forEach(iso => {
+        if (iso >= dalMese && iso <= alMese && mappa[iso] === 'goduto') nFCalcolate++;
+      });
+    });
+  }
   const riepilogo = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:14px">
     <div style="background:var(--bg);border-radius:10px;padding:9px 4px;text-align:center"><div style="font-size:18px;font-weight:800">${nP}</div><div style="font-size:10px;color:var(--muted)">Presenti</div></div>
-    <div style="background:var(--bg);border-radius:10px;padding:9px 4px;text-align:center"><div style="font-size:18px;font-weight:800">${nF}</div><div style="font-size:10px;color:var(--muted)">Ferie</div></div>
+    <div style="background:var(--bg);border-radius:10px;padding:9px 4px;text-align:center"><div style="font-size:18px;font-weight:800">${nF}</div><div style="font-size:10px;color:var(--muted)">Ferie</div>${nFCalcolate !== nF ? `<div style="font-size:9px;color:var(--accent);font-weight:700;margin-top:2px">${nFCalcolate} effettive</div>` : ''}</div>
     <div style="background:var(--bg);border-radius:10px;padding:9px 4px;text-align:center"><div style="font-size:18px;font-weight:800">${nM}</div><div style="font-size:10px;color:var(--muted)">Malattia</div></div>
     <div style="background:var(--bg);border-radius:10px;padding:9px 4px;text-align:center"><div style="font-size:18px;font-weight:800">${nVuoti}</div><div style="font-size:10px;color:var(--muted)">Nessun dato</div></div>
   </div>`;
