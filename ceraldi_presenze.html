@@ -2033,7 +2033,26 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     </div>
     <div class="sheet-body">
       <div id="promemoria-list"></div>
-      <div id="attivita-list" style="display:none"></div>
+      <div id="attivita-wrap" style="display:none">
+        <div id="attivita-tipo-chips" style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:8px;-webkit-overflow-scrolling:touch"></div>
+        <div style="display:flex;gap:6px;margin-bottom:10px">
+          <select id="attivita-filtro-dip" onchange="renderAttivitaFiltrata()" style="flex:1;min-width:0;font-size:12.5px;padding:8px 6px;border:1px solid var(--border);border-radius:10px;background:var(--card);color:var(--text)">
+            <option value="">Tutti i dipendenti</option>
+          </select>
+          <select id="attivita-filtro-stato" onchange="renderAttivitaFiltrata()" style="flex:1;min-width:0;font-size:12.5px;padding:8px 6px;border:1px solid var(--border);border-radius:10px;background:var(--card);color:var(--text)">
+            <option value="">Tutti gli stati</option>
+            <option value="sospeso">⏳ In attesa</option>
+            <option value="confermato">✅ Confermato</option>
+          </select>
+          <select id="attivita-filtro-periodo" onchange="caricaAttivitaDipendenti()" style="flex:1;min-width:0;font-size:12.5px;padding:8px 6px;border:1px solid var(--border);border-radius:10px;background:var(--card);color:var(--text)">
+            <option value="7">7 giorni</option>
+            <option value="30" selected>30 giorni</option>
+            <option value="90">90 giorni</option>
+            <option value="180">180 giorni</option>
+          </select>
+        </div>
+        <div id="attivita-list"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -9650,17 +9669,20 @@ function switchPromTab(tab) {
   $('tab-prom-scadenze').classList.toggle('prom-tab-on', onScad);
   $('tab-prom-attivita').classList.toggle('prom-tab-on', !onScad);
   $('promemoria-list').style.display = onScad ? 'block' : 'none';
-  $('attivita-list').style.display = onScad ? 'none' : 'block';
+  $('attivita-wrap').style.display = onScad ? 'none' : 'block';
 }
 
 // Carica lo stato delle conferme di acconti, stipendi e buste paga di tutti i dipendenti
+let _attivitaTutti = [];      // cache dell'ultimo caricamento, per filtrare senza rileggere il DB
+let _attivitaFiltroTipo = ''; // '' = tutti; altrimenti 'acconto'|'stipendio'|'documento'|'restituzione'
 async function caricaAttivitaDipendenti() {
   const wrap = $('attivita-list');
   if (!wrap) return;
   wrap.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted)">Caricamento…</div>';
   try {
+    const giorniPeriodo = parseInt(($('attivita-filtro-periodo') && $('attivita-filtro-periodo').value) || '30');
     const oggi = new Date();
-    const d90 = new Date(oggi.getTime()-90*86400000).toISOString().split('T')[0];
+    const dPeriodo = new Date(oggi.getTime()-giorniPeriodo*86400000).toISOString().split('T')[0];
     // FIX: prima si cercava solo tra i profili con ruolo='dipendente',
     // quindi una busta paga assegnata a un socio/admin (es. Ceraldi Valerio
     // o Vincenzo, che possono comunque ricevere documenti — vedi
@@ -9672,95 +9694,186 @@ async function caricaAttivitaDipendenti() {
     const nomeDi = (id) => { const d=(dips||[]).find(x=>x.id===id); return d?(d.nome||'')+(d.cognome?' '+d.cognome:''):'⚠ dipendente rimosso/disattivato'; };
     const hasTg  = (id) => { const d=(dips||[]).find(x=>x.id===id); return d&&d.telegram_chat_id; };
 
-    const [{ data: acconti }, { data: liquidaz }, { data: documenti }] = await Promise.all([
-      sb.from('presenze_acconti').select('id,dipendente_id,importo,data,letto_dip,letto_il,causale,contestata_il').gte('data',d90).order('data',{ascending:false}),
-      sb.from('presenze_liquidazioni').select('id,dipendente_id,importo_netto,anno,mese,confermata_dip,confermata_il,causale,contestata_il').order('anno',{ascending:false}).order('mese',{ascending:false}).limit(60),
-      sb.from('presenze_documenti').select('id,dipendente_id,categoria,nome_file,mese,anno,letto_il,creato_il,contestata_il,inviato_dip').gte('creato_il',d90+'T00:00:00').order('creato_il',{ascending:false})
+    const [{ data: acconti }, { data: liquidaz }, { data: documenti }, { data: restituzioni }] = await Promise.all([
+      sb.from('presenze_acconti').select('id,dipendente_id,importo,data,letto_dip,letto_il,causale,contestata_il').gte('data',dPeriodo).order('data',{ascending:false}),
+      sb.from('presenze_liquidazioni').select('id,dipendente_id,importo_netto,anno,mese,confermata_dip,confermata_il,causale,contestata_il,liquidato_il').gte('liquidato_il',dPeriodo+'T00:00:00').order('liquidato_il',{ascending:false}),
+      sb.from('presenze_documenti').select('id,dipendente_id,categoria,nome_file,mese,anno,letto_il,creato_il,contestata_il,inviato_dip').gte('creato_il',dPeriodo+'T00:00:00').order('creato_il',{ascending:false})
         .or('categoria.neq.busta_paga,inviato_dip.eq.true'),
+      // FIX (segnalato da Valerio: "ho premuto restituzione ma non la
+      // trovo da nessuna parte per correggerla/eliminarla") — le
+      // restituzioni non sono mai state incluse in questa schermata,
+      // l'unica pensata apposta per rivedere ed eventualmente annullare
+      // qualunque cosa registrata. Non hanno un vero e proprio stato
+      // "da confermare" (sono un fatto già avvenuto quando l'admin la
+      // registra, non qualcosa che il dipendente deve confermare dopo),
+      // quindi finiscono in una sezione propria, sempre eliminabile — non
+      // tra "in attesa" né tra i "confermati" bloccati.
+      sb.from('presenze_restituzioni').select('id,dipendente_id,importo,data,mese_riferimento,anno_riferimento,note').gte('data',dPeriodo).order('data',{ascending:false}),
     ]);
 
-    const inSospeso = [];
-    const confermati = [];
-
+    // RIPROGETTAZIONE (richiesta da Valerio: "ci vanno a finire molte cose,
+    // la renderei più leggibile e completa, filtrabile per tipo/dipendente/
+    // data/stato") — un unico elenco normalizzato invece di 4 costruzioni
+    // separate, cachato in _attivitaTutti così i filtri (tipo/dipendente/
+    // stato) si applicano subito in renderAttivitaFiltrata() senza
+    // ricaricare dal DB; solo il periodo (che cambia la finestra della
+    // query) ricarica da qui.
+    const tutti = [];
     (acconti||[]).forEach(a => {
-      const item = { tipo:'acconto', icona:'💶', id:a.id, dipId:a.dipendente_id,
+      tutti.push({ tipo:'acconto', icona:'💶', id:a.id, dipId:a.dipendente_id, dipNome:nomeDi(a.dipendente_id),
         titolo:'Acconto € '+parseFloat(a.importo).toFixed(2)+(a.causale&&a.causale!=='stipendio'?' · '+causaleLbl(a.causale):''),
         sub:nomeDi(a.dipendente_id)+' · '+new Date(a.data).toLocaleDateString('it-IT')+(a.contestata_il?' · ⚠ CONTESTATO':''),
-        confermato:a.letto_dip, quando:a.letto_il };
-      (a.letto_dip ? confermati : inSospeso).push(item);
+        sezione: a.letto_dip ? 'confermato' : 'sospeso', stato: a.letto_dip ? 'confermato' : 'sospeso',
+        quando:a.letto_il, dataOrd:a.data, canResend:hasTg(a.dipendente_id) });
     });
     (liquidaz||[]).forEach(l => {
       const meseLbl = new Date(l.anno, (l.mese||1)-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
-      const item = { tipo:'stipendio', icona:'💰', id:l.id, dipId:l.dipendente_id,
+      tutti.push({ tipo:'stipendio', icona:'💰', id:l.id, dipId:l.dipendente_id, dipNome:nomeDi(l.dipendente_id),
         titolo:(l.causale&&l.causale!=='stipendio'?causaleLbl(l.causale):'Stipendio')+' '+meseLbl+' — € '+parseFloat(l.importo_netto||0).toFixed(2),
         sub:nomeDi(l.dipendente_id)+(l.contestata_il?' · ⚠ CONTESTATO':''),
-        confermato:l.confermata_dip, quando:l.confermata_il };
-      (l.confermata_dip ? confermati : inSospeso).push(item);
+        sezione: l.confermata_dip ? 'confermato' : 'sospeso', stato: l.confermata_dip ? 'confermato' : 'sospeso',
+        quando:l.confermata_il, dataOrd:l.liquidato_il, canResend:hasTg(l.dipendente_id) });
     });
     (documenti||[]).forEach(doc => {
       const catLbl = etichettaCategoriaDoc(doc.categoria);
       const periodo = doc.mese ? new Date(doc.anno,(doc.mese||1)-1,1).toLocaleDateString('it-IT',{month:'long',year:'numeric'}) : (doc.anno||'');
-      const item = { tipo:'documento', icona:'📄', id:doc.id, dipId:doc.dipendente_id,
+      tutti.push({ tipo:'documento', icona:'📄', id:doc.id, dipId:doc.dipendente_id, dipNome:nomeDi(doc.dipendente_id),
         titolo:catLbl+' '+periodo,
         sub:nomeDi(doc.dipendente_id)+(doc.contestata_il?' · ⚠ CONTESTATO':''),
-        confermato:!!doc.letto_il, quando:doc.letto_il };
-      (doc.letto_il ? confermati : inSospeso).push(item);
+        sezione: doc.letto_il ? 'confermato' : 'sospeso', stato: doc.letto_il ? 'confermato' : 'sospeso',
+        quando:doc.letto_il, dataOrd:doc.creato_il, canResend:hasTg(doc.dipendente_id) });
     });
+    (restituzioni||[]).forEach(r => {
+      const meseLbl = (r.mese_riferimento && r.anno_riferimento) ? (' · rif. '+new Date(r.anno_riferimento, r.mese_riferimento-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'})) : '';
+      tutti.push({ tipo:'restituzione', icona:'↩️', id:r.id, dipId:r.dipendente_id, dipNome:nomeDi(r.dipendente_id),
+        titolo:'Restituzione € '+parseFloat(r.importo).toFixed(2),
+        sub:nomeDi(r.dipendente_id)+' · '+new Date(r.data).toLocaleDateString('it-IT')+meseLbl+(r.note?' · '+r.note:''),
+        sezione:'restituzione', stato:'confermato', quando:null, dataOrd:r.data, canResend:false });
+    });
+    tutti.sort((a,b) => (b.dataOrd||'').localeCompare(a.dataOrd||''));
+    _attivitaTutti = tutti;
 
-    confermati.sort((a,b)=> new Date(b.quando||0)-new Date(a.quando||0));
-
-    let html = '';
-    // In sospeso
-    html += '<div style="font-size:13px;font-weight:700;color:var(--text);margin:4px 0 10px">⏳ In attesa di conferma ('+inSospeso.length+')</div>';
-    if (!inSospeso.length) {
-      html += '<div style="text-align:center;padding:16px;color:var(--muted);font-size:13px;background:var(--bg);border-radius:12px;margin-bottom:16px">Tutto confermato ✅</div>';
-    } else {
-      inSospeso.forEach((it,i) => {
-        const canResend = hasTg(it.dipId);
-        html += '<div style="display:flex;gap:10px;align-items:center;padding:12px;background:rgba(217,119,6,.06);border:1px solid var(--border);border-left:3px solid #d97706;border-radius:12px;margin-bottom:8px">'
-          + '<span style="font-size:22px;flex-shrink:0">'+it.icona+'</span>'
-          + '<div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:600">'+it.titolo+'</div>'
-          + '<div style="font-size:12px;color:var(--muted)">'+it.sub+'</div></div>'
-          + '<div style="display:flex;flex-direction:column;gap:5px;flex-shrink:0;align-items:stretch">'
-          + (canResend
-              ? '<button class="btn-sm" style="background:var(--accent);color:#fff;border:none" onclick="reinviaRichiestaConferma(\''+it.tipo+'\',\''+it.id+'\',\''+it.dipId+'\')">🔔 Sollecita</button>'
-              : '<span style="font-size:11px;color:var(--muted);text-align:center">no Telegram</span>')
-          // FIX: prima, se il dipendente collegato non esisteva più (rimosso
-          // o disattivato) o non aveva Telegram, questa voce restava lì per
-          // sempre — nessuno poteva mai confermarla al posto suo, e non
-          // c'era modo di toglierla di torno. Ora l'admin può eliminarla
-          // direttamente da qui in qualunque caso.
-          + '<button class="btn-sm" style="color:var(--red)" onclick="eliminaVoceInSospeso(\''+it.tipo+'\',\''+it.id+'\',this)">🗑 Elimina</button>'
-          + '</div>'
-          + '</div>';
-      });
+    // Chip filtro tipo — costruite una volta per caricamento (sopravvivono
+    // ai filtri dipendente/stato, che non ricaricano dal DB).
+    const tipiChip = [
+      { key:'', lbl:'Tutti' },
+      { key:'acconto', lbl:'💶 Acconti' },
+      { key:'stipendio', lbl:'💰 Stipendi' },
+      { key:'documento', lbl:'📄 Documenti' },
+      { key:'restituzione', lbl:'↩️ Restituzioni' },
+    ];
+    const chipWrap = $('attivita-tipo-chips');
+    if (chipWrap) {
+      chipWrap.innerHTML = tipiChip.map(t =>
+        '<button class="btn-sm'+(_attivitaFiltroTipo===t.key?' primary':'')+'" style="white-space:nowrap;flex-shrink:0" onclick="_attivitaFiltroTipo=\''+t.key+'\';renderAttivitaFiltrata()">'+t.lbl+'</button>'
+      ).join('');
     }
-    // Confermati di recente
-    html += '<div style="font-size:13px;font-weight:700;color:var(--text);margin:18px 0 10px">✅ Confermati di recente ('+confermati.length+')</div>';
-    if (!confermati.length) {
-      html += '<div style="text-align:center;padding:16px;color:var(--muted);font-size:13px;background:var(--bg);border-radius:12px">Nessuna conferma recente</div>';
-    } else {
-      confermati.slice(0,30).forEach(it => {
-        const quandoLbl = it.quando ? new Date(it.quando).toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
-        html += '<div style="display:flex;gap:10px;align-items:center;padding:11px 12px;background:rgba(47,138,92,.05);border:1px solid var(--border);border-left:3px solid var(--green);border-radius:12px;margin-bottom:7px">'
-          + '<span style="font-size:20px;flex-shrink:0">'+it.icona+'</span>'
-          + '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">'+it.titolo+'</div>'
-          + '<div style="font-size:11px;color:var(--muted)">'+it.sub+(quandoLbl?' · ✓ '+quandoLbl:'')+'</div></div>'
-          + '<span style="font-size:16px;color:var(--green);flex-shrink:0">✓</span></div>';
-      });
+    // Filtro dipendente — solo chi compare davvero nell'elenco corrente
+    const dipSel = $('attivita-filtro-dip');
+    if (dipSel) {
+      const dipUnici = [...new Map(tutti.map(it => [it.dipId, it.dipNome])).entries()].sort((a,b)=>a[1].localeCompare(b[1]));
+      const valPrec = dipSel.value;
+      dipSel.innerHTML = '<option value="">Tutti i dipendenti</option>' + dipUnici.map(([id,nome]) => '<option value="'+id+'">'+esc(nome)+'</option>').join('');
+      if (valPrec && dipUnici.some(([id])=>id===valPrec)) dipSel.value = valPrec;
     }
-    wrap.innerHTML = html;
+    renderAttivitaFiltrata();
   } catch(e) {
     console.warn('caricaAttivitaDipendenti:', e);
     wrap.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted)">Errore nel caricamento</div>';
   }
 }
 
+// Ridisegna l'elenco da _attivitaTutti (già in memoria) applicando i
+// filtri correnti — nessuna nuova query, per restare istantaneo quando si
+// cambia tipo/dipendente/stato. Solo il periodo passa da caricaAttivitaDipendenti()
+// perché cambia la finestra della query stessa.
+function renderAttivitaFiltrata() {
+  const wrap = $('attivita-list');
+  if (!wrap) return;
+  const dipFiltro = ($('attivita-filtro-dip') && $('attivita-filtro-dip').value) || '';
+  const statoFiltro = ($('attivita-filtro-stato') && $('attivita-filtro-stato').value) || '';
+  const chipWrap = $('attivita-tipo-chips');
+  if (chipWrap) {
+    [...chipWrap.children].forEach((b,i) => {
+      const keys = ['','acconto','stipendio','documento','restituzione'];
+      b.classList.toggle('primary', keys[i]===_attivitaFiltroTipo);
+    });
+  }
+  const filtrati = _attivitaTutti.filter(it =>
+    (!_attivitaFiltroTipo || it.tipo===_attivitaFiltroTipo) &&
+    (!dipFiltro || it.dipId===dipFiltro) &&
+    (!statoFiltro || it.stato===statoFiltro)
+  );
+  const inSospeso = filtrati.filter(it => it.sezione==='sospeso');
+  const restItems = filtrati.filter(it => it.sezione==='restituzione');
+  const confermati = filtrati.filter(it => it.sezione==='confermato').sort((a,b)=> new Date(b.quando||0)-new Date(a.quando||0));
+
+  let html = '';
+  if (!filtrati.length) {
+    html = '<div style="text-align:center;padding:24px;color:var(--muted);font-size:13px;background:var(--bg);border-radius:12px">Nessun risultato con questi filtri</div>';
+    wrap.innerHTML = html;
+    return;
+  }
+  // In sospeso
+  html += '<div style="font-size:13px;font-weight:700;color:var(--text);margin:4px 0 10px">⏳ In attesa di conferma ('+inSospeso.length+')</div>';
+  if (!inSospeso.length) {
+    html += '<div style="text-align:center;padding:16px;color:var(--muted);font-size:13px;background:var(--bg);border-radius:12px;margin-bottom:16px">Tutto confermato ✅</div>';
+  } else {
+    inSospeso.forEach(it => {
+      html += '<div style="display:flex;gap:10px;align-items:center;padding:12px;background:rgba(217,119,6,.06);border:1px solid var(--border);border-left:3px solid #d97706;border-radius:12px;margin-bottom:8px">'
+        + '<span style="font-size:22px;flex-shrink:0">'+it.icona+'</span>'
+        + '<div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:600">'+it.titolo+'</div>'
+        + '<div style="font-size:12px;color:var(--muted)">'+it.sub+'</div></div>'
+        + '<div style="display:flex;flex-direction:column;gap:5px;flex-shrink:0;align-items:stretch">'
+        + (it.canResend
+            ? '<button class="btn-sm" style="background:var(--accent);color:#fff;border:none" onclick="reinviaRichiestaConferma(\''+it.tipo+'\',\''+it.id+'\',\''+it.dipId+'\')">🔔 Sollecita</button>'
+            : '<span style="font-size:11px;color:var(--muted);text-align:center">no Telegram</span>')
+        // FIX: prima, se il dipendente collegato non esisteva più (rimosso
+        // o disattivato) o non aveva Telegram, questa voce restava lì per
+        // sempre — nessuno poteva mai confermarla al posto suo, e non
+        // c'era modo di toglierla di torno. Ora l'admin può eliminarla
+        // direttamente da qui in qualunque caso.
+        + '<button class="btn-sm" style="color:var(--red)" onclick="eliminaVoceInSospeso(\''+it.tipo+'\',\''+it.id+'\',this)">🗑 Elimina</button>'
+        + '</div>'
+        + '</div>';
+    });
+  }
+  // Restituzioni registrate — sempre eliminabili, non c'è nulla da
+  // "confermare" qui, solo da rivedere.
+  html += '<div style="font-size:13px;font-weight:700;color:var(--text);margin:18px 0 10px">↩️ Restituzioni registrate ('+restItems.length+')</div>';
+  if (!restItems.length) {
+    html += '<div style="text-align:center;padding:16px;color:var(--muted);font-size:13px;background:var(--bg);border-radius:12px">Nessuna restituzione nel periodo selezionato</div>';
+  } else {
+    restItems.forEach(it => {
+      html += '<div style="display:flex;gap:10px;align-items:center;padding:11px 12px;background:rgba(43,74,203,.05);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:12px;margin-bottom:7px">'
+        + '<span style="font-size:20px;flex-shrink:0">'+it.icona+'</span>'
+        + '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">'+it.titolo+'</div>'
+        + '<div style="font-size:11px;color:var(--muted)">'+it.sub+'</div></div>'
+        + '<button class="btn-sm" style="color:var(--red);flex-shrink:0" onclick="eliminaVoceInSospeso(\'restituzione\',\''+it.id+'\',this)">🗑</button></div>';
+    });
+  }
+  // Confermati di recente
+  html += '<div style="font-size:13px;font-weight:700;color:var(--text);margin:18px 0 10px">✅ Confermati di recente ('+confermati.length+')</div>';
+  if (!confermati.length) {
+    html += '<div style="text-align:center;padding:16px;color:var(--muted);font-size:13px;background:var(--bg);border-radius:12px">Nessuna conferma recente</div>';
+  } else {
+    confermati.slice(0,50).forEach(it => {
+      const quandoLbl = it.quando ? new Date(it.quando).toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
+      html += '<div style="display:flex;gap:10px;align-items:center;padding:11px 12px;background:rgba(47,138,92,.05);border:1px solid var(--border);border-left:3px solid var(--green);border-radius:12px;margin-bottom:7px">'
+        + '<span style="font-size:20px;flex-shrink:0">'+it.icona+'</span>'
+        + '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">'+it.titolo+'</div>'
+        + '<div style="font-size:11px;color:var(--muted)">'+it.sub+(quandoLbl?' · ✓ '+quandoLbl:'')+'</div></div>'
+        + '<span style="font-size:16px;color:var(--green);flex-shrink:0">✓</span></div>';
+    });
+  }
+  wrap.innerHTML = html;
+}
+
 // Elimina una voce "in sospeso" (acconto, stipendio, busta paga) che non
 // potrà mai essere confermata — es. dipendente rimosso/disattivato, o
 // una voce di prova rimasta lì per sempre. Doppio tocco per confermare,
 // niente confirm() nativo (può comportarsi in modo anomalo in PWA su iOS).
-const _TABELLE_ATTIVITA = { acconto:'presenze_acconti', stipendio:'presenze_liquidazioni', documento:'presenze_documenti', timbratura:'presenze' };
+const _TABELLE_ATTIVITA = { acconto:'presenze_acconti', stipendio:'presenze_liquidazioni', documento:'presenze_documenti', timbratura:'presenze', restituzione:'presenze_restituzioni' };
 async function eliminaVoceInSospeso(tipo, id, btn) {
   const tab = _TABELLE_ATTIVITA[tipo];
   if (!tab) return;
@@ -10699,6 +10812,19 @@ async function salvaRestituzione() {
   const dipIdSalvato = _restDipId;
   closeSheet('sh-restituzione');
   if (btn) { btn.disabled = false; btn.textContent = '\u2713 Conferma ricezione'; }
+  // FIX (segnalato da Valerio: "ho premuto restituzione ma non è arrivata
+  // nessuna notifica"): questa funzione non inviava MAI nessuna notifica,
+  // né al dipendente né all'admin — solo il salvataggio avveniva, in
+  // silenzio. Ora avvisa entrambi, sullo stesso modello già usato per
+  // acconti/liquidazioni: il dipendente sa che è stata registrata una sua
+  // restituzione, l'admin ha conferma che l'inserimento è andato a buon
+  // fine (utile soprattutto se più persone gestiscono i pagamenti).
+  const meseLblRest = (meseRifRest && annoRifRest) ? (' di '+new Date(annoRifRest, meseRifRest-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'})) : '';
+  const tgRestDip = '↩ <b>Ceraldi Presenze</b>\n\n'
+    + 'Ciao <b>'+escTG(nome)+'</b>, abbiamo registrato una tua restituzione'+meseLblRest+'.\n'
+    + 'Apri l\'app per vedere i dettagli.';
+  await inviaNotificaDipendente(dipIdSalvato, tgRestDip, '#stipendi');
+  inviaNotificaTelegram('↩ Registrata restituzione di € '+importo.toFixed(2)+' da '+escTG(nome)+meseLblRest+'.');
   // FIX: prima da qui si apriva sempre la Scheda Dipendente, anche se
   // l'admin non l'aveva mai chiesto — una navigazione a sorpresa e non
   // richiesta. Ora si resta dove si era: si aggiorna solo la card
@@ -10709,7 +10835,7 @@ async function salvaRestituzione() {
   } else if (typeof caricaAvvisoRestituzione === 'function') {
     caricaAvvisoRestituzione(dipIdSalvato, nome);
   }
-  toast('✓ Restituzione registrata');
+  toast('✓ Restituzione registrata — notifica inviata al dipendente');
 }
 
 let _sdiffDati = null;
@@ -12990,6 +13116,16 @@ function popolaMesiSel() {
     const lbl = d.toLocaleDateString('it-IT',{month:'long',year:'numeric'});
     opts += `<option value="${val}" ${i===0?'selected':''}>${lbl.charAt(0).toUpperCase()+lbl.slice(1)}</option>`;
   }
+  // FIX (segnalato da Valerio): un acconto o una restituzione con "mese di
+  // riferimento" impostato al mese SUCCESSIVO a quello attuale (possibile
+  // dalle rispettive sheet, che permettono di scegliere fino a un mese
+  // avanti) finiva in un mese che qui non compariva mai — irraggiungibile,
+  // quindi impossibile da rivedere o eliminare da questa pagina. Aggiunto
+  // in fondo alla lista, mai selezionato di default.
+  const dNext = new Date(now.getFullYear(), now.getMonth()+1, 1);
+  const valNext = dNext.getFullYear() + '-' + String(dNext.getMonth()+1).padStart(2,'0');
+  const lblNext = dNext.toLocaleDateString('it-IT',{month:'long',year:'numeric'});
+  opts += `<option value="${valNext}">${lblNext.charAt(0).toUpperCase()+lblNext.slice(1)}</option>`;
   sel.innerHTML = opts;
 }
 
