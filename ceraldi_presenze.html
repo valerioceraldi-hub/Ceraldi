@@ -3297,9 +3297,25 @@ async function presenzeCalcolaRiconciliazioneBonifici(){
     const dipIds = dips.map(d => d.id);
 
     const { data: cedolini } = await sb.from('presenze_documenti')
-      .select('dipendente_id,mese,anno,netto_busta').eq('categoria','busta_paga')
+      .select('id,dipendente_id,mese,anno,netto_busta').eq('categoria','busta_paga')
       .not('netto_busta','is',null).in('dipendente_id', dipIds);
     if (!cedolini || !cedolini.length) return vuoto;
+
+    // Acconti "Salda cedolino" (bonifico, taggati col documento del
+    // cedolino che pagano) — usati SOLO come indizio in più per la
+    // riconciliazione bancaria (importo e data dichiarati da chi ha
+    // pagato), MAI il contrario: nessun dato letto qui viene scritto o
+    // riletto dal calcolo di stipendio/arretrato. I due binari restano
+    // separati come richiesto — questo è solo un aiuto a capire a quale
+    // cedolino corrisponde un movimento "beneficiari vari" altrimenti
+    // ambiguo, quando importo e data coincidono con quanto già segnalato.
+    const { data: accontiCedSegnalati } = await sb.from('presenze_acconti')
+      .select('documento_id,importo,data').eq('modalita','bonifico').not('documento_id','is',null);
+    const segnalatiPerDoc = {};
+    (accontiCedSegnalati||[]).forEach(a => {
+      if (!segnalatiPerDoc[a.documento_id]) segnalatiPerDoc[a.documento_id] = [];
+      segnalatiPerDoc[a.documento_id].push(a);
+    });
 
     // Periodo complessivo da coprire: dal mese più vecchio al 25 del mese
     // successivo al più recente, per non scaricare tutto movimenti_banca.
@@ -3340,23 +3356,50 @@ async function presenzeCalcolaRiconciliazioneBonifici(){
 
       const candNome = movsUtili.filter(m => inFinestra(m) && _rsbNomeMatchaDescrizione(m.descrizione, nomeCompleto));
       candNome.forEach(m => usatiIds.add(m.id));
-      const sommaNome = candNome.reduce((s,m) => s + Math.abs(m.importo), 0);
+
+      // Match "segnalato": un acconto Salda-cedolino per QUESTO cedolino
+      // (stesso documento_id) il cui importo e la cui data dichiarati
+      // combaciano (tolleranza 0.50€ / 5 giorni) con un movimento ancora
+      // libero — anche fuori dalla finestra mensile stretta, perché un
+      // bonifico può arrivare qualche giorno dopo la data segnalata in
+      // app. Più affidabile del solo importo-residuo qui sotto, perché usa
+      // anche la data che TU hai dichiarato di aver pagato.
+      const segnalati = segnalatiPerDoc[c.id] || [];
+      const candSegnalati = [];
+      segnalati.forEach(seg => {
+        const importoSeg = parseFloat(seg.importo);
+        const dataSeg = new Date(seg.data+'T00:00:00');
+        let miglior = null, migliorDist = Infinity;
+        movsUtili.forEach(m => {
+          if (candNome.includes(m) || candSegnalati.includes(m) || usatiIds.has(m.id)) return;
+          if (Math.abs(Math.abs(m.importo) - importoSeg) > 0.5) return;
+          const distGiorni = Math.abs((new Date(m.data+'T00:00:00') - dataSeg) / 86400000);
+          if (distGiorni > 5) return;
+          if (distGiorni < migliorDist) { migliorDist = distGiorni; miglior = m; }
+        });
+        if (miglior) candSegnalati.push(miglior);
+      });
+      candSegnalati.forEach(m => usatiIds.add(m.id));
+
+      const tuttiNome = candNome.concat(candSegnalati);
+      const sommaNome = tuttiNome.reduce((s,m) => s + Math.abs(m.importo), 0);
       const netto = parseFloat(c.netto_busta);
       const restante = Math.round((netto - sommaNome) * 100) / 100;
 
-      // Se dopo il match per nome resta un importo scoperto, cerca UN
-      // movimento "beneficiari vari" (senza nome individuabile) il cui
-      // importo combaci col restante — proposta debole, sempre da confermare.
+      // Se dopo il match per nome/segnalato resta un importo scoperto,
+      // cerca UN movimento "beneficiari vari" (senza nome individuabile e
+      // senza corrispondenza dichiarata) il cui importo combaci col
+      // restante — proposta debole, sempre da confermare.
       let extra = [];
       if (Math.abs(restante) > 0.5) {
         extra = movsUtili.filter(m =>
           inFinestra(m) && _rsbEBeneficiariVari(m.descrizione) &&
-          !candNome.includes(m) && Math.abs(Math.abs(m.importo) - restante) <= 0.5
+          !tuttiNome.includes(m) && Math.abs(Math.abs(m.importo) - restante) <= 0.5
         ).slice(0, 1); // una sola proposta, non ambigua
       }
       extra.forEach(m => usatiIds.add(m.id));
 
-      const tutti = candNome.concat(extra);
+      const tutti = tuttiNome.concat(extra);
       if (!tutti.length) return; // nessun candidato per questo cedolino, niente da proporre
 
       const somma = tutti.reduce((s,m) => s + Math.abs(m.importo), 0);
@@ -3368,7 +3411,8 @@ async function presenzeCalcolaRiconciliazioneBonifici(){
         netto, somma, diff, stato,
         movimenti: tutti.map(m => ({
           id: m.id, data: m.data, importo: Math.abs(m.importo), descrizione: m.descrizione,
-          certo: candNome.includes(m) // true = trovato per nome, false = beneficiari-vari da confermare
+          certo: candNome.includes(m) || candSegnalati.includes(m), // true = auto-confermabile (nome o segnalato in app)
+          fonte: candNome.includes(m) ? 'nome' : (candSegnalati.includes(m) ? 'segnalato' : null)
         }))
       });
     });
@@ -12295,6 +12339,12 @@ let _accontoDipId = null;
 // non dal normale "+ Acconto": { tipo:'13'|'14', annoInizio }. Null = flusso
 // acconto classico, il checkbox "Considera saldata" resta nascosto.
 let _accLiquidaPeriodo = null;
+// Contesto attivo SOLO quando la sheet Acconto è stata aperta da "Salda
+// cedolino" (vedi apriSaldaCedolino): id del documento (cedolino) che
+// questo specifico acconto-bonifico sta pagando. Null = acconto normale,
+// non collegato a nessun cedolino. Riusa la sheet/tabella esistenti invece
+// di inventare un nuovo concetto — vedi salvaAcconto().
+let _accDocumentoId = null;
 
 /* ── STORICO PAGA GIORNALIERA / AUMENTI ────────────────────────────
    Prima la paga giornaliera era un campo che si sovrascriveva senza
@@ -12451,6 +12501,12 @@ function openAcconto(dipId, nome, prefillImporto, prefillNota) {
   // checkbox/etichetta di chiusura periodo lasciati accesi da un'apertura
   // precedente. apriLiquidaPeriodo1314() li riattiva subito dopo, se serve.
   _accLiquidaPeriodo = null;
+  // Reset del contesto "Salda cedolino" — stesso motivo: la normale
+  // apertura da "+ Acconto" non deve mai ereditare un collegamento a un
+  // documento lasciato da un'apertura precedente. apriSaldaCedolino() lo
+  // riattiva subito dopo, se serve.
+  _accDocumentoId = null;
+  if ($('acc-modalita')) $('acc-modalita').disabled = false;
   if ($('acc-sheet-title')) $('acc-sheet-title').textContent = 'Registra acconto';
   if ($('acc-saldo-periodo-wrap')) $('acc-saldo-periodo-wrap').style.display = 'none';
   if ($('acc-saldo-periodo')) $('acc-saldo-periodo').checked = false;
@@ -12499,6 +12555,40 @@ function apriLiquidaPeriodo1314(dipId, nome, tipo, annoInizio, importoConsigliat
   if ($('acc-saldo-periodo-wrap')) $('acc-saldo-periodo-wrap').style.display = 'block';
   if ($('acc-saldo-periodo')) $('acc-saldo-periodo').checked = true;
   if ($('acc-saldo-periodo-lbl')) $('acc-saldo-periodo-lbl').textContent = periodoLbl ? (' — '+periodoLbl) : '';
+}
+
+// Apre la sheet Acconto in modalità "Salda cedolino": stessa sheet riusata
+// (nessun modale nuovo, nessuna tabella nuova) ma bloccata su
+// causale=stipendio, modalità=bonifico (il cedolino si paga sempre così),
+// e importo precompilato con quanto MANCA per completare il netto del
+// cedolino — non l'intero netto ogni volta, altrimenti un secondo utilizzo
+// (per completare un pagamento parziale) duplicherebbe quanto già versato.
+// A differenza del normale "+ Acconto", questo acconto viene taggato con
+// documento_id (vedi salvaAcconto()): è quel collegamento che permette a
+// "Liquida" di sapere quanto del cedolino è già coperto e precompilare di
+// conseguenza bonifico/contanti.
+async function apriSaldaCedolino(docId, dipId, nome, mese, anno, nettoBusta) {
+  let giaVersato = 0;
+  try {
+    const { data } = await sb.from('presenze_acconti').select('importo').eq('documento_id', docId);
+    giaVersato = (data||[]).reduce((s,a)=>s+parseFloat(a.importo||0), 0);
+  } catch(e) { console.warn('apriSaldaCedolino:', e); }
+  const differenza = Math.round((nettoBusta - giaVersato) * 100) / 100;
+  if (differenza <= 0.01) { toast('Il cedolino di '+nome+' risulta già saldato per intero con bonifico'); return; }
+  const meseLbl = new Date(anno, mese-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
+  openAcconto(dipId, nome, differenza, giaVersato > 0.01
+    ? ('Completamento pagamento cedolino di '+meseLbl+' (già versati € '+giaVersato.toFixed(2)+' con bonifico)')
+    : ('Pagamento cedolino di '+meseLbl+' tramite bonifico'));
+  if ($('acc-causale')) $('acc-causale').value = 'stipendio';
+  toggleAccontoFerie();
+  toggleAccontoRateiMesi();
+  if ($('acc-modalita')) { $('acc-modalita').value = 'bonifico'; $('acc-modalita').disabled = true; toggleAccFonteWrap(); }
+  if ($('acc-mese-rif')) {
+    if ($('acc-mese-rif').options.length === 0) $('acc-mese-rif').innerHTML = _opzioniMese(12, 1);
+    $('acc-mese-rif').value = anno+'-'+String(mese).padStart(2,'0');
+  }
+  _accDocumentoId = docId;
+  if ($('acc-sheet-title')) $('acc-sheet-title').textContent = 'Salda cedolino';
 }
 
 // Pannello "da dove prendi i contanti" (cassetto/fondo) — visibile solo se
@@ -12768,6 +12858,7 @@ async function salvaAcconto() {
       mese_riferimento: meseRif, anno_riferimento: annoRif2,
       periodo_anno_inizio: periodoAnnoInizioIns,
       saldo_periodo: saldoPeriodoIns,
+      documento_id:  _accDocumentoId || null,
       note:          noteAcconto || null,
       registrato_da: ME.id,
       letto_dip:     false
@@ -12832,6 +12923,24 @@ async function salvaAcconto() {
     const meseRifLbl = new Date(annoRif2, meseRif-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
     vocabolarioTipo += ' di '+meseRifLbl;
   }
+  // "Salda cedolino": sovrascrive la dicitura generica sopra con una
+  // specifica per il cedolino — "il pagamento del cedolino di [mese]" se
+  // il totale versato per QUESTO documento (compreso l'acconto appena
+  // inserito) copre per intero il netto della busta, "un acconto sul
+  // cedolino di [mese]" se resta parziale.
+  if (_accDocumentoId) {
+    try {
+      const { data: docCed } = await sb.from('presenze_documenti').select('netto_busta,mese,anno').eq('id', _accDocumentoId).maybeSingle();
+      if (docCed && docCed.netto_busta != null) {
+        const { data: acctiCed } = await sb.from('presenze_acconti').select('importo').eq('documento_id', _accDocumentoId);
+        const totVersatoCed = (acctiCed||[]).reduce((s,a)=>s+parseFloat(a.importo||0), 0);
+        const meseCedLbl = new Date(docCed.anno, docCed.mese-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
+        vocabolarioTipo = (totVersatoCed >= parseFloat(docCed.netto_busta) - 0.01)
+          ? ('il pagamento del cedolino di '+meseCedLbl)
+          : ('un acconto sul cedolino di '+meseCedLbl);
+      }
+    } catch(e) { console.warn('salvaAcconto — dicitura cedolino:', e); }
+  }
   // Scrittura automatica in Prima Nota (Ceraldi Fatture) — SOLO se il
   // pagamento è avvenuto in contanti: stesso backend Supabase condiviso,
   // stessa tabella prima_nota_movimenti già usata da Fatture per le spese
@@ -12862,6 +12971,8 @@ async function salvaAcconto() {
   inviaNotificaTelegram('✅ Registrato: '+vocabolarioTipo.charAt(0).toUpperCase()+vocabolarioTipo.slice(1)+' — € '+parseFloat(importo).toFixed(2)+' per '+escTG(nomeAcc)+' — in attesa di conferma dipendente.');
   toast('Registrato — notifica inviata al dipendente');
   _accLiquidaPeriodo = null;
+  _accDocumentoId = null;
+  if ($('acc-modalita')) $('acc-modalita').disabled = false;
   closeSheet('sh-acconto');
   await caricaStipendi();
 }
@@ -13482,7 +13593,9 @@ async function rbRenderLista(){
     const righeMov = r.movimenti.map((m,mi) => `
       <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid var(--border);font-size:12px">
         <div><div>${m.data} — € ${m.importo.toFixed(2)}</div><div style="color:var(--muted);font-size:10.5px;word-break:break-word">${esc(m.descrizione)}</div></div>
-        ${m.certo ? '<span style="font-size:10px;color:#1a7a3a;font-weight:700;white-space:nowrap;margin-left:8px">✓ per nome</span>'
+        ${m.certo ? (m.fonte === 'segnalato'
+                      ? '<span style="font-size:10px;color:var(--accent);font-weight:700;white-space:nowrap;margin-left:8px">🔗 come segnalato</span>'
+                      : '<span style="font-size:10px;color:#1a7a3a;font-weight:700;white-space:nowrap;margin-left:8px">✓ per nome</span>')
                    : `<button class="btn-sm" style="white-space:nowrap;margin-left:8px" onclick="rbConfermaSingolo(${idx},${mi})">Conferma</button>`}
       </div>`).join('');
     let azione = '';
@@ -13903,7 +14016,7 @@ async function caricaStipendi() {
     // il problema era che la riga non arrivava nemmeno fino a lì. Ora si
     // recupera la storia completa, come già per la 13a/14a — niente più
     // limite di data.
-    sb.from('presenze_acconti').select('id,dipendente_id,importo,data,note,letto_dip,causale,saldato,mese_riferimento,anno_riferimento,periodo_anno_inizio,saldo_periodo'),
+    sb.from('presenze_acconti').select('id,dipendente_id,importo,data,note,letto_dip,causale,saldato,mese_riferimento,anno_riferimento,periodo_anno_inizio,saldo_periodo,documento_id'),
     // FIX (acconto "sdoppiato" tra mesi): un acconto non liquidato viene
     // riportato avanti nei mesi successivi (vedi acconti sotto), ma la
     // relativa restituzione veniva presa SOLO se caduta nel mese in corso
@@ -13944,7 +14057,7 @@ async function caricaStipendi() {
     // l'importo reale della busta paga). Presi TUTTI, anche quelli senza
     // netto valorizzato: se manca l'importo va segnalato, non fatto
     // sparire in silenzio (altrimenti sembra che il cedolino non esista).
-    sb.from('presenze_documenti').select('dipendente_id,netto_busta')
+    sb.from('presenze_documenti').select('id,dipendente_id,netto_busta')
       .eq('categoria','busta_paga').eq('mese',parseInt(m)).eq('anno',parseInt(y)),    // FIX BUG GRAVE: gli acconti/correzioni 13a/14a usavano finora
     // accontiTutti, che è filtrato con .lte('data',al) — cioè escluso di
     // netto qualunque riga datata DOPO il mese che si sta guardando in
@@ -13966,7 +14079,22 @@ async function caricaStipendi() {
       .eq('mese_riferimento',parseInt(m)).eq('anno_riferimento',parseInt(y)), null),
   ]);
   const cedoliniMeseMap = {};
-  (cedoliniMese||[]).forEach(c => { cedoliniMeseMap[c.dipendente_id] = c.netto_busta != null ? parseFloat(c.netto_busta) : null; });
+  const cedoliniDocIdMap = {}; // dipendente_id -> id del documento (cedolino) di questo mese, per "Salda cedolino"
+  (cedoliniMese||[]).forEach(c => {
+    cedoliniMeseMap[c.dipendente_id] = c.netto_busta != null ? parseFloat(c.netto_busta) : null;
+    cedoliniDocIdMap[c.dipendente_id] = c.id;
+  });
+  // Quanto già versato in bonifico specificamente per IL CEDOLINO DI QUESTO
+  // MESE (acconti taggati con documento_id, via "Salda cedolino") — usato
+  // solo per l'etichetta del pulsante qui sotto; il calcolo del netto
+  // reale continua a sommare TUTTI gli acconti causale stipendio come già
+  // fa (questo campo non cambia quel calcolo, è solo informativo).
+  const versatoCedolinoMap = {};
+  (accontiTutti||[]).forEach(a => {
+    if (a.documento_id && cedoliniDocIdMap[a.dipendente_id] === a.documento_id) {
+      versatoCedolinoMap[a.dipendente_id] = (versatoCedolinoMap[a.dipendente_id]||0) + parseFloat(a.importo||0);
+    }
+  });
   const bonificiRiconciliatiMap = {};
   (bonificiRiconciliatiMese||[]).forEach(b => {
     if (!bonificiRiconciliatiMap[b.dipendente_id]) bonificiRiconciliatiMap[b.dipendente_id] = { somma:0, movimenti:[] };
@@ -14423,9 +14551,18 @@ async function caricaStipendi() {
           }
         </div>
         ${(!liquidatiMap[d.id] && Object.prototype.hasOwnProperty.call(cedoliniMeseMap, d.id) && cedoliniMeseMap[d.id] != null)
-          ? `<button class="btn-sm" style="width:100%;margin:-4px 0 10px;background:var(--accent);color:#fff;border:none" onclick="apriLiquidaConCedolino('${d.id}','${nomeOnclick}',${parseInt(m)},${parseInt(y)},${giorni},${paga},${totAcc},${presManualiNonValid},${totRestMese},${giorniFestivoLav},${totaleFestivoLav},${giorniFestivoNonLav},${totaleFestivoNonLav},${giorniFerie},${totaleFerie})">📄 Salda con l'importo del cedolino (€${cedoliniMeseMap[d.id].toFixed(2)})</button>`
+          ? (() => {
+              const nettoCed = cedoliniMeseMap[d.id];
+              const giaVersatoCed = versatoCedolinoMap[d.id] || 0;
+              const restanteCed = Math.round((nettoCed - giaVersatoCed) * 100) / 100;
+              if (restanteCed <= 0.01) {
+                return `<div style="font-size:11px;color:var(--green);background:rgba(47,138,92,.08);border-radius:8px;padding:8px 10px;margin:-4px 0 10px">✓ Cedolino già saldato con bonifico (€${nettoCed.toFixed(2)})</div>`;
+              }
+              const lbl = giaVersatoCed > 0.01 ? `🔗 Completa cedolino (€${restanteCed.toFixed(2)})` : `🔗 Salda cedolino (€${nettoCed.toFixed(2)})`;
+              return `<button class="btn-sm" style="width:100%;margin:-4px 0 10px;background:var(--accent);color:#fff;border:none" onclick="apriSaldaCedolino('${cedoliniDocIdMap[d.id]}','${d.id}','${nomeOnclick}',${parseInt(m)},${parseInt(y)},${nettoCed})">${lbl}</button>`;
+            })()
           : (!liquidatiMap[d.id] && Object.prototype.hasOwnProperty.call(cedoliniMeseMap, d.id) && cedoliniMeseMap[d.id] == null)
-            ? `<div style="font-size:11px;color:var(--yellow);background:rgba(200,135,58,.1);border-radius:8px;padding:8px 10px;margin:-4px 0 10px">⚠ C'è un cedolino caricato per questo mese ma senza importo netto — apri "Documenti" → "✏️ Modifica" su quel cedolino e compila il netto per poter usare "Salda con cedolino"</div>`
+            ? `<div style="font-size:11px;color:var(--yellow);background:rgba(200,135,58,.1);border-radius:8px;padding:8px 10px;margin:-4px 0 10px">⚠ C'è un cedolino caricato per questo mese ma senza importo netto — apri "Documenti" → "✏️ Modifica" su quel cedolino e compila il netto per poter usare "Salda cedolino"</div>`
             : ''
         }
         <!-- Festività lavorate: paga doppia, sempre in evidenza a parte
@@ -18003,14 +18140,19 @@ async function openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, 
   // sempre coincide col netto stampato sul cedolino — l'admin deve vederli
   // entrambi per avere contezza dello stipendio reale.
   let bustaDoc = null;
+  let giaVersatoCedolino = 0; // quanto già versato in bonifico specificamente per QUESTO cedolino (via "Salda cedolino")
   try {
     const { data: bd } = await sb.from('presenze_documenti')
       .select('id,netto_busta,lordo').eq('dipendente_id',dipId).eq('categoria','busta_paga')
       .eq('mese',mese).eq('anno',anno).limit(1).maybeSingle();
     bustaDoc = bd || null;
+    if (bustaDoc) {
+      const { data: acctiCed } = await sb.from('presenze_acconti').select('importo').eq('documento_id', bustaDoc.id);
+      giaVersatoCedolino = (acctiCed||[]).reduce((s,a)=>s+parseFloat(a.importo||0), 0);
+    }
   } catch(e) { console.warn('riconciliazione busta paga:', e); }
 
-  _liqDati = { dipId, nome, mese, anno, giorni, paga, acconti, restituzioni, netto, totaleLordo, giorniFestivoLav, totaleFestivoLav, giorniFestivoNonLav, totaleFestivoNonLav, giorniFerie, totaleFerie, documentoId: bustaDoc ? bustaDoc.id : null, cedolinoNetto: (bustaDoc && bustaDoc.netto_busta != null) ? parseFloat(bustaDoc.netto_busta) : null };
+  _liqDati = { dipId, nome, mese, anno, giorni, paga, acconti, restituzioni, netto, totaleLordo, giorniFestivoLav, totaleFestivoLav, giorniFestivoNonLav, totaleFestivoNonLav, giorniFerie, totaleFerie, documentoId: bustaDoc ? bustaDoc.id : null, cedolinoNetto: (bustaDoc && bustaDoc.netto_busta != null) ? parseFloat(bustaDoc.netto_busta) : null, cedolinoGiaVersato: giaVersatoCedolino };
   const meseLbl = new Date(anno, mese-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
   let riconciliazioneHtml = '';
   if (bustaDoc && bustaDoc.netto_busta != null) {
@@ -18018,6 +18160,7 @@ async function openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, 
     riconciliazioneHtml = '<div style="background:rgba(43,74,203,.05);border:1px solid rgba(43,74,203,.18);border-radius:10px;padding:10px 12px;margin-top:10px;font-size:12px">'
       + '<div style="display:flex;justify-content:space-between"><span>Netto da busta paga caricata</span><span style="font-weight:700">€ '+parseFloat(bustaDoc.netto_busta).toFixed(2)+'</span></div>'
       + '<div style="display:flex;justify-content:space-between;margin-top:2px"><span>Netto reale (da presenze/acconti)</span><span style="font-weight:700">€ '+netto.toFixed(2)+'</span></div>'
+      + (giaVersatoCedolino > 0.01 ? '<div style="display:flex;justify-content:space-between;margin-top:2px;color:var(--accent)"><span>🔗 Già versato in bonifico (Salda cedolino)</span><span style="font-weight:700">€ '+giaVersatoCedolino.toFixed(2)+'</span></div>' : '')
       + (Math.abs(diff)>0.01 ? '<div style="margin-top:4px;color:var(--red);font-weight:700">⚠ Differenza: € '+diff.toFixed(2)+' — la busta non coincide col reale dovuto</div>' : '<div style="margin-top:4px;color:var(--green)">✓ Corrisponde alla busta paga</div>')
       + '</div>';
   }
@@ -18062,8 +18205,28 @@ async function openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, 
     +riconciliazioneHtml;
   $('liq-note').value = '';
   if ($('liq-causale')) $('liq-causale').value = 'stipendio';
-  $('liq-bonifico').value = '';
-  $('liq-contanti').value = '';
+  // Precompilazione intelligente bonifico/contanti quando c'è un cedolino
+  // caricato per questo mese: bonifico = quanto manca per COMPLETARE il
+  // cedolino (0 se già coperto per intero da "Salda cedolino" prima d'ora,
+  // l'intero importo se non ancora toccato, la differenza se parziale);
+  // contanti = il resto del netto reale (che già esclude, come sempre,
+  // tutti gli acconti dati finora — cedolino compreso). Sempre modificabile.
+  if (bustaDoc && bustaDoc.netto_busta != null) {
+    const nettoBustaVal = parseFloat(bustaDoc.netto_busta);
+    const bonificoDaCompletare = Math.max(0, Math.round((nettoBustaVal - giaVersatoCedolino) * 100) / 100);
+    $('liq-bonifico').value = bonificoDaCompletare > 0.01 ? bonificoDaCompletare.toFixed(2) : '';
+    const contantiRimanenti = Math.max(0, Math.round((netto - bonificoDaCompletare) * 100) / 100);
+    $('liq-contanti').value = contantiRimanenti > 0.01 ? contantiRimanenti.toFixed(2) : '';
+    // "viaCedolino" (usato da salvaLiquidazione per la dicitura della
+    // notifica) solo se questa liquidazione include DAVVERO una parte di
+    // bonifico-cedolino non ancora versata — se il cedolino era già stato
+    // saldato del tutto con "Salda cedolino", questa è solo il saldo in
+    // contanti, non un pagamento del cedolino.
+    _liqDati.viaCedolino = bonificoDaCompletare > 0.01;
+  } else {
+    $('liq-bonifico').value = '';
+    $('liq-contanti').value = '';
+  }
   if ($('liq-data')) $('liq-data').value = todayISO();
   _liqFonte = '';
   ['cassetto','fondo'].forEach(k=>{ const b=$('liq-fonte-'+k); if(b) b.className='btn-sm'; });
@@ -18089,39 +18252,6 @@ async function openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, 
     btnRestituzione.style.display = 'none';
   }
   openSheet('sh-liquida');
-}
-
-// Apre "Liquida" come il tasto normale, ma precompila subito il campo
-// bonifico con l'importo netto del cedolino già caricato per quel mese —
-// così il "bonifico" registrato è sempre pari al cedolino, non calcolato a
-// parte. Se il versato (bonifico + eventuali acconti già dati) supera il
-// dovuto reale, salvaLiquidazione() registra già in automatico l'eccedenza
-// come acconto: comparirà come saldo negativo ("Deve restituire") non
-// appena quell'acconto rientra nel calcolo di un mese, con tanto di tasto
-// pronto per registrare la restituzione quando avviene davvero. Se invece
-// il versato è inferiore al dovuto, il riquadro sotto mostra subito quanto
-// resta da pagare.
-async function apriLiquidaConCedolino(dipId, nome, mese, anno, giorni, paga, acconti, presDaValidare, restituzioni, giorniFestivoLav, totaleFestivoLav, giorniFestivoNonLav, totaleFestivoNonLav, giorniFerie, totaleFerie) {
-  await openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, presDaValidare, restituzioni, giorniFestivoLav, totaleFestivoLav, giorniFestivoNonLav, totaleFestivoNonLav, giorniFerie, totaleFerie);
-  if (_liqDati && _liqDati.cedolinoNetto != null) {
-    $('liq-bonifico').value = _liqDati.cedolinoNetto.toFixed(2);
-    // Precompila anche i contanti con la differenza tra il netto reale
-    // (da presenze/acconti) e il netto del cedolino, così bonifico+contanti
-    // coprono subito l'intero dovuto — evita che il pagamento risulti
-    // "parziale" (e quindi un acconto) solo perché il cedolino da solo non
-    // copriva tutto il netto. Se il cedolino è pari o superiore al netto
-    // reale non c'è differenza da aggiungere in contanti (resta 0, gestito
-    // come eccedenza da salvaLiquidazione). Resta comunque modificabile.
-    const diffCedolino = _liqDati.netto - _liqDati.cedolinoNetto;
-    $('liq-contanti').value = diffCedolino > 0.01 ? diffCedolino.toFixed(2) : '';
-    verificaPagamentoLiquida();
-    // Ricordato per la notifica: questo pagamento nasce dal cedolino, non
-    // da una liquidazione "a mano" — cambia la dicitura del messaggio al
-    // dipendente (vedi salvaLiquidazione).
-    _liqDati.viaCedolino = true;
-  } else {
-    showMsg('liq-msg','Nessun cedolino con importo netto trovato per questo mese — inserisci l\'importo manualmente','warn');
-  }
 }
 
 // Verifica che bonifico + contanti inseriti coincidano col netto da pagare.
