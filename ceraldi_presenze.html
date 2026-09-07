@@ -14540,6 +14540,25 @@ async function caricaStipendi() {
       ? (nettoSaldatoSenzaLiquidazione ? (tuttiAccontiConfermati ? 'saldato_acconti' : 'saldato_acconti_attesa') : 'da_liquidare')
       : (residuoLiq > 0.01 ? 'parziale' : (liqCorrente.confermata_dip ? 'confermato' : 'in_attesa'));
     const statoLbl = { da_liquidare:'Da liquidare', parziale:'⚠ Pagamento parziale', in_attesa:'⏳ In attesa', confermato:'✓✓ Confermato', saldato_acconti:'✓✓ Saldato', saldato_acconti_attesa:'⏳ Saldato — in attesa' }[stato];
+    // FIX (segnalato da Valerio: "il numero in alto segue logiche diverse
+    // in base a come è stato pagato, si confonde" — es. Guarino mostrava
+    // €0,00 pur avendo percepito per intero, mentre un altro dipendente
+    // pagato allo stesso modo (saldo tramite acconti/cedolino, senza mai
+    // passare da Liquida) avrebbe mostrato lo stesso €0 fuorviante). SOLO
+    // per i due stati "saldato senza liquidazione formale" (vedi sopra) il
+    // "netto" può leggersi 0 o negativo pur essendo tutto a posto — lì la
+    // cifra in alto diventa il totale lordo del mese (stabile, sempre
+    // positivo, "quanto gli spettava"). Per tutti gli altri stati resta il
+    // netto come sempre (per una liquidazione formale è la cifra
+    // realmente versata in quella transazione, corretta così com'era).
+    // In ogni caso ora c'è sempre un'etichetta sotto la cifra che dice
+    // esplicitamente cosa si sta leggendo, invece di doverlo intuire dallo
+    // stato.
+    const statiSaldatoSenzaLiquidazione = new Set(['saldato_acconti','saldato_acconti_attesa']);
+    const importoHeadline = statiSaldatoSenzaLiquidazione.has(stato) ? totale : netto;
+    const headlineLbl = statiSaldatoSenzaLiquidazione.has(stato) ? 'totale mese'
+      : (stato === 'confermato' || stato === 'in_attesa') ? 'pagato'
+      : 'da pagare';
 
     // Calcolo ratei 13a e 14a secondo CCNL Pubblici Esercizi
     const ratei = calcolaRatei13a14a(d.data_assunzione, paga, parseInt(m), parseInt(y));
@@ -14664,7 +14683,8 @@ async function caricaStipendi() {
           ${Math.abs(arretratoTotale) > 0.005 ? `<div style="font-size:10px;color:var(--muted);margin-top:1px">+ arretrato mesi precedenti: <span style="font-weight:700;color:${arretratoTotale>=0?'var(--muted)':'var(--red)'}">€${arretratoTotale.toFixed(2)}</span></div>` : ''}
         </div>
         <div style="text-align:right;flex-shrink:0">
-          <div style="font-size:16px;font-weight:800;color:${netto>=0?'var(--green)':'var(--red)'}">€${netto.toFixed(2)}</div>
+          <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px">${headlineLbl}</div>
+          <div style="font-size:16px;font-weight:800;color:${importoHeadline>=0?'var(--green)':'var(--red)'}">€${importoHeadline.toFixed(2)}</div>
           <div style="font-size:10px;color:var(--muted)" id="stip-chev-${d.id}">dettagli ▾</div>
         </div>
       </div>
@@ -14765,7 +14785,7 @@ async function caricaStipendi() {
           </div>
           <div style="background:${boxBg};border:1.5px solid ${boxBorder};border-radius:12px;padding:12px">
             <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">${boxLbl}</div>
-            <div style="font-size:22px;font-weight:800;color:${boxColor}">€${netto.toFixed(2)}</div>
+            <div style="font-size:22px;font-weight:800;color:${boxColor}">€${(statiSaldatoSenzaLiquidazione.has(stato) ? totale : netto).toFixed(2)}</div>
           </div>
         </div>`;
         })()}
