@@ -14517,9 +14517,29 @@ async function caricaStipendi() {
     // DOPO la liquidazione (nuova timbratura, acconto, restituzione...) —
     // va segnalato esplicitamente invece di correggersi in silenzio.
     const nettoCambiatoDopoLiquidazione = liqCorrente && Math.abs(netto - parseFloat(liqCorrente.importo_netto||0)) > 0.01;
-    const stato = !liqCorrente ? 'da_liquidare'
+    // FIX (segnalato da Valerio, caso Guarino: cedolino saldato con "Salda
+    // cedolino" + una restituzione hanno azzerato il netto del mese SENZA
+    // mai passare da "Liquida" — nessuna presenze_liquidazioni viene mai
+    // creata in quel percorso, quindi il mese restava "Da liquidare" per
+    // sempre anche se in realtà è saldato per intero, e il dipendente ha
+    // pure già confermato il bonifico del cedolino). Un mese senza
+    // liquidazione formale ma il cui netto NON risulta più a credito del
+    // dipendente è saldato lo stesso — solo per un'altra via: netto <= 0
+    // copre sia lo zero esatto sia un'eccedenza (ha percepito più del
+    // dovuto — resta comunque "pagato", l'eccedenza è un credito tracciato
+    // a parte nell'arretrato, non blocca questo stato). Solo un netto
+    // ancora POSITIVO (gli spetta ancora qualcosa) non deve mai risultare
+    // "pagato e confermato" — su questo Valerio è stato esplicito. Se
+    // inoltre TUTTI gli acconti che hanno portato il netto a questo punto
+    // sono già stati confermati dal dipendente, lo stato è "confermato" a
+    // tutti gli effetti; se anche uno solo è ancora da confermare, resta
+    // in attesa (mai un falso "confermato").
+    const nettoSaldatoSenzaLiquidazione = !liqCorrente && netto <= 0.5 && accsStipendio.length > 0;
+    const tuttiAccontiConfermati = nettoSaldatoSenzaLiquidazione && accsStipendio.every(a => a.letto_dip);
+    const stato = !liqCorrente
+      ? (nettoSaldatoSenzaLiquidazione ? (tuttiAccontiConfermati ? 'saldato_acconti' : 'saldato_acconti_attesa') : 'da_liquidare')
       : (residuoLiq > 0.01 ? 'parziale' : (liqCorrente.confermata_dip ? 'confermato' : 'in_attesa'));
-    const statoLbl = { da_liquidare:'Da liquidare', parziale:'⚠ Pagamento parziale', in_attesa:'⏳ In attesa', confermato:'✓✓ Confermato' }[stato];
+    const statoLbl = { da_liquidare:'Da liquidare', parziale:'⚠ Pagamento parziale', in_attesa:'⏳ In attesa', confermato:'✓✓ Confermato', saldato_acconti:'✓✓ Saldato', saldato_acconti_attesa:'⏳ Saldato — in attesa' }[stato];
 
     // Calcolo ratei 13a e 14a secondo CCNL Pubblici Esercizi
     const ratei = calcolaRatei13a14a(d.data_assunzione, paga, parseInt(m), parseInt(y));
@@ -14629,6 +14649,8 @@ async function caricaStipendi() {
       parziale:     '<span style="display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:20px;background:rgba(200,135,58,.12);color:var(--yellow)">⚠ Pagamento parziale — mancano €'+residuoLiq.toFixed(2)+'</span>',
       in_attesa:    '<span style="display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:20px;background:rgba(43,74,203,.1);color:var(--accent)">⏳ In attesa conferma</span>',
       confermato:   '<span style="display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:20px;background:rgba(47,138,92,.12);color:var(--green)">✅ Pagato e confermato</span>',
+      saldato_acconti: '<span style="display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:20px;background:rgba(47,138,92,.12);color:var(--green)">✅ Saldato e confermato</span>',
+      saldato_acconti_attesa: '<span style="display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:20px;background:rgba(43,74,203,.1);color:var(--accent)">⏳ Saldato — in attesa conferma</span>',
     }[stato];
 
     const html = `<div class="card" style="margin-bottom:8px;padding:12px">
@@ -14731,6 +14753,8 @@ async function caricaStipendi() {
         ${(() => {
           let boxBg, boxBorder, boxColor, boxLbl;
           if (stato === 'confermato')      { boxBg='rgba(47,138,92,.12)';  boxBorder='rgba(47,138,92,.35)';  boxColor='var(--green)';  boxLbl='✅ Pagato e confermato'; }
+          else if (stato === 'saldato_acconti') { boxBg='rgba(47,138,92,.12)'; boxBorder='rgba(47,138,92,.35)'; boxColor='var(--green)'; boxLbl='✅ Saldato e confermato'; }
+          else if (stato === 'saldato_acconti_attesa') { boxBg='rgba(43,74,203,.1)'; boxBorder='rgba(43,74,203,.3)'; boxColor='var(--accent)'; boxLbl='⏳ Saldato — in attesa conferma'; }
           else if (stato === 'in_attesa')  { boxBg='rgba(43,74,203,.1)';   boxBorder='rgba(43,74,203,.3)';   boxColor='var(--accent)'; boxLbl='⏳ Pagato — in attesa conferma'; }
           else if (stato === 'parziale')   { boxBg='rgba(200,135,58,.12)';boxBorder='rgba(200,135,58,.35)'; boxColor='var(--yellow)'; boxLbl='⚠ Pagamento parziale'; }
           else                              { boxBg = netto>=0?'rgba(47,138,92,.1)':'rgba(217,48,37,.1)'; boxBorder = netto>=0?'rgba(47,138,92,.3)':'rgba(217,48,37,.3)'; boxColor = netto>=0?'var(--green)':'var(--red)'; boxLbl='Da pagare'; }
@@ -14868,7 +14892,13 @@ function filtraStipendi() {
   const stato = ($('st-filtro-stato') ? $('st-filtro-stato').value : '');
   let filtered = _stipendiData;
   if (q)     filtered = filtered.filter(r => (r.nome+' '+r.cognome).toLowerCase().includes(q));
-  if (stato) filtered = filtered.filter(r => r.stato === stato);
+  // I nuovi stati "saldato_acconti"/"saldato_acconti_attesa" (mese saldato
+  // solo con acconti/restituzioni, senza una vera Liquidazione — vedi
+  // caricaStipendi) sono equivalenti a "confermato"/"in_attesa" ai fini di
+  // questo filtro, per non dover aggiungere altre voci nel menu a tendina.
+  if (stato === 'confermato') filtered = filtered.filter(r => r.stato === 'confermato' || r.stato === 'saldato_acconti');
+  else if (stato === 'in_attesa') filtered = filtered.filter(r => r.stato === 'in_attesa' || r.stato === 'saldato_acconti_attesa');
+  else if (stato) filtered = filtered.filter(r => r.stato === stato);
   if (!filtered.length) {
     wrap.innerHTML = '<div class="empty"><div class="empty-icon">💶</div><div class="empty-txt">Nessun dipendente trovato</div></div>';
     return;
