@@ -403,7 +403,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.44.1</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.45.0</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -18790,11 +18790,20 @@ function _cfRender(mostraTutte, filtro){
         var impF=nettoFattura(f);
         var resto=f.stato==='parziale'?Math.max(0,impF-(f.parzPagato||0)):impF;
         var diff=Math.abs(impF-imp);
+        // FIX 07/09 (segnalato da Valerio): il confronto guardava SOLO il
+        // totale della fattura, mai il residuo di una già parziale — un
+        // movimento che combacia esattamente col resto (es. secondo
+        // pagamento che chiude una fattura parziale) non veniva segnalato
+        // in nessun modo, restava un "diff" fuorviante calcolato sul totale
+        // sbagliato. Ora, per le fatture parziali, il confronto giusto è
+        // col residuo, ed è segnalato in modo esplicito quanto quello pieno.
+        var diffResto = f.stato==='parziale' ? Math.abs(resto-imp) : null;
+        var combaciaResto = diffResto!==null && diffResto<0.50;
         var diffStr=diff<0.50?'':'diff '+fmt(diff);
         var statoCol=f.stato==='pagata'?'#1a7a3a':(f.stato==='parziale'?'#b36a00':'var(--red)');
         var movAltrove = f.stato==='pagata' ? (_bancaMovimenti||[]).find(function(x){ return x.fatturaId===f.id && x.abbinata; }) : null;
         var fid=String(f.id).replace(/'/g,'');
-        hh+='<div style="padding:10px;border:1px solid var(--sep);border-radius:8px;margin-bottom:8px">';
+        hh+='<div style="padding:10px;border:1px solid '+(combaciaResto?'var(--blue)':'var(--sep)')+';border-radius:8px;margin-bottom:8px'+(combaciaResto?';background:var(--blue-light)':'')+'">';
         hh+='<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">';
         hh+='<div style="flex:1;min-width:0">';
         hh+='<div style="font-size:13px;font-weight:600">'+esc(f.fornitore||'—')+'</div>';
@@ -18802,15 +18811,16 @@ function _cfRender(mostraTutte, filtro){
         hh+='<div style="font-size:11px;margin-top:2px"><span style="color:'+statoCol+'">'+f.stato+'</span>';
         if(f.stato==='parziale') hh+=' · Pagato '+fmt(f.parzPagato||0)+' · Resto '+fmt(resto);
         if(movAltrove) hh+=' · <span style="color:#b36a00;font-weight:700">🔗 già abbinata al movimento del '+esc(movAltrove.data||'')+'</span>';
+        if(combaciaResto) hh+='<div style="margin-top:3px"><span style="color:var(--blue);font-weight:700">✓ Combacia esattamente col residuo</span></div>';
         hh+='</div></div>';
         hh+='<div style="text-align:right;flex-shrink:0">';
         hh+='<div style="font-size:14px;font-weight:700">'+fmt(impF)+'</div>';
-        if(diffStr) hh+='<div style="font-size:10px;color:var(--orange)">'+diffStr+'</div>';
+        if(diffStr && !combaciaResto) hh+='<div style="font-size:10px;color:var(--orange)">'+diffStr+'</div>';
         hh+='</div></div>';
         hh+='<div style="display:flex;gap:6px">';
         hh+='<button onclick="_cfAbbina('+idx+',\''+fid+'\',false)" style="flex:1;padding:7px 6px;border:1px solid var(--green);border-radius:6px;background:var(--green-light);color:#1a7a3a;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">Abbina ('+fmt(impF)+')</button>';
         if(diff>0.50){
-          hh+='<button onclick="_cfAbbina('+idx+',\''+fid+'\',true)" style="flex:1;padding:7px 6px;border:1px solid var(--orange);border-radius:6px;background:#fff8ec;color:#b36a00;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">Parziale ('+fmt(imp)+')</button>';
+          hh+='<button onclick="_cfAbbina('+idx+',\''+fid+'\',true)" style="flex:1;padding:7px 6px;border:1px solid '+(combaciaResto?'var(--blue)':'var(--orange)')+';border-radius:6px;background:'+(combaciaResto?'var(--blue-light)':'#fff8ec')+';color:'+(combaciaResto?'var(--blue)':'#b36a00')+';font-family:inherit;font-size:11px;font-weight:700;cursor:pointer">'+(combaciaResto?'✓ ':'')+'Parziale ('+fmt(imp)+')</button>';
         }
         hh+='</div></div>';
       });
@@ -18931,11 +18941,15 @@ function _cfRender(mostraTutte, filtro){
       var impF=nettoFattura(f);
       var resto=f.stato==='parziale'?Math.max(0,impF-(f.parzPagato||0)):impF;
       var diff=Math.abs(impF-imp);
+      // FIX 07/09 (stesso motivo della lista gemella sopra): confronto col
+      // residuo per le fatture parziali, non solo col totale.
+      var diffResto = f.stato==='parziale' ? Math.abs(resto-imp) : null;
+      var combaciaResto = diffResto!==null && diffResto<0.50;
       var diffStr=diff<0.50?'':'diff '+fmt(diff);
       var statoCol=f.stato==='pagata'?'#1a7a3a':(f.stato==='parziale'?'#b36a00':'var(--red)');
         var movAltrove = f.stato==='pagata' ? (_bancaMovimenti||[]).find(function(x){ return x.fatturaId===f.id && x.abbinata; }) : null;
       var fid=String(f.id).replace(/'/g,'');
-      hh+='<div style="padding:10px;border:1px solid var(--sep);border-radius:8px;margin-bottom:8px">';
+      hh+='<div style="padding:10px;border:1px solid '+(combaciaResto?'var(--blue)':'var(--sep)')+';border-radius:8px;margin-bottom:8px'+(combaciaResto?';background:var(--blue-light)':'')+'">';
       hh+='<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">';
       hh+='<div style="flex:1;min-width:0">';
       hh+='<div style="font-size:13px;font-weight:600">'+esc(f.fornitore||'—')+'</div>';
@@ -18943,15 +18957,16 @@ function _cfRender(mostraTutte, filtro){
       hh+='<div style="font-size:11px;margin-top:2px"><span style="color:'+statoCol+'">'+f.stato+'</span>';
       if(f.stato==='parziale') hh+=' · Pagato '+fmt(f.parzPagato||0)+' · Resto '+fmt(resto);
       if(movAltrove) hh+=' · <span style="color:#b36a00;font-weight:700">🔗 già abbinata al movimento del '+esc(movAltrove.data||'')+'</span>';
+      if(combaciaResto) hh+='<div style="margin-top:3px"><span style="color:var(--blue);font-weight:700">✓ Combacia esattamente col residuo</span></div>';
       hh+='</div></div>';
       hh+='<div style="text-align:right;flex-shrink:0">';
       hh+='<div style="font-size:14px;font-weight:700">'+fmt(impF)+'</div>';
-      if(diffStr) hh+='<div style="font-size:10px;color:var(--orange)">'+diffStr+'</div>';
+      if(diffStr && !combaciaResto) hh+='<div style="font-size:10px;color:var(--orange)">'+diffStr+'</div>';
       hh+='</div></div>';
       hh+='<div style="display:flex;gap:6px">';
       hh+='<button onclick="_cfAbbina('+idx+',\''+fid+'\',false)" style="flex:1;padding:7px 6px;border:1px solid var(--green);border-radius:6px;background:var(--green-light);color:#1a7a3a;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">Abbina ('+fmt(impF)+')</button>';
       if(diff>0.50){
-        hh+='<button onclick="_cfAbbina('+idx+',\''+fid+'\',true)" style="flex:1;padding:7px 6px;border:1px solid var(--orange);border-radius:6px;background:#fff8ec;color:#b36a00;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">Parziale ('+fmt(imp)+')</button>';
+        hh+='<button onclick="_cfAbbina('+idx+',\''+fid+'\',true)" style="flex:1;padding:7px 6px;border:1px solid '+(combaciaResto?'var(--blue)':'var(--orange)')+';border-radius:6px;background:'+(combaciaResto?'var(--blue-light)':'#fff8ec')+';color:'+(combaciaResto?'var(--blue)':'#b36a00')+';font-family:inherit;font-size:11px;font-weight:700;cursor:pointer">'+(combaciaResto?'✓ ':'')+'Parziale ('+fmt(imp)+')</button>';
       }
       hh+='</div></div>';
     });
