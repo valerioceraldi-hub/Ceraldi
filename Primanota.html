@@ -404,7 +404,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.47.0</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.48.0</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -3209,8 +3209,16 @@ function _onFiClick(e, id){
     e.preventDefault();
     e.stopPropagation();
     _toggleSelezione(id);
+    return;
   }
-  // Altrimenti non facciamo nulla: i bottoni interni hanno i propri handler
+  // Apri XML/documento allegato (07/09, richiesto da Valerio: eliminato il
+  // pulsante "Doc." separato — troppi pulsanti stretti in riga — tap sulla
+  // card stessa apre lo stesso documento). Controllo e.target.closest
+  // invece di fidarmi che ogni pulsante interno chiami stopPropagation
+  // (Foto e Paga ora, per esempio, non lo fanno) — così un tocco su
+  // QUALUNQUE pulsante della card non apre mai l'XML per sbaglio.
+  if(e.target.closest('button')) return;
+  if(typeof aprifatturaAllegata==='function') aprifatturaAllegata(id);
 }
 
 function _toggleSelezione(id){
@@ -5288,8 +5296,7 @@ function renderLista(){
     const hasFattAllegata=(f.fatturaAllegata&&f.fatturaAllegata.length>0)||(f.xmlGithubPath&&f.xmlGithubPath.length>0)||(f.source==='aruba')||f.hasAllegata;
     const extraBtns=[];
     if(ddtOpen) extraBtns.push(`<button class="fi-act-btn warning" onclick="openEditDdt(${f.id})">🔗 Aggancia</button>`);
-    if(hasFattAllegata) extraBtns.push(`<button class="fi-act-btn success" onclick="aprifatturaAllegata(${f.id})">📄 Doc.</button>`);
-    else if(isDdt&&ddtOpen) extraBtns.push(`<button class="fi-act-btn" onclick="allegaFatturaDdt(${f.id})">📎 Allega</button>`);
+    if(isDdt&&ddtOpen&&!hasFattAllegata) extraBtns.push(`<button class="fi-act-btn" onclick="event.stopPropagation();allegaFatturaDdt(${f.id})">📎 Allega</button>`);
     if(haFotoQualsiasi) extraBtns.push(`<button class="fi-act-btn" onclick="apriF('${f.id}')">📷 Foto</button>`);
     // Ricerca pagamento a rate (23/08): solo per fatture ancora aperte con
     // metodo assegno/bonifico — con altri metodi (contanti/carta) il
@@ -5303,15 +5310,16 @@ function renderLista(){
     // fattura e cerca il movimento giusto. Solo per metodi che passano da
     // un vero movimento bancario (non ha senso per i contanti), e solo se
     // la fattura non è già del tutto riconciliata.
-    if(!isDdt && !isNotaCredito && (st==='da_pagare'||st==='parziale') && f.pagamento && f.pagamento!=='contanti'){
-      extraBtns.push(`<button class="fi-act-btn" onclick="event.stopPropagation();apriRiconciliaDaFattura('${f.id}')">🔗 Riconcilia</button>`);
-    }
-    // Ricerca combinazioni DDT→fattura (27/08, richiesto da Valerio): una
-    // fattura che arriva a fine mese e copre più DDT già inseriti in Prima
-    // Nota — stesso principio della ricerca "Rate" sopra, ma sui DDT dello
-    // stesso fornitore invece che sui movimenti bancari.
+    // Riconcilia dalla fattura (07/09, richiesto da Valerio): visibile
+    // SEMPRE, anche su fatture già pagate o segnate come contanti — perché
+    // può capitare che una fattura segnata "pagata in contanti" in realtà
+    // sia stata pagata con assegno/bonifico, e la riconciliazione bancaria
+    // serve proprio a correggerlo (aggancia la prova bancaria vera e
+    // corregge il metodo di pagamento). L'unico caso davvero senza senso è
+    // un DDT (non ha un pagamento proprio) o una nota di credito (ha il suo
+    // aggancio dedicato, "Aggancia a fattura").
     if(!isDdt && !isNotaCredito){
-      extraBtns.push(`<button class="fi-act-btn" onclick="event.stopPropagation();_apriCercaDdtFattura('${f.id}')">🧮 DDT</button>`);
+      extraBtns.push(`<button class="fi-act-btn" onclick="event.stopPropagation();apriRiconciliaDaFattura('${f.id}')">🔗 Riconcilia</button>`);
     }
     // Quick-pay: bottone verde visibile solo se "Da pagare" o "Parziale" — MAI per note di credito
     const quickPayBtn = (!isNotaCredito && (st==='da_pagare' || st==='parziale'))
@@ -7928,6 +7936,35 @@ function _trovaCombinazioniEsatte(imp, fornitoriAmmessi, dataMovimento){
 // al residuo da pagare — stesso algoritmo (DP + potatura) di
 // _trovaCombinazioniEsatte, solo invertito: i "candidati" sono movimenti,
 // non fatture.
+// Versione condivisa di _categorizzaMovimento (07/09, per il fix di "Rate"
+// sotto): esisteva solo come funzione chiusa dentro renderRiconciliazione,
+// quindi la ricerca pagamenti a rate non poteva escludere stipendi/leasing/
+// mutuo/F24/ecc. dai candidati — li contava tutti come "movimenti liberi",
+// gonfiando il numero fino a farlo sempre sforare il limite di sicurezza.
+// Identica in tutto alla versione originale (non referenzia nient'altro
+// oltre al parametro m, quindi è sicura da condividere così com'è).
+function _categorizzaMovimento(m){
+  var d = (m.descrizione||'').toLowerCase();
+  if(/numia/.test(d))                                          return {key:'numia',    label:'💳 Numia (POS)'};
+  if(/cbill/.test(d))                                          return {key:'cbill',    label:'🧾 CBILL / Bollettini'};
+  if(/\bf24\b|i24\s+agenzia|agenzia\s+entrate/.test(d))        return {key:'f24',      label:'🏛️ F24 / Agenzia Entrate'};
+  if(/mutuo/.test(d))                                          return {key:'mutuo',    label:'🏦 Mutuo'};
+  if(/leasing|arval|ald\s+automotive|leasys/.test(d))          return {key:'leasing',  label:'🚗 Leasing / Noleggio'};
+  if(/vostro assegno|prelievo assegno/.test(d))                 return {key:'assegno',  label:'📝 Assegni'};
+  if(/american\s+express/.test(d))                             return {key:'spese',    label:'💰 Commissioni e spese'};
+  if(/sdd\s+core|sdd\s+b2b/.test(d))                            return {key:'sdd',      label:'🔄 Addebiti SDD'};
+  if(/paypal/.test(d))                                         return {key:'paypal',   label:'💰 PayPal'};
+  if(/comm(issioni)?[\s.]|spese\s+e\s+comm|interessi|competenze|add\.spe|imp\.bollo|rilascio\s+carnet/.test(d))
+                                                                return {key:'spese',    label:'💰 Commissioni e spese'};
+  if(/valerio\s+ceraldi|ceraldi\s+valerio|vincenzo\s+ceraldi|ceraldi\s+vincenzo|michele\s+ceraldi|ceraldi\s+michele|salvatore\s+pocci|pocci\s+salvatore|mario\s+murolo|murolo\s+mario|antonio\s+parisi|parisi\s+antonio|alessandro\s+capezzuto|capezzuto\s+alessandro|luigi\s+taiano|taiano\s+luigi|emanuele\s+moscato|moscato\s+emanuele|giuliano\s+guarino|guarino\s+giuliano|angela\s+lesina|lesina\s+angela|carmine\s+russo|russo\s+carmine|vincenzo\s+vespa|vespa\s+vincenzo|antonella\s+carotenuto|carotenuto\s+antonella|sankapala/.test(d))
+                                                                return {key:'stipendi', label:'👤 Stipendi/collaboratori'};
+  if((/vs\.disp\.|favore/.test(d)) && /\bstip(\.|endio)?\b|\btfr\b|\bstraordinari\b|\b1[34]\s*[aª]\b|acconto\s+stipendio|busta\s+paga/i.test(d))
+                                                                return {key:'stipendi', label:'👤 Stipendi/collaboratori'};
+  if(/vs\.disp\.|favore/.test(d) || m.sottotipo==='Bonifico')    return {key:'bonifico', label:'🏦 Bonifici fornitori'};
+  if(m.tipo==='entrata')                                       return {key:'entrata',  label:'↑ Entrate'};
+  return {key:'altro', label:'📦 Altro'};
+}
+
 function _trovaMovimentiPerFattura(fatturaId){
   const f = (fatture||[]).find(function(x){ return String(x.id)===String(fatturaId); });
   if(!f) return {errore:'Fattura non trovata'};
@@ -7949,10 +7986,21 @@ function _trovaMovimentiPerFattura(fatturaId){
     if(eAssegno !== eAssegnoAtteso) return false;
     if(dataMin && m.data && new Date(m.data+'T12:00:00') < dataMin) return false;
     if(dataMax && m.data && new Date(m.data+'T12:00:00') > dataMax) return false;
+    // FIX 07/09 (segnalato da Valerio: "Rate" falliva sempre con "troppi
+    // movimenti liberi", 77 nel suo caso). Causa: contava come candidati
+    // anche stipendi, leasing, mutuo, F24, ecc. — mai fatture di un
+    // fornitore, quindi mai parte di un pagamento a rate. Restringendo ai
+    // soli bonifici fornitore/assegni/movimenti non altrimenti classificati
+    // (categoria 'bonifico', 'assegno' o 'altro'), il gruppo utile è molto
+    // più piccolo del totale dei movimenti liberi.
+    if(!eAssegno){
+      const cat = _categorizzaMovimento(m).key;
+      if(cat!=='bonifico' && cat!=='altro') return false;
+    }
     return true;
   });
   if(candidati.length < 2) return {combinazioni:[], troppiCandidati:false, candidatiUsati:candidati.length};
-  if(candidati.length > 35) return {combinazioni:[], troppiCandidati:true, candidatiUsati:candidati.length};
+  if(candidati.length > 50) return {combinazioni:[], troppiCandidati:true, candidatiUsati:candidati.length};
 
   const targetCents = Math.round(residuo*100);
   const cents = candidati.map(function(m){ return Math.round(Math.abs(m.importo)*100); });
