@@ -10235,19 +10235,38 @@ async function apriDettaglioStat(tipo, meseSel) {
     const alFestivoCosto = al < oggiStrCosto ? al : oggiStrCosto;
     const festMeseCosto = [...festSetAnnoCosto].filter(dt => dt >= dal && dt <= alFestivoCosto);
 
+    // Malattia: pagata come giornata regolare (scelta esplicita di
+    // Valerio) — stesso trattamento della pagina Stipendi, per restare
+    // "unica fonte di verità" e non ripetere il disallineamento già
+    // risolto sopra.
+    const { data: malAssenzeCosto } = await sb.from('presenze_assenze').select('dipendente_id,data_inizio,data_fine')
+      .eq('tipo','malattia').in('stato',['approvata','confermata'])
+      .lte('data_inizio', al).gte('data_fine', dal);
+    const malSetPerDipCosto = {};
+    (malAssenzeCosto||[]).forEach(a => {
+      if (!malSetPerDipCosto[a.dipendente_id]) malSetPerDipCosto[a.dipendente_id] = new Set();
+      const ini = new Date((a.data_inizio>dal?a.data_inizio:dal)+'T12:00:00');
+      const fin = new Date((a.data_fine<al?a.data_fine:al)+'T12:00:00');
+      for (let dt = ini; dt <= fin; dt.setDate(dt.getDate()+1)) malSetPerDipCosto[a.dipendente_id].add(_isoDate(dt));
+    });
+
     const datePerDip = {};
     (pres||[]).forEach(p => {
       if (!datePerDip[p.dipendente_id]) datePerDip[p.dipendente_id] = new Set();
       datePerDip[p.dipendente_id].add(p.data);
     });
     const costoMap = {};
-    Object.keys(datePerDip).forEach(dipId => {
-      const dateSet = datePerDip[dipId];
+    const tuttiDipIdsCosto = new Set([...Object.keys(datePerDip), ...Object.keys(malSetPerDipCosto)]);
+    tuttiDipIdsCosto.forEach(dipId => {
+      const dateSet = datePerDip[dipId] || new Set();
       const paga = pagaMap[dipId] || 0;
       const giorniFestivoLav = [...dateSet].filter(dt => festSetAnnoCosto.has(dt)).length;
       const giorniOrdinari = dateSet.size - giorniFestivoLav;
       const giorniFestivoNonLav = festMeseCosto.filter(dt => !dateSet.has(dt)).length;
-      const totale = giorniOrdinari*paga + giorniFestivoLav*paga*2 + giorniFestivoNonLav*paga;
+      // Esclusi i giorni di malattia che sono anche festività (già pagati
+      // sopra in giorniFestivoNonLav) per non pagarli due volte.
+      const giorniMalattia = [...(malSetPerDipCosto[dipId]||[])].filter(dt => !festSetAnnoCosto.has(dt)).length;
+      const totale = giorniOrdinari*paga + giorniFestivoLav*paga*2 + giorniFestivoNonLav*paga + giorniMalattia*paga;
       if (totale > 0) costoMap[nomeMap[dipId]||'—'] = totale;
     });
 
@@ -14363,7 +14382,7 @@ async function caricaStipendi() {
   // sotto, vicino a calcolaFerieMaturate — così anche l'export Excel usa
   // esattamente lo STESSO codice della schermata, senza copie divergenti.)
 
-  function calcolaLordoPeriodo(datePresSet, dalPeriodo, alPeriodo, paga, festSet, feriePeriodiDip, riposoFisso, workedSet) {
+  function calcolaLordoPeriodo(datePresSet, dalPeriodo, alPeriodo, paga, festSet, feriePeriodiDip, riposoFisso, workedSet, malSetDip) {
     const giorni = datePresSet.size;
     const giorniFestivoLav = [...datePresSet].filter(dt => festSet.has(dt)).length;
     const giorniOrdinari = giorni - giorniFestivoLav;
@@ -14376,8 +14395,15 @@ async function caricaStipendi() {
     // vi cadono (già pagate a parte sopra, in giorniFestivoNonLav — evita un
     // doppio pagamento dello stesso giorno).
     const giorniFerie = sommaGiorniFerieGoduti(feriePeriodiDip, dalPeriodo, alPeriodo, riposoFisso, festSet, workedSet);
-    const totale = giorniOrdinari*paga + giorniFestivoLav*paga*2 + giorniFestivoNonLav*paga + giorniFerie*paga;
-    return { giorni, giorniOrdinari, giorniFestivoLav, giorniFestivoNonLav, giorniFerie, totale };
+    // Malattia nel periodo, PAGATA come giornata normale — su richiesta
+    // esplicita di Valerio (decisione sua, non un default CCNL: normalmente
+    // la malattia è in parte a carico INPS/carenza, ma qui la vuole trattata
+    // come un giorno di paga pieno, sempre, ovunque il lordo venga calcolato).
+    // Esclusi i giorni che sono anche festività (già pagati sopra in
+    // giorniFestivoNonLav) per non pagarli due volte.
+    const giorniMalattia = malSetDip ? [...malSetDip].filter(dt => dt >= dalPeriodo && dt <= alPeriodo && !festSet.has(dt)).length : 0;
+    const totale = giorniOrdinari*paga + giorniFestivoLav*paga*2 + giorniFestivoNonLav*paga + giorniFerie*paga + giorniMalattia*paga;
+    return { giorni, giorniOrdinari, giorniFestivoLav, giorniFestivoNonLav, giorniFerie, giorniMalattia, totale };
   }
 
   // Ricostruisce, mese per mese, quanto spetta ancora al dipendente sui
@@ -14415,7 +14441,7 @@ async function caricaStipendi() {
           // l'anno "y" in visualizzazione: un arretrato che risale a
           // dicembre dell'anno PRIMA di "y" non troverà qui le sue ferie
           // (limite noto, da estendere se serve davvero).
-          const lordo = calcolaLordoPeriodo(dateMese, dalMese, alMese, paga, festSetDueAnni, feriePeriodi[dipId], riposoFissoMap[dipId], workedSetPerDip[dipId]);
+          const lordo = calcolaLordoPeriodo(dateMese, dalMese, alMese, paga, festSetDueAnni, feriePeriodi[dipId], riposoFissoMap[dipId], workedSetPerDip[dipId], malSetPerDip[dipId]);
           const nettoMese = lordo.totale - accMese + restMese;
           if (Math.abs(nettoMese) > 0.005) {
             const meseLbl = new Date(cy, cm-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
@@ -14470,13 +14496,26 @@ async function caricaStipendi() {
     // separato di residuo, come se non fossero giorni retribuiti.
     const giorniFerie = sommaGiorniFerieGoduti(feriePeriodi[d.id], dal, al, riposoFissoMap[d.id], festSetAnno, workedSetPerDip[d.id], malSetPerDip[d.id]);
     const totaleFerie = giorniFerie * paga;
+    // CAMBIO RICHIESTO DA VALERIO (decisione sua, non un default CCNL): la
+    // malattia va pagata come una giornata di paga regolare, sempre, in
+    // ogni conteggio — non più esclusa in attesa del consulente. Prima
+    // (segnalazione caso Lesina) restava invisibile e fuori dal lordo;
+    // ora entra nel totale come le ferie, ed è comunque sempre mostrata a
+    // parte per restare leggibile e verificabile.
+    // Esclude i giorni che sono anche festività: quelli sono già pagati
+    // sopra in giorniFestivoNonLav (1 paga) — stesso accorgimento già
+    // usato per la malattia nell'export (ggMal - festInMal), altrimenti
+    // un giorno di malattia caduto su una festività verrebbe pagato due
+    // volte.
+    const giorniMalattiaMese = [...(malSetPerDip[d.id]||[])].filter(iso => iso >= dal && iso <= al && !festSetAnno.has(iso)).length;
+    const totaleMalattia = giorniMalattiaMese * paga;
     // Compenso netto mensile fisso (tipico di admin/soci Co.Co.Co, senza
     // paga giornaliera): se impostato e non c'è paga giornaliera, il lordo
     // del mese è quel fisso invece del calcolo a presenze — tutto il resto
     // (acconti, restituzioni, Liquida, 13ª/14ª se applicabile, TFR) resta
     // identico a un dipendente normale.
     const usaCompensoFisso = paga === 0 && parseFloat(d.netto_fisso_mensile) > 0;
-    const totale = usaCompensoFisso ? parseFloat(d.netto_fisso_mensile) : (totaleOrdinario + totaleFestivoLav + totaleFestivoNonLav + totaleFerie);
+    const totale = usaCompensoFisso ? parseFloat(d.netto_fisso_mensile) : (totaleOrdinario + totaleFestivoLav + totaleFestivoNonLav + totaleFerie + totaleMalattia);
     // FIX (bug grave segnalato): qui venivano sottratti TUTTI gli acconti
     // del mese, qualunque fosse la causale — un "Acconto TFR" o "Acconto
     // 13ª" finiva per scalare lo STIPENDIO mensile, quando invece deve
@@ -14679,7 +14718,7 @@ async function caricaStipendi() {
         <div style="flex:1;min-width:0">
           <div style="font-weight:800;font-size:14px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(d.nome)}${d.cognome?' '+esc(d.cognome):''}</div>
           <div style="margin-top:2px">${statoPill}</div>
-          <div style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px">${giorni}gg${giorniFestivoNonLav>0?' + '+giorniFestivoNonLav+' festività':''} · €${paga.toFixed(0)}/gg${presManualiNonValid > 0 ? ' · <span style="color:var(--yellow)">'+presManualiNonValid+' da validare</span>' : ''}</div>
+          <div style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px">${giorni}gg${giorniFestivoNonLav>0?' + '+giorniFestivoNonLav+' festività':''}${giorniMalattiaMese>0?' + <span style="color:var(--red)">'+giorniMalattiaMese+' malattia</span>':''} · €${paga.toFixed(0)}/gg${presManualiNonValid > 0 ? ' · <span style="color:var(--yellow)">'+presManualiNonValid+' da validare</span>' : ''}</div>
           ${Math.abs(arretratoTotale) > 0.005 ? `<div style="font-size:10px;color:var(--muted);margin-top:1px">+ arretrato mesi precedenti: <span style="font-weight:700;color:${arretratoTotale>=0?'var(--muted)':'var(--red)'}">€${arretratoTotale.toFixed(2)}</span></div>` : ''}
         </div>
         <div style="text-align:right;flex-shrink:0">
@@ -14724,7 +14763,7 @@ async function caricaStipendi() {
           <button class="btn-sm" style="flex:1" onclick="openAcconto('${d.id}','${nomeOnclick}')">+ Acconto</button>
           <button class="btn-sm" style="flex:1" onclick="openRestituzione('${d.id}','${nomeOnclick}')">↩ Restituzione</button>
           ${!liquidatiMap[d.id]
-            ? `<button class="btn-sm primary" style="flex:1" onclick="openLiquidazione('${d.id}','${nomeOnclick}',${parseInt(m)},${parseInt(y)},${giorni},${paga},${totAcc},${presManualiNonValid},${totRestMese},${giorniFestivoLav},${totaleFestivoLav},${giorniFestivoNonLav},${totaleFestivoNonLav},${giorniFerie},${totaleFerie})">Liquida</button>`
+            ? `<button class="btn-sm primary" style="flex:1" onclick="openLiquidazione('${d.id}','${nomeOnclick}',${parseInt(m)},${parseInt(y)},${giorni},${paga},${totAcc},${presManualiNonValid},${totRestMese},${giorniFestivoLav},${totaleFestivoLav},${giorniFestivoNonLav},${totaleFestivoNonLav},${giorniFerie},${totaleFerie},${giorniMalattiaMese},${totaleMalattia})">Liquida</button>`
             : ''
           }
         </div>
@@ -14764,6 +14803,13 @@ async function caricaStipendi() {
           <div style="font-size:11px;font-weight:800;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">🌴 Ferie godute nel mese — pagate</div>
           <div style="display:flex;justify-content:space-between;font-size:13px"><span>${giorniFerie} giorn${giorniFerie===1?'o':'i'} di ferie × €${paga.toFixed(2)}</span><span style="font-weight:700">€${totaleFerie.toFixed(2)}</span></div>
           <div style="font-size:10px;color:var(--muted);margin-top:4px">Escluso il riposo settimanale e le eventuali festività cadute nel periodo — non consumano né pagano un giorno di ferie.</div>
+        </div>` : ''}
+        <!-- Malattia nel mese: pagata come giornata regolare (scelta
+             esplicita di Valerio) — mostrata a parte per restare
+             leggibile, come le ferie. -->
+        ${giorniMalattiaMese > 0 ? `<div style="background:rgba(217,48,37,.06);border:1.5px solid rgba(217,48,37,.2);border-radius:12px;padding:12px;margin-bottom:10px">
+          <div style="font-size:11px;font-weight:800;color:var(--red);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">🤒 Malattia nel mese — pagata</div>
+          <div style="display:flex;justify-content:space-between;font-size:13px"><span>${giorniMalattiaMese} giorn${giorniMalattiaMese===1?'o':'i'} di malattia × €${paga.toFixed(2)}</span><span style="font-weight:700">€${totaleMalattia.toFixed(2)}</span></div>
         </div>` : ''}
         <!-- Totale lordo e netto: i due numeri che contano, sempre in cima
              e ben visibili. Il box a destra ora riflette lo STATO reale del
@@ -15690,9 +15736,9 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
   F1.push(['Periodo: '+periodoLbl.toUpperCase()+'  •  Documento per il Consulente del Lavoro  •  Generato il '+new Date().toLocaleDateString('it-IT')]);
   F1.push(['LEGENDA: la festività retribuita non lavorata è pagata 1 giornata; se lavorata è pagata doppia (lavoro + festività).']);
   F1.push([]);
-  F1.push(['Dipendente','Codice fiscale','Giorni lavorati (ordinari)','Festività LAVORATE (paga x2)','Festività NON lavorate (pagate)','Giorni ferie','Giorni malattia','Giorni permesso/altro','Paga giorn. (€)','Retrib. giorni ordinari (€)','Retrib. festività non lavorate (€)','Retrib. festività lavorate (€)','Retrib. giorni ferie (€)','Totale lordo (€)','Acconti erogati (€)','Restituzione ricevuta (€)','Netto da pagare (€)','Ratei 13ª','Importo 13ª (€)','Ratei 14ª','Importo 14ª (€)','Note']);
+  F1.push(['Dipendente','Codice fiscale','Giorni lavorati (ordinari)','Festività LAVORATE (paga x2)','Festività NON lavorate (pagate)','Giorni ferie','Giorni malattia','Giorni permesso/altro','Paga giorn. (€)','Retrib. giorni ordinari (€)','Retrib. festività non lavorate (€)','Retrib. festività lavorate (€)','Retrib. giorni ferie (€)','Retrib. giorni malattia (€)','Totale lordo (€)','Acconti erogati (€)','Restituzione ricevuta (€)','Netto da pagare (€)','Ratei 13ª','Importo 13ª (€)','Ratei 14ª','Importo 14ª (€)','Note']);
   let totGord=0, totFlav=0, totFnonLav=0, totFerie=0, totMal=0, totAltro=0;
-  let totRord=0, totRfnl=0, totRflav=0, totRferie=0, totTot=0, totAcc=0, totRest=0, totNetto=0;
+  let totRord=0, totRfnl=0, totRflav=0, totRferie=0, totRmal=0, totTot=0, totAcc=0, totRest=0, totNetto=0;
   (dipendenti||[]).forEach(d => {
     const pres = (presenze||[]).filter(p => p.dipendente_id === d.id);
     // Giorni ordinari = presenze NON festive ; festività lavorate = presenze in giorno festivo
@@ -15742,17 +15788,18 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
     const retrOrd  = giorniOrdinari * paga;          // giorni lavorati normali
     const retrFnl  = festNonLav * paga;              // festività non lavorate: 1 paga (incluse quelle in mal/ferie)
     const retrFlav = festiviLav * paga * 2;          // festività lavorate: 2 paghe
-    // FIX 29/08 (segnalato da Valerio, errore GRAVE sui soldi): le ferie
-    // godute NON venivano retribuite affatto — il totale lordo sommava solo
-    // giorni lavorati e festività, ignorando del tutto i giorni di ferie.
     // Le ferie sono per definizione retribuite: chi ha fatto 8 giorni di
     // ferie ad agosto risultava non pagato per quegli 8 giorni. Aggiunta
     // come voce distinta, così resta leggibile e verificabile dal
-    // consulente. (La malattia NON viene aggiunta qui di proposito: la sua
-    // retribuzione è in parte a carico INPS e dipende da carenza/CCNL —
-    // resta indicata come giorni, la quantifica il consulente.)
+    // consulente.
+    // CAMBIO RICHIESTO DA VALERIO: anche la malattia va pagata come
+    // giornata regolare, sempre — non più esclusa in attesa del
+    // consulente (prima: "la malattia NON viene aggiunta qui di
+    // proposito"). Stesso trattamento di ferie/ordinario, qui e in ogni
+    // altro punto dell'app dove si calcola il lordo.
     const retrFerie = ggFerie * paga;
-    const totLordoDip = retrOrd + retrFnl + retrFlav + retrFerie;
+    const retrMal = ggMal * paga;
+    const totLordoDip = retrOrd + retrFnl + retrFlav + retrFerie + retrMal;
     const netto = totLordoDip - accTot + restTot;
     // Ratei 13a e 14a (CCNL art. 183-184) — solo il periodo dell'anno
     // corrente (anno solare per la 13a, luglio-giugno per la 14a); il
@@ -15780,17 +15827,17 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
     }
     F1.push([
       nomeDi(d.id), d.codice_fiscale||'', giorniOrdinari, festiviLav, festNonLav, ggFerie, ggMal, ggAltro,
-      paga, retrOrd, retrFnl, retrFlav, retrFerie, totLordoDip, accTot, restTot, netto,
+      paga, retrOrd, retrFnl, retrFlav, retrFerie, retrMal, totLordoDip, accTot, restTot, netto,
       mat13Xls.ratei+'/12', mat13Xls.importo, mat14Xls.ratei+'/12', mat14Xls.importo,
       note.join('; ')
     ]);
     totGord+=giorniOrdinari; totFlav+=festiviLav; totFnonLav+=festNonLav;
     totFerie+=ggFerie; totMal+=ggMal; totAltro+=ggAltro;
-    totRord+=retrOrd; totRfnl+=retrFnl; totRflav+=retrFlav; totRferie+=retrFerie; totTot+=totLordoDip; totAcc+=accTot; totRest+=restTot; totNetto+=netto;
+    totRord+=retrOrd; totRfnl+=retrFnl; totRflav+=retrFlav; totRferie+=retrFerie; totRmal+=retrMal; totTot+=totLordoDip; totAcc+=accTot; totRest+=restTot; totNetto+=netto;
   });
-  F1.push(['TOTALE MESE','',totGord,totFlav,totFnonLav,totFerie,totMal,totAltro,'',totRord,totRfnl,totRflav,totRferie,totTot,totAcc,totRest,totNetto,'','','','','']);
+  F1.push(['TOTALE MESE','',totGord,totFlav,totFnonLav,totFerie,totMal,totAltro,'',totRord,totRfnl,totRflav,totRferie,totRmal,totTot,totAcc,totRest,totNetto,'','','','','']);
   const ws1 = XLSX.utils.aoa_to_sheet(F1);
-  ws1['!cols'] = [{wch:26},{wch:19},{wch:13},{wch:15},{wch:17},{wch:10},{wch:11},{wch:13},{wch:12},{wch:17},{wch:19},{wch:18},{wch:17},{wch:14},{wch:14},{wch:15},{wch:16},{wch:9},{wch:13},{wch:9},{wch:13},{wch:60}];
+  ws1['!cols'] = [{wch:26},{wch:19},{wch:13},{wch:15},{wch:17},{wch:10},{wch:11},{wch:13},{wch:12},{wch:17},{wch:19},{wch:18},{wch:17},{wch:17},{wch:14},{wch:14},{wch:15},{wch:16},{wch:9},{wch:13},{wch:9},{wch:13},{wch:60}];
   // Righe un po' più alte: le celle Note contengono testo lungo a capo.
   ws1['!rows'] = [{hpt:22},{hpt:16},{hpt:16},{hpt:8},{hpt:30}];
   // La tabella ha 22 colonne (0-21) dopo l'aggiunta di "Retrib. giorni
@@ -18296,7 +18343,7 @@ function openLiqBtn(el) {
   openLiquidazione(dipId, nome, mese, anno, giorni, paga, totAcc);
 }
 
-async function openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, presDaValidare, restituzioni, giorniFestivoLav, totaleFestivoLav, giorniFestivoNonLav, totaleFestivoNonLav, giorniFerie, totaleFerie) {
+async function openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, presDaValidare, restituzioni, giorniFestivoLav, totaleFestivoLav, giorniFestivoNonLav, totaleFestivoNonLav, giorniFerie, totaleFerie, giorniMalattia, totaleMalattia) {
   // FIX: presManualiNonValid era una variabile fuori scope (dichiarata dentro
   // caricaStipendi) → ReferenceError e il tasto Liquida moriva in silenzio.
   // Ora arriva come parametro opzionale.
@@ -18324,8 +18371,14 @@ async function openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, 
   // dopo la liquidazione" al primo ricalcolo.
   giorniFerie = giorniFerie || 0;
   totaleFerie = totaleFerie || 0;
+  // Malattia pagata come giornata regolare (scelta esplicita di Valerio) —
+  // stesso trattamento delle ferie qui sopra, per restare allineati al
+  // calcolo mostrato nella card (altrimenti stesso falso "importo cambiato
+  // dopo la liquidazione" già visto con le ferie).
+  giorniMalattia = giorniMalattia || 0;
+  totaleMalattia = totaleMalattia || 0;
   const giorniOrdinari = giorni - giorniFestivoLav;
-  const totaleLordo = (giorniOrdinari * paga) + totaleFestivoLav + totaleFestivoNonLav + totaleFerie;
+  const totaleLordo = (giorniOrdinari * paga) + totaleFestivoLav + totaleFestivoNonLav + totaleFerie + totaleMalattia;
   const netto = totaleLordo - acconti + restituzioni;
 
   // Riconciliazione con la busta paga caricata (se già presente per questo
@@ -18383,6 +18436,14 @@ async function openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, 
       + '<div style="display:flex;justify-content:space-between"><span>'+giorniFerie+' giorn'+(giorniFerie===1?'o':'i')+' di ferie × € '+paga.toFixed(2)+'</span><span style="font-weight:700">€ '+totaleFerie.toFixed(2)+'</span></div>'
       + '</div>'
     : '';
+  // Malattia pagata come giornata regolare (scelta esplicita di Valerio) —
+  // stesso trattamento delle ferie qui sopra.
+  const malattiaHtml = giorniMalattia > 0
+    ? '<div style="background:rgba(217,48,37,.06);border:1.5px solid rgba(217,48,37,.2);border-radius:10px;padding:10px 12px;margin:8px 0;font-size:12px">'
+      + '<div style="font-weight:800;color:var(--red);text-transform:uppercase;font-size:10px;letter-spacing:.5px;margin-bottom:5px">🤒 Malattia nel mese — pagata</div>'
+      + '<div style="display:flex;justify-content:space-between"><span>'+giorniMalattia+' giorn'+(giorniMalattia===1?'o':'i')+' di malattia × € '+paga.toFixed(2)+'</span><span style="font-weight:700">€ '+totaleMalattia.toFixed(2)+'</span></div>'
+      + '</div>'
+    : '';
   $('liq-riepilogo').innerHTML =
     '<div style="font-size:15px;font-weight:700;margin-bottom:12px">'+esc(nome)+'</div>'
     +'<div style="font-size:13px;color:var(--muted);margin-bottom:10px">'+meseLbl.charAt(0).toUpperCase()+meseLbl.slice(1)+'</div>'
@@ -18391,6 +18452,7 @@ async function openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, 
     +festivoLavHtml
     +festivoNonLavHtml
     +ferieHtml
+    +malattiaHtml
     +'<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px"><span>Totale lordo</span><span>€ '+totaleLordo.toFixed(2)+'</span></div>'
     +'<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px"><span>Acconti erogati</span><span style="color:var(--red)">- € '+acconti.toFixed(2)+'</span></div>'
     +(restituzioni > 0 ? '<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px"><span>Restituzione ricevuta</span><span style="color:var(--green)">+ € '+restituzioni.toFixed(2)+'</span></div>' : '')
