@@ -403,7 +403,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.43.0</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.44.1</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -2316,6 +2316,14 @@ function dbToApp(r){
     assBanca:r.ass_banca||'', bonIban:r.bon_iban||'', bonCaus:r.bon_caus||'',
     bonData:r.bon_data||'', bonRif:r.bon_rif||'', riconciliata:r.riconciliata||false,
     riconciliazione:r.riconciliazione||null,
+    // Storico di TUTTI i pagamenti parziali ricevuti, non solo l'ultimo —
+    // richiesto esplicitamente da Valerio (06/09): con più pagamenti sulla
+    // stessa fattura nel tempo, il singolo campo "riconciliazione" sopra
+    // resta l'ULTIMO (serve com'era già usato ovunque nell'app), ma questo
+    // array tiene tutti quelli precedenti con i loro dettagli originali —
+    // altrimenti il secondo pagamento cancellava dalla vista i dettagli del
+    // primo (data, riferimento bancario, importo di QUELLA specifica volta).
+    riconciliazioneStorico: Array.isArray(r.riconciliazione_storico) ? r.riconciliazione_storico : [],
     note:r.note||'', stato:r.stato||'pagata', scadenza:r.scadenza||'',
     foto:r.foto||'', fatturaAllegata:r.fattura_allegata||'', fatturaAllegataName:r.fattura_allegata_name||'',
     xmlGithubPath:r.xml_github_path||'', source:r.source||'',
@@ -2343,6 +2351,7 @@ function appToDB(f){
     ass_banca:f.assBanca||'', bon_iban:f.bonIban||'', bon_caus:f.bonCaus||'',
     bon_data:f.bonData||null, bon_rif:f.bonRif||'', riconciliata:f.riconciliata||false,
     riconciliazione:f.riconciliazione||null,
+    riconciliazione_storico:f.riconciliazioneStorico||[],
     note:f.note||'', stato:f.stato||'pagata', scadenza:f.scadenza||null,
     foto:f.foto||'', fattura_allegata:f.fatturaAllegata||'', fattura_allegata_name:f.fatturaAllegataName||'',
     xml_github_path:f.xmlGithubPath||'', source:f.source||'',
@@ -5088,11 +5097,39 @@ function renderLista(){
     // strutturato (f.riconciliazione), le note restano libere per l'utente.
     var noteVisibile = f.note || '';
     var riconciliazioneBox = '';
-    // FIX 27/08: quando alla fattura sono abbinati PIÙ movimenti bancari
-    // reali (pagamento a rate/più assegni), mostra lo storico intero invece
-    // del solo ultimo evento — vedi _movimentiPerFattura più sopra.
+    // Storico completo (06/09, richiesto da Valerio: un secondo pagamento
+    // parziale non deve più far sparire i dettagli del primo). Fonte
+    // primaria: f.riconciliazioneStorico, alimentato da
+    // _impostaDatiRiconciliazione per QUALUNQUE tipo di riconciliazione
+    // (banca, carta, PayPal, SumUp) — più completo del solo
+    // _movimentiPerFattura sotto, che vede solo i movimenti bancari veri e
+    // niente descrizione. Il vecchio meccanismo resta come riserva SOLO per
+    // le fatture riconciliate prima che questo storico esistesse.
+    var _storicoRicco = Array.isArray(f.riconciliazioneStorico) ? f.riconciliazioneStorico : [];
     var _movsF = (typeof _movimentiPerFattura==='function') ? _movimentiPerFattura(f.id) : [];
-    if(_movsF.length > 1){
+    if(_storicoRicco.length > 1){
+      var _totStorico = _storicoRicco.reduce(function(s,r){ return s+Math.abs(r.importo||0); },0);
+      var _righeStorico = _storicoRicco.map(function(r){
+        var _dr = r.data ? new Date(r.data+'T12:00:00').toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'}) : '—';
+        var _bancaR = r.banca || 'BPM';
+        var _bancaColoreR = _bancaR==='SumUp' ? '#0066cc' : (_bancaR==='Nexi' ? '#7b2ff7' : 'var(--red)');
+        return `<div style="padding:6px 0;border-top:1px solid #d6e9f7">
+          <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;align-items:center">
+            <span>${_dr}${r.parziale?' · parziale':''}</span>
+            <span style="display:flex;align-items:center;gap:6px">
+              <span style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:99px;background:${_bancaColoreR};color:#fff">${esc(_bancaR)}</span>
+              <span style="font-weight:700">${fmt(Math.abs(r.importo||0))}</span>
+            </span>
+          </div>
+          ${r.descrizione?`<div style="font-size:10.5px;color:var(--ink3);margin-top:2px;word-break:break-word;line-height:1.25">${esc(r.descrizione)}</div>`:''}
+        </div>`;
+      }).join('');
+      riconciliazioneBox += `<div style="margin-top:6px;padding:9px 11px;background:#eaf4ff;border:1.5px solid #b3d7f5;border-radius:10px">
+        <div style="font-size:11px;font-weight:700;color:#0066cc;margin-bottom:2px">🏦 Riconciliata con estratto conto · ${_storicoRicco.length} pagamenti</div>
+        <div style="font-size:13px;color:var(--ink);font-weight:600">Totale ${fmt(_totStorico)}</div>
+        ${_righeStorico}
+      </div>`;
+    } else if(_movsF.length > 1){
       var _totMovsF = _movsF.reduce(function(s,m){ return s+Math.abs(m.importo||0); },0);
       var _righeMovsF = _movsF.map(function(m){
         var _dm = m.data ? new Date(m.data+'T12:00:00').toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'}) : '—';
@@ -5491,7 +5528,16 @@ function _rigaEsportCompleta(f){
   let pezziRiferimento = [];
   if(f.pagamento==='assegno' && f.assegno) pezziRiferimento.push('Assegno n° '+f.assegno+(f.assInt?' ('+f.assInt+')':''));
   else if(f.pagamento==='bonifico' && f.bonIban) pezziRiferimento.push('Bonifico IBAN '+f.bonIban);
-  if(f.riconciliazione && f.riconciliazione.descrizione) pezziRiferimento.push(f.riconciliazione.descrizione);
+  // Storico completo (06/09, richiesto da Valerio: un secondo pagamento
+  // parziale non deve far sparire dal bilancio i dettagli del primo). Se ci
+  // sono più pagamenti, li elenca tutti con data e importo; altrimenti resta
+  // il solo ultimo (comportamento invariato per le fatture pagate in un colpo).
+  var _storicoExp = Array.isArray(f.riconciliazioneStorico) ? f.riconciliazioneStorico : [];
+  if(_storicoExp.length > 1){
+    pezziRiferimento.push(_storicoExp.map(function(r){
+      return (r.data||'?')+': '+fmt(Math.abs(r.importo||0))+(r.descrizione?' ('+r.descrizione+')':'');
+    }).join(' | '));
+  } else if(f.riconciliazione && f.riconciliazione.descrizione) pezziRiferimento.push(f.riconciliazione.descrizione);
   let riferimento = pezziRiferimento.join(' — ');
 
   // Per i pagamenti in contanti non ha senso parlare di "riconciliazione"
@@ -5501,7 +5547,7 @@ function _rigaEsportCompleta(f){
   const dettaglioRiconc = f.pagamento==='contanti'
     ? ('Pagata in contanti'+(f.dataPagamento?' il '+f.dataPagamento:(f.data?' (data pagamento non registrata, fattura del '+f.data+')':'')))
     : (f.riconciliata
-        ? 'Riconciliata'+(f.riconciliazione&&f.riconciliazione.data?' il '+f.riconciliazione.data:'')+(f.riconciliazione&&f.riconciliazione.parziale?' (parziale)':'')
+        ? 'Riconciliata'+(_storicoExp.length>1?' con '+_storicoExp.length+' pagamenti':(f.riconciliazione&&f.riconciliazione.data?' il '+f.riconciliazione.data:''))+(f.riconciliazione&&f.riconciliazione.parziale?' (parziale)':'')
         : (f.stato==='pagata' ? 'Pagata ma non riconciliata con l\'estratto conto' : 'Non riconciliata'));
 
   return {
@@ -6272,8 +6318,26 @@ function openEdit(id){
   sv('eImp2',f.importo?String(f.importo).replace('.',','):'');
   var _datiRicEl = document.getElementById('eDatiRiconciliazione');
   if(_datiRicEl){
+    var _storicoRiccoEdit = Array.isArray(f.riconciliazioneStorico) ? f.riconciliazioneStorico : [];
     var _movsFEdit = (typeof _movimentiPerFattura==='function') ? _movimentiPerFattura(f.id) : [];
-    if(_movsFEdit.length > 1){
+    if(_storicoRiccoEdit.length > 1){
+      // Storico completo (06/09): ogni pagamento con la sua descrizione
+      // originale, non più solo l'ultimo — fonte primaria per qualunque
+      // tipo di riconciliazione (banca, carta, PayPal, SumUp).
+      var _totStoricoEdit = _storicoRiccoEdit.reduce(function(s,r){ return s+Math.abs(r.importo||0); },0);
+      _datiRicEl.style.display = 'block';
+      _datiRicEl.innerHTML = '<b>'+_storicoRiccoEdit.length+' pagamenti · totale '+fmt(_totStoricoEdit)+'</b>'
+        + _storicoRiccoEdit.map(function(r){
+            var _dr = r.data ? new Date(r.data+'T12:00:00').toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'}) : '—';
+            var _bancaR = r.banca || 'BPM';
+            var _bancaColoreR = _bancaR==='SumUp' ? '#0066cc' : (_bancaR==='Nexi' ? '#7b2ff7' : 'var(--red)');
+            return '<div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(0,122,255,.12)">'
+              + '<span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:99px;background:'+_bancaColoreR+';color:#fff;margin-right:4px">'+esc(_bancaR)+'</span>'
+              + '<b>'+_dr+' · '+fmt(Math.abs(r.importo||0))+'</b>'+(r.parziale?' (parziale)':'')
+              + (r.descrizione?'<div style="margin-top:2px;color:var(--ink3);word-break:break-word">'+esc(r.descrizione)+'</div>':'')
+              + '</div>';
+          }).join('');
+    } else if(_movsFEdit.length > 1){
       // FIX 27/08: più movimenti collegati alla stessa fattura → storico intero
       var _totMovsFEdit = _movsFEdit.reduce(function(s,m){ return s+Math.abs(m.importo||0); },0);
       _datiRicEl.style.display = 'block';
@@ -8668,8 +8732,8 @@ async function _eseguiEsportazioneAvanzata(){
     Object.keys(bucket).forEach(function(k){ if(bucket[k][0]) righe.push([k+' giorni', bucket[k][0], Math.round(bucket[k][1]*100)/100]); });
     righe.push([]);
     righe.push(['ℹ️ NOTE METODOLOGICHE']);
-    righe.push(['— Per i pagamenti in CONTANTI lo storico di ogni singolo versamento parziale è completo (fonte: Prima Nota, che non sovrascrive mai). Vedi foglio "Pagamenti - Contanti".']);
-    righe.push(['— Per BONIFICO, ASSEGNO e CARTA (fix 27/08) la colonna "Riferimento movimento bancario" elenca TUTTI i movimenti realmente abbinati a ciascuna fattura, non solo l\'ultimo — ricostruito dai movimenti bancari collegati (fatturaId), stessa fonte usata dal Registro.']);
+    righe.push(['— Quando una fattura riceve più pagamenti nel tempo (es. un acconto e un saldo mesi dopo), lo storico di OGNI pagamento resta tracciato — data, importo e riferimento di ciascuno, non solo l\'ultimo. Vale per qualunque metodo (bonifico, assegno, carta, SDD, PayPal, contanti).']);
+    righe.push(['— Per BONIFICO, ASSEGNO e CARTA la colonna "Riferimento movimento bancario" elenca TUTTI i movimenti realmente abbinati a ciascuna fattura, non solo l\'ultimo — ricostruito dai movimenti bancari collegati (fatturaId), stessa fonte usata dal Registro.']);
     fogli.push({nome:'Riepilogo esecutivo', righe:righe});
   })();
 
@@ -8732,14 +8796,23 @@ async function _eseguiEsportazioneAvanzata(){
     fogli.push({nome:'Pagamenti - Carta', righe:[head, ...body]});
   })();
 
-  // ═══ 7. PAGAMENTI PARZIALI — dettaglio e grado di tracciabilità ═══
+  // ═══ 7. PAGAMENTI PARZIALI — dettaglio riga per riga di ogni versamento ═══
   (function(){
     var sub = base.filter(function(f){ return f.stato==='parziale'; });
-    var head = ['Data fattura','Fornitore','Numero fattura','Importo totale','Pagato finora','Residuo','% pagato','Metodo','Ultimo movimento noto','Storico completo disponibile?'];
+    var head = ['Data fattura','Fornitore','Numero fattura','Importo totale','Pagato finora','Residuo','% pagato','Metodo','N. pagamenti ricevuti','Dettaglio di ciascun pagamento (data · importo · riferimento)'];
     var body = sub.sort(function(a,b){return (b.parzPagato||0)/(nettoFattura(b)||1) - (a.parzPagato||0)/(nettoFattura(a)||1);}).map(function(f){
       var r = _fatturaPagatoResiduo(f);
-      var completo = (f.pagamento||'')==='contanti' ? 'Sì — vedi foglio Contanti' : 'No — solo ultimo movimento';
-      return [f.data||'', f.fornitore||'', f.numero||'', r.tot, r.pagato, r.residuo, r.pct+'%', _metodoLabel(f), _riferimentoBanca(f), completo];
+      // FIX 06/09 (richiesto da Valerio: verificare che i report riflettano
+      // lo storico completo introdotto oggi). Prima questa colonna diceva
+      // solo "Sì/No — disponibile altrove", ora elenca DAVVERO ogni singolo
+      // pagamento con data, importo e riferimento — per qualunque metodo,
+      // non solo contanti (il vecchio "solo contanti" veniva da Prima Nota,
+      // eliminato — questo storico è più generale e lo sostituisce).
+      var _storicoP = Array.isArray(f.riconciliazioneStorico) ? f.riconciliazioneStorico : [];
+      var dettaglio = _storicoP.length
+        ? _storicoP.map(function(rr){ return (rr.data||'?')+' · '+fmt(Math.abs(rr.importo||0))+(rr.descrizione?' · '+rr.descrizione:''); }).join(' | ')
+        : _riferimentoBanca(f);
+      return [f.data||'', f.fornitore||'', f.numero||'', r.tot, r.pagato, r.residuo, r.pct+'%', _metodoLabel(f), _storicoP.length||(f.riconciliata?1:0), dettaglio];
     });
     fogli.push({nome:'Pagamenti parziali', righe:[head, ...body]});
   })();
@@ -19421,6 +19494,25 @@ function _impostaDatiRiconciliazione(f, mov, isParziale, importoSpecifico){
     // storici/carta non hanno mai avuto questo campo prima) — mai 'undefined'.
     banca: mov.banca || 'BPM'
   };
+  // Storico di tutti i pagamenti (06/09, richiesto da Valerio): oltre a
+  // sovrascrivere il campo "ultimo pagamento" sopra (comportamento invariato,
+  // ovunque nell'app continua a leggere f.riconciliazione per l'ultimo),
+  // accumula anche una COPIA in un array — così un secondo pagamento parziale
+  // arrivato un mese dopo non cancella più dalla vista i dettagli del primo.
+  // Stesso principio "già applicato, non ripetere" usato per parzPagato: se
+  // l'ultima voce dello storico è già questo identico movimento, non se ne
+  // aggiunge una seconda identica (capiterebbe con un doppio tocco o un
+  // nuovo tentativo dopo un errore di rete che in realtà era già riuscito).
+  if(!Array.isArray(f.riconciliazioneStorico)) f.riconciliazioneStorico = [];
+  var _ultimaStorico = f.riconciliazioneStorico[f.riconciliazioneStorico.length-1];
+  if(!_ultimaStorico || _ultimaStorico.movId !== f.riconciliazione.movId){
+    f.riconciliazioneStorico.push(Object.assign({}, f.riconciliazione));
+  } else {
+    // Stesso movimento già in cima allo storico: aggiorna quella voce invece
+    // di duplicarla (es. l'importo di quota può cambiare se si ricalcola un
+    // abbinamento di gruppo).
+    f.riconciliazioneStorico[f.riconciliazioneStorico.length-1] = Object.assign({}, f.riconciliazione);
+  }
   // Salva data e riferimento bancario strutturati (comportamento invariato)
   if(mov.data && !f.bonData) f.bonData = mov.data;
   if(mov.descrizione && !f.bonRif){
