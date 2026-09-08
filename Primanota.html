@@ -403,7 +403,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.41.2</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.43.0</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -17420,13 +17420,27 @@ function renderRiconciliazione(){
       // "da_pagare" (non è mai passata per stato='pagata' prima), quindi senza
       // questo blocco NON veniva MAI persistita — è il caso esatto di
       // Levigazione Marmi segnalato da Valerio.
+      // FIX 06/09 (trovato indagando i casi A2000 Costruzioni/Rentokil): come
+      // in _confermaPagamento, anche qui isParziale era sempre scritto come
+      // false e lo stato passava sempre a "pagata" senza mai controllare se
+      // l'importo del movimento coprisse davvero il residuo — un abbinamento
+      // automatico per un importo più piccolo veniva quindi segnato come se
+      // avesse saldato tutto. Qui è ancora più delicato: questo ramo scrive
+      // SENZA che l'utente confermi nulla a mano, quindi vale la pena essere
+      // prudenti sull'importo.
       if(!matchCerto.riconciliata){
-        _impostaDatiRiconciliazione(matchCerto, m, false);
+        var _residuoAttualeAuto = matchCerto.stato==='parziale' ? Math.max(0,(matchCerto.importo||0)-(matchCerto.parzPagato||0)) : (matchCerto.importo||0);
+        var _impMovAuto = Math.abs(m.importo||0);
+        var _isParzAuto = _impMovAuto < _residuoAttualeAuto - 0.50;
+        _impostaDatiRiconciliazione(matchCerto, m, _isParzAuto, _impMovAuto);
         matchCerto.riconciliata = true;
-        if(matchCerto.stato!=='pagata'){
-          matchCerto.stato = 'pagata';
-          matchCerto.dataPagamento = matchCerto.dataPagamento || m.data;
-        }
+        // Sempre somma al pagato precedente (0 o già qualcosa) e decide lo
+        // stato dal totale — stesso fix v2 di _confermaPagamento, stesso
+        // motivo: un importo che copre esattamente il residuo di una
+        // fattura già parziale non va trattato come "paga da zero".
+        matchCerto.parzPagato = Math.round(((matchCerto.parzPagato||0) + _impMovAuto) * 100) / 100;
+        matchCerto.stato = (matchCerto.parzPagato >= (matchCerto.importo||0) - 0.50) ? 'pagata' : 'parziale';
+        if(matchCerto.stato==='pagata') matchCerto.dataPagamento = matchCerto.dataPagamento || m.data;
         if(typeof dbUpdate==='function') dbUpdate(matchCerto);
       }
       salvaMovimentoBanca(m).catch(function(e){console.warn('salvaMovimentoBanca:',e);});
@@ -19319,16 +19333,28 @@ function _cfMultiplo(){
     for(var si=0; si<selezionate.length; si++){
       var x = selezionate[si];
       var f=x.fatt, impPag=x.importoPagato;
+      // FIX 06/09 (segnalato da Valerio: fattura VANDEMOORTELE 8528021612,
+      // "pagato" 117,42€ invece dei 58,71€ reali — esattamente il doppio). Se
+      // questa fattura ha GIÀ registrato questo identico movimento (stesso
+      // movId) come ultima riconciliazione, l'importo è già stato sommato
+      // una volta: sommarlo di nuovo qui lo raddoppia. Capita se questa
+      // conferma viene richiamata due volte sullo stesso abbinamento (doppio
+      // tocco, un nuovo tentativo dopo un errore di rete che in realtà era
+      // già andato a buon fine).
+      var giaApplicatoQui = f.riconciliazione && f.riconciliazione.movId === m.id;
       var isParz = Math.abs((f.importo||0)-impPag)>0.50;
       _impostaDatiRiconciliazione(f, m, isParz, impPag);
       f.riconciliata = true;
-      if(isParz){
-        f.parzPagato=(f.parzPagato||0)+impPag;
-        f.stato=f.parzPagato>=(f.importo||0)-0.50?'pagata':'parziale';
-        if(f.stato==='pagata') f.dataPagamento=m.data;
-      } else {
-        f.stato='pagata'; f.dataPagamento=m.data;
-      }
+      // FIX v2 (stesso giorno, trovato testando davvero il caso A2000
+      // Costruzioni): quando impPag copre esattamente il residuo di una
+      // fattura GIÀ parziale, isParz risultava false (confrontato con
+      // l'importo pieno, non col residuo) e finiva nel ramo "paga da zero",
+      // perdendo il parzPagato precedente. Ora si somma sempre (a meno che
+      // sia lo stesso movimento già applicato) e lo stato si decide dal
+      // totale, niente più casi limite da inseguire uno per uno.
+      if(!giaApplicatoQui) f.parzPagato = Math.round(((f.parzPagato||0) + impPag) * 100) / 100;
+      f.stato = (f.parzPagato >= (f.importo||0) - 0.50) ? 'pagata' : 'parziale';
+      if(f.stato==='pagata') f.dataPagamento=m.data;
       _impostaPagamentoDaRiconciliazione(f, 'bonifico');
       // Salvataggi uno alla volta e ATTESI — prima partivano tutti insieme
       // senza aspettare né controllare l'esito, e con più fatture insieme
@@ -19465,8 +19491,12 @@ function _cfAbbina(movIdx, fattId, isParziale){
   // Marca la fattura come riconciliata con estratto (indipendente dallo stato pagamento)
   f.riconciliata = true;
   var _metodoDaMov = /assegno/i.test(m.sottotipo||'')?'assegno':'bonifico';
+  // FIX 06/09 (stesso motivo del multi-conferma sopra): se questo identico
+  // movimento risultava già l'ultima riconciliazione salvata su questa
+  // fattura, l'importo è già stato sommato una volta — non sommarlo di nuovo.
+  var _giaApplicatoQuiSingolo = f.riconciliazione && f.riconciliazione.movId === m.id;
   if(isParziale){
-    var np=(f.parzPagato||0)+imp;
+    var np=_giaApplicatoQuiSingolo ? (f.parzPagato||0) : (f.parzPagato||0)+imp;
     f.parzPagato=np; f.stato=np>=impF-0.50?'pagata':'parziale';
     if(f.stato==='pagata') f.dataPagamento=m.data;
     _impostaPagamentoDaRiconciliazione(f, _metodoDaMov);
@@ -19884,8 +19914,24 @@ function _confermaPagamento(idx, conferma){
     d.mov.abbinata     = true;
     d.mov.fatturaId    = d.fatt.id;
     d.mov.fatturaLabel = (d.fatt.fornitore||'') + ' N°' + (d.fatt.numero||'');
+    // FIX 06/09 (trovato indagando i casi A2000 Costruzioni FEP 7_26 e
+    // Rentokil 25155993, segnalati da Valerio: un movimento vero collegato
+    // alla fattura, ma "pagato" mai aggiornato — la fattura restava bloccata
+    // su "parziale" col vecchio importo). Causa reale: questa funzione
+    // scriveva SEMPRE isParziale=false (indipendentemente da quanto valeva
+    // davvero il movimento) e marcava SEMPRE "pagata" senza mai controllare
+    // se l'importo bastasse a coprire il residuo, né toccare mai parzPagato
+    // — quindi un movimento più piccolo del residuo veniva trattato come se
+    // avesse saldato tutto, mentre uno che in realtà chiudeva un residuo
+    // già in corso (fattura già "parziale" con un parzPagato precedente)
+    // lasciava il vecchio importo intatto invece di sommarci sopra il nuovo.
+    // Ora confronta l'importo vero del movimento col residuo reale, come
+    // fanno già _cfMultiConferma e la conferma singola generale.
+    var _residuoAttualeCf = d.fatt.stato==='parziale' ? Math.max(0,(d.fatt.importo||0)-(d.fatt.parzPagato||0)) : (d.fatt.importo||0);
+    var _impMovCf = Math.abs(d.mov.importo||0);
+    var _isParzCf = _impMovCf < _residuoAttualeCf - 0.50;
     // Aggiunge dettagli estratto nelle note della fattura
-    _impostaDatiRiconciliazione(d.fatt, d.mov, false);
+    _impostaDatiRiconciliazione(d.fatt, d.mov, _isParzCf, _impMovCf);
     // Se la fattura non ha ancora un numero assegno registrato, lo recupera in
     // automatico dalla descrizione dell'estratto conto (08/08, richiesto da
     // Valerio: non deve essere obbligatorio scriverlo a mano, la riconciliazione
@@ -19896,11 +19942,18 @@ function _confermaPagamento(idx, conferma){
     }
     // Marca come riconciliata con estratto
     d.fatt.riconciliata = true;
-    if(d.fatt.stato!=='pagata'){
-      d.fatt.stato = 'pagata';
-      d.fatt.dataPagamento = d.mov.data;
-      if(!d.fatt.pagamento) d.fatt.pagamento = /assegno/i.test(d.mov.sottotipo||'')?'assegno':'bonifico';
-    }
+    // FIX v2 (stesso giorno, secondo giro dopo un test reale): la versione
+    // precedente sbagliava proprio il caso di A2000 Costruzioni — un
+    // movimento che copre ESATTAMENTE il residuo rimasto di una fattura già
+    // parziale finiva nel ramo "paga da zero" invece che in quello che
+    // somma al parzPagato esistente, lasciando il vecchio importo intatto.
+    // Più semplice e senza casi limite: si somma SEMPRE il nuovo importo al
+    // pagato precedente (che sia 0 o già qualcosa), e lo stato si decide
+    // guardando il totale risultante, non un confronto separato.
+    d.fatt.parzPagato = Math.round(((d.fatt.parzPagato||0) + _impMovCf) * 100) / 100;
+    d.fatt.stato = (d.fatt.parzPagato >= (d.fatt.importo||0) - 0.50) ? 'pagata' : 'parziale';
+    if(d.fatt.stato==='pagata') d.fatt.dataPagamento = d.mov.data;
+    if(!d.fatt.pagamento) d.fatt.pagamento = /assegno/i.test(d.mov.sottotipo||'')?'assegno':'bonifico';
     if(typeof dbUpdate==='function') dbUpdate(d.fatt);
     if(_reconReport) _reconReport.fattureConfermate.push({
       data: d.mov.data, importo: Math.abs(d.mov.importo), fattData: d.fatt.data||'',
