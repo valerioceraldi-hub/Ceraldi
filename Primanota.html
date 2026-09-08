@@ -403,7 +403,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.45.0</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.45.1</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -2741,7 +2741,14 @@ async function dbUpdate(f){
       source:f.source||'',
       pec_id:f.pecId||null,
       riconciliata:f.riconciliata||false,
-      riconciliazione:f.riconciliazione||null
+      riconciliazione:f.riconciliazione||null,
+      // FIX 07/09 (segnalato da Valerio: lo storico dei pagamenti restava
+      // vuoto anche dopo un secondo pagamento parziale confermato bene).
+      // Causa: dbUpdate ha una sua serializzazione "safe" tutta sua,
+      // diversa da quella corretta ieri quando ho aggiunto lo storico — il
+      // campo semplicemente non veniva mai incluso in QUESTO specifico
+      // salvataggio, anche se f.riconciliazioneStorico era giusto in memoria.
+      riconciliazione_storico:f.riconciliazioneStorico||[]
     };
     // Aggiungi pec_verificata solo se definita esplicitamente
     if(typeof f.pecVerificata === 'boolean') safe.pec_verificata = f.pecVerificata;
@@ -19588,6 +19595,17 @@ function _cfAbbina(movIdx, fattId, isParziale){
   }
   m.abbinata=true; m.fatturaId=f.id; m.fatturaLabel=(f.fornitore||'')+' N°'+(f.numero||'');
   salvaMovimentoBanca(m); // persiste su Supabase
+  // FIX v2 (07/09, segnalato da Valerio: fattura VANDEMOORTELE 8528021612,
+  // un secondo pagamento parziale di 167,99€ confermato correttamente
+  // (riconciliazione aggiornata, descrizione giusta) ma "pagato" rimasto
+  // fermo a 58,71€ invece di salire a 226,70€ — BUG NELLA MIA STESSA
+  // CORREZIONE DI IERI: il controllo "è già stato applicato questo
+  // movimento?" leggeva f.riconciliazione.movId DOPO che
+  // _impostaDatiRiconciliazione lo aveva già sovrascritto con l'ID del
+  // movimento NUOVO — quindi il confronto risultava sempre vero, e
+  // bloccava la somma per QUALUNQUE pagamento nuovo, non solo per i
+  // doppioni veri. Va calcolato PRIMA di sovrascrivere, non dopo.
+  var _giaApplicatoQuiSingolo = f.riconciliazione && f.riconciliazione.movId === m.id;
   // Aggiunge dettagli estratto nelle note
   _impostaDatiRiconciliazione(f, m, isParziale);
   // Stesso recupero automatico del numero assegno (vedi _confermaPagamento).
@@ -19598,10 +19616,6 @@ function _cfAbbina(movIdx, fattId, isParziale){
   // Marca la fattura come riconciliata con estratto (indipendente dallo stato pagamento)
   f.riconciliata = true;
   var _metodoDaMov = /assegno/i.test(m.sottotipo||'')?'assegno':'bonifico';
-  // FIX 06/09 (stesso motivo del multi-conferma sopra): se questo identico
-  // movimento risultava già l'ultima riconciliazione salvata su questa
-  // fattura, l'importo è già stato sommato una volta — non sommarlo di nuovo.
-  var _giaApplicatoQuiSingolo = f.riconciliazione && f.riconciliazione.movId === m.id;
   if(isParziale){
     var np=_giaApplicatoQuiSingolo ? (f.parzPagato||0) : (f.parzPagato||0)+imp;
     f.parzPagato=np; f.stato=np>=impF-0.50?'pagata':'parziale';
