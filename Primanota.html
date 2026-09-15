@@ -404,7 +404,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.48.0</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.49.0</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -5942,6 +5942,11 @@ function _quickPayConfirmDialog(id){
     {k:'carta',    ic:'\ud83d\udcb3', lbl:'Carta'}
   ];
   let selectedMetodo = metodoDefault;
+  // Richiesto esplicitamente da Valerio: quando il metodo è "Carta" bisogna SEMPRE
+  // chiedere con quale carta è avvenuto il pagamento (Nexi aziendale o SumUp POS) —
+  // prima il quick-pay salvava "carta" senza mai chiederlo, a differenza del form
+  // di modifica completo che lo chiede già da tempo (vedi setContoPagamento).
+  let selectedContoCarta = f.contoPagamento || '';
   let html = '';
   html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">';
   html += '<h3 style="margin:0;font-size:17px;font-weight:700;color:var(--ink)">\u2705 Conferma pagamento</h3>';
@@ -5968,6 +5973,16 @@ function _quickPayConfirmDialog(id){
   html += '<div style="margin-top:10px"><label style="display:block;font-size:12px;font-weight:600;color:var(--ink3);margin-bottom:5px">Banca</label>';
   html += '<input id="qpcAssBanca" type="text" autocapitalize="words" value="' + esc(f.assBanca||'') + '" style="width:100%;padding:11px 13px;border:1.5px solid var(--sep);border-radius:10px;font-size:15px;background:var(--surface2);color:var(--ink);box-sizing:border-box;font-family:inherit"></div>';
   html += '</div>';
+  html += '<div id="qpcCartaFields" style="display:' + (metodoDefault==='carta'?'block':'none') + ';margin-bottom:14px">';
+  html += '<div style="font-size:12px;font-weight:600;color:var(--ink3);margin-bottom:6px">Con quale carta?</div>';
+  html += '<div id="qpcCartaGrid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+  [{k:'Nexi',c:'#7b2ff7'},{k:'SumUp',c:'#0066cc'}].forEach(function(cc){
+    var selC = cc.k === selectedContoCarta;
+    html += '<button data-conto="' + cc.k + '" onclick="qpcSelezioneConto(\''+cc.k+'\')" style="padding:12px 10px;border:1.5px solid ' + (selC?cc.c:'var(--sep)') + ';border-radius:12px;background:' + (selC?cc.c+'22':'var(--surface)') + ';font-family:inherit;font-size:14px;font-weight:700;cursor:pointer;color:' + (selC?cc.c:'var(--ink)') + '">\ud83d\udcb3 ' + cc.k + '</button>';
+  });
+  html += '</div>';
+  html += '<div id="qpcCartaAvviso" style="display:none;font-size:12px;color:var(--red);margin-top:6px">Scegli Nexi o SumUp prima di confermare.</div>';
+  html += '</div>';
   html += '<button id="qpcConfermaBtn" style="width:100%;padding:15px;border:none;border-radius:12px;background:var(--green);color:#fff;font-size:16px;font-weight:700;cursor:pointer;font-family:inherit">\u2705 Segna come pagata</button>';
   sheet.innerHTML = html;
   mo.appendChild(sheet);
@@ -5987,6 +6002,25 @@ function _quickPayConfirmDialog(id){
     var af = document.getElementById('qpcAssegnoFields');
     if(af) af.style.display = metodo === 'assegno' ? 'block' : 'none';
     if(metodo === 'assegno') setTimeout(function(){ try{document.getElementById('qpcAss1').focus();}catch(e){} }, 50);
+    var cf = document.getElementById('qpcCartaFields');
+    if(cf) cf.style.display = metodo === 'carta' ? 'block' : 'none';
+    var av = document.getElementById('qpcCartaAvviso');
+    if(av) av.style.display = 'none';
+  };
+
+  window.qpcSelezioneConto = function(conto){
+    selectedContoCarta = conto;
+    var btns = document.querySelectorAll('#qpcCartaGrid button');
+    btns.forEach(function(b){
+      var c = b.getAttribute('data-conto');
+      var sel = c === conto;
+      var colore = c === 'Nexi' ? '#7b2ff7' : '#0066cc';
+      b.style.borderColor = sel ? colore : 'var(--sep)';
+      b.style.background = sel ? colore + '22' : 'var(--surface)';
+      b.style.color = sel ? colore : 'var(--ink)';
+    });
+    var av = document.getElementById('qpcCartaAvviso');
+    if(av) av.style.display = 'none';
   };
 
   document.getElementById('qpcClose').onclick = function(){ mo.remove(); };
@@ -5997,13 +6031,21 @@ function _quickPayConfirmDialog(id){
       // arrivare dopo, in automatico, quando l'estratto conto viene riconciliato
       // (vedi Match su numero assegno + avviso di discrepanza in renderRiconciliazione).
     }
-    _qpcMostraSceltaData(id, f, mo, selectedMetodo, backup);
+    // Richiesto da Valerio: per "Carta" va sempre chiesto Nexi o SumUp, non si
+    // può confermare senza aver scelto — a differenza dell'assegno (numero
+    // recuperabile dopo in automatico), qui non c'è modo di dedurlo dopo.
+    if(selectedMetodo === 'carta' && !selectedContoCarta){
+      var av = document.getElementById('qpcCartaAvviso');
+      if(av) av.style.display = 'block';
+      return;
+    }
+    _qpcMostraSceltaData(id, f, mo, selectedMetodo, backup, selectedContoCarta);
   };
   var backup = {stato:f.stato,pagamento:f.pagamento,dataPag:f.dataPag,assegno:f.assegno,assInt:f.assInt,assBanca:f.assBanca,parzPagato:f.parzPagato};
 }
 
 // Ultimo passaggio prima di confermare: chiede quale data di pagamento usare
-function _qpcMostraSceltaData(id, f, mo, selectedMetodo, backup){
+function _qpcMostraSceltaData(id, f, mo, selectedMetodo, backup, contoCarta){
   var sheet = mo.querySelector('div');
   var oggiStr = new Date().toISOString().slice(0,10);
   var dataFatt = f.data || oggiStr;
@@ -6026,16 +6068,16 @@ function _qpcMostraSceltaData(id, f, mo, selectedMetodo, backup){
   document.getElementById('qpcDateClose').onclick = function(){ mo.remove(); };
   document.getElementById('qpcDataOggi').onclick = async function(){
     mo.remove();
-    await _finalizzaQuickPay(id, selectedMetodo, backup, oggiStr);
+    await _finalizzaQuickPay(id, selectedMetodo, backup, oggiStr, contoCarta);
   };
   var btnFatt = document.getElementById('qpcDataFatt');
   if(btnFatt) btnFatt.onclick = async function(){
     mo.remove();
-    await _finalizzaQuickPay(id, selectedMetodo, backup, dataFatt);
+    await _finalizzaQuickPay(id, selectedMetodo, backup, dataFatt, contoCarta);
   };
 }
 
-async function _finalizzaQuickPay(id, selectedMetodo, backup, dataScelta){
+async function _finalizzaQuickPay(id, selectedMetodo, backup, dataScelta, contoCarta){
   var extra = {};
   if(selectedMetodo === 'assegno'){
     extra = {
@@ -6043,6 +6085,9 @@ async function _finalizzaQuickPay(id, selectedMetodo, backup, dataScelta){
       intestatario: (document.getElementById('qpcAssInt')||{}).value ? document.getElementById('qpcAssInt').value.trim() : '',
       banca: (document.getElementById('qpcAssBanca')||{}).value ? document.getElementById('qpcAssBanca').value.trim() : ''
     };
+  }
+  if(selectedMetodo === 'carta'){
+    extra = { contoPagamento: contoCarta || '' };
   }
   await _applicaQuickPay(id, selectedMetodo, extra, backup, dataScelta);
 }
@@ -6058,6 +6103,9 @@ async function _applicaQuickPay(id, metodo, extra, backup, dataScelta){
     if(extra.numAssegno) fatture[idx].assegno = extra.numAssegno;
     if(extra.intestatario) fatture[idx].assInt = extra.intestatario;
     if(extra.banca) fatture[idx].assBanca = extra.banca;
+  }
+  if(metodo === 'carta' && extra.contoPagamento){
+    fatture[idx].contoPagamento = extra.contoPagamento;
   }
   // Se era parziale, azzera il residuo (ora è tutto pagato)
   if(fatture[idx].parzPagato) fatture[idx].parzPagato = 0;
@@ -7335,7 +7383,20 @@ async function analizzaXML(file){
         return n>0 ? tot : null;
       })();
       const importoTotaleDoc = parseFloat((importoRaw||'0').replace(',','.'))||0;
-      const importoNettoDaUsare = (_sommaImportiPagamento!==null && _sommaImportiPagamento>0 && _sommaImportiPagamento<=importoTotaleDoc+0.02)
+      // BUG CORRETTO (15/09, segnalato da Valerio su ME.PA. ALIMENTARI fattura
+      // 3224/C: importo salvato 2,80€ invece del totale reale 27,13€). La riga
+      // sopra si fidava di QUALSIASI somma di <ImportoPagamento> purché non
+      // superiore al totale — ma senza una vera ritenuta d'acconto a
+      // giustificare la differenza, un <ImportoPagamento> anomalo/isolato
+      // nell'XML (es. un acconto già versato, o un tag letto fuori contesto)
+      // veniva preso per buono al posto del totale vero. Ora si accetta la
+      // somma SOLO se torna col totale (rate multiple, nessuna ritenuta) o con
+      // totale meno la ritenuta effettivamente dichiarata in <DatiRitenuta>
+      // <ImportoRitenuta> — altrimenti si usa sempre ImportoTotaleDocumento.
+      const _ritenutaRaw = getIn('DatiRitenuta','ImportoRitenuta');
+      const _ritenutaVal = parseFloat((_ritenutaRaw||'0').replace(',','.'))||0;
+      const _nettoAtteso = importoTotaleDoc - _ritenutaVal;
+      const importoNettoDaUsare = (_sommaImportiPagamento!==null && _sommaImportiPagamento>0 && Math.abs(_sommaImportiPagamento-_nettoAtteso)<=0.02)
         ? _sommaImportiPagamento : importoTotaleDoc;
       const iban=get('IBAN');
       const modalita=get('ModalitaPagamento'); // MP01=contanti, MP05=bonifico, ecc.
@@ -7519,7 +7580,15 @@ async function importaMassivoXml(input){
         return n>0 ? tot : null;
       })();
       const importoTotaleDoc2 = parseFloat((importoRaw||'0').replace(',','.'))||0;
-      const importo   = (_sommaImportiPagamento2!==null && _sommaImportiPagamento2>0 && _sommaImportiPagamento2<=importoTotaleDoc2+0.02)
+      // BUG CORRETTO (15/09) — stesso motivo del punto gemello in analizzaXML():
+      // vedi commento lì. Qui il caso reale era ME.PA. ALIMENTARI 3224/C, importo
+      // salvato 2,80€ invece di 27,13€ durante un import massimo. Si accetta la
+      // somma degli <ImportoPagamento> solo se torna col totale meno l'eventuale
+      // ritenuta dichiarata, mai una somma qualsiasi ≤ totale.
+      const _ritenutaRaw2 = getIn('DatiRitenuta','ImportoRitenuta');
+      const _ritenutaVal2 = parseFloat((_ritenutaRaw2||'0').replace(',','.'))||0;
+      const _nettoAtteso2 = importoTotaleDoc2 - _ritenutaVal2;
+      const importo   = (_sommaImportiPagamento2!==null && _sommaImportiPagamento2>0 && Math.abs(_sommaImportiPagamento2-_nettoAtteso2)<=0.02)
         ? _sommaImportiPagamento2 : importoTotaleDoc2;
       const modalita  = get('ModalitaPagamento');
       const pagamento = mpCodeToBucket(modalita);
