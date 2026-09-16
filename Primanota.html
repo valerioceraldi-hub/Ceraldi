@@ -404,7 +404,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.49.0</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.50.0</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -1072,6 +1072,11 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     <div style="background:var(--surface);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);margin-bottom:12px">
       <div style="font-size:16px;font-weight:700;margin-bottom:2px">🏦 Riconciliazione bancaria</div>
       <div style="font-size:12px;color:var(--ink3);margin-bottom:12px">Importa estratto conto e abbina alle fatture pagate</div>
+      <!-- Richiesto da Valerio (15/09): vedere a colpo d'occhio fino a che
+           periodo sono stati caricati gli estratti — sia la lista movimenti
+           CSV (BPM/SumUp), sia le copie dei PDF caricati, con periodo
+           visibile e riapribili senza dover ricercare il file originale. -->
+      <div id="bancaEstrattiCaricati" style="margin-bottom:12px"></div>
 
       <!-- Selettore conto — reso PROMINENTE (25/08, richiesta esplicita di
            Valerio: "fai in modo che sumup non mi faccia andare in confusione
@@ -10712,6 +10717,10 @@ async function aprifatturaAllegata(docId){
   const body = document.getElementById('fattMoBody');
   const title = document.getElementById('fattMoTitle');
   const sub = document.getElementById('fattMoSub');
+  // Ripristina "Rimuovi" (nascosto quando si apre un estratto salvato
+  // tramite apriEstrattoSalvato — vedi lì)
+  const btnEliminaFatt = document.getElementById('fattMoElimina');
+  if(btnEliminaFatt) btnEliminaFatt.style.display = '';
 
   _fattMoDdtId = docId;
   const tipoLabel = f.tipo==='ddt' ? `DDT ${f.numero||''}` : `Fattura ${f.numero||''}`;
@@ -15185,6 +15194,11 @@ async function onCartaPDFSelected(input){
       // dopo senza riaprire ogni PDF). mese = mese del primo movimento letto.
       var _meseImport = res.transazioni[0].data.slice(0,7);
       try{
+        // Copia del PDF (15/09, richiesta di Valerio — stesso motivo del
+        // gemello per l'estratto banca): salvata nello stesso riepilogo
+        // mensile già esistente, così il pannello "Riepilogo addebiti per
+        // mese" può offrire anche "Apri PDF" senza una tabella nuova.
+        var _dataUrlPdfNexi = await _leggiFileComeDataUrl(file);
         await sbFetch('carta_estratti_riepilogo', {
           method:'POST',
           headers: Object.assign({}, SB_H, {'Prefer':'resolution=merge-duplicates,return=minimal'}),
@@ -15196,6 +15210,8 @@ async function onCartaPDFSelected(input){
             residuo_finale: res.residuoFinale,
             totale_addebito_cc: res.totaleAddebitoCC,
             data_addebito: res.dataAddebito,
+            file_name: file.name,
+            file_base64: _dataUrlPdfNexi,
             updated_at: new Date().toISOString()
           })
         });
@@ -15429,7 +15445,7 @@ async function _renderRiepilogoStoricoCarta(){
   if(!wrap) return;
   var righeRiep;
   try{
-    righeRiep = await sbFetch('carta_estratti_riepilogo?select=*&order=mese.desc');
+    righeRiep = await sbFetch('carta_estratti_riepilogo?select=mese,questo_mese_ha_speso,imposta_bollo,residuo_mese_precedente,residuo_finale,totale_addebito_cc,data_addebito,file_name&order=mese.desc');
   }catch(e){
     wrap.innerHTML = ''; // tabella non ancora creata — nessun errore visibile, silenzioso
     return;
@@ -15469,10 +15485,22 @@ async function _renderRiepilogoStoricoCarta(){
     html += '<div style="color:'+(r.totale_addebito_cc==null?'var(--ink3)':(quadra?'#1a7a3a':'#c0392b'))+'">'
       + (r.totale_addebito_cc!=null ? 'Dichiarato nel PDF: <b>'+fmt(r.totale_addebito_cc)+'</b>'+(r.data_addebito?' il '+_fmtDataBreveCarta(r.data_addebito):'') : 'Totale dichiarato non disponibile per questo mese')
       + '</div>';
+    if(r.file_name){
+      html += '<button onclick="_apriEstrattoPdfNexi(\''+esc(r.mese)+'\')" style="margin-top:6px;padding:5px 9px;border:none;border-radius:7px;background:var(--blue);color:#fff;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">📄 Apri PDF</button>';
+    }
     html += '</div>';
   });
   html += '</div></details>';
   wrap.innerHTML = html;
+}
+
+async function _apriEstrattoPdfNexi(mese){
+  try{
+    var righe = await sbFetch('carta_estratti_riepilogo?mese=eq.'+mese+'&select=file_name,file_base64');
+    var r = Array.isArray(righe) && righe[0];
+    if(!r || !r.file_base64){ toast('⚠️ Copia PDF non trovata'); return; }
+    apriEstrattoSalvato(r.file_base64, r.file_name, '💳 Estratto Nexi '+mese);
+  }catch(e){ toast('⚠️ Errore apertura PDF: '+(e.message||e)); }
 }
 
 async function _confermaCartaConsigliato(idx){
@@ -16856,6 +16884,106 @@ function _csvDupIgnoraNuovo(idx){
   if(btn) btn.style.opacity = '.4';
 }
 
+// ── ESTRATTI CARICATI (15/09, richiesta esplicita di Valerio) ──────────────
+// Un modo per vedere, senza dover riaprire ogni file, fino a che periodo
+// sono stati caricati gli estratti: sia la lista movimenti CSV (BPM/SumUp —
+// giusto una scritta col periodo, i dati sono già tutti in movimenti_banca,
+// nessuna copia serve), sia gli estratti PDF (BPM e Nexi — qui invece si
+// salva anche una copia del PDF stesso, riapribile in app, perché per un PDF
+// "so fino a quando è importato" non basta: a volte serve riguardare
+// l'originale (es. per un movimento contestato o una verifica commercialista).
+function _leggiFileComeDataUrl(file){
+  return new Promise(function(resolve, reject){
+    var reader = new FileReader();
+    reader.onload = function(e){ resolve(e.target.result); };
+    reader.onerror = function(){ reject(new Error('Impossibile leggere il file')); };
+    reader.readAsDataURL(file);
+  });
+}
+
+// Riapre un PDF salvato (estratto banca/Nexi) riusando lo stesso visualizzatore
+// già presente per gli allegati fattura (fattMo) — nessun codice duplicato.
+function apriEstrattoSalvato(dataUrl, fileName, titolo){
+  if(!dataUrl){ toast('⚠️ Copia PDF non disponibile per questo estratto'); return; }
+  var mo = document.getElementById('fattMo');
+  var body = document.getElementById('fattMoBody');
+  var title = document.getElementById('fattMoTitle');
+  var sub = document.getElementById('fattMoSub');
+  var btnElimina = document.getElementById('fattMoElimina');
+  _fattMoDdtId = null; // non è una fattura: "Rimuovi" del modale non si applica qui
+  if(btnElimina) btnElimina.style.display = 'none';
+  title.textContent = titolo||'📄 Estratto';
+  sub.textContent = fileName||'';
+  body.innerHTML = '';
+  mo.style.display = 'flex';
+  _mostraFatturaDataUrl(dataUrl, {fatturaAllegataName: fileName}, body);
+}
+
+function _fmtDataBreveEstratti(s){
+  if(!s) return '';
+  try{ return new Date(s+'T12:00:00').toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'}); }catch(e){ return s; }
+}
+
+async function _renderEstrattiCaricatiBanca(){
+  var wrap = document.getElementById('bancaEstrattiCaricati');
+  if(!wrap) return;
+  var maxBPM, maxSumUp, pdfList;
+  try{
+    var rBPM = await sbFetch('movimenti_banca?banca=eq.BPM&select=data&order=data.desc&limit=1');
+    maxBPM = (Array.isArray(rBPM) && rBPM[0]) ? rBPM[0].data : null;
+  }catch(e){ maxBPM = null; }
+  try{
+    var rSumUp = await sbFetch('movimenti_banca?banca=eq.SumUp&select=data&order=data.desc&limit=1');
+    maxSumUp = (Array.isArray(rSumUp) && rSumUp[0]) ? rSumUp[0].data : null;
+  }catch(e){ maxSumUp = null; }
+  try{
+    pdfList = await sbFetch('banca_estratti_pdf?select=id,periodo_da,periodo_a,file_name,quadratura_ok,caricato_il&order=periodo_a.desc');
+  }catch(e){ pdfList = null; } // tabella non ancora creata — nessun errore visibile
+
+  var html = '<details style="background:var(--surface2);border-radius:10px;padding:10px 12px" open>';
+  html += '<summary style="font-size:12px;font-weight:600;color:var(--ink2);cursor:pointer">📂 Estratti caricati</summary>';
+  html += '<div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">';
+  html += '<div style="font-size:12px;color:var(--ink2)">📋 Lista movimenti BPM: '+(maxBPM?('importata fino al <b>'+_fmtDataBreveEstratti(maxBPM)+'</b>'):'<span style="color:var(--ink3)">nessuna importata</span>')+'</div>';
+  html += '<div style="font-size:12px;color:var(--ink2)">📋 Lista movimenti SumUp: '+(maxSumUp?('importata fino al <b>'+_fmtDataBreveEstratti(maxSumUp)+'</b>'):'<span style="color:var(--ink3)">nessuna importata</span>')+'</div>';
+  if(Array.isArray(pdfList) && pdfList.length){
+    html += '<div style="font-size:11px;font-weight:700;color:var(--ink3);text-transform:uppercase;letter-spacing:.5px;margin-top:6px">Copie PDF caricate ('+pdfList.length+')</div>';
+    pdfList.forEach(function(r){
+      var periodo = (r.periodo_da&&r.periodo_a) ? (_fmtDataBreveEstratti(r.periodo_da)+' → '+_fmtDataBreveEstratti(r.periodo_a)) : '—';
+      html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;padding:6px 0;border-top:1px solid var(--sep)">';
+      html += '<span>'+(r.quadratura_ok===false?'⚠️ ':'')+'<b>'+esc(periodo)+'</b> <span style="color:var(--ink3)">· '+esc(r.file_name||'')+'</span></span>';
+      html += '<span style="display:flex;gap:6px;flex-shrink:0">';
+      html += '<button onclick="_apriEstrattoPdfBanca(\''+r.id+'\')" style="padding:5px 9px;border:none;border-radius:7px;background:var(--blue);color:#fff;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">Apri</button>';
+      html += '<button onclick="_eliminaEstrattoPdfBanca(\''+r.id+'\')" style="padding:5px 9px;border:1px solid var(--sep);border-radius:7px;background:transparent;color:var(--ink3);font-family:inherit;font-size:11px;cursor:pointer">🗑</button>';
+      html += '</span></div>';
+    });
+  } else if(pdfList !== null){
+    html += '<div style="font-size:11px;color:var(--ink3);margin-top:4px">Nessuna copia PDF caricata finora — si salva automaticamente ogni volta che carichi un estratto PDF (BPM o Nexi).</div>';
+  }
+  html += '</div></details>';
+  wrap.innerHTML = html;
+}
+
+// Il PDF è salvato in base64 in tabella — per non tenerlo tutto in RAM lo si
+// rilegge da Supabase solo quando viene aperto, non insieme all'elenco sopra.
+async function _apriEstrattoPdfBanca(id){
+  try{
+    var righe = await sbFetch('banca_estratti_pdf?id=eq.'+id+'&select=file_name,file_base64,periodo_da,periodo_a');
+    var r = Array.isArray(righe) && righe[0];
+    if(!r || !r.file_base64){ toast('⚠️ Copia PDF non trovata'); return; }
+    var titolo = '📄 Estratto BPM '+_fmtDataBreveEstratti(r.periodo_da)+' → '+_fmtDataBreveEstratti(r.periodo_a);
+    apriEstrattoSalvato(r.file_base64, r.file_name, titolo);
+  }catch(e){ toast('⚠️ Errore apertura PDF: '+(e.message||e)); }
+}
+
+async function _eliminaEstrattoPdfBanca(id){
+  if(!confirm('Eliminare questa copia PDF? I movimenti già importati restano intatti, elimini solo il file salvato.')) return;
+  try{
+    await sbFetch('banca_estratti_pdf?id=eq.'+id, {method:'DELETE'});
+    toast('🗑 Copia PDF eliminata');
+    _renderEstrattiCaricatiBanca();
+  }catch(e){ toast('⚠️ Errore eliminazione: '+(e.message||e)); }
+}
+
 async function onBancaPDFSelected(input){
   if(!input.files||!input.files[0]) return;
   var file = input.files[0];
@@ -16900,6 +17028,27 @@ async function onBancaPDFSelected(input){
     // mascherando eventuali fallimenti silenziosi dell'upsert — vedi upsertMovimentiBanca).
     try{
       await upsertMovimentiBanca(_bancaMovimenti);
+      // Salva anche una copia del PDF con il periodo coperto (15/09, richiesta
+      // di Valerio: poter rivedere quali estratti sono stati caricati e
+      // riaprire l'originale senza doverlo ricercare fuori dall'app). Non
+      // blocca il flusso principale se fallisce (es. tabella non ancora
+      // creata) — i movimenti sono comunque già salvati.
+      try{
+        var _dataUrlPdf = await _leggiFileComeDataUrl(file);
+        await sbFetch('banca_estratti_pdf', {
+          method:'POST',
+          headers: Object.assign({}, SB_H, {'Prefer':'return=minimal'}),
+          body: JSON.stringify({
+            id: Date.now(),
+            periodo_da: _bancaMovimenti[_bancaMovimenti.length-1].data,
+            periodo_a: _bancaMovimenti[0].data,
+            file_name: file.name,
+            file_base64: _dataUrlPdf,
+            quadratura_ok: _quadraturaMsg ? false : (_saldoIni!==null && _saldoFin!==null ? true : null),
+            caricato_il: new Date().toISOString()
+          })
+        });
+      }catch(pdfErr){ console.warn('Copia PDF estratto banca non salvata:', pdfErr); }
       renderRiconciliazione();
       if(_quadraturaMsg){
         if(info) info.textContent = '⚠️ ' + mov.length + ' movimenti salvati — ma L\'ESTRATTO NON QUADRA (vedi avviso)';
@@ -17101,6 +17250,7 @@ function _riconSezHeader(key, iconaTitolo, colore){
     + '</button>';
 }
 function renderRiconciliazione(){
+  if(typeof _renderEstrattiCaricatiBanca==='function') _renderEstrattiCaricatiBanca();
   var wrap = document.getElementById('bancaContenuto');
   if(!wrap) return;
   var mese = (document.getElementById('bancaMese')||{}).value||'';
