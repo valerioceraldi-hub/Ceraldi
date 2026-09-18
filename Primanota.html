@@ -404,7 +404,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.60.0</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.61.0</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -1190,6 +1190,8 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
         <option value="sdd">SDD</option>
         <option value="leasing">Leasing</option>
         <option value="numia">POS/Numia</option>
+        <option value="versamento">Versamenti contanti</option>
+        <option value="nexi">Carta di credito aziendale</option>
         <option value="cbill">CBILL</option>
         <option value="f24">F24</option>
         <option value="mutuo">Mutuo</option>
@@ -8106,6 +8108,17 @@ function _trovaCombinazioniEsatte(imp, fornitoriAmmessi, dataMovimento){
 function _categorizzaMovimento(m){
   var d = (m.descrizione||'').toLowerCase();
   if(/numia/.test(d))                                          return {key:'numia',    label:'💳 Numia (POS)'};
+  // FIX 18/09 (segnalato da Valerio: versamenti presenti in banca ma mai
+  // proposti in app): mancava del tutto una categoria per i versamenti
+  // contanti — finivano genericamente in "↑ Entrate", indistinguibili dal
+  // resto. Stesso regex già corretto in _bancaSottotipo (CSV vs PDF).
+  if(/versamento\s+contanti|vers\.?\s*contanti/.test(d))       return {key:'versamento',label:'💵 Versamenti contanti'};
+  // FIX 18/09 (trovato studiando i movimenti mai categorizzati, richiesta di
+  // Valerio di categorizzare "tutto"): l'addebito mensile della carta di
+  // credito aziendale Nexi ("SPESA CON CARTA DI CREDITO NEXI"/"CANONE CARTA")
+  // finiva genericamente in "Altro" — oltre 11.500€ su 6 movimenti nei soli
+  // dati verificati, mai riconosciuti come una categoria propria.
+  if(/spesa\s+con\s+carta|canone\s+carta/.test(d))              return {key:'nexi',     label:'💳 Carta di credito aziendale'};
   if(/cbill/.test(d))                                          return {key:'cbill',    label:'🧾 CBILL / Bollettini'};
   if(/\bf24\b|i24\s+agenzia|agenzia\s+entrate/.test(d))        return {key:'f24',      label:'🏛️ F24 / Agenzia Entrate'};
   if(/mutuo/.test(d))                                          return {key:'mutuo',    label:'🏦 Mutuo'};
@@ -16343,7 +16356,10 @@ function _bancaSottotipo(desc){
   if(/vostro assegno|prelievo assegno/.test(d)) return 'Assegno';
   if(/vs\.disp\.|favore/.test(d)) return 'Bonifico';
   if(/bon\.da/.test(d)) return 'Bonifico in entrata';
-  if(/versamento contanti/.test(d)) return 'Versamento contanti';
+  // FIX 18/09: il CSV BPM (usato da luglio) scrive "VERS. CONTANTI", il PDF
+  // scriveva per esteso "VERSAMENTO CONTANTI" — stesso identico movimento,
+  // testo diverso. Il regex letterale non riconosceva mai la forma CSV.
+  if(/versamento\s+contanti|vers\.?\s*contanti/.test(d)) return 'Versamento contanti';
   if(/agenzia entrate|i24/.test(d)) return 'F24';
   if(/cbill/.test(d)) return 'CBILL';
   if(/sdd core|comm\.sdd/.test(d)) return 'Addebito SDD';
@@ -17545,7 +17561,13 @@ function renderRiconciliazione(){
     // fattura sbagliata, annullando silenziosamente la correzione manuale.
     if(m.ignorata) return;
     var d = (m.descrizione||'').toLowerCase();
-    if(/versamento contanti/.test(d) && m.tipo==='entrata'){
+    // FIX 18/09 (segnalato da Valerio: versamenti presenti nell'estratto ma mai
+    // proposti in app da luglio in poi): stesso identico problema già visto per
+    // i doppioni CSV — il PDF scrive "VERSAMENTO CONTANTI" per esteso, il CSV
+    // BPM (usato da luglio) scrive invece l'abbreviazione "VERS. CONTANTI" —
+    // testo diverso, il vecchio regex letterale non la riconosceva mai.
+    // Verificato sui dati reali: 3 versamenti (26/08, 02/09, 07/09) invisibili.
+    if(/versamento\s+contanti|vers\.?\s*contanti/.test(d) && m.tipo==='entrata'){
       versamentiBanca.push(m);
     } else if(/numia/.test(d) && m.tipo==='entrata'){
       // Estrai data effettiva del POS dal testo "DEL DD/MM/YY"
@@ -19172,6 +19194,10 @@ function renderRiconciliazione(){
   function _categorizzaMovimento(m){
     var d = (m.descrizione||'').toLowerCase();
     if(/numia/.test(d))                                          return {key:'numia',    label:'💳 Numia (POS)'};
+    // FIX 18/09 (segnalato da Valerio: versamenti presenti in banca ma mai
+    // proposti in app) — stessa copia della funzione sopra (8106), stesso fix.
+    if(/versamento\s+contanti|vers\.?\s*contanti/.test(d))       return {key:'versamento',label:'💵 Versamenti contanti'};
+    if(/spesa\s+con\s+carta|canone\s+carta/.test(d))              return {key:'nexi',     label:'💳 Carta di credito aziendale'};
     if(/cbill/.test(d))                                          return {key:'cbill',    label:'🧾 CBILL / Bollettini'};
     if(/\bf24\b|i24\s+agenzia|agenzia\s+entrate/.test(d))        return {key:'f24',      label:'🏛️ F24 / Agenzia Entrate'};
     if(/mutuo/.test(d))                                          return {key:'mutuo',    label:'🏦 Mutuo'};
@@ -19209,7 +19235,7 @@ function renderRiconciliazione(){
     if(m.tipo==='entrata')                                       return {key:'entrata',  label:'↑ Entrate'};
     return {key:'altro', label:'📦 Altro'};
   }
-  var _catOrdine = ['numia','cbill','f24','mutuo','leasing','stipendi','paypal','spese','entrata','altro'];
+  var _catOrdine = ['numia','versamento','nexi','cbill','f24','mutuo','leasing','stipendi','paypal','spese','entrata','altro'];
   var _catCounts = {};
   // "Tutti i movimenti" (ora "Altro") mostra solo le categorie che non hanno
   // mai bisogno di un abbinamento a fattura — bonifici fornitori/assegni/SDD/
