@@ -404,7 +404,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.64.1</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.67.1</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -953,7 +953,15 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
        arrivare a "Registro IVA acquisti". Con IVA e Chiusura mese spostati
        nel nuovo tab "Fiscale", qui in Cassa restano solo le 5 cose di ogni
        giorno — un'unica fila di chip, un livello solo. -->
-  <div class="chip-row" id="incgrpsub-quot" style="margin-bottom:12px;display:flex">
+  <!-- FIX 19/09 (richiesto da Valerio: "lo scorrimento orizzontale forse
+       non è il massimo" — con 6 tab in fila su schermo stretto, "Carta" e
+       "PayPal" restavano fuori senza nessun indizio visivo che si potesse
+       scorrere, quindi restavano di fatto nascoste). Qui, SOLO per questa
+       fila (non tocco .chip-row altrove, usata anche per liste lunghe dove
+       lo scroll orizzontale resta giusto), si passa da scroll nascosto a
+       "a capo": tutte e 6 le tab restano sempre visibili, su una o due righe
+       a seconda dello schermo, senza bisogno di scoprire che si scorre. -->
+  <div class="chip-row" id="incgrpsub-quot" style="margin-bottom:12px;display:flex;flex-wrap:wrap;overflow-x:visible">
     <button class="chip active" id="inctab-giorno" onclick="setIncTab('giorno',this)">📅 Oggi</button>
     <button class="chip" id="inctab-versamenti" onclick="setIncTab('versamenti',this)">📤 Versamenti</button>
     <button class="chip" id="inctab-lista" onclick="setIncTab('lista',this)">📋 Storico</button>
@@ -1003,11 +1011,19 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
       </div>
       <input type="hidden" id="chgPos">
       <div style="font-size:11px;color:var(--ink3);text-align:right;margin-bottom:10px">Totale pagamenti elettronici: <b id="chgPosTotaleLbl">€ 0,00</b></div>
-      <div style="margin-bottom:10px">
-        <div style="font-size:10px;color:#0066cc;margin-bottom:3px">🏦 Estratto conto banca/POS (di solito Numia + SumUp insieme)</div>
-        <input type="text" id="chgPosBanca" inputmode="decimal" placeholder="0,00 — lascia vuoto se uguale a Numia+SumUp qui sopra" oninput="_chgRecalc()" style="width:100%;padding:10px;border:1.5px solid #b3d7f5;border-radius:8px;font-size:14px;background:#f0f7ff;box-sizing:border-box;text-align:right">
-        <div id="chgPosScostamento" style="font-size:11px;margin-top:4px;display:none"></div>
-      </div>
+      <!-- RIMOSSA 19/09 (richiesto da Valerio: "elimina la riga estratto
+           conto banca pos che non penso serva a molto o che l'abbia mai
+           usato"). Il campo manuale "Estratto conto banca/POS" era anche la
+           causa di un bug reale già corretto in passato (FIX 31/08, vedi
+           salvaChiusuraGiornaliera): chi scrive un totale a mano rischia di
+           dimenticare Numia o SumUp e sovrascrivere pos_banca con un valore
+           sbagliato per difetto. pos_banca resta un dato importante — lo
+           calcolano da soli SumUp/riconciliazione bancaria altrove — ma da
+           qui non si legge né si scrive più: caricaChiusuraGiorno() non lo
+           precompila e salvaChiusuraGiornaliera() non lo include più nel
+           salvataggio, quindi il valore su Supabase resta quello che gli
+           altri meccanismi hanno già calcolato, senza rischio che questo
+           form lo sovrascriva o azzeri. -->
 
       <div id="chgQuadra" style="border-radius:10px;padding:12px 14px;margin-bottom:12px;font-size:14px;text-align:center;font-weight:600"></div>
 
@@ -12551,8 +12567,7 @@ async function caricaChiusuraGiorno(){
     document.getElementById('chgPos').value = _usaTotaleRicostruito ? _fNum(posNumia+posSumUp) : (existing.pos ? _fNum(existing.pos) : '');
     document.getElementById('chgPosTotaleLbl').textContent = fmt(_usaTotaleRicostruito ? (posNumia+posSumUp) : (existing.pos||0));
     document.getElementById('chgNote').value  = existing.note || '';
-    const pbEl = document.getElementById('chgPosBanca');
-    if(pbEl) pbEl.value = existing.pos_banca ? _fNum(existing.pos_banca) : '';
+    // chgPosBanca rimosso 19/09 — pos_banca non si legge più in questo form (vedi nota sopra nell'HTML).
   } else {
     // Giorno nuovo: precompila da qualunque dato sia già stato sincronizzato,
     // Numia e SumUp allo stesso modo (prima solo Numia veniva precompilato).
@@ -12637,7 +12652,9 @@ function _chgRecalc(){
   const totale = _pNum(gv('chgTotaleCorrInp'));
   const cassa = _pNum(gv('chgCassa'));
   const pos = _pNum(gv('chgPos'));
-  const posBanca = _pNum(gv('chgPosBanca'));
+  // chgPosBanca/chgPosScostamento rimossi 19/09 — lo scostamento banca vs
+  // fiscale di questo giorno resta visibile in Fiscale → Riconciliazione,
+  // non serve più duplicarlo qui.
   // Scorporo automatico IVA 10%
   const imponibile = totale / 1.10;
   const ivaDaVersare = totale - imponibile;
@@ -12645,15 +12662,6 @@ function _chgRecalc(){
   const ivaEl = document.getElementById('chgIvaDaVersare');
   if(impEl) impEl.textContent = fmt(imponibile);
   if(ivaEl) ivaEl.textContent = fmt(ivaDaVersare);
-
-  // Scostamento POS banca vs fiscale
-  const scostEl = document.getElementById('chgPosScostamento');
-  if(scostEl && posBanca > 0 && pos > 0){
-    const scost = posBanca - pos;
-    scostEl.style.display = 'block';
-    scostEl.style.color = Math.abs(scost)<0.01 ? '#1a7a3a' : (scost<0 ? 'var(--red)' : '#b36a00');
-    scostEl.textContent = Math.abs(scost)<0.01 ? '✓ POS banca = POS fiscale' : 'Scostamento: '+(scost>0?'+':'')+fmt(scost)+' (banca vs fiscale)';
-  } else if(scostEl){ scostEl.style.display='none'; }
 
   // Riconciliazione: (cassa + POS) deve quadrare con totale corrispettivi (tolleranza €0.50)
   const incassatoTot = cassa + pos;
@@ -12690,24 +12698,12 @@ async function salvaChiusuraGiornaliera(){
 
   // FIX 31/08 (causa trovata di un bug reale, segnalato da Valerio: dal 7 al
   // 14 agosto "POS banca" era stato salvato con SOLO Numia, senza SumUp —
-  // 1522,20€ spariti l'8 agosto, per dire). La causa: questo campo
-  // "Estratto conto banca/POS" è manuale e separato dal calcolo automatico
-  // Numia+SumUp — chi lo compila può facilmente scriverci solo Numia,
-  // dimenticando SumUp, e l'app lo salvava così senza controllo. Ora, se
-  // c'è un disallineamento con quanto calcolato automaticamente, si avvisa
-  // prima di salvare — resta possibile confermare comunque, per i casi in
-  // cui il valore manuale è davvero voluto.
-  const _numiaChg = _pNum(gv('chgPosNumia'));
-  const _sumupChg = _pNum(gv('chgPosSumUp'));
-  const _bancaManualeChg = _pNum(gv('chgPosBanca'));
-  if(_bancaManualeChg > 0 && (_numiaChg > 0 || _sumupChg > 0)){
-    const _totCalcolatoChg = Math.round((_numiaChg + _sumupChg) * 100) / 100;
-    if(Math.abs(_bancaManualeChg - _totCalcolatoChg) > 0.50){
-      const ok = confirm('Il valore scritto in "Estratto conto banca/POS" ('+fmt(_bancaManualeChg)+') non coincide con Numia + SumUp calcolato qui sopra ('+fmt(_totCalcolatoChg)+').\n\nSe hai scritto solo Numia dimenticando SumUp (o viceversa), il totale salvato risulterebbe sbagliato per difetto.\n\nSalvare comunque il valore manuale?');
-      if(!ok) return;
-    }
-  }
-
+  // 1522,20€ spariti l'8 agosto, per dire) — causato dal campo manuale
+  // "Estratto conto banca/POS" di questo form. RIMOSSO 19/09 (richiesto da
+  // Valerio, non l'ha mai usato): questo form non legge né scrive più
+  // pos_banca (vedi sotto), quindi quel rischio non esiste più alla radice,
+  // non serve più nemmeno il controllo di disallineamento che era stato
+  // aggiunto per mitigarlo.
   const totale = _pNum(gv('chgTotaleCorrInp'));
   const imponibile = totale / 1.10;
   const ivaDaVersare = totale - imponibile;
@@ -12733,7 +12729,9 @@ async function salvaChiusuraGiornaliera(){
     pos: _pNum(gv('chgPos')),
     pos_numia: _pNum(gv('chgPosNumia')) || null,
     pos_sumup: _pNum(gv('chgPosSumUp')) || null,
-    pos_banca: _pNum(gv('chgPosBanca')) || null,
+    // pos_banca RIMOSSO 19/09 (vedi nota sopra): non si legge/scrive più da
+    // qui — resta quello che SumUp/riconciliazione bancaria hanno già
+    // calcolato, mai sovrascritto o azzerato da questo form.
     note: gv('chgNote') || '',
     incassato: 0,
     differenza: 0,
@@ -12742,9 +12740,12 @@ async function salvaChiusuraGiornaliera(){
   record.incassato = record.cassa + record.pos;
   record.differenza = Math.round((record.incassato - record.totaleCorrispettivi) * 100) / 100;
 
-  // Aggiorna RAM locale
+  // Aggiorna RAM locale — merge (non sostituzione integrale) così i campi che
+  // questo form non gestisce più (pos_banca, pos_riconciliata, i recuperi
+  // "chiusure RT dimenticate"...) restano quelli già in memoria finché
+  // caricaChiusuraGiorno() qui sotto non li ricarica dal DB.
   const idx = chiusure.findIndex(c=>c.data===data);
-  if(idx >= 0){ chiusure[idx] = record; } else { chiusure.push(record); }
+  if(idx >= 0){ chiusure[idx] = Object.assign({}, chiusure[idx], record); } else { chiusure.push(record); }
   salvaChiusureLocale();
 
   const recordSB = {
@@ -12754,7 +12755,6 @@ async function salvaChiusuraGiornaliera(){
     iva_da_versare10: record.ivaDaVersare10,
     cassa: record.cassa,
     pos: record.pos,
-    pos_banca: record.pos_banca || null,
     incassato: record.incassato,
     differenza: record.differenza,
     note: record.note || null,
@@ -13485,6 +13485,17 @@ function renderIncMese(){
     if(!_mapPosGiorno[x.data]) _mapPosGiorno[x.data] = {numia:0, sumup:0};
     _mapPosGiorno[x.data][x.source] += (x.importo||0);
   });
+  // FIX 19/09 (richiesto da Valerio: chiusura RT dimenticata — es. 17/09 — il
+  // POS di quel giorno non deve sparire dal report mensile). Se una chiusura
+  // ha recuperato SumUp/Numia da un giorno senza chiusura (vedi Riconciliazione
+  // bancaria → "Chiusure RT dimenticate"), si somma qui sul giorno che ha
+  // recuperato — `incassi` non viene mai toccato, resta con la data vera.
+  (typeof chiusure!=='undefined'?chiusure:[]).forEach(function(c){
+    if(!(c.pos_sumup_recuperato>0) && !(c.pos_numia_recuperato>0)) return;
+    if(!_mapPosGiorno[c.data]) _mapPosGiorno[c.data] = {numia:0, sumup:0};
+    _mapPosGiorno[c.data].sumup += (c.pos_sumup_recuperato||0);
+    _mapPosGiorno[c.data].numia += (c.pos_numia_recuperato||0);
+  });
   const _posGiorno = function(data){ return _mapPosGiorno[data] || {numia:0, sumup:0}; };
   const giorniConNumia = inMese.filter(c=>{
     const g = _posGiorno(c.data);
@@ -13598,6 +13609,11 @@ function apriDettaglioScostamento(tipo, nomeFileMese){
   (typeof incassi!=='undefined'?incassi:[]).forEach(function(x){
     if(x.esito!=='ok' || (x.source!=='numia' && x.source!=='sumup')) return;
     _mapPosGiornoDD[x.data] = (_mapPosGiornoDD[x.data]||0) + (x.importo||0);
+  });
+  // FIX 19/09: stesso recupero da chiusura RT dimenticata usato in renderIncMese.
+  (typeof chiusure!=='undefined'?chiusure:[]).forEach(function(c){
+    var rec = (c.pos_sumup_recuperato||0) + (c.pos_numia_recuperato||0);
+    if(rec>0) _mapPosGiornoDD[c.data] = (_mapPosGiornoDD[c.data]||0) + rec;
   });
   const numiaDelGiorno = data => _mapPosGiornoDD[data] || 0;
 
@@ -18656,6 +18672,21 @@ function renderRiconciliazione(){
     if(!posSumupBancaProv[x.data]) posSumupBancaProv[x.data] = 0;
     posSumupBancaProv[x.data] += (x.importo||0);
   });
+  // FIX 19/09 (richiesto da Valerio: chiusura RT dimenticata, es. 17/09 —
+  // quel giorno il negozio era aperto e SumUp/Numia hanno transato
+  // regolarmente, ma senza una chiusura in `chiusure_giornaliere` quei soldi
+  // sparivano da ogni confronto, perché tutto qui sotto legge per giorno DI
+  // CHIUSURA, non per giorno di vendita). Se un giorno mancante viene
+  // "recuperato" nella chiusura successiva (vedi sezione "Chiusure RT
+  // dimenticate" più sotto e _autoRecuperaChiusuraMancante), qui si somma
+  // quell'importo al giorno che lo ha recuperato — l'incasso originale in
+  // `incassi` resta con la sua data vera, non viene mai toccato.
+  (typeof chiusure!=='undefined' ? chiusure : []).forEach(function(c){
+    if(c.pos_sumup_recuperato > 0){
+      if(!posSumupBancaProv[c.data]) posSumupBancaProv[c.data] = 0;
+      posSumupBancaProv[c.data] += c.pos_sumup_recuperato;
+    }
+  });
 
   // ═══ 3. CONFRONTO POS ═══
   // FIX 31/08 (redesign su indicazione precisa di Valerio, dopo il caso
@@ -18689,7 +18720,11 @@ function renderRiconciliazione(){
     var ch = chiusure.find(function(c){return c.data===data;});
     var numiaBanca = posNumiaBanca.hasOwnProperty(data) ? Math.round((posNumiaBancaProv[data]||0)*100)/100 : null;
     var sumup = Math.round((posSumupBancaProv[data]||0)*100)/100;
-    var numiaManuale = (ch && ch.pos_numia!=null) ? Math.round(ch.pos_numia*100)/100 : null;
+    // FIX 19/09: se questa chiusura ha recuperato Numia da un giorno
+    // mancante (vedi sopra), si somma qui — stesso principio del SumUp.
+    var numiaManuale = (ch && (ch.pos_numia!=null || ch.pos_numia_recuperato>0))
+      ? Math.round(((ch.pos_numia||0) + (ch.pos_numia_recuperato||0))*100)/100
+      : null;
     var fiscale = (ch && ch.pos!=null) ? Math.round(ch.pos*100)/100 : null;
 
     // 1) Conflitto, mancanza (o zero confermato), o Numia trovato in banca ma mai confermato
@@ -18789,6 +18824,59 @@ function renderRiconciliazione(){
     }
   });
 
+  // ═══ 3bis. CHIUSURE RT DIMENTICATE ═══
+  // FIX 19/09 (segnalato da Valerio, caso reale 17/09: "la chiusura non è
+  // stata fatta dal registratore fiscale... potrebbe essere stata una
+  // dimenticanza non perché eravamo chiusi. Il dato SumUp di quel giorno non
+  // viene contabilizzato"). Cerca SOLO i giorni per cui esiste un salto (≥1
+  // giorno) tra una chiusura e la successiva — non scansiona tutto l'anno,
+  // come richiesto — e per ognuno controlla se SumUp o Numia (CSV o estratto
+  // banca) mostrano vendite reali quel giorno: se sì, il registratore era
+  // acceso (il locale era aperto), semplicemente nessuno ha chiuso la
+  // giornata sull'RT.
+  // AGGIORNAMENTO 19/09 (Valerio: "non creare pulsanti... automatizza tutto
+  // il processo... se aggiungiamo pulsanti creiamo solo ulteriore
+  // confusione"). Il recupero non è più proposto con un bottone da
+  // confermare: appena l'anomalia viene rilevata, il POS del giorno mancante
+  // viene scritto DA SOLO nella chiusura esistente immediatamente successiva
+  // (colonne dedicate pos_sumup_recuperato/pos_numia_recuperato/
+  // recupero_da_giorno — mai sommato dentro pos_sumup/pos_numia, sempre
+  // distinguibile e reversibile a mano su Supabase se mai servisse). Un
+  // toast informa (una sola volta per giorno, non ad ogni re-render) e la
+  // sezione qui sotto diventa un pannello di sola lettura ("cosa è stato
+  // recuperato automaticamente"), senza nessuna azione da fare.
+  var posChiusureMancanti = []; // solo informativo/di sola lettura, per la SEZIONE 1bis
+  if(typeof chiusure!=='undefined' && chiusure.length){
+    var _chOrd = chiusure.filter(function(c){return c.data>='2026-01-01';}).map(function(c){return c.data;}).sort();
+    for(var _gi=0; _gi<_chOrd.length-1; _gi++){
+      var _prec = _chOrd[_gi], _succ = _chOrd[_gi+1];
+      var _salto = _giorniTra(_prec, _succ);
+      if(_salto<=1) continue; // consecutivi, nessun giorno mancante
+      for(var _dg=1; _dg<_salto; _dg++){
+        var _dMan = new Date(_prec+'T12:00:00'); _dMan.setDate(_dMan.getDate()+_dg);
+        var _giornoMancante = _dMan.toISOString().slice(0,10);
+        var _chSucc = chiusure.find(function(c){return c.data===_succ;});
+        // Già recuperato in precedenza (da questo stesso giorno)? Non rifare.
+        if(_chSucc && _chSucc.recupero_da_giorno===_giornoMancante) continue;
+        var _sumupTrov = (typeof incassi!=='undefined'?incassi:[]).filter(function(x){return x.data===_giornoMancante && x.source==='sumup' && x.esito==='ok';}).reduce(function(s,x){return s+(x.importo||0);},0);
+        var _numiaCsvTrov = (typeof incassi!=='undefined'?incassi:[]).filter(function(x){return x.data===_giornoMancante && x.source==='numia' && x.esito==='ok';}).reduce(function(s,x){return s+(x.importo||0);},0);
+        var _numiaBancaTrov = (window._numiaPerGiornoDB && window._numiaPerGiornoDB[_giornoMancante]!=null) ? window._numiaPerGiornoDB[_giornoMancante] : 0;
+        var _numiaTrov = _numiaCsvTrov>0 ? _numiaCsvTrov : _numiaBancaTrov;
+        if(_sumupTrov>0.50 || _numiaTrov>0.50){
+          var _sumupR = Math.round(_sumupTrov*100)/100, _numiaR = Math.round(_numiaTrov*100)/100;
+          if(_chSucc){
+            // Applica subito, in automatico — nessuna conferma richiesta.
+            _autoRecuperaChiusuraMancante(_giornoMancante, _succ, _chSucc, _sumupR, _numiaR);
+          }
+          posChiusureMancanti.push({
+            giorno: _giornoMancante, giornoSucc: _succ, chiusuraSucc: _chSucc,
+            sumup: _sumupR, numia: _numiaR, applicato: !!_chSucc
+          });
+        }
+      }
+    }
+  }
+
   // ═══ 4. RENDERING (a tab: Da fare / Verifiche / Riconciliati / Scartati / Tutti) ═══
   // RISTRUTTURATO 16/09 (richiesto da Valerio dopo aver studiato la
   // schermata: "confusa, troppe cose"). Questo blocco cambia SOLO come le
@@ -18861,6 +18949,33 @@ function renderRiconciliazione(){
       });
       htmlVerifiche += '</div>';
     }
+  }
+
+  // ═══ SEZIONE 1bis: CHIUSURE RT DIMENTICATE (FIX 19/09, AUTOMATIZZATO) ═══
+  // Pannello di sola lettura: niente bottoni, niente da confermare — il
+  // recupero (se possibile) è già stato applicato in automatico qui sopra,
+  // in _autoRecuperaChiusuraMancante(). Qui si mostra solo cosa è successo.
+  if(posChiusureMancanti.length){
+    htmlVerifiche += '<div style="background:var(--surface);border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow);border-left:3px solid var(--red)">';
+    htmlVerifiche += _riconSezHeader('chmancanti', '📅 Chiusure RT dimenticate ('+posChiusureMancanti.length+')', 'var(--red)');
+    if(!_riconIsColl('chmancanti')){
+    htmlVerifiche += '<div style="font-size:11px;color:var(--ink3);margin-top:8px;margin-bottom:10px">Nessuna chiusura registrata per questi giorni, ma SumUp/Numia hanno transato — il locale era aperto, probabilmente ci si è dimenticati di chiudere la giornata sull\'RT. Il POS di quel giorno viene recuperato in automatico nella chiusura esistente subito dopo, senza bisogno di confermare nulla.</div>';
+    posChiusureMancanti.forEach(function(p){
+      htmlVerifiche += '<div style="padding:9px 0;border-top:1px solid var(--sep);font-size:13px">';
+      htmlVerifiche += '<div style="font-weight:600;margin-bottom:4px">'+p.giorno+' <span style="font-weight:400;color:var(--ink3);font-size:11px">— nessuna chiusura</span></div>';
+      htmlVerifiche += '<div style="font-size:11px;color:var(--ink3);margin-bottom:6px">';
+      if(p.sumup>0) htmlVerifiche += '🟣 SumUp trovato: <b>'+fmt(p.sumup)+'</b> &nbsp;';
+      if(p.numia>0) htmlVerifiche += '🔵 Numia trovato: <b>'+fmt(p.numia)+'</b>';
+      htmlVerifiche += '</div>';
+      if(p.applicato){
+        htmlVerifiche += '<div style="font-size:11px;color:#1a7a3a">✓ Recuperato automaticamente nella chiusura del '+p.giornoSucc+'</div>';
+      } else {
+        htmlVerifiche += '<div style="font-size:11px;color:var(--red)">⏳ In attesa: nessuna chiusura successiva ancora registrata — verrà recuperato da solo appena ne farai una</div>';
+      }
+      htmlVerifiche += '</div>';
+    });
+    }
+    htmlVerifiche += '</div>';
   }
 
   // ═══ SEZIONE 2: POS — tre controlli distinti, ciascuno con le date
@@ -18978,6 +19093,12 @@ function renderRiconciliazione(){
       // giorni col bug (entrambi a zero) spariva, lasciando un numero
       // ambiguo senza dire a cosa si riferisce. Ora sempre visibile.
       var breakdown = ' (Numia '+(p.fonteNumia==='manuale'?'a mano':(p.fonteNumia==='banca'?'BPM':'non usato'))+' '+fmt(p.posNumia)+' + SumUp '+fmt(p.posSumup)+')';
+      // FIX 19/09: se questa chiusura ha recuperato il POS di un giorno senza
+      // chiusura RT (vedi _autoRecuperaChiusuraMancante), lo segnala qui — il
+      // numero sopra include già quel recupero, questa riga spiega perché.
+      if(p.chiusura && p.chiusura.recupero_da_giorno){
+        breakdown += ' — di cui recuperato dal '+p.chiusura.recupero_da_giorno+': SumUp '+fmt(p.chiusura.pos_sumup_recuperato||0)+(p.chiusura.pos_numia_recuperato>0?' + Numia '+fmt(p.chiusura.pos_numia_recuperato):'');
+      }
       htmlVerifiche += '<div style="padding:10px 0;border-top:1px solid var(--sep);font-size:13px">';
       htmlVerifiche += '<div style="display:flex;justify-content:space-between;align-items:flex-start">';
       htmlVerifiche += '<div style="flex:1"><div style="font-weight:600">'+p.data+'</div>';
@@ -21055,6 +21176,45 @@ async function _confermaNumiaNonUsato(idx){
   if(typeof renderRiconciliazione==='function') renderRiconciliazione();
 }
 
+// FIX 19/09 (richiesto da Valerio, caso reale 17/09: chiusura RT dimenticata
+// — il locale era aperto, SumUp/Numia hanno transato regolarmente, ma senza
+// una chiusura quel POS non entrava in nessun confronto). Scrive il SumUp/
+// Numia del giorno mancante nella chiusura ESISTENTE subito dopo, in due
+// colonne dedicate (pos_sumup_recuperato/pos_numia_recuperato/
+// recupero_da_giorno) — mai sommato dentro pos_sumup/pos_numia stessi, per
+// restare sempre distinguibile e reversibile (basta rimettere a null quelle
+// 3 colonne per tornare indietro, direttamente su Supabase se mai servisse).
+// AGGIORNAMENTO 19/09 (Valerio: "automatizza tutto il processo... non
+// creare pulsanti"): non è più un'azione da confermare — viene chiamata da
+// sola dentro renderRiconciliazione() appena l'anomalia viene rilevata.
+// renderRiconciliazione() gira spesso (ad ogni apertura/aggiornamento della
+// tab), quindi qui dentro si scrive subito il valore in memoria (idempotente:
+// se richiamata di nuovo sullo stesso giorno il valore è identico) ma il
+// PATCH e il toast partono una sola volta per giorno grazie a
+// window._recuperiAutoFatti, per non spammare la rete o l'utente.
+window._recuperiAutoFatti = window._recuperiAutoFatti || {};
+function _autoRecuperaChiusuraMancante(giorno, giornoSucc, ch, sumup, numia){
+  ch.pos_sumup_recuperato = sumup||0;
+  ch.pos_numia_recuperato = numia||0;
+  ch.recupero_da_giorno = giorno;
+  ch.updated_at = new Date().toISOString();
+  var key = giorno+'→'+ch.id;
+  if(window._recuperiAutoFatti[key]) return; // già persistito in questa sessione, non rifare il PATCH
+  window._recuperiAutoFatti[key] = true;
+  // Persistenza in background, non bloccante: renderRiconciliazione() è
+  // sincrona e può essere richiamata molte volte, il salvataggio su Supabase
+  // non deve mai fermarla.
+  sbFetch('chiusure_giornaliere?id=eq.'+ch.id, {method:'PATCH', headers:Object.assign({}, SB_H, {'Prefer':'return=minimal'}), body: JSON.stringify({pos_sumup_recuperato:ch.pos_sumup_recuperato, pos_numia_recuperato:ch.pos_numia_recuperato, recupero_da_giorno:ch.recupero_da_giorno, updated_at:ch.updated_at})})
+    .then(function(){
+      if(typeof salvaChiusureLocale==='function') salvaChiusureLocale();
+      toast('✓ Chiusura dimenticata del '+giorno+': POS recuperato in automatico nella chiusura del '+giornoSucc);
+    })
+    .catch(function(e){
+      delete window._recuperiAutoFatti[key]; // permette di riprovare al prossimo render
+      toast('⚠️ Recupero automatico del '+giorno+' non salvato: '+String((e&&e.message)||e).slice(0,60));
+    });
+}
+
 // Quando Numia manuale e Numia da banca non coincidono, Valerio sceglie
 // quale tenere — scrive quel valore come pos_numia definitivo.
 async function _risolviConflittoNumia(idx, scelta){
@@ -21885,6 +22045,38 @@ async function _controlloIntegritaRiconciliazioni(){
       catch(e){ return d; }
     };
 
+    // ═══ NUOVO CONTROLLO (19/09, caso reale TIMAS ASCENSORI N°386): una
+    // fattura risultava "pagata", riconciliata con un movimento datato 44
+    // giorni PRIMA della fattura stessa (un bonifico non può pagare una
+    // fattura che ancora non esiste). Cercando casi analoghi in tutto il
+    // registro sono emersi anche 2 abbinamenti Nexi completamente sbagliati
+    // (Ricambi Manzo↔"Paypal Spotify", AP Commerciale↔"Packlink/Auctane" —
+    // stesso importo per puro caso, esercente tutt'altro, gap 51 e 155
+    // giorni). Tutti e 3 corretti il 19/09 (riportati a "da pagare",
+    // scollegati dal movimento). Da qui in avanti questo controllo li
+    // rileva in automatico: fattura riconciliata con un movimento datato
+    // più di 25 giorni prima della fattura stessa (mai applicato da solo —
+    // solo segnalato, tocca a te scegliere, come tutto il resto di questo
+    // pannello). Soglia scelta sui dati reali: verificati TUTTI gli scarti
+    // "movimento prima della fattura" del registro — quelli legittimi
+    // (bonifici ricorrenti VS.DISP., SDD, assegni) vanno da 1 a 20 giorni,
+    // normale per i tempi bancari; i 3 casi realmente sbagliati avevano
+    // 44/51/155 giorni. Provato anche un controllo sulla descrizione del
+    // movimento (deve contenere il nome del fornitore) ma scartato: per
+    // bonifici/SDD la descrizione è quasi sempre solo un codice di
+    // riferimento bancario senza il nome del fornitore anche quando
+    // l'abbinamento è corretto, e per Nexi i nomi abbreviati dai circuiti
+    // (es. "AMZN MKTPLACE" per Amazon) avrebbero dato falsi allarmi in
+    // continuazione — il solo scarto di giorni, verificato sui dati reali,
+    // si è rivelato il criterio pulito, senza falsi positivi.
+    var sospetteDataDescrizione = [];
+    (typeof fatture!=='undefined' ? fatture : []).forEach(function(f){
+      if(!f.riconciliata || !f.riconciliazione || !f.riconciliazione.data || !f.data) return;
+      var gap = _giorniTra(f.riconciliazione.data, f.data); // >0 se il movimento è PRIMA della fattura
+      if(gap>25) sospetteDataDescrizione.push({f:f, gap:gap});
+    });
+    sospetteDataDescrizione.sort(function(a,b){ return b.gap-a.gap; });
+
     // ═══ NUOVO CONTROLLO (18/09, aggiunto dopo il caso CARPINO): quello sopra
     // (idsSospetti) guarda SOLO "una fattura con più di un movimento agganciato"
     // (rateizzazione) — non poteva mai accorgersi di CARPINO, che è l'anomalia
@@ -21980,6 +22172,31 @@ async function _controlloIntegritaRiconciliazioni(){
     if(!gruppiFantasma.length){
       html += '<div style="text-align:center;padding:8px 24px 4px;color:var(--ink3);font-size:12px">✓ Nessun movimento con totale fuori quadratura.</div>';
     }
+
+    // ═══ RENDERING: fatture riconciliate con movimento sospetto (data/descrizione) ═══
+    if(sospetteDataDescrizione.length){
+      html += '<div style="background:#fdecea;border:1.5px solid var(--red);border-radius:10px;padding:10px 12px;margin-bottom:14px;margin-top:14px;font-size:12px;color:var(--ink2);line-height:1.5">';
+      html += '<b style="color:var(--red)">⚠️ '+sospetteDataDescrizione.length+' '+(sospetteDataDescrizione.length===1?'fattura':'fatture')+' con abbinamento sospetto</b> — riconciliate con un movimento datato più di 25 giorni prima della fattura (caso reale: TIMAS ASCENSORI, pagata con un bonifico di 44 giorni precedente — un pagamento non può avvenire prima che la fattura esista).</div>';
+      sospetteDataDescrizione.forEach(function(s){
+        var f = s.f, r = f.riconciliazione;
+        var colore = 'var(--red)';
+        var badge = '🕒 Movimento '+s.gap+' giorni prima della fattura';
+        html += '<div style="border-left:3px solid '+colore+';background:var(--surface2);border-radius:10px;padding:10px 12px;margin-bottom:10px">';
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">';
+        html += '<div style="font-size:13px;font-weight:700">'+esc((f.fornitore||'')+(f.numero?' N°'+f.numero:''))+'</div>';
+        html += '<div style="font-size:11px;font-weight:700;color:'+colore+'">'+badge+'</div>';
+        html += '</div>';
+        html += '<div style="font-size:11px;color:var(--ink3)">Data fattura: '+fmtDataIntegrita(f.data)+' &nbsp;·&nbsp; Data movimento: '+fmtDataIntegrita(r.data)+' ('+r.banca+')</div>';
+        html += '<div style="font-size:12px;color:var(--ink2);margin-top:2px">Importo fattura: <b>'+fmt(f.importo||0)+'</b> &nbsp;·&nbsp; Descrizione movimento: <i>'+esc(r.descrizione||'—')+'</i></div>';
+        if(r.banca==='BPM' && r.movId){
+          html += '<div class="_integritaMovRiga" data-movid="'+esc(r.movId)+'" style="font-size:12px;color:var(--blue);padding:4px 0 0;cursor:pointer;text-decoration:underline dotted;font-weight:600">Tocca per aprire e correggere l\'abbinamento →</div>';
+        } else {
+          html += '<div style="font-size:11px;color:var(--ink3);margin-top:4px">Movimento '+esc(r.banca||'carta/PayPal')+' — correggi da Fiscale → Riconciliazione → '+(r.banca==='Nexi'?'Carta':'PayPal')+'.</div>';
+        }
+        html += '</div>';
+      });
+    }
+
     if(!idsSospetti.length){
       html += '<div style="text-align:center;padding:24px;color:var(--ink3);font-size:13px">✓ Nessuna fattura con più di un movimento agganciato.</div>';
     } else {
