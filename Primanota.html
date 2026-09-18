@@ -404,7 +404,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.58.0</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.60.0</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -21633,9 +21633,103 @@ async function _controlloIntegritaRiconciliazioni(){
       catch(e){ return d; }
     };
 
+    // ═══ NUOVO CONTROLLO (18/09, aggiunto dopo il caso CARPINO): quello sopra
+    // (idsSospetti) guarda SOLO "una fattura con più di un movimento agganciato"
+    // (rateizzazione) — non poteva mai accorgersi di CARPINO, che è l'anomalia
+    // opposta: un movimento a cui PIÙ fatture dicono di essere agganciate
+    // (fattura.riconciliazione.movId), il cui totale non torna più con
+    // l'importo vero del movimento — segno che una di quelle fatture porta
+    // ancora il "flag fantasma" di un abbinamento superato (bug corretto il
+    // 16/09, ma solo per il futuro: le fatture già colpite PRIMA di quel fix
+    // restavano da scovare una per una). Non si guarda movimenti_banca.fattura_id
+    // (che per i pagamenti di gruppo punta solo alla prima fattura per
+    // costruzione, es. ARVAL/Leasys/ARTECARTA — guardarlo da solo avrebbe dato
+    // troppi falsi positivi, verificato sui dati reali prima di scegliere
+    // questo criterio) ma si raggruppa per movId, ESATTAMENTE come fa
+    // renderRiconciliazione per decidere chi è "riconciliato" — stessa
+    // tolleranza di 0,50€ già usata sopra per la rateizzazione.
+    var movById = {};
+    movimenti.forEach(function(m){ movById[m.id] = m; });
+    var perMovId = {};
+    (typeof fatture!=='undefined' ? fatture : []).forEach(function(f){
+      if(!f.riconciliata || !f.riconciliazione || !f.riconciliazione.movId) return;
+      (perMovId[f.riconciliazione.movId] = perMovId[f.riconciliazione.movId] || []).push(f);
+    });
+    var gruppiFantasma = [];
+    Object.keys(perMovId).forEach(function(movId){
+      var m = movById[movId];
+      if(!m) return; // movimento non in movimenti_banca (es. Nexi/PayPal) — non verificabile con questo criterio
+      var claimants = perMovId[movId];
+      var somma = claimants.reduce(function(s,f){
+        var imp = (f.riconciliazione && typeof f.riconciliazione.importo==='number') ? f.riconciliazione.importo : Math.abs(f.importo||0);
+        return s+imp;
+      },0);
+      var totMov = Math.abs(m.importo||0);
+      if(Math.abs(somma-totMov) > 0.50) gruppiFantasma.push({m:m, claimants:claimants, somma:somma, totMov:totMov});
+    });
+
+    // FIX 18/09 (richiesta esplicita di Valerio): oltre a segnalare l'anomalia,
+    // per ogni fattura coinvolta si cercano anche eventuali movimenti bancari
+    // con lo STESSO importo esatto (±0,02€, stessa tolleranza già usata in
+    // tutto il motore di riconciliazione) — un possibile abbinamento più giusto
+    // per quella fattura, mostrato come suggerimento. Non si applica MAI da
+    // solo: resta sempre Valerio a scegliere toccando la riga, come per tutto
+    // il resto di questo pannello.
+    var _candidatiCache = {};
+    async function _cercaCandidatiEsattiImporto(importoAbs, escludiMovId){
+      var key = importoAbs.toFixed(2);
+      if(_candidatiCache[key]) return _candidatiCache[key];
+      var lo=(importoAbs-0.02).toFixed(2), hi=(importoAbs+0.02).toFixed(2);
+      var negLo=(-importoAbs-0.02).toFixed(2), negHi=(-importoAbs+0.02).toFixed(2);
+      var q = 'movimenti_banca?select=id,data,importo,fattura_id,fattura_label,abbinata'
+        + '&or=(and(importo.gte.'+negLo+',importo.lte.'+negHi+'),and(importo.gte.'+lo+',importo.lte.'+hi+'))'
+        + '&order=data.desc&limit=6';
+      var rows = [];
+      try{ rows = await sbFetch(q); }catch(e){}
+      _candidatiCache[key] = rows;
+      return rows;
+    }
+
     var html = '';
+    if(gruppiFantasma.length){
+      html += '<div style="background:#fdecea;border:1.5px solid var(--red);border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:var(--ink2);line-height:1.5">';
+      html += '<b style="color:var(--red)">⚠️ '+gruppiFantasma.length+' '+(gruppiFantasma.length===1?'movimento':'movimenti')+' con un totale che non torna</b> — una o più fatture agganciate a quel movimento portano probabilmente ancora il riferimento di un abbinamento poi cambiato (come nel caso CARPINO). <b>Tocca una riga per aprire e correggere quella fattura.</b>';
+      html += '</div>';
+      for(var _gi=0; _gi<gruppiFantasma.length; _gi++){
+        var g = gruppiFantasma[_gi];
+        var diff = g.somma - g.totMov;
+        html += '<div style="border-left:3px solid var(--red);background:var(--surface2);border-radius:10px;padding:10px 12px;margin-bottom:10px">';
+        html += '<div style="font-size:13px;font-weight:700">Movimento del '+fmtDataIntegrita(g.m.data)+' — '+fmt(g.totMov)+'</div>';
+        html += '<div style="font-size:11px;color:var(--ink3);margin-bottom:2px">Assegnato ufficialmente a: '+esc(g.m.fattura_label||'—')+'</div>';
+        html += '<div style="font-size:11px;color:var(--red);font-weight:600;margin-bottom:4px">'+g.claimants.length+' fattur'+(g.claimants.length===1?'a lo rivendica':'e lo rivendicano')+' per un totale di '+fmt(g.somma)+' ('+(diff>0?'+':'')+fmt(diff)+' rispetto al movimento)</div>';
+        for(var _ci=0; _ci<g.claimants.length; _ci++){
+          var f = g.claimants[_ci];
+          html += '<div class="_integritaMovRiga" data-movid="'+esc(g.m.id)+'" style="font-size:12px;color:var(--blue);padding:3px 0;cursor:pointer;text-decoration:underline dotted;font-weight:600">· '+esc((f.fornitore||'')+(f.numero?' N°'+f.numero:''))+' — '+fmt(f.importo||0)+' →</div>';
+          // Suggerimenti: altri movimenti con lo stesso importo esatto di QUESTA
+          // fattura, diversi da quello già rivendicato — possibili abbinamenti
+          // più corretti, mai applicati da soli.
+          var candidati = await _cercaCandidatiEsattiImporto(Math.abs(f.importo||0), g.m.id);
+          var candidatiUtili = (candidati||[]).filter(function(c){ return c.id !== g.m.id; });
+          if(candidatiUtili.length){
+            html += '<div style="margin:2px 0 6px 12px;padding:4px 8px;border-left:2px solid var(--sep)">';
+            html += '<div style="font-size:10px;color:var(--ink3);margin-bottom:2px">Possibile abbinamento esatto per questa fattura:</div>';
+            candidatiUtili.forEach(function(c){
+              var occupato = c.abbinata && c.fattura_id!=null;
+              html += '<div class="_integritaMovRiga" data-movid="'+esc(c.id)+'" style="font-size:11px;color:'+(occupato?'var(--orange)':'#1a7a3a')+';padding:2px 0;cursor:pointer;text-decoration:underline dotted;font-weight:600">'
+                + (occupato?'⚠️ ':'✓ ') + fmtDataIntegrita(c.data)+' — '+fmt(Math.abs(c.importo||0))
+                + (occupato ? ' (già assegnato a: '+esc(c.fattura_label||'altra fattura')+')' : ' (libero)') + ' →</div>';
+            });
+            html += '</div>';
+          }
+        }
+        html += '</div>';
+      }
+    }
+    if(!gruppiFantasma.length){
+      html += '<div style="text-align:center;padding:8px 24px 4px;color:var(--ink3);font-size:12px">✓ Nessun movimento con totale fuori quadratura.</div>';
+    }
     if(!idsSospetti.length){
-      html = '<div style="text-align:center;padding:24px;color:var(--ink3);font-size:13px">✓ Nessuna fattura con più di un movimento agganciato.</div>';
+      html += '<div style="text-align:center;padding:24px;color:var(--ink3);font-size:13px">✓ Nessuna fattura con più di un movimento agganciato.</div>';
     } else {
       // Carica gli importi/stato reali delle fatture coinvolte in una sola query
       var idsNum = idsSospetti.map(function(s){ return isNaN(+s)?s:+s; });
