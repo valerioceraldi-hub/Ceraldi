@@ -404,7 +404,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.68.0</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.69.0</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -2375,7 +2375,17 @@ async function _aiCicloConStrumenti(systemPrompt, bollaRisposta){
 // Entrambe possono pesare centinaia di KB a riga e mandano in timeout (57014) la SELECT
 // quando le righe sono centinaia. Foto e XML grezzo vengono caricati on-demand per la
 // singola fattura aperta (vedi apriF / aprifatturaAllegata).
-const SLIM_COLS_FATTURE = 'id,tipo,fornitore,numero,fatt_num,num_ddt,data,importo,pagamento,pagamento_origine,pagamento_impostato_il,assegno,ass_int,ass_banca,bon_iban,bon_caus,bon_data,bon_rif,riconciliata,riconciliazione,note,stato,scadenza,fattura_allegata_name,xml_github_path,source,rate,ts,parz_pagato,data_pagamento,pec_verificata,pec_verificata_at,pec_id,iva,iva_breakdown,totale_imponibile,totale_imposta,incompleta,deleted_at';
+// FIX 19/09 (BUG TROVATO, segnalato da Valerio: fattura VANDEMOORTELE N°8528021612
+// pagata con 2 bonifici — 06/08 parziale €58,71 + 11/08 saldo €167,99 — ma il
+// badge di riconciliazione ne mostrava solo 1). Causa: `riconciliazione_storico`
+// (l'array con TUTTI i pagamenti, non solo l'ultimo — vedi dbToApp più sotto)
+// non era MAI in questa lista di colonne selezionate da Supabase — quindi
+// arrivava sempre `undefined` all'app, che lo trattava come "storico vuoto" e
+// mostrava solo il singolo `riconciliazione` (l'ULTIMO pagamento). Sul database
+// il dato era sempre stato corretto e completo (verificato: 58,71+167,99=226,70,
+// esatto) — mancava solo qui nella select. Aggiungendo la colonna, il fix vale
+// per TUTTE le fatture pagate con più di un bonifico/movimento, non solo questa.
+const SLIM_COLS_FATTURE = 'id,tipo,fornitore,numero,fatt_num,num_ddt,data,importo,pagamento,pagamento_origine,pagamento_impostato_il,assegno,ass_int,ass_banca,bon_iban,bon_caus,bon_data,bon_rif,riconciliata,riconciliazione,riconciliazione_storico,note,stato,scadenza,fattura_allegata_name,xml_github_path,source,rate,ts,parz_pagato,data_pagamento,pec_verificata,pec_verificata_at,pec_id,iva,iva_breakdown,totale_imponibile,totale_imposta,incompleta,deleted_at';
 
 async function sbFetch(path, opts={}){
   const method = (opts.method||'GET').toUpperCase();
@@ -2480,9 +2490,13 @@ function _cacheMaxTs(){
 // che nell'aggiornamento di una singola riga dopo un salvataggio.
 function _slimPerCache(r){
   var o = {};
+  // FIX 19/09: 'riconciliazione_storico' aggiunto — mancava anche qui, stesso
+  // bug di SLIM_COLS_FATTURE sopra (vedi il commento lì). Senza, una fattura
+  // pagata con più bonifici perdeva lo storico non appena letta dalla cache
+  // locale invece che da una query fresca a Supabase.
   var keep = ['id','tipo','fornitore','numero','fatt_num','num_ddt','data','importo',
     'pagamento','assegno','ass_int','ass_banca','bon_iban','bon_caus','bon_data','bon_rif',
-    'riconciliata','note','stato','scadenza','rate','ts','parz_pagato','data_pagamento',
+    'riconciliata','riconciliazione','riconciliazione_storico','note','stato','scadenza','rate','ts','parz_pagato','data_pagamento',
     'fattura_allegata_name','xml_github_path','source','pec_id','pec_verificata',
     'updated_at','incompleta','totale_imponibile','totale_imposta','iva_breakdown','iva',
     'has_foto','has_allegata'];
@@ -19241,6 +19255,16 @@ function renderRiconciliazione(){
         // lo stesso numero assegno (quello dell'ultimo salvato in f.riconciliazione).
         var descrizioneRiga = (ric && ric.movId===m.id && ric.descrizione) ? ric.descrizione : (m.descrizione||'');
         if(descrizioneRiga) htmlRiconciliati += '<div style="font-size:10px;color:var(--ink3);margin-top:1px;word-break:break-word;line-height:1.3">'+esc(descrizioneRiga)+'</div>';
+        // FIX 19/09 (richiesto da Valerio: "mostrami anche quale è il bonifico
+        // in questione con gli estremi e l'importo" — quando un unico
+        // bonifico paga più fatture insieme, ogni riga qui mostrava solo la
+        // QUOTA di quella fattura, mai la data/importo VERI del movimento
+        // bancario intero da cui quella quota viene). Estremi del movimento
+        // sempre visibili: data e importo pieno del bonifico/movimento,
+        // indipendentemente da quante fatture lo condividono.
+        var _dataMov = m.data ? new Date(m.data+'T12:00:00').toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'}) : '—';
+        var _importoMovPieno = Math.abs(m.importo||0);
+        htmlRiconciliati += '<div style="font-size:11px;margin-top:4px;color:var(--ink2)">🏦 Movimento del '+_dataMov+': <b>'+fmt(_importoMovPieno)+'</b></div>';
         // ETICHETTA PIÙ ANALITICA (08/08, richiesta da Valerio): prima "Parziale:
         // €X di €Y" non chiariva se X fosse il pagamento di QUESTA riga/movimento
         // o il totale pagato finora sulla fattura, né se Y fosse il totale
@@ -19248,7 +19272,9 @@ function renderRiconciliazione(){
         // riusando f.parzPagato — il cumulativo VERO già mantenuto altrove
         // nell'app (si aggiorna ad ogni pagamento applicato, non dedotto qui) —
         // invece di ricalcolarlo dai soli movimenti visibili in questo mese.
-        htmlRiconciliati += '<div style="font-size:11px;margin-top:4px;color:var(--ink2)">Questo movimento: <b>'+fmt(importoRiga)+'</b></div>';
+        if(Math.abs(_importoMovPieno-importoRiga) > 0.01){
+          htmlRiconciliati += '<div style="font-size:11px;color:var(--ink2)">↳ Di cui su questa fattura: <b>'+fmt(importoRiga)+'</b></div>';
+        }
         if(eParziale && f){
           var _pagatoFinora = f.parzPagato||0;
           var _totFatt = f.importo||0;
