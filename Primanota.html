@@ -413,7 +413,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.71.0</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.72.0</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -4300,9 +4300,22 @@ function salvaPaypalKeys(){
   _impRenderHome();
 }
 
+// FIX 19/09 (richiesto da Valerio: "se navigo tra le varie sezioni, tipo da
+// Registro vado a Cassa, quando ritorno il Registro non deve ricominciare
+// da capo ma deve continuare da dove l'ho lasciato nello scorrimento
+// verticale" — con o senza filtri impostati). I filtri già restavano
+// impostati da soli (i campi non vengono mai distrutti, solo nascosti con
+// .view{display:none}); mancava solo la posizione di scorrimento, che il
+// cambio tab riportava sempre in cima. Ricorda lo scroll di OGNI tab
+// (non solo Registro) in window._tabScrollY, con lo stesso identico
+// pattern salva/ripristina già usato altrove nell'app per i re-render
+// (vedi _setReconTab e affini) — qui esteso al cambio di vista.
+window._tabScrollY = window._tabScrollY || {};
 function goTab(tab,btn){
   // Esci dalla modalità selezione se cambiamo tab
   if(_selModalita){ _uscitaSelezione(); }
+  var vistaAttuale = document.querySelector('.view.active');
+  if(vistaAttuale) window._tabScrollY[vistaAttuale.id] = window.pageYOffset || document.documentElement.scrollTop || 0;
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   document.querySelectorAll('.tab-item').forEach(b=>b.classList.remove('active'));
   document.getElementById('view-'+tab).classList.add('active');
@@ -4319,6 +4332,8 @@ function goTab(tab,btn){
   }
   // Aggiorna saldo cassa ogni volta che si apre il tab (dati fatture potrebbero essere cambiati)
   if(tab==='incassi') setTimeout(aggiornaSaldoCassa, 100);
+  var _syTab = window._tabScrollY['view-'+tab] || 0;
+  setTimeout(function(){ window.scrollTo(0, _syTab); }, 30);
 }
 
 // FIX 31/08 (nuovo tab "Fiscale"): stessa identica logica di inizializzazione
@@ -4329,7 +4344,18 @@ function apriFiscaleSezione(t){
   document.getElementById('fisc-sezione').style.display = '';
   document.querySelectorAll('#fisc-sezione .inc-sec').forEach(function(s){ s.style.display='none'; });
   document.getElementById('inc-'+t).style.display = '';
-  if(t==='mese') renderIncMese();
+  if(t==='mese'){
+    // FIX 19/09 (Valerio: "sezione report mensile poco leggibile" — in realtà
+    // appariva vuota, non solo poco chiara). A differenza delle altre 4 sezioni
+    // qui sotto (chiusuramese/saldoiva/registroiva/liquidazione), il mese non
+    // veniva mai precompilato con quello corrente: renderIncMese() usciva
+    // subito (`if(!mese) return;`) finché Valerio non selezionava un mese a
+    // mano, lasciando il riquadro vuoto sotto il titolo. Stessa identica
+    // precompilazione già usata per gli altri 4 casi.
+    const inpMese = document.getElementById('incMese');
+    if(inpMese && !inpMese.value && !_incVistaAnno) inpMese.value = new Date().toISOString().slice(0,7);
+    renderIncMese();
+  }
   if(t==='importazioni'){
     // Aggiorna il pannello "Estratti caricati" (fino a che data è già
     // importato BPM/SumUp) — stessa identica _renderEstrattiCaricatiBanca()
