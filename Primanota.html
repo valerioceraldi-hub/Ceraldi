@@ -200,6 +200,15 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 .edit-sheet{background:var(--bg);border-radius:20px 20px 0 0;width:100%;max-width:500px;max-height:92vh;overflow-y:auto;animation:slideUp .3s cubic-bezier(.32,.72,0,1)}
 @keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
 @keyframes slideDown{from{transform:translateY(-100%)}to{transform:translateY(0)}}
+/* FIX 19/09 (richiesto da Valerio: l'Assistente restava sul messaggio "⏳ …"
+   fisso, senza NESSUN movimento a schermo — anche quando stava davvero
+   lavorando (una risposta lunga può richiedere anche 20-30 secondi), sembrava
+   bloccato perché nulla si muoveva mai. Tre puntini che pulsano a turno danno
+   un segnale continuo e visibile che qualcosa sta ancora succedendo. */
+@keyframes aiThinkDot{0%,80%,100%{opacity:.25;transform:scale(.75)}40%{opacity:1;transform:scale(1)}}
+.ai-thinking-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:currentColor;margin:0 2px;animation:aiThinkDot 1.1s ease-in-out infinite}
+.ai-thinking-dot:nth-child(2){animation-delay:.15s}
+.ai-thinking-dot:nth-child(3){animation-delay:.3s}
 .fi.fi-selected{background:var(--blue-light)!important;border:1.5px solid var(--blue);transition:all .12s}
 .edit-sheet-hd{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;position:sticky;top:0;background:var(--bg);z-index:1;border-bottom:1px solid var(--sep)}
 .edit-sheet-hd h3{font-size:18px;font-weight:700}
@@ -404,7 +413,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.69.0</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.70.0</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -422,8 +431,15 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     <div id="aiAssistMsgs" style="flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px">
       <div style="font-size:12px;color:var(--ink3);text-align:center;padding:8px">Chiedimi di un fornitore, di fatture da pagare, riconciliazioni, o altro sul registro. Posso anche proporre correzioni: le applico solo dopo la tua conferma.</div>
     </div>
-    <div style="display:flex;gap:8px;padding:12px 14px;border-top:1px solid var(--sep);flex-shrink:0">
-      <input id="aiAssistInp" type="text" placeholder="Es. Kimbo ha fatture da pagare?" style="flex:1;padding:11px 13px;border:1.5px solid var(--sep);border-radius:99px;font-size:14px;background:var(--surface2);color:var(--ink);font-family:inherit" onkeydown="if(event.key==='Enter')inviaAiAssistente()">
+    <div style="display:flex;gap:8px;padding:12px 14px;border-top:1px solid var(--sep);flex-shrink:0;align-items:flex-end">
+      <!-- FIX 19/09 (richiesto da Valerio: "quando premo il tasto invio sulla
+           tastiera deve andare a capo non inviare la richiesta"). Un <input
+           type="text"> non può MAI andare a capo, per costruzione — serviva
+           un <textarea>. Invio ora fa sempre e solo "a capo" (comportamento
+           di default di una textarea, nessun handler lo intercetta più); si
+           invia SOLO toccando il pulsante ➤. Cresce da 1 a 4 righe man mano
+           che scrivi (_aiInpAutoResize), poi scorre internamente. -->
+      <textarea id="aiAssistInp" rows="1" placeholder="Es. Kimbo ha fatture da pagare?" oninput="_aiInpAutoResize(this)" style="flex:1;padding:11px 13px;border:1.5px solid var(--sep);border-radius:18px;font-size:14px;background:var(--surface2);color:var(--ink);font-family:inherit;resize:none;max-height:110px;overflow-y:auto;line-height:1.35"></textarea>
       <button onclick="inviaAiAssistente()" style="width:44px;height:44px;border-radius:50%;border:none;background:var(--blue);color:#fff;font-size:18px;cursor:pointer;flex-shrink:0">&#10148;</button>
     </div>
   </div>
@@ -2016,6 +2032,14 @@ function apriAiAssistente(){
   setTimeout(function(){ try{document.getElementById('aiAssistInp').focus();}catch(e){} }, 100);
 }
 
+// Fa crescere la textarea della domanda da 1 a ~4 righe man mano che si
+// scrive (poi scorre internamente) — necessario ora che è una textarea vera
+// e non più un singolo <input> a riga fissa.
+function _aiInpAutoResize(el){
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 110) + 'px';
+}
+
 function _aiNuovaConversazione(){
   window._aiHistory = [];
   var wrap = document.getElementById('aiAssistMsgs');
@@ -2036,15 +2060,37 @@ function _aiAssistAppendMsg(testo, ruolo){
   return div;
 }
 
+// Bolla "sta scrivendo" con 3 puntini che pulsano (vedi @keyframes aiThinkDot
+// più sopra) invece del vecchio testo fisso "⏳ …" — quando arriva la vera
+// risposta, .textContent la sostituisce e i puntini (essendo innerHTML)
+// spariscono da soli. Sempre usare .textContent per sostituirla, MAI
+// .innerHTML, altrimenti un testo di risposta con "<" o "&" verrebbe
+// interpretato come markup invece che stampato così com'è.
+function _aiAssistAppendPending(){
+  var wrap = document.getElementById('aiAssistMsgs');
+  if(!wrap) return null;
+  var div = document.createElement('div');
+  div.style.cssText = 'max-width:85%;padding:10px 13px;border-radius:14px;font-size:14px;line-height:1.4;align-self:flex-start;background:var(--surface2);color:var(--ink3);border-bottom-left-radius:4px';
+  div.innerHTML = '<span class="ai-thinking-dot"></span><span class="ai-thinking-dot"></span><span class="ai-thinking-dot"></span>';
+  wrap.appendChild(div);
+  wrap.scrollTop = wrap.scrollHeight;
+  return div;
+}
+
 // Bolla di stato ("sto controllando...") aggiornabile in corso d'opera, per far
 // vedere cosa sta facendo l'assistente durante i passaggi con gli strumenti
-// invece di un unico "..." muto per diversi secondi.
+// invece di un unico "..." muto per diversi secondi. Puntini animati anche
+// qui (stesso motivo della bolla sopra: dare un segnale continuo che il
+// lavoro sta procedendo, non solo un'unica scritta ferma).
 function _aiAssistStatoMsg(testo){
   var wrap = document.getElementById('aiAssistMsgs');
   if(!wrap) return null;
   var div = document.createElement('div');
-  div.style.cssText = 'align-self:flex-start;font-size:12px;color:var(--ink3);font-style:italic;padding:2px 4px';
-  div.textContent = testo;
+  div.style.cssText = 'align-self:flex-start;font-size:12px;color:var(--ink3);font-style:italic;padding:2px 4px;display:flex;align-items:center;gap:6px';
+  var span = document.createElement('span');
+  span.textContent = testo;
+  div.appendChild(span);
+  div.insertAdjacentHTML('beforeend', '<span class="ai-thinking-dot"></span><span class="ai-thinking-dot"></span><span class="ai-thinking-dot"></span>');
   wrap.appendChild(div);
   wrap.scrollTop = wrap.scrollHeight;
   return div;
@@ -2310,6 +2356,7 @@ async function inviaAiAssistente(){
   var domanda = (inp.value||'').trim();
   if(!domanda) return;
   inp.value='';
+  inp.style.height='auto'; // torna a 1 riga dopo l'invio (era cresciuta con _aiInpAutoResize)
   _aiAssistAppendMsg(domanda,'user');
 
   window._aiHistory = window._aiHistory || [];
@@ -2324,51 +2371,67 @@ async function inviaAiAssistente(){
     'Prima di proporre una correzione con proponi_correzione_fattura, spiega in una frase perché — Valerio deve poter capire il ragionamento prima di confermare, non solo vedere il risultato.\n'+
     'Se i dati non bastano per essere sicuro, dillo chiaramente invece di proporre una correzione incerta.';
 
-  var pensando = _aiAssistAppendMsg('⏳ …','assistant');
-  try{
-    var risposta = await _aiCicloConStrumenti(systemPrompt, pensando);
-    pensando.textContent = risposta;
-  }catch(e){
-    pensando.textContent = '❌ Errore: '+(e.message||e);
-  }
+  var pensando = _aiAssistAppendPending();
+  await _aiCicloConStrumenti(systemPrompt, pensando);
 }
 
+// BUG REALE TROVATO (19/09, segnalato da Valerio: "l'assistente non funziona,
+// resta bloccato così" — restava piantato su "⏳ …" per sempre, ogni volta
+// che la domanda richiedeva almeno uno strumento, cioè quasi sempre). Causa:
+// ad ogni passaggio con strumenti questa funzione creava una NUOVA bolla
+// "sta scrivendo" e la assegnava alla variabile LOCALE bollaRisposta — ma
+// era solo un parametro di funzione, riassegnarlo qui non cambiava affatto
+// `pensando` nella funzione chiamante (inviaAiAssistente), che restava
+// sempre puntata alla PRIMISSIMA bolla (nel frattempo nascosta con
+// display:none). Risultato: sia la risposta finale sia un eventuale errore
+// venivano scritti nella bolla sbagliata — quella invisibile — mentre
+// l'ultima bolla visibile a schermo (quella vera, con più di uno strumento
+// richiamato) restava per sempre sui puntini, perché nessuno la aggiornava
+// più. Ora questa funzione aggiorna SEMPRE la bolla giusta (quella corrente,
+// che ha sott'occhio in ogni momento) da sola, sia per la risposta finale sia
+// per un errore — invece di restituire un testo e sperare che chi la chiama
+// sappia quale bolla toccare.
 async function _aiCicloConStrumenti(systemPrompt, bollaRisposta){
   var messages = (window._aiHistory||[]).slice();
-  for(var iter=0; iter<8; iter++){
-    var res = await _fetchConTimeout('https://api.anthropic.com/v1/messages',{
-      method:'POST', headers: AI_HEADERS(),
-      body: JSON.stringify({model:'claude-sonnet-4-5', max_tokens:1500, system: systemPrompt, tools: AI_TOOLS, messages: messages})
-    }, 30000);
-    if(!res.ok){
-      var corpoErr = await res.text().catch(function(){ return ''; });
-      throw new Error('HTTP '+res.status+(corpoErr?' — '+corpoErr.slice(0,150):''));
-    }
-    var data = await res.json();
-    var content = data.content||[];
-    messages.push({role:'assistant', content: content});
+  try{
+    for(var iter=0; iter<8; iter++){
+      var res = await _fetchConTimeout('https://api.anthropic.com/v1/messages',{
+        method:'POST', headers: AI_HEADERS(),
+        body: JSON.stringify({model:'claude-sonnet-4-5', max_tokens:1500, system: systemPrompt, tools: AI_TOOLS, messages: messages})
+      }, 30000);
+      if(!res.ok){
+        var corpoErr = await res.text().catch(function(){ return ''; });
+        throw new Error('HTTP '+res.status+(corpoErr?' — '+corpoErr.slice(0,150):''));
+      }
+      var data = await res.json();
+      var content = data.content||[];
+      messages.push({role:'assistant', content: content});
 
-    var toolUses = content.filter(function(b){ return b.type==='tool_use'; });
-    if(!toolUses.length){
-      var testo = content.filter(function(b){ return b.type==='text'; }).map(function(b){ return b.text; }).join('\n').trim();
-      window._aiHistory = messages;
-      return testo || 'Non sono riuscito a generare una risposta.';
-    }
+      var toolUses = content.filter(function(b){ return b.type==='tool_use'; });
+      if(!toolUses.length){
+        var testo = content.filter(function(b){ return b.type==='text'; }).map(function(b){ return b.text; }).join('\n').trim();
+        window._aiHistory = messages;
+        bollaRisposta.textContent = testo || 'Non sono riuscito a generare una risposta.';
+        return;
+      }
 
-    bollaRisposta.style.display='none';
-    var toolResults = [];
-    for(var i=0;i<toolUses.length;i++){
-      var tu = toolUses[i];
-      var stato = _aiAssistStatoMsg(AI_STATI_STRUMENTI[tu.name] || ('⚙️ '+tu.name+'…'));
-      var risultato = await _aiEseguiStrumento(tu);
-      if(stato) stato.remove();
-      toolResults.push({type:'tool_result', tool_use_id: tu.id, content: String(risultato).slice(0,12000)});
+      bollaRisposta.style.display='none';
+      var toolResults = [];
+      for(var i=0;i<toolUses.length;i++){
+        var tu = toolUses[i];
+        var stato = _aiAssistStatoMsg(AI_STATI_STRUMENTI[tu.name] || ('⚙️ '+tu.name+'…'));
+        var risultato = await _aiEseguiStrumento(tu);
+        if(stato) stato.remove();
+        toolResults.push({type:'tool_result', tool_use_id: tu.id, content: String(risultato).slice(0,12000)});
+      }
+      messages.push({role:'user', content: toolResults});
+      bollaRisposta = _aiAssistAppendPending();
     }
-    messages.push({role:'user', content: toolResults});
-    bollaRisposta = _aiAssistAppendMsg('⏳ …','assistant');
+    window._aiHistory = messages;
+    bollaRisposta.textContent = '⚠️ Troppi passaggi per questa domanda — prova a scomporla in domande più semplici.';
+  }catch(e){
+    bollaRisposta.textContent = '❌ Errore: '+(e.message||e);
   }
-  window._aiHistory = messages;
-  return '⚠️ Troppi passaggi per questa domanda — prova a scomporla in domande più semplici.';
 }
 
 // Colonne "slim" per la lista fatture: NO foto (base64) e NO fattura_allegata (XML grezzo).
