@@ -413,7 +413,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 <div class="ios-header" style="position:relative">
   <h1>&#128196; Fatture</h1>
   <p>Caffetteria Ceraldi</p>
-  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.70.0</p>
+  <p style="font-size:11px;color:var(--ink3);margin-top:-4px">v9.71.0</p>
   <div style="position:absolute;top:50%;right:12px;transform:translateY(-50%);display:flex;align-items:center;gap:14px">
     <button onclick="sincronizzaOra()" title="Sincronizza con Cloud" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px;line-height:1">&#8635;</button>
     <button onclick="apriImpostazioni()" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px;line-height:1">&#9881;&#65039;</button>
@@ -2100,13 +2100,20 @@ function _aiAssistStatoMsg(testo){
 // strumento resta in sospeso finché l'utente non tocca uno dei due pulsanti.
 // Stesso principio già usato in tutta l'app: mai una scrittura senza un tap
 // esplicito di conferma da parte di Valerio.
-function _aiChiediConferma(titolo, dettaglio){
+// FIX 19/09 (Valerio: "funziona ma è poco chiaro" — la bolla mostrava un
+// diff grezzo campo:valore, es. "riconciliazione: null → {json}"). Ora
+// `dettaglioHtml` è HTML già pronto (costruito da _aiCostruisciDettaglioCorrezione,
+// che si occupa di escapare i pezzi di testo dinamici) invece di un testo
+// semplice da escapare qui — permette di mostrare un quadro leggibile
+// (fattura + movimento/pagamento + elenco "cosa cambia" tradotto in italiano)
+// invece del solo diff tecnico.
+function _aiChiediConferma(titolo, dettaglioHtml){
   return new Promise(function(resolve){
     var wrap = document.getElementById('aiAssistMsgs');
     var div = document.createElement('div');
     div.style.cssText = 'align-self:stretch;background:var(--surface);border:1.5px solid var(--orange);border-radius:12px;padding:12px;font-size:13px';
-    div.innerHTML = '<div style="font-weight:700;margin-bottom:6px">⚠️ '+esc(titolo)+'</div>'+
-      '<div style="white-space:pre-wrap;color:var(--ink2);margin-bottom:10px;font-size:12.5px">'+esc(dettaglio)+'</div>'+
+    div.innerHTML = '<div style="font-weight:700;margin-bottom:8px">⚠️ '+esc(titolo)+'</div>'+
+      '<div style="margin-bottom:10px">'+dettaglioHtml+'</div>'+
       '<div style="display:flex;gap:8px">'+
       '<button id="aiConfBtn" style="flex:1;padding:9px;border:none;border-radius:8px;background:#1a7a3a;color:#fff;font-family:inherit;font-weight:700;cursor:pointer">✓ Applica</button>'+
       '<button id="aiAnnBtn" style="flex:1;padding:9px;border:1px solid var(--sep);border-radius:8px;background:var(--surface2);color:var(--ink3);font-family:inherit;font-weight:700;cursor:pointer">✕ Annulla</button>'+
@@ -2122,6 +2129,98 @@ function _aiChiediConferma(titolo, dettaglio){
       resolve(false);
     };
   });
+}
+
+// ── Costruzione del quadro leggibile per la card di conferma ──
+// Traduce i nomi tecnici dei campi e i loro valori in italiano comprensibile,
+// e mostra SEMPRE (non solo quando cambiano) i dati della fattura e — se
+// presente, nuovo o già esistente — del movimento/pagamento collegato, così
+// Valerio ha un quadro completo prima di decidere, non solo il delta grezzo.
+var _AI_CAMPO_LABEL = {
+  stato: 'Stato pagamento',
+  riconciliata: 'Riconciliata con banca',
+  riconciliazione: 'Movimento collegato',
+  pagamento: 'Modalità di pagamento',
+  data_pagamento: 'Data pagamento',
+  dataPagamento: 'Data pagamento',
+  parz_pagato: 'Importo già pagato',
+  note: 'Note'
+};
+var _AI_STATO_LABEL = {da_pagare:'Da pagare', parziale:'Pagamento parziale', pagata:'Pagata'};
+
+function _aiFmtData(d){
+  if(!d) return '—';
+  var s = String(d).slice(0,10);
+  var dt = new Date(s+'T12:00:00');
+  if(isNaN(dt.getTime())) return s;
+  return dt.toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'});
+}
+
+function _aiFmtValoreCampo(k, v){
+  if(v===null || v===undefined || v==='') return '—';
+  if(k==='stato') return _AI_STATO_LABEL[v]||v;
+  if(k==='riconciliata') return v ? 'Sì' : 'No';
+  if(k==='data_pagamento' || k==='dataPagamento') return _aiFmtData(v);
+  if(k==='riconciliazione') return v ? ('Movimento del '+_aiFmtData(v.data)+' di '+fmt(v.importo)) : 'Nessuno';
+  if(k==='parz_pagato') return fmt(v);
+  return String(v);
+}
+
+// Cerca un movimento (banca o carta) per id, per recuperarne la descrizione
+// (gli "estremi") anche quando la proposta non la riporta già esplicitamente.
+function _aiTrovaMovimentoPerId(movId){
+  if(!movId) return null;
+  var m = (_bancaMovimenti||[]).find(function(x){ return String(x.id)===String(movId); });
+  if(m) return {mov:m, tipo:'banca'};
+  m = (_cartaMovimenti||[]).find(function(x){ return String(x.id)===String(movId); });
+  if(m) return {mov:m, tipo:'carta'};
+  return null;
+}
+
+function _aiCostruisciDettaglioCorrezione(f, campi){
+  campi = campi||{};
+  var statoAttuale = _AI_STATO_LABEL[f.stato]||f.stato||'—';
+  var html = '';
+
+  // Blocco fattura — sempre presente, così Valerio vede subito DI COSA si parla.
+  html += '<div style="margin-bottom:8px">'+
+    '<div style="font-weight:700;color:var(--ink)">📄 '+esc(f.fornitore||'—')+' — N° '+esc(f.numero||'—')+'</div>'+
+    '<div style="color:var(--ink2)">Importo: <b>'+fmt(f.importo)+'</b> · Data fattura: '+_aiFmtData(f.data)+' · Stato attuale: '+esc(statoAttuale)+'</div>'+
+    '</div>';
+
+  // Blocco pagamento/movimento — mostra quello proposto se c'è, altrimenti
+  // quello già collegato oggi; se la proposta lo rimuove (null) lo dice.
+  var riconcNuova = Object.prototype.hasOwnProperty.call(campi,'riconciliazione');
+  var riconc = riconcNuova ? campi.riconciliazione : f.riconciliazione;
+  if(riconc){
+    var trovato = _aiTrovaMovimentoPerId(riconc.movId);
+    var descr = riconc.descrizione || (trovato ? trovato.mov.descrizione : '') || '—';
+    var importoMov = trovato ? Math.abs(trovato.mov.importo||0) : Math.abs(riconc.importo||0);
+    var importoQuota = Math.abs(riconc.importo||0);
+    html += '<div style="margin-bottom:8px;padding:8px;background:var(--surface2);border-radius:8px">'+
+      '<div style="font-weight:700;color:var(--ink)">'+(trovato&&trovato.tipo==='carta'?'💳':'🏦')+' Movimento del '+_aiFmtData(riconc.data)+'</div>'+
+      '<div style="color:var(--ink2)">Importo movimento: <b>'+fmt(importoMov)+'</b>'+
+      (Math.abs(importoMov-importoQuota)>0.01 ? ' · Su questa fattura: <b>'+fmt(importoQuota)+'</b>' : '')+'</div>'+
+      '<div style="color:var(--ink3);font-size:11.5px;margin-top:2px">'+esc(descr)+'</div>'+
+      '</div>';
+  } else if(riconcNuova && !campi.riconciliazione){
+    html += '<div style="margin-bottom:8px;color:var(--ink2)">🔓 Il collegamento al movimento bancario verrà rimosso.</div>';
+  }
+
+  // Blocco "cosa cambia" — tradotto in italiano leggibile, non il diff grezzo.
+  var righe = Object.keys(campi).filter(function(k){ return k!=='riconciliazione'; }).map(function(k){
+    var label = _AI_CAMPO_LABEL[k]||k;
+    var vOld = _aiFmtValoreCampo(k, f[k]);
+    var vNew = _aiFmtValoreCampo(k, campi[k]);
+    return '<div>• '+esc(label)+': '+esc(vOld)+' → <b>'+esc(vNew)+'</b></div>';
+  });
+  if(!righe.length && riconcNuova){
+    righe.push('<div>• Movimento collegato: aggiornato come sopra</div>');
+  }
+  if(righe.length){
+    html += '<div style="font-size:12px;color:var(--ink2)"><div style="font-weight:700;margin-bottom:3px">📝 Cosa cambia</div>'+righe.join('')+'</div>';
+  }
+  return html;
 }
 
 // ── PAYPAL — lettura transazioni reali (richiesto da Valerio 01/09: la banca
@@ -2293,13 +2392,8 @@ function _aiLeggiChiusure(input){
 async function _aiProponiCorrezione(input){
   var f = (fatture||[]).find(function(x){ return String(x.id)===String(input.fattura_id); });
   if(!f) return JSON.stringify({applicato:false, errore:'Fattura non trovata: '+input.fattura_id});
-  var righeDettaglio = Object.keys(input.campi||{}).map(function(k){
-    var vNew = input.campi[k];
-    var vOld = f[k==='riconciliazione'?'riconciliazione':k];
-    return k+': '+(typeof vOld==='object'?JSON.stringify(vOld):vOld)+' → '+(typeof vNew==='object'?JSON.stringify(vNew):vNew);
-  }).join('\n');
-  var dettaglio = (f.fornitore||'—')+' N°'+(f.numero||'—')+' ('+fmt(f.importo)+')\n'+righeDettaglio;
-  var ok = await _aiChiediConferma(input.titolo||'Correzione proposta', dettaglio);
+  var dettaglioHtml = _aiCostruisciDettaglioCorrezione(f, input.campi||{});
+  var ok = await _aiChiediConferma(input.titolo||'Correzione proposta', dettaglioHtml);
   if(!ok) return JSON.stringify({applicato:false, motivo:'Valerio ha annullato la proposta'});
   try{
     var payload = appToDB(Object.assign({}, f, input.campi));
