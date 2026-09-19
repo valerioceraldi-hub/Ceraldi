@@ -5,20 +5,79 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>Fatture Ceraldi</title>
 <script>
-// Cattura QUALSIASI errore JS non gestito e lo mostra a schermo — senza questo,
-// un errore silenzioso può bloccare l'esecuzione di tutto il codice dopo di esso.
-// Diagnostica risolta (28/07): restava solo il log in console, niente più a schermo.
+// ── REGISTRO ERRORI (19/09, punto 1 della roadmap) ──
+// Prima ogni errore finiva SOLO nella console del browser, che sul telefono
+// nessuno vede: così un bug di Riepilogo ("Spesa da inizio anno" sempre a
+// € 0,00) è rimasto nascosto a lungo. Ora ogni errore:
+//  1) viene salvato sul dispositivo (ultimi 60, consultabili in
+//     Impostazioni → Diagnostica), raggruppando le ripetizioni identiche;
+//  2) accende un pallino rosso sull'icona Impostazioni;
+//  3) viene inviato alla tabella Supabase `app_errori` — che accetta SOLO
+//     inserimenti (nessuno può leggerla o modificarla con la chiave pubblica).
+// Anti-inondazione: lo stesso errore si invia una volta sola per sessione,
+// massimo 25 invii per sessione. Il registro non può mai rompere l'app:
+// tutto è dentro try/catch.
+(function(){
+  var KEY='ceraldi_errori_log', KEY_NUOVI='ceraldi_errori_nuovi', MAX=60;
+  var inviati={}, nInviati=0, MAX_INVII=25;
+  function leggi(){ try{ var a=JSON.parse(localStorage.getItem(KEY)||'[]'); return Array.isArray(a)?a:[]; }catch(e){ return []; } }
+  function scrivi(a){ try{ localStorage.setItem(KEY, JSON.stringify(a.slice(-MAX))); }catch(e){} }
+  function pagina(){
+    try{
+      var v=document.querySelector('.view.active'); var p=v?v.id.replace('view-',''):'avvio';
+      var secs=document.querySelectorAll('#view-'+p+' .inc-sec');
+      for(var i=0;i<secs.length;i++){ if(secs[i].offsetParent!==null){ p+='/'+secs[i].id.replace('inc-',''); break; } }
+      return p;
+    }catch(e){ return '?'; }
+  }
+  function versione(){ try{ var el=document.querySelector('.app-ver'); return el?el.textContent.trim():''; }catch(e){ return ''; } }
+  window._registraErrore = function(tipo, messaggio, dettaglio){
+    try{
+      tipo=String(tipo||'js'); messaggio=String(messaggio||'').slice(0,500); dettaglio=String(dettaglio||'').slice(0,1500);
+      var voce={t:new Date().toISOString(), tipo:tipo, msg:messaggio, det:dettaglio, pag:pagina(), ver:versione(), n:1};
+      var a=leggi(), ult=a[a.length-1];
+      if(ult && ult.msg===voce.msg && ult.tipo===voce.tipo){ ult.n=(ult.n||1)+1; ult.t=voce.t; } else a.push(voce);
+      scrivi(a);
+      try{ localStorage.setItem(KEY_NUOVI, String((+localStorage.getItem(KEY_NUOVI)||0)+1)); }catch(e){}
+      if(typeof window._aggiornaPallinoErrori==='function') window._aggiornaPallinoErrori();
+      var firma=tipo+'|'+messaggio;
+      if(inviati[firma] || nInviati>=MAX_INVII) return;
+      inviati[firma]=1; nInviati++;
+      if(typeof SB_URL==='undefined' || typeof SB_KEY==='undefined' || navigator.onLine===false) return;
+      fetch(SB_URL+'/rest/v1/app_errori',{method:'POST',
+        headers:{'Content-Type':'application/json','apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY,'Prefer':'return=minimal'},
+        body:JSON.stringify({app:'fatture',versione:voce.ver.slice(0,30),tipo:tipo.slice(0,30),messaggio:messaggio,dettaglio:dettaglio,pagina:voce.pag.slice(0,200),dispositivo:(navigator.userAgent||'').slice(0,300)})
+      }).catch(function(){});
+    }catch(e){}
+  };
+  window._leggiErroriLocali = leggi;
+  window._svuotaErroriLocali = function(){ scrivi([]); try{ localStorage.removeItem(KEY_NUOVI); }catch(e){} if(typeof window._aggiornaPallinoErrori==='function') window._aggiornaPallinoErrori(); };
+  window._azzeraErroriNuovi = function(){ try{ localStorage.removeItem(KEY_NUOVI); }catch(e){} if(typeof window._aggiornaPallinoErrori==='function') window._aggiornaPallinoErrori(); };
+})();
 function _mostraErroreGlobale(testo){
   console.error(testo);
 }
 window.addEventListener('error', function(e){
+  // Risorsa non caricata (immagine/script/foglio di stile): e.target è l'elemento.
+  if(e && e.target && e.target!==window && e.target.nodeType===1){
+    var attr = e.target.getAttribute ? (e.target.getAttribute('src') || e.target.getAttribute('href') || '') : '';
+    var src = e.target.src || e.target.href || '';
+    // Un'immagine con src vuoto (es. l'anteprima foto prima di scattare) viene
+    // risolta dal browser come l'indirizzo della pagina: non è un vero errore.
+    if(!attr || src===location.href) return;
+    _registraErrore('risorsa', 'Risorsa non caricata: '+String(src).slice(0,200));
+    return;
+  }
+  var det = (e && e.error && e.error.stack) ? e.error.stack.split('\n').slice(0,5).join(' | ') : '';
   _mostraErroreGlobale('❌ ERRORE JS: '+(e.message||'')+' — '+(e.filename||'').split('/').pop()+':'+(e.lineno||''));
-});
+  _registraErrore('js', (e.message||'Errore sconosciuto')+(e.lineno?' (riga '+e.lineno+')':''), det);
+}, true);
 window.addEventListener('unhandledrejection', function(e){
   var r = e.reason;
   var msg = (r && r.message) ? r.message : String(r);
-  var stack = (r && r.stack) ? r.stack.split('\n')[1] : '';
+  var stack = (r && r.stack) ? r.stack.split('\n').slice(0,5).join(' | ') : '';
   _mostraErroreGlobale('❌ PROMISE non gestita: '+msg+' — '+stack);
+  _registraErrore('promessa', msg, stack);
 });
 </script>
 
@@ -432,14 +491,17 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v9.75.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v9.84.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
+    <button class="hdr-btn" onclick="_crApri()" title="Cerca in tutta l'app" aria-label="Cerca">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+    </button>
     <button class="hdr-btn" onclick="var s=this.querySelector('svg');s.classList.remove('spin');void s.getBoundingClientRect();s.classList.add('spin');sincronizzaOra()" title="Sincronizza con Cloud" aria-label="Sincronizza">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
     </button>
-    <button class="hdr-btn" onclick="apriImpostazioni()" title="Impostazioni" aria-label="Impostazioni">
+    <button class="hdr-btn" id="hdrImpBtn" onclick="apriImpostazioni()" title="Impostazioni" aria-label="Impostazioni">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
     </button>
   </div>
@@ -735,6 +797,9 @@ html[data-theme="dark"] .reg-import-link{border-color:rgba(255,255,255,.08)}
       </div>
     </div>
   </div>
+
+  <!-- Controllo anomalie (punto 2 roadmap): compare solo se c'è qualcosa da vedere -->
+  <div id="homeAnomalie" class="stg" style="--i:2"></div>
 
   <div class="home-sec stg" style="--i:2">
     <div class="home-sec-t">Registra fattura</div>
@@ -1509,6 +1574,9 @@ html[data-theme="dark"] .reg-import-link{border-color:rgba(255,255,255,.08)}
     <div class="tot-card tc-b" style="cursor:pointer" onclick="_riepClickCard('carta')"><div class="tl">&#128179; Carta</div><div class="tv" id="totK">&#8364; 0,00</div></div>
   </div>
 
+  <!-- Grafici di andamento (punto 5 roadmap) -->
+  <div id="grafAndamento"></div>
+
   <!-- ANALISI & ESPORTA (08/08, unificate su richiesta di Valerio — non aveva
        senso separare i filtri dall'esportazione che li usa, erano due schede
        a fisarmonica distinte anche se strettamente collegate) -->
@@ -1909,7 +1977,10 @@ html[data-theme="dark"] .reg-import-link{border-color:rgba(255,255,255,.08)}
   <div class="edit-sheet">
     <div class="edit-sheet-hd">
       <h3>Modifica</h3>
-      <button class="edit-close" onclick="closeEdit()">&#215;</button>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="edit-close" onclick="_stApri()" title="Storico modifiche" aria-label="Storico modifiche"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/><path d="M3.5 4.5V9H8"/><path d="M12 7.5V12l3 2"/></svg></button>
+        <button class="edit-close" onclick="closeEdit()">&#215;</button>
+      </div>
     </div>
     <div class="edit-body" id="editBody">
       <div class="tipo-toggle">
@@ -2755,7 +2826,7 @@ async function _aiCicloConStrumenti(systemPrompt, bollaRisposta){
 // il dato era sempre stato corretto e completo (verificato: 58,71+167,99=226,70,
 // esatto) — mancava solo qui nella select. Aggiungendo la colonna, il fix vale
 // per TUTTE le fatture pagate con più di un bonifico/movimento, non solo questa.
-const SLIM_COLS_FATTURE = 'id,tipo,fornitore,numero,fatt_num,num_ddt,data,importo,pagamento,pagamento_origine,pagamento_impostato_il,assegno,ass_int,ass_banca,bon_iban,bon_caus,bon_data,bon_rif,riconciliata,riconciliazione,riconciliazione_storico,note,stato,scadenza,fattura_allegata_name,xml_github_path,source,rate,ts,parz_pagato,data_pagamento,pec_verificata,pec_verificata_at,pec_id,iva,iva_breakdown,totale_imponibile,totale_imposta,incompleta,deleted_at';
+const SLIM_COLS_FATTURE = 'id,tipo,fornitore,numero,fatt_num,num_ddt,data,importo,pagamento,pagamento_origine,pagamento_impostato_il,assegno,ass_int,ass_banca,bon_iban,bon_caus,bon_data,bon_rif,riconciliata,riconciliazione,riconciliazione_storico,piva,denominazione_xml,note,stato,scadenza,fattura_allegata_name,xml_github_path,source,rate,ts,parz_pagato,data_pagamento,pec_verificata,pec_verificata_at,pec_id,iva,iva_breakdown,totale_imponibile,totale_imposta,incompleta,deleted_at';
 
 async function sbFetch(path, opts={}){
   const method = (opts.method||'GET').toUpperCase();
@@ -2774,6 +2845,12 @@ async function sbFetch(path, opts={}){
     err.body = e;
     // Prova a estrarre il codice PostgreSQL (es. 23505 duplicate key)
     try{ const j = JSON.parse(e); err.pgCode = j.code; err.pgMessage = j.message; }catch(_){}
+    // Registro errori (19/09): molti chiamanti intercettano questo errore in
+    // silenzio — qui resta comunque traccia. Esclusi i "duplicato" (409 /
+    // 23505), che l'app gestisce apposta come caso normale.
+    if(res.status!==409 && err.pgCode!=='23505' && typeof _registraErrore==='function'){
+      _registraErrore('database', method+' '+path.split('?')[0].slice(0,40)+' → '+res.status, (err.pgMessage||e||'').slice(0,300));
+    }
     throw err;
   }
   const txt = await res.text();
@@ -2864,7 +2941,7 @@ function _slimPerCache(r){
   // bug di SLIM_COLS_FATTURE sopra (vedi il commento lì). Senza, una fattura
   // pagata con più bonifici perdeva lo storico non appena letta dalla cache
   // locale invece che da una query fresca a Supabase.
-  var keep = ['id','tipo','fornitore','numero','fatt_num','num_ddt','data','importo',
+  var keep = ['id','tipo','fornitore','numero','fatt_num','num_ddt','data','importo','piva','denominazione_xml',
     'pagamento','assegno','ass_int','ass_banca','bon_iban','bon_caus','bon_data','bon_rif',
     'riconciliata','riconciliazione','riconciliazione_storico','note','stato','scadenza','rate','ts','parz_pagato','data_pagamento',
     'fattura_allegata_name','xml_github_path','source','pec_id','pec_verificata',
@@ -2913,6 +2990,8 @@ function dbToApp(r){
     // altrimenti il secondo pagamento cancellava dalla vista i dettagli del
     // primo (data, riferimento bancario, importo di QUELLA specifica volta).
     riconciliazioneStorico: Array.isArray(r.riconciliazione_storico) ? r.riconciliazione_storico : [],
+    // 19/09 (punto 8): P.IVA e nome ufficiale letti dall'XML dal database
+    piva: r.piva||'', denominazioneXml: r.denominazione_xml||'',
     note:r.note||'', stato:r.stato||'pagata', scadenza:r.scadenza||'',
     foto:r.foto||'', fatturaAllegata:r.fattura_allegata||'', fatturaAllegataName:r.fattura_allegata_name||'',
     xmlGithubPath:r.xml_github_path||'', source:r.source||'',
@@ -4381,6 +4460,62 @@ function _impRow(icon, title, sub, onclick, opts){
   </button>`;
 }
 
+// ── DIAGNOSTICA (19/09, punto 1 roadmap) ──
+// Mostra il registro errori salvato sul dispositivo (vedi _registraErrore in
+// cima al file). Sola lettura + "Copia" (per mandarlo a chi sviluppa) +
+// "Svuota". Aprirla spegne il pallino rosso sull'icona Impostazioni.
+function _diagSottotitolo(){
+  try{
+    var a = _leggiErroriLocali();
+    var setteGg = Date.now() - 7*86400000;
+    var n = a.filter(function(x){ return new Date(x.t).getTime() >= setteGg; }).reduce(function(s,x){ return s+(x.n||1); },0);
+    return n ? (n+' error'+(n===1?'e':'i')+' negli ultimi 7 giorni') : 'Nessun errore negli ultimi 7 giorni';
+  }catch(e){ return 'Registro errori'; }
+}
+function _diagEtichettaTipo(t){
+  return ({js:'Codice', promessa:'Operazione', database:'Database', risorsa:'Rete'})[t] || t;
+}
+function _diagRender(body){
+  if(typeof _azzeraErroriNuovi==='function') _azzeraErroriNuovi();
+  var a = (_leggiErroriLocali()||[]).slice().reverse();
+  var righe = a.length ? a.map(function(x){
+    var d = new Date(x.t);
+    var quando = isNaN(d) ? '' : d.toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit'})+' '+d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});
+    return '<div style="padding:12px 14px;border-bottom:.5px solid var(--ds-hair,var(--sep))">'+
+      '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;flex-wrap:wrap">'+
+        '<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:99px;background:var(--red-light);color:var(--red)">'+esc(_diagEtichettaTipo(x.tipo))+'</span>'+
+        ((x.n||1)>1 ? '<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:99px;background:var(--surface2);color:var(--ink2)">×'+x.n+'</span>' : '')+
+        '<span style="font-size:11px;color:var(--ink3);margin-left:auto;font-variant-numeric:tabular-nums">'+esc(quando)+'</span>'+
+      '</div>'+
+      '<div style="font-size:13px;font-weight:600;color:var(--ink);word-break:break-word">'+esc(x.msg)+'</div>'+
+      '<div style="font-size:11px;color:var(--ink3);margin-top:3px">Schermata: '+esc(x.pag||'?')+(x.ver?' · '+esc(x.ver):'')+'</div>'+
+    '</div>';
+  }).join('') : '<div style="padding:34px 16px;text-align:center"><div style="font-size:34px;margin-bottom:8px">✅</div><div style="font-size:15px;font-weight:700;color:var(--ink)">Nessun errore registrato</div><div style="font-size:12px;color:var(--ink3);margin-top:4px">L\'app sta funzionando senza problemi su questo dispositivo.</div></div>';
+  body.innerHTML = _impBack('Diagnostica') + `
+    <div style="padding:6px 20px 24px">
+      <div style="font-size:12.5px;color:var(--ink3);line-height:1.45;margin-bottom:14px">Qui trovi gli errori che l'app ha incontrato su questo dispositivo. Vengono registrati anche in automatico nel registro centrale, così possono essere corretti anche se non te ne accorgi.</div>
+      <div class="imp-group" style="margin-bottom:14px">${righe}</div>
+      ${a.length ? `<div style="display:flex;gap:8px">
+        <button class="btn btn-s" style="flex:1;padding:12px" onclick="_diagCopia()">Copia elenco</button>
+        <button class="btn btn-d" style="flex:1;padding:12px" onclick="if(confirm('Svuotare il registro errori di questo dispositivo?')){_svuotaErroriLocali();_impRenderSub('diagnostica');}">Svuota</button>
+      </div>` : ''}
+    </div>`;
+}
+function _diagCopia(){
+  var a = _leggiErroriLocali()||[];
+  var testo = a.slice().reverse().map(function(x){ return x.t+' ['+x.tipo+(x.n>1?' ×'+x.n:'')+'] '+x.msg+' — '+(x.pag||'')+' '+(x.ver||'')+(x.det?'\n   '+x.det:''); }).join('\n');
+  try{ navigator.clipboard.writeText(testo).then(function(){ toast('Copiato'); }, function(){ toast('Copia non riuscita'); }); }
+  catch(e){ toast('Copia non disponibile'); }
+}
+window._aggiornaPallinoErrori = function(){
+  try{
+    var b = document.getElementById('hdrImpBtn'); if(!b) return;
+    var n = +localStorage.getItem('ceraldi_errori_nuovi') || 0;
+    b.classList.toggle('ha-errori', n>0);
+  }catch(e){}
+};
+document.addEventListener('DOMContentLoaded', function(){ try{ _aggiornaPallinoErrori(); }catch(e){} });
+
 function _impRenderHome(){
   let notifSub = 'Disattive';
   try{ if('Notification' in window && Notification.permission==='granted') notifSub = 'Attive'; }catch(e){}
@@ -4423,6 +4558,7 @@ function _impRenderHome(){
 
       <div class="imp-group-label">Manutenzione</div>
       <div class="imp-group">
+        ${_impRow('🩺','Diagnostica', _diagSottotitolo(), "_impRenderSub('diagnostica')")}
         ${_impRow('🧽','Pulisci fornitori duplicati', '', "chiudiImpostazioni();apriPuliziaFornitori()")}
         ${_impRow('🔄','Reset cache locale completa', 'Fatture, cassa e banca — i dati su Supabase restano intatti', "if(confirm('Svuotare tutta la cache locale (fatture + cassa + banca)? I dati su Supabase restano intatti. Al prossimo avvio riscarica tutto.')){['cf_fatture_cache','cf_fatture_maxts','ceraldi_chiusure_v1','ceraldi_versamenti_v1','ceraldi_incassi_v1','ceraldi_banca_v1'].forEach(k=>localStorage.removeItem(k));Object.keys(localStorage).filter(k=>k.startsWith('cf_xml_')||k.startsWith('cf_ivabk_')).forEach(k=>localStorage.removeItem(k));chiudiImpostazioni();toast('✓ Cache svuotata — riavvio in corso');setTimeout(()=>location.reload(),1500);}", {danger:true})}
       </div>
@@ -4443,6 +4579,8 @@ function _impBack(titolo){
 
 function _impRenderSub(key){
   const body = document.getElementById('impBody');
+  if(key==='diagnostica'){ _diagRender(body); return; }
+  if(key==='backup') setTimeout(_bkCaricaStato, 0);
   if(key==='apikey'){
     body.innerHTML = _impBack('API Key Anthropic') + `
       <div style="padding:4px 20px 24px">
@@ -4486,6 +4624,10 @@ function _impRenderSub(key){
   } else if(key==='backup'){
     body.innerHTML = _impBack('Backup e ripristino') + `
       <div style="padding:4px 20px 24px">
+        <div class="imp-group-label">Backup automatico</div>
+        <div class="imp-group" style="margin-bottom:10px;padding:14px 16px" id="bkStato"><span style="font-size:13px;color:var(--ink3)">Controllo lo stato del backup…</span></div>
+        <div style="font-size:12px;color:var(--ink3);line-height:1.45;margin:0 4px 22px">Ogni lunedì notte il database copia da solo tutti i dati (fatture, banca, cassa, prima nota, presenze, ordini) e conserva le ultime 8 settimane, in una zona che l'app non può modificare. Foto e XML originali non cambiano mai e restano al loro posto; una fattura cancellata definitivamente resta comunque recuperabile dallo storico.</div>
+        <div class="imp-group-label">Copia su questo dispositivo</div>
         <button onclick="chiudiImpostazioni();scaricaBackup();" style="width:100%;padding:13px;border:1.5px solid var(--sep);border-radius:var(--radius-sm);background:var(--surface);font-family:'Inter',-apple-system,sans-serif;font-size:14px;font-weight:600;cursor:pointer;color:var(--ink);margin-bottom:8px;text-align:left">&#128229; Esporta backup JSON</button>
         <div style="position:relative">
           <button style="width:100%;padding:13px;border:1.5px solid var(--sep);border-radius:var(--radius-sm);background:var(--surface);font-family:'Inter',-apple-system,sans-serif;font-size:14px;font-weight:600;cursor:pointer;color:var(--ink);text-align:left">&#128228; Importa da backup</button>
@@ -4493,6 +4635,37 @@ function _impRenderSub(key){
         </div>
       </div>`;
   }
+}
+
+// Stato del backup automatico (punto 7 roadmap): legge solo i metadati
+// (backup_registro), mai i dati copiati.
+async function _bkCaricaStato(){
+  var el=document.getElementById('bkStato'); if(!el) return;
+  try{
+    var r = await sbFetch('backup_registro?select=eseguito_il,tabella,righe,manuale&order=eseguito_il.desc&limit=400');
+    if(!r || !r.length){ el.innerHTML='<div style="font-size:13.5px;font-weight:700">Nessun backup ancora eseguito</div><div style="font-size:12px;color:var(--ink3);margin-top:2px">Il primo partirà lunedì notte.</div>'; return; }
+    var ultimo=r[0].eseguito_il, stesso=r.filter(function(x){ return x.eseguito_il===ultimo; });
+    var copie={}; r.forEach(function(x){ copie[x.eseguito_il]=1; });
+    var nCopie=Object.keys(copie).length, righe=stesso.reduce(function(s,x){ return s+(+x.righe||0); },0);
+    var fat=stesso.find(function(x){ return x.tabella==='fatture'; });
+    var d=new Date(ultimo), giorni=Math.floor((Date.now()-d.getTime())/86400000);
+    var ok=giorni<=8;
+    el.innerHTML='<div style="display:flex;align-items:center;gap:12px">'+
+      '<span class="ds-g '+(ok?'ds-g-green':'ds-g-orange')+'" style="width:36px;height:36px;border-radius:11px;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">'+(ok?'<path d="m5 12.5 4.5 4.5L19 7.5"/>':'<path d="M12 7v6M12 16.5v.5"/>')+'</svg></span>'+
+      '<div style="min-width:0"><div style="font-size:14px;font-weight:800;letter-spacing:-.2px">Ultimo backup: '+(giorni===0?'oggi':giorni===1?'ieri':giorni+' giorni fa')+'</div>'+
+      '<div style="font-size:12px;color:var(--ink3);margin-top:2px">'+d.toLocaleDateString('it-IT',{weekday:'long',day:'numeric',month:'long'})+' alle '+d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'})+' · '+stesso.length+' tabelle · '+righe.toLocaleString('it-IT')+' righe'+(fat?' · '+(+fat.righe).toLocaleString('it-IT')+' fatture':'')+'</div>'+
+      '<div style="font-size:12px;color:var(--ink3)">'+nCopie+' cop'+(nCopie===1?'ia conservata':'ie conservate')+' (fino a 8 settimane)</div></div></div>'+
+      '<button class="btn btn-s" style="margin-top:12px;padding:11px;font-size:14px" onclick="_bkAdesso(this)">Esegui un backup adesso</button>';
+  }catch(e){ el.innerHTML='<span style="font-size:13px;color:var(--red)">Stato del backup non disponibile</span>'; }
+}
+async function _bkAdesso(btn){
+  if(btn){ btn.disabled=true; btn.textContent='Backup in corso…'; }
+  try{
+    var r = await sbFetch('rpc/backup_adesso', {method:'POST', body:'{}'});
+    if(r && r.eseguito) toast('✓ Backup eseguito: '+(r.tabelle||'')+' tabelle');
+    else toast('Backup già fatto da poco: riprova tra qualche ora');
+  }catch(e){ toast('❌ Backup non riuscito'); }
+  _bkCaricaStato();
 }
 
 function salvaApiKey(){
@@ -5192,8 +5365,9 @@ function aggiornaHeroCard(){
   const fattureMese = fatture.filter(f=>f.data&&f.data.startsWith(meseStr)&&f.tipo!=='ddt');
   const totaleMese = fattureMese.reduce((s,f)=>s+(f.importo||0),0);
   const oggi = ora.toISOString().slice(0,10);
-  const daPagare = fatture.filter(f=>(f.stato==='da_pagare'||f.stato==='parziale')&&f.tipo!=='ddt').length;
-  const scadute = fatture.filter(f=>(f.stato==='da_pagare'||f.stato==='parziale')&&f.tipo!=='ddt'&&f.scadenza&&f.scadenza<oggi).length;
+  // 19/09: le note di credito non si pagano (sono un credito) — escluse dai conteggi
+  const daPagare = fatture.filter(f=>(f.stato==='da_pagare'||f.stato==='parziale')&&f.tipo!=='ddt'&&f.tipo!=='nota_credito').length;
+  const scadute = fatture.filter(f=>(f.stato==='da_pagare'||f.stato==='parziale')&&f.tipo!=='ddt'&&f.tipo!=='nota_credito'&&f.scadenza&&f.scadenza<oggi).length;
   const set = (id,val) => { const el=document.getElementById(id); if(el) el.textContent=val; };
   // 19/09: i numeri ora "scorrono" fino al valore (stessi identici valori di
   // prima, cambia solo come ci arrivano) — vedi _heroConta più sotto.
@@ -5206,6 +5380,8 @@ function aggiornaHeroCard(){
   let entrateContantiMese=0;
   chiusure.forEach(c=>{ if((c.data||'').startsWith(meseStr)) entrateContantiMese+=(c.cassa||0); });
   _heroConta('heroCassa', entrateContantiMese, fmt);
+  // i dati sono cambiati: ricontrolla le anomalie (con attesa, per non ripetere il calcolo a raffica)
+  if(typeof _anAggiornaHomeDebounce==='function') _anAggiornaHomeDebounce();
 }
 
 // ── Conteggio animato dei numeri della hero card ──
@@ -5270,6 +5446,8 @@ function _homeEntrata(){
     fill.style.transition = '';
     fill.style.width = Math.round(giorno/giorniMese*1000)/10 + '%';
   }
+  // Controllo anomalie (punto 2 roadmap)
+  if(typeof _anAggiornaHomeDebounce==='function') _anAggiornaHomeDebounce();
   // Rilancia l'animazione a cascata
   var v = document.getElementById('view-scan');
   if(v){ v.classList.remove('home-in'); void v.offsetWidth; v.classList.add('home-in'); }
@@ -6261,7 +6439,7 @@ function renderDaPagare(){
   }).join('');
 }
 
-function renderRiepilogo(){aggiornaDL();updRiep();try{_aggiornaSpesaAnno();}catch(e){}}
+function renderRiepilogo(){aggiornaDL();updRiep();try{_aggiornaSpesaAnno();}catch(e){}try{ if(typeof _grRender==='function') _grRender(); }catch(e){ if(typeof _registraErrore==='function') _registraErrore('js','Grafici: '+(e.message||e)); }}
 
 // ── EXPORT (iOS-compatibile) ──
 function condividi(content, nome, type){
@@ -7436,7 +7614,9 @@ function apriAgganciaNC(ncId){
     // Riferimento salvato all'import (fattura collegata indicata nell'XML della nota) —
     // se presente, quella fattura va proposta per prima e messa in evidenza.
     const rifMatch = (nc.note||'').match(/\[RIF-NC:([^·\]]+)/);
-    const numRif = rifMatch ? normS(rifMatch[1]) : '';
+    // 19/09: se manca il promemoria, usa il riferimento letto dall'XML (v_nc_riferimenti)
+    const rifXml = (window._ncRif && window._ncRif[String(nc.id)]) ? window._ncRif[String(nc.id)].num : '';
+    const numRif = rifMatch ? normS(rifMatch[1]) : normS(rifXml);
     const candidati = fatture.filter(f=>
       f.tipo==='fattura' && (f.stato==='da_pagare'||f.stato==='parziale'||f.stato==='pagata') &&
       _fattMatchTestoImporto(f, s)
@@ -7495,9 +7675,16 @@ async function _eseguiAggancioNC(ncId, fatturaId){
   // riduce il pagato registrato, e se il credito è abbastanza grande la
   // fattura torna "parziale" — il residuo che ne risulta è il credito
   // ancora da recuperare o da scalare su un prossimo ordine.
+  const _ncRamoPagata = f.stato==='pagata';
   if(f.stato==='pagata'){
-    daApplicare = Math.round(Math.min(Math.abs(nc.importo||0), f.parzPagato||0) * 100) / 100;
-    f.parzPagato = Math.round(((f.parzPagato||0) - daApplicare) * 100) / 100;
+    // FIX 19/09 (bug trovato in verifica): per una fattura pagata per intero
+    // il campo parzPagato resta spesso a 0 (si usa solo per i parziali) —
+    // prima qui si applicava min(credito, 0) = 0 € e la fattura passava da
+    // "pagata" a "parziale". Il pagato reale di una fattura "pagata" è
+    // parzPagato se valorizzato, altrimenti l'intero importo.
+    const _pagatoReale = (f.parzPagato||0) > 0.01 ? f.parzPagato : (f.importo||0);
+    daApplicare = Math.round(Math.min(Math.abs(nc.importo||0), _pagatoReale) * 100) / 100;
+    f.parzPagato = Math.round((_pagatoReale - daApplicare) * 100) / 100;
     f.stato = (f.parzPagato >= (f.importo||0) - 0.01) ? 'pagata' : 'parziale';
   } else {
     const residuo = Math.max(0, (f.importo||0) - (f.parzPagato||0));
@@ -7510,12 +7697,16 @@ async function _eseguiAggancioNC(ncId, fatturaId){
 
   const labelForn = (f.fornitore||'')+' N°'+(f.numero||'');
   // Rimuovi un eventuale marcatore precedente prima di aggiungerne uno nuovo
-  nc.note = (nc.note||'').replace(/\[NC→\d+·[\d.]+·[^\]]*\]\s*/,'').trim();
+  nc.note = (nc.note||'').replace(/\[NC→\d+·[\d.]+·[^\]]*\]\s*/,'').replace(/\[NC-P\]\s*/g,'').replace(/\[NC-NO-AUTO\]\s*/g,'').trim();
   nc.note = ('[NC→'+f.id+'·'+daApplicare.toFixed(2)+'·'+labelForn.replace(/[\[\]]/g,'')+'] '+nc.note).trim();
+  // FIX 19/09: ricorda se la nota è stata applicata a una fattura GIÀ pagata
+  // (ramo che riduce il pagato) — serve a "Sgancia" per annullare esattamente
+  // l'operazione giusta invece di rimettere la fattura "da pagare".
+  if(_ncRamoPagata) nc.note = ('[NC-P] '+nc.note).trim();
 
   await dbUpdate(f);
   await dbUpdate(nc);
-  renderLista(); aggiornaAlertBanner(); updateHero();
+  renderLista(); aggiornaAlertBanner(); if(typeof aggiornaHeroCard==='function') aggiornaHeroCard(); // (era updateHero(), funzione inesistente: errore dopo ogni aggancio/sgancio)
   toast('🔗 Nota di credito agganciata: -'+fmt(daApplicare)+' su '+(f.fornitore||''));
 }
 
@@ -7530,13 +7721,30 @@ async function _sganciaNC(ncId){
   const idxF = fatture.findIndex(x=>x.id===fatturaId);
   if(idxF>=0){
     const f = fatture[idxF];
-    f.parzPagato = Math.max(0, Math.round(((f.parzPagato||0) - importoApplicato) * 100) / 100);
-    f.stato = f.parzPagato>0.01 ? 'parziale' : 'da_pagare';
+    // FIX 19/09 (bug trovato in verifica): l'aggancio a una fattura GIÀ
+    // pagata RIDUCE il pagato; qui prima lo si riduceva di nuovo e la fattura
+    // tornava "da pagare" (es. Kimbo 0070019612, già pagata, sarebbe
+    // risultata da pagare per € 1.247,46). Ora si annulla l'operazione vera:
+    // [NC-P] = applicata a fattura pagata → si RIAGGIUNGE il pagato. Per i
+    // collegamenti creati prima di questo marcatore: se la fattura risulta
+    // pagata/riconciliata con la banca, si tratta come ramo "pagata".
+    const ramoPagata = /\[NC-P\]/.test(nc.note||'') || ((f.riconciliata || f.stato==='pagata') && ((f.parzPagato||0) + importoApplicato <= (f.importo||0) + 0.01));
+    if(ramoPagata){
+      f.parzPagato = Math.round(((f.parzPagato||0) + importoApplicato) * 100) / 100;
+      f.stato = (f.parzPagato >= (f.importo||0) - 0.01) ? 'pagata' : 'parziale';
+    } else {
+      f.parzPagato = Math.max(0, Math.round(((f.parzPagato||0) - importoApplicato) * 100) / 100);
+      f.stato = f.parzPagato>0.01 ? 'parziale' : 'da_pagare';
+    }
+    // toglie anche la riga descrittiva aggiunta all'aggancio
+    f.note = String(f.note||'').replace(/(\s·\s)?Nota di credito N°[^·]*? applicata: -€\s?[\d.,]+/,'').trim();
     await dbUpdate(f);
   }
-  nc.note = (nc.note||'').replace(/\[NC→\d+·[\d.]+·[^\]]*\]\s*/,'').trim();
+  nc.note = (nc.note||'').replace(/\[NC→\d+·[\d.]+·[^\]]*\]\s*/,'').replace(/\[NC-P\]\s*/g,'').trim();
+  // sganciata a mano: l'aggancio automatico non deve rifarla da solo
+  nc.note = ('[NC-NO-AUTO] '+nc.note).trim();
   await dbUpdate(nc);
-  renderLista(); aggiornaAlertBanner(); updateHero();
+  renderLista(); aggiornaAlertBanner(); if(typeof aggiornaHeroCard==='function') aggiornaHeroCard(); // (era updateHero(), funzione inesistente: errore dopo ogni aggancio/sgancio)
   toast('↩️ Nota di credito sganciata');
 }
 
@@ -8473,7 +8681,10 @@ async function importaMassivoXml(input){
   save(fatture);
   renderLista();
   aggiornaAlertBanner();
-  updateHero();
+  // FIX 19/09: era updateHero(), funzione che non esiste — l'errore fermava
+  // tutto quello che segue: il riquadro di avanzamento restava a schermo e il
+  // messaggio finale "✅ N fatture importate" non compariva mai.
+  if(typeof aggiornaHeroCard==='function') aggiornaHeroCard();
 
   setTimeout(()=>{ progBox.style.display='none'; }, dupInfo.length ? 20000 : 5000);
 
@@ -11083,6 +11294,34 @@ function apriXmlGithub(path){
 function apriXmlLocale(id){
   aprifatturaAllegata(id);
 }
+// FIX 19/09 (trovato con un controllo automatico su tutto il file): nella
+// "Verifica PEC" l'opzione PREDEFINITA "Aruba/XML" chiamava unisciFatture(),
+// che non esisteva — l'unione falliva sempre e il doppione restava. Stessa
+// logica del ramo "Manuale", ma con i dati del DOCUMENTO presi dall'XML
+// (fonte ufficiale): fornitore, numero, data, importo, IVA, allegato.
+// Metodo di pagamento, stato e riconciliazione restano quelli del record
+// manuale, come dice la schermata stessa.
+async function unisciFatture(i, pec){
+  const f = fatture[i];
+  if(!f || !pec) return;
+  ['tipo','fornitore','numero','data','scadenza','numDdt','bonIban'].forEach(function(k){ if(pec[k]) f[k] = pec[k]; });
+  const imp = parseFloat(pec.importo);
+  if(!isNaN(imp) && imp!==0) f.importo = imp;
+  ['iva','ivaBreakdown','totaleImponibile','totaleImposta'].forEach(function(k){ if(pec[k]!==undefined && pec[k]!==null && pec[k]!=='') f[k] = pec[k]; });
+  if(pec.xmlGithubPath){
+    f.xmlGithubPath = pec.xmlGithubPath;
+    f.fatturaAllegata = '__github__';
+    f.fatturaAllegataName = pec.xmlGithubPath.split('/').pop()||'fattura.xml';
+  }
+  f.pecVerificata = true;
+  f.pecVerificataAt = new Date().toISOString();
+  f.pecId = pec.id;
+  f.source = 'pec';
+  f.incompleta = [];
+  f.ts = Date.now();
+  await dbUpdate(f);
+}
+
 async function apriXmlFoto(id){
   const f = fatture.find(x=>String(x.id)===String(id));
   if(!f) { toast('Fattura non trovata'); return; }
@@ -11090,7 +11329,8 @@ async function apriXmlFoto(id){
     toast('⏳ Carico foto dal Cloud...');
     await fetchFotoSingola(id);
   }
-  if(f && f.foto) apriFullFoto(f.foto);
+  // FIX 19/09: era apriFullFoto(), funzione inesistente — il tasto non apriva mai la foto.
+  if(f && f.foto) apriF(f.id);
   else toast('Foto non trovata');
 }
 
@@ -12937,6 +13177,12 @@ async function eliminaVersamento(id){
 // ══════════════════════════════════════════════════════════════════════════════
 
 function aggiornaSaldoCassa(){
+  // FIX 19/09 (trovato in verifica): "Entrate del mese" nella home si
+  // aggiornava solo quando cambiavano le FATTURE — su un dispositivo nuovo o
+  // dopo aver svuotato la cache restava a € 0,00 anche con le chiusure già
+  // scaricate. Questa funzione viene chiamata dopo ogni caricamento delle
+  // chiusure, in tutti i percorsi: da qui la home si riallinea sempre.
+  if(typeof aggiornaHeroCard==='function'){ try{ aggiornaHeroCard(); }catch(e){} }
   const valEl    = document.getElementById('saldoCassaValore');
   const detEl    = document.getElementById('saldoCassaDettaglio');
   const dataEl   = document.getElementById('saldoCassaData');
@@ -23196,6 +23442,1203 @@ async function pnFetchScioperi(dal, al){
   }catch(e){ console.warn('Lettura scioperi fallita:', e.message||e); return {}; }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// CONTROLLO ANOMALIE (19/09, punto 2 della roadmap)
+// Controlla da solo, ad ogni apertura della home, quattro tipi di errore che
+// costano soldi o falsano i totali. Tarato sui dati reali del registro:
+//  1. BONIFICO A UN ALTRO BENEFICIARIO — il nome dopo "FAVORE" nel bonifico
+//     non corrisponde al fornitore della fattura collegata (caso reale:
+//     bonifico a Rosaria Marotta collegato a una fattura Ferrantini).
+//     Tollera le varianti dello stesso nome (VANDEMOORTLE/Vandemoortele,
+//     2MITALIA/2M ITALIA, ING. PUMA GIULIANO/giuliano puma…): su 47 bonifici
+//     reali segnala solo il caso davvero sbagliato.
+//  2. FATTURA PAGATA DUE VOLTE — due o più movimenti, ciascuno pari
+//     all'INTERO importo, collegati alla stessa fattura (casi reali: Morelli
+//     € 404 con due bonifici diversi; Tinexta con due addebiti identici).
+//  3. FATTURA REGISTRATA DUE VOLTE — stessa data e stesso importo, numero
+//     uguale o quasi (errori di lettura tipici della scansione: 8↔B, 0↔O…,
+//     oppure inserita a mano e poi importata dall'XML con un formato diverso
+//     del numero). Casi reali: AP Commerciale, San Carlo, Miraglia.
+//     Stessa data+importo ma numero diverso → solo "da confermare".
+//  4. IMPORTO INSOLITO — fatture degli ultimi 45 giorni oltre 4 volte la
+//     mediana di quel fornitore (almeno 6 fatture di confronto).
+// Non modifica MAI nulla da solo: mostra, apre la fattura o il movimento da
+// correggere, oppure si segna "non è un problema" (reversibile, condiviso
+// fra dispositivi tramite ceraldi_stato_condiviso).
+// ══════════════════════════════════════════════════════════════════════════
+var _AN_GEN = /^(srl|srls|spa|sas|snc|sapa|srlu|coop|scarl|di|del|della|dei|delle|and|the|sede|secondaria|italia|italiana|not|provid|provide|notprovide|notprovid|add|tot|ragioniere|rag|dott|dottssa|dottor|ing|arch|geom|avv|societa|soc|responsabilita|respon|limitata|europe|group|gruppo|ditta|pagamento|saldo|fattura|fatture|contr|codice|cliente|iva|nome|conto)$/;
+function _anNorm(s){ return String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
+function _anTok(s){ return _anNorm(s).replace(/[^a-z0-9]+/g,' ').split(' ').filter(function(w){ return w.length>=3 && !_AN_GEN.test(w) && !/^\d+$/.test(w); }); }
+function _anFull(s){ return _anNorm(s).replace(/[^a-z0-9]/g,''); }
+function _anNomiCompatibili(a, b){
+  var ta=_anTok(a), tb=_anTok(b);
+  if(!ta.length || !tb.length) return true; // non giudicabile: meglio non segnalare
+  var fa=_anFull(a), fb=_anFull(b);
+  function vicini(x,y){ return x===y || (x.length>=4 && y.indexOf(x)>=0) || (y.length>=4 && x.indexOf(y)>=0) || (x.length>=6 && y.length>=6 && x.slice(0,6)===y.slice(0,6)); }
+  return ta.some(function(x){ return (x.length>=4 && fb.indexOf(x)>=0) || tb.some(function(y){ return vicini(x,y); }); })
+      || tb.some(function(y){ return y.length>=4 && fa.indexOf(y)>=0; });
+}
+function _anBeneficiario(descr){
+  var m = String(descr||'').match(/FAVORE\s+(.+)$/i);
+  if(!m) return '';
+  return m[1].split(/\s+-\s+|\s*NOT\s*PROVID/i)[0].trim();
+}
+var _AN_OCR = {'8':'b','b':'8','0':'o','o':'0','1':'i','i':'1','5':'s','s':'5','2':'z','z':'2','6':'g','g':'6'};
+function _anNumeriSimili(a, b){
+  var x=_anFull(a), y=_anFull(b);
+  if(!x || !y) return false;
+  if(x===y) return true;
+  // Stessa lunghezza, al massimo 2 caratteri diversi e SOLO coppie che la
+  // scansione confonde (8/B, 0/O, 1/I/L, 5/S, 2/Z, 6/G) — così due fatture
+  // con numeri consecutivi (…880/…881) NON risultano "simili".
+  if(x.length===y.length && x.length>=5){
+    var diff=0, ok=true;
+    for(var i=0;i<x.length;i++){
+      if(x[i]!==y[i]){ diff++; var c1=x[i]==='l'?'1':x[i], c2=y[i]==='l'?'1':y[i]; if(c1!==c2 && _AN_OCR[c1]!==c2) ok=false; }
+    }
+    if(ok && diff<=2) return true;
+  }
+  // Stesso numero scritto in due formati (es. manuale "4126/2020/566525" e
+  // XML "26566525100020@04126"): almeno 2 blocchi di ≥4 cifre in comune,
+  // ignorando gli anni (2015–2035) che coincidono per forza.
+  var sx=String(a).replace(/\D/g,''), sy=String(b).replace(/\D/g,''), hit=0;
+  function blocchi(s){ return (String(s).match(/\d{4,}/g)||[]).map(function(t){ return t.replace(/^0+/,''); }).filter(function(t){ return t.length>=4 && !(t.length===4 && +t>=2015 && +t<=2035); }); }
+  blocchi(b).forEach(function(t){ if(sx.indexOf(t)>=0) hit++; });
+  blocchi(a).forEach(function(t){ if(sy.indexOf(t)>=0) hit++; });
+  return hit>=2;
+}
+function _anData(d){ if(!d) return '—'; var dt=new Date(String(d).slice(0,10)+'T12:00:00'); return isNaN(dt)?String(d):dt.toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'}); }
+
+function _anCalcola(F, movs, entrate){
+  var out=[];
+  entrate = entrate||[];
+  F = (F||[]).filter(function(f){ return f && f.tipo!=='ddt'; });
+  var byId={}; F.forEach(function(f){ byId[String(f.id)]=f; });
+  movs = (movs||[]).filter(function(m){ return m && m.abbinata && m.fatturaId; });
+  // 1) Bonifico a un altro beneficiario
+  var movSbagliati={};
+  movs.forEach(function(m){
+    var f=byId[String(m.fatturaId)]; if(!f) return;
+    var ben=_anBeneficiario(m.descrizione); if(!ben) return;
+    if(!_anNomiCompatibili(ben, f.fornitore)){
+      movSbagliati[m.id]=1;
+      out.push({chiave:'benef|'+m.id+'|'+f.id, tipo:'beneficiario', gravita:'alta',
+        titolo:'Bonifico collegato alla fattura sbagliata',
+        testo:'Il bonifico del '+_anData(m.data)+' di '+fmt(Math.abs(m.importo))+' è a favore di «'+ben+'», ma è collegato a una fattura di '+f.fornitore+'. Probabilmente appartiene a un\'altra fattura: correggi l\'abbinamento.',
+        fatture:[f], movimenti:[m], rischio:Math.abs(m.importo)});
+    }
+  });
+  // 2) Fattura pagata due volte
+  var perFatt={};
+  movs.forEach(function(m){ if(movSbagliati[m.id]) return; var k=String(m.fatturaId); (perFatt[k]=perFatt[k]||[]).push(m); });
+  Object.keys(perFatt).forEach(function(k){
+    var f=byId[k]; if(!f) return;
+    var imp=Math.abs(f.importo||0); if(!(imp>0)) return;
+    var pieni=perFatt[k].filter(function(m){ return Math.abs(Math.abs(m.importo)-imp)<=0.5; });
+    if(pieni.length<2) return;
+    var identici=pieni.every(function(m){ return m.descrizione===pieni[0].descrizione && m.data===pieni[0].data; });
+    // Rimborso già arrivato? (caso reale: Morelli ha restituito i € 404 il
+    // 23/07 con "X RESTITUZIONE BONIFICO ERRATO"). Cerca un bonifico IN
+    // ENTRATA dello stesso importo nei 60 giorni successivi, dallo stesso
+    // fornitore o con una parola da rimborso nella causale.
+    var primaData=pieni.map(function(m){ return String(m.data||''); }).sort()[0]||'';
+    var limiteRimb=new Date(new Date(primaData+'T12:00:00').getTime()+60*86400000).toISOString().slice(0,10);
+    var rimborso=entrate.find(function(e){
+      if(!(e.importo>0) || Math.abs(e.importo-imp)>0.5) return false;
+      var d=String(e.data||''); if(d<primaData || d>limiteRimb) return false;
+      return /RESTITU|RIMBORS|STORNO/i.test(e.descrizione||'') || _anNomiCompatibili(String(e.descrizione||'').replace(/^.*?(BON\.?\s*DA|DA)\s+/i,''), f.fornitore);
+    });
+    if(rimborso && !identici){
+      out.push({chiave:'doppiorimb|'+k+'|'+rimborso.id, tipo:'pagamento_doppio_rimborsato', gravita:'bassa',
+        titolo:'Pagamento doppio, già rimborsato',
+        testo:'La fattura è stata pagata due volte ('+fmt(imp)+'), ma il '+_anData(rimborso.data)+' è arrivato un bonifico di rimborso dello stesso importo. Conviene solo scollegare dalla fattura il pagamento in più, così i conti tornano.',
+        fatture:[f], movimenti:pieni.concat([rimborso]), rischio:0});
+      return;
+    }
+    out.push({chiave:'doppiopag|'+k+'|'+pieni.map(function(m){ return m.id; }).sort().join(','), tipo:'pagamento_doppio', gravita:'alta',
+      titolo: identici ? 'Stesso addebito presente due volte' : 'Fattura pagata due volte?',
+      testo: identici
+        ? ('Ci sono '+pieni.length+' addebiti identici ('+_anData(pieni[0].data)+', '+fmt(imp)+') collegati a questa fattura. Se sull\'estratto conto l\'addebito è uno solo, è un doppione dell\'importazione; se sono davvero due, uno appartiene a un altro acquisto.')
+        : ('Ci sono '+pieni.length+' pagamenti diversi, ognuno pari all\'intero importo di '+fmt(imp)+', collegati a questa fattura. O '+fmt(imp*(pieni.length-1))+' sono da farsi restituire dal fornitore, oppure uno dei pagamenti è per un\'altra fattura.'),
+      fatture:[f], movimenti:pieni, rischio:imp*(pieni.length-1)});
+  });
+  // 3) Fattura registrata due volte
+  var gruppi={};
+  F.forEach(function(f){ if(!f.data || !(Math.abs(f.importo||0)>0)) return; var k=String(f.data).slice(0,10)+'|'+Number(f.importo).toFixed(2); (gruppi[k]=gruppi[k]||[]).push(f); });
+  Object.keys(gruppi).forEach(function(k){
+    var g=gruppi[k]; if(g.length<2) return;
+    for(var i=0;i<g.length;i++) for(var j=i+1;j<g.length;j++){
+      var a=g[i], b=g[j];
+      var numSim=_anNumeriSimili(a.numero, b.numero), fornSim=_anNomiCompatibili(a.fornitore, b.fornitore);
+      var ids=[String(a.id),String(b.id)].sort().join(',');
+      if(numSim && fornSim){
+        out.push({chiave:'doppione|'+ids, tipo:'doppione', gravita:'alta', titolo:'Fattura registrata due volte',
+          testo:'Stesso fornitore, stessa data, stesso importo e numero '+(_anFull(a.numero)===_anFull(b.numero)?'identico':'quasi identico («'+a.numero+'» e «'+b.numero+'»)')+': è la stessa fattura inserita due volte, quindi la spesa risulta contata doppia. Elimina quella in più (finisce nel Cestino, recuperabile).',
+          fatture:[a,b], movimenti:[], rischio:Math.abs(a.importo)});
+      } else if(numSim){
+        out.push({chiave:'doppioneforn|'+ids, tipo:'doppione', gravita:'alta', titolo:'Stessa fattura sotto due fornitori',
+          testo:'Numero «'+a.numero+'», data e importo identici, ma registrata sia per '+a.fornitore+' sia per '+b.fornitore+'. Di solito una delle due ha il fornitore sbagliato, oppure è un doppione.',
+          fatture:[a,b], movimenti:[], rischio:Math.abs(a.importo)});
+      } else if(fornSim){
+        out.push({chiave:'simile|'+ids, tipo:'simile', gravita:'bassa', titolo:'Stesso giorno, stesso importo',
+          testo:'Due fatture di '+a.fornitore+' con la stessa data e lo stesso importo ('+fmt(Math.abs(a.importo))+'), numeri «'+a.numero+'» e «'+b.numero+'». Spesso sono fatture diverse: se è così, segna "non è un problema".',
+          fatture:[a,b], movimenti:[], rischio:0});
+      }
+    }
+  });
+  // 5) Note di credito non agganciate (punto 4 roadmap): finché non sono
+  //    agganciate, il credito non riduce il debito verso il fornitore.
+  //    Una sola voce con l'elenco (non una per nota, per non coprire le
+  //    anomalie gravi), ogni nota col suo tasto "Aggancia".
+  var ncSole = F.filter(function(nc){ return nc.tipo==='nota_credito' && !/\[NC→\d+·/.test(nc.note||''); })
+    .sort(function(x,y){ return Math.abs(y.importo||0)-Math.abs(x.importo||0); });
+  if(ncSole.length){
+    var totNc = ncSole.reduce(function(t,nc){ return t+Math.abs(nc.importo||0); },0);
+    out.push({chiave:'ncsole|'+ncSole.map(function(n){ return n.id; }).sort().join(','), tipo:'nota_credito', gravita:'media',
+      titolo: ncSole.length+' not'+(ncSole.length===1?'a':'e')+' di credito da agganciare',
+      testo:'Crediti per '+fmt(totNc)+' non ancora collegati a nessuna fattura, quindi non scalati da quanto devi ai fornitori. Aggancia ciascuna alla fattura che storna (se l\'XML la indica, è proposta per prima).',
+      fatture:[], movimenti:[], rischio:0, ncList:ncSole});
+  }
+  // 6) Fatture vecchie ancora aperte (punto 9 roadmap): una sola voce che
+  //    apre la bonifica guidata.
+  if(typeof _bfVecchie==='function'){
+    var vecchie=_bfVecchie();
+    if(vecchie.length){
+      out.push({chiave:'bonifica|'+new Date().toISOString().slice(0,7), tipo:'bonifica', gravita:'media',
+        titolo:vecchie.length+' fatture scadute da oltre un mese ancora aperte',
+        testo:'Risultano da pagare '+fmt(vecchie.reduce(function(t,f){ return t+(f.importo||0); },0))+', ma quasi sempre sono già pagate e mai segnate: gonfiano «Da pagare», «Scadute» e le uscite previste. Sistemale per fornitore in pochi tocchi.',
+        fatture:[], movimenti:[], rischio:0, bonifica:true});
+    }
+  }
+  // 4) Importo insolito (solo fatture recenti: sono quelle su cui si può ancora intervenire)
+  var limite=new Date(Date.now()-45*86400000).toISOString().slice(0,10);
+  var perForn={};
+  F.forEach(function(f){ if((f.importo||0)>0){ var k=_anFull(f.fornitore); (perForn[k]=perForn[k]||[]).push(f); } });
+  F.forEach(function(f){
+    if(!f.data || String(f.data).slice(0,10)<limite || !((f.importo||0)>0)) return;
+    var altri=(perForn[_anFull(f.fornitore)]||[]).filter(function(x){ return x!==f; }).map(function(x){ return x.importo; }).sort(function(p,q){ return p-q; });
+    if(altri.length<6) return;
+    var n=altri.length, med = n%2 ? altri[(n-1)/2] : (altri[n/2-1]+altri[n/2])/2;
+    if(med>0 && f.importo>med*4 && f.importo-med>300){
+      out.push({chiave:'insolito|'+f.id, tipo:'insolito', gravita:'media', titolo:'Importo insolito per questo fornitore',
+        testo:'Di solito le fatture di '+f.fornitore+' sono intorno a '+fmt(med)+'; questa è di '+fmt(f.importo)+' (circa '+Math.round(f.importo/med)+' volte tanto). Controlla che l\'importo sia stato letto bene e che corrisponda a quanto ordinato.',
+        fatture:[f], movimenti:[], rischio:0});
+    }
+  });
+  var ord={alta:0, media:1, bassa:2};
+  out.sort(function(p,q){ return (ord[p.gravita]-ord[q.gravita]) || ((q.rischio||0)-(p.rischio||0)); });
+  return out;
+}
+
+// ── Anomalie: dati di supporto (movimenti abbinati + "ignorate" condivise) ──
+var _anMovCache=null, _anMovCacheTs=0, _anIgnorate=null, _anIgnorateTs=0, _anEntrate=[];
+var _AN_KEY_STATO='fatture_anomalie_ignorate', _AN_KEY_LOCALE='ceraldi_anomalie_ignorate';
+// Elenco LEGGERO dei soli movimenti abbinati (id, data, importo, descrizione,
+// fattura): scaricato al massimo una volta ogni 10 minuti, così il controllo
+// funziona anche su un dispositivo dove Cassa non è mai stata aperta.
+async function _anCaricaMovAbbinati(forza){
+  if(!forza && _anMovCache && Date.now()-_anMovCacheTs < 10*60000) return _anMovCache;
+  try{
+    var rows = await sbFetchAll('movimenti_banca?abbinata=eq.true&select=id,data,importo,descrizione,fattura_id,abbinata&order=id');
+    _anMovCache = (rows||[]).map(function(r){ return {id:r.id, data:r.data, importo:r.importo||0, descrizione:r.descrizione||'', fatturaId:r.fattura_id, abbinata:true}; });
+    // Bonifici in entrata / rimborsi (poche righe): servono a riconoscere un
+    // pagamento doppio già restituito dal fornitore.
+    try{
+      var ent = await sbFetchAll('movimenti_banca?importo=gt.0&or=(descrizione.ilike.*BONIF*,descrizione.ilike.*RIMBORS*,descrizione.ilike.*STORNO*,descrizione.ilike.*RESTITU*)&select=id,data,importo,descrizione&order=id');
+      _anEntrate = (ent||[]).map(function(r){ return {id:r.id, data:r.data, importo:r.importo||0, descrizione:r.descrizione||''}; });
+    }catch(e){ if(!_anEntrate) _anEntrate=[]; }
+    _anMovCacheTs = Date.now();
+  }catch(e){ if(!_anMovCache) _anMovCache=[]; }
+  return _anMovCache;
+}
+// Unisce l'elenco scaricato con la copia in memoria dell'app (più fresca:
+// se correggi un abbinamento in Riconciliazione, qui se ne tiene conto subito).
+function _anMovimentiCorrenti(){
+  var map={};
+  (_anMovCache||[]).forEach(function(m){ map[m.id]=m; });
+  (typeof _bancaMovimenti!=='undefined' && Array.isArray(_bancaMovimenti) ? _bancaMovimenti : []).forEach(function(m){ if(m && m.id) map[m.id]=m; });
+  return Object.keys(map).map(function(k){ return map[k]; });
+}
+async function _anCaricaIgnorate(forza){
+  if(!forza && _anIgnorate && Date.now()-_anIgnorateTs < 5*60000) return _anIgnorate;
+  var locale={}; try{ locale=JSON.parse(localStorage.getItem(_AN_KEY_LOCALE)||'{}')||{}; }catch(e){}
+  try{
+    var r = await sbFetch('ceraldi_stato_condiviso?id=eq.'+_AN_KEY_STATO+'&select=data');
+    _anIgnorate = (r && r[0] && r[0].data && r[0].data.chiavi) ? r[0].data.chiavi : locale;
+    try{ localStorage.setItem(_AN_KEY_LOCALE, JSON.stringify(_anIgnorate)); }catch(e){}
+  }catch(e){ _anIgnorate = locale; }
+  _anIgnorateTs = Date.now();
+  return _anIgnorate;
+}
+// Legge l'ultima versione condivisa, applica la singola modifica, riscrive:
+// così due dispositivi non si cancellano a vicenda le scelte.
+async function _anSalvaIgnorata(chiave, ignora){
+  var base;
+  try{
+    var r = await sbFetch('ceraldi_stato_condiviso?id=eq.'+_AN_KEY_STATO+'&select=data');
+    base = (r && r[0] && r[0].data && r[0].data.chiavi) ? r[0].data.chiavi : Object.assign({}, _anIgnorate||{});
+  }catch(e){ base = Object.assign({}, _anIgnorate||{}); }
+  if(ignora) base[chiave] = new Date().toISOString(); else delete base[chiave];
+  _anIgnorate = base; _anIgnorateTs = Date.now();
+  try{ localStorage.setItem(_AN_KEY_LOCALE, JSON.stringify(base)); }catch(e){}
+  try{
+    await sbFetch('ceraldi_stato_condiviso?on_conflict=id', {method:'POST', headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},
+      body: JSON.stringify({id:_AN_KEY_STATO, data:{chiavi:base}, updated_at:new Date().toISOString()})});
+  }catch(e){ toast('⚠️ Salvato solo su questo dispositivo'); }
+}
+
+// ── Anomalie: card in home ──
+var _anTimer=null;
+function _anAggiornaHomeDebounce(){ clearTimeout(_anTimer); _anTimer=setTimeout(function(){ _anAggiornaHome(false); }, 600); }
+async function _anAggiornaHome(forza){
+  var slot=document.getElementById('homeAnomalie'); if(!slot) return;
+  try{
+    await Promise.all([_anCaricaMovAbbinati(forza), _anCaricaIgnorate(forza), (typeof _ncCaricaRiferimenti==='function'?_ncCaricaRiferimenti():null)]);
+    var tutte=_anCalcola(typeof fatture!=='undefined'?fatture:[], _anMovimentiCorrenti(), _anEntrate);
+    var ign=_anIgnorate||{};
+    var attive=tutte.filter(function(a){ return !ign[a.chiave]; });
+    window._anStato={tutte:tutte, attive:attive};
+    var rilevanti=attive.filter(function(a){ return a.gravita!=='bassa'; });
+    var nBasse=attive.length-rilevanti.length;
+    if(!rilevanti.length){
+      slot.innerHTML = nBasse ? '<button class="an-mini" onclick="_anApri()">'+nBasse+' possibil'+(nBasse===1?'e':'i')+' doppion'+(nBasse===1?'e':'i')+' da confermare ›</button>' : '';
+      return;
+    }
+    var nAlte=rilevanti.filter(function(a){ return a.gravita==='alta'; }).length;
+    var soldi=rilevanti.filter(function(a){ return a.tipo==='pagamento_doppio' && !/identici/.test(a.testo); }).reduce(function(s,a){ return s+(a.rischio||0); },0);
+    var tipi={}; rilevanti.forEach(function(a){ tipi[a.titolo]=(tipi[a.titolo]||0)+1; });
+    var sotto=Object.keys(tipi).slice(0,2).map(function(t){ return (tipi[t]>1?tipi[t]+'× ':'')+t.toLowerCase(); }).join(' · ');
+    slot.innerHTML =
+      '<div class="an-card" onclick="_anApri()">'+
+        '<span class="an-card-ico ds-g ds-g-red"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 2.8 19.5h18.4z"/><path d="M12 10v4.5M12 17.2v.3"/></svg></span>'+
+        '<div style="min-width:0;flex:1">'+
+          '<div class="an-card-t">'+rilevanti.length+' anomali'+(rilevanti.length===1?'a':'e')+' da controllare'+(nAlte?' <span class="an-card-n">'+nAlte+' important'+(nAlte===1?'e':'i')+'</span>':'')+'</div>'+
+          '<div class="an-card-s">'+esc(sotto)+(soldi>0?' · <b style="color:var(--red)">'+fmt(soldi)+' forse da recuperare</b>':'')+'</div>'+
+        '</div>'+
+        '<span class="an-card-chev">›</span>'+
+      '</div>';
+  }catch(e){ if(typeof _registraErrore==='function') _registraErrore('js','Controllo anomalie: '+(e.message||e)); }
+}
+
+// ── Anomalie: foglio con l'elenco completo ──
+function _anRigaFattura(f){
+  var st={pagata:'Pagata', da_pagare:'Da pagare', parziale:'Parziale'}[f.stato]||f.stato||'';
+  return '<button class="an-row" data-fid="'+esc(String(f.id))+'" onclick="_anApriFattura(this.dataset.fid)">'+
+    '<span class="an-row-ico">📄</span><span class="an-row-main"><b>'+esc(f.fornitore||'—')+'</b><span>N° '+esc(f.numero||'—')+' · '+_anData(f.data)+' · '+fmt(Math.abs(f.importo||0))+(st?' · '+esc(st):'')+'</span></span><span class="an-row-chev">›</span></button>';
+}
+function _anRigaMovimento(m){
+  return '<div class="an-row an-row-mov"><span class="an-row-ico">🏦</span><span class="an-row-main"><b>'+_anData(m.data)+' · '+fmt(Math.abs(m.importo||0))+'</b><span>'+esc(String(m.descrizione||'').slice(0,120))+'</span></span>'+
+    '<button class="an-fix" data-mid="'+esc(String(m.id))+'" onclick="_anCorreggiMov(this.dataset.mid)">Correggi</button></div>';
+}
+function _anHtmlVoce(a, ignorata){
+  var cls={alta:'an-g-alta', media:'an-g-media', bassa:'an-g-bassa'}[a.gravita];
+  var lab={alta:'Importante', media:'Da verificare', bassa:'Da confermare'}[a.gravita];
+  return '<div class="an-item'+(ignorata?' an-item-ign':'')+'">'+
+    '<div class="an-item-hd"><span class="an-pill '+cls+'">'+lab+'</span><span class="an-item-t">'+esc(a.titolo)+'</span></div>'+
+    '<div class="an-item-txt">'+esc(a.testo)+'</div>'+
+    '<div class="an-rows">'+a.fatture.map(_anRigaFattura).join('')+(a.movimenti||[]).map(_anRigaMovimento).join('')+'</div>'+
+    (a.bonifica && !ignorata ? '<button class="an-fix" style="margin-top:10px;width:100%;padding:11px" onclick="_anChiudi();_bfApri()">Apri la sistemazione guidata</button>' : '')+
+    (a.ncList && a.ncList.length ? '<div class="an-rows">'+a.ncList.map(function(nc){
+      var rif=(window._ncRif && window._ncRif[String(nc.id)]) ? window._ncRif[String(nc.id)].num : '';
+      return '<div class="an-row an-row-mov"><span class="an-row-ico">📋</span><span class="an-row-main"><b>'+esc(nc.fornitore||'—')+' · '+fmt(Math.abs(nc.importo||0))+'</b><span>NC N° '+esc(nc.numero||'—')+' · '+_anData(nc.data)+(rif?' · storna N° '+esc(rif)+' (non a registro)':'')+'</span></span>'+
+        (ignorata?'':'<button class="an-fix" data-id="'+esc(String(nc.id))+'" data-fn="apriAgganciaNC" onclick="_anAzione(this.dataset.fn,this.dataset.id)">Aggancia</button>')+'</div>';
+    }).join('')+'</div>' : '')+
+    (ignorata
+      ? '<button class="an-ign" data-k="'+esc(a.chiave)+'" onclick="_anIgnora(this.dataset.k,false)">↺ Ripristina</button>'
+      : '<button class="an-ign" data-k="'+esc(a.chiave)+'" onclick="_anIgnora(this.dataset.k,true)">✓ Non è un problema</button>')+
+  '</div>';
+}
+function _anRenderFoglio(){
+  var box=document.getElementById('anFoglioBody'); if(!box) return;
+  var st=window._anStato||{tutte:[],attive:[]};
+  var ign=_anIgnorate||{};
+  var attive=st.attive, ignorate=st.tutte.filter(function(a){ return ign[a.chiave]; });
+  var sez=function(titolo, sotto, arr){ return arr.length ? '<div class="an-sez">'+titolo+'<span>'+sotto+'</span></div>'+arr.map(function(a){ return _anHtmlVoce(a,false); }).join('') : ''; };
+  var alte=attive.filter(function(a){ return a.gravita==='alta'; }), medie=attive.filter(function(a){ return a.gravita==='media'; }), basse=attive.filter(function(a){ return a.gravita==='bassa'; });
+  var html='';
+  if(!attive.length) html+='<div class="an-vuoto"><div style="font-size:38px">✅</div><b>Nessuna anomalia</b><span>Il registro è in ordine: nessun doppione, nessun pagamento doppio, nessun bonifico collegato alla fattura sbagliata.</span></div>';
+  html+=sez('Da controllare subito', alte.length+'', alte);
+  html+=sez('Da verificare', medie.length+'', medie);
+  html+=sez('Probabilmente a posto', basse.length+' · stesso giorno e stesso importo', basse);
+  if(ignorate.length){
+    html+='<details class="an-det"><summary>Segnate come "non è un problema" ('+ignorate.length+')</summary>'+ignorate.map(function(a){ return _anHtmlVoce(a,true); }).join('')+'</details>';
+  }
+  box.innerHTML=html;
+}
+async function _anApri(){
+  _anChiudi();
+  var ov=document.createElement('div');
+  ov.id='anOverlay';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:880;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px)';
+  ov.onclick=function(e){ if(e.target===ov) _anChiudi(); };
+  ov.innerHTML='<div style="background:var(--bg);border-radius:20px 20px 0 0;width:100%;max-width:560px;max-height:90vh;overflow-y:auto;display:flex;flex-direction:column">'+
+    '<div class="edit-sheet-hd" style="background:var(--bg)"><h3>Controllo anomalie</h3><button class="edit-close" onclick="_anChiudi()">×</button></div>'+
+    '<div style="padding:4px 16px 34px"><div class="an-intro">L\'app controlla da sola registro e pagamenti. Non cambia mai nulla senza di te: apri la fattura o il movimento da sistemare, oppure segna che va bene così.</div><div id="anFoglioBody"><div class="an-vuoto"><span>Controllo in corso…</span></div></div></div>'+
+  '</div>';
+  document.body.appendChild(ov);
+  await _anAggiornaHome(false);
+  _anRenderFoglio();
+}
+function _anChiudi(){ var o=document.getElementById('anOverlay'); if(o) o.remove(); }
+// Azioni dedicate (solo funzioni note, mai codice arbitrario dai dati)
+function _anAzione(fn, id){
+  var f=(fatture||[]).find(function(x){ return String(x.id)===String(id); });
+  if(!f) return;
+  _anChiudi();
+  if(fn==='apriAgganciaNC' && typeof apriAgganciaNC==='function') apriAgganciaNC(f.id);
+}
+async function _anIgnora(chiave, ignora){
+  await _anSalvaIgnorata(chiave, ignora);
+  toast(ignora ? '✓ Segnata come a posto' : '↺ Ripristinata');
+  await _anAggiornaHome(false);
+  _anRenderFoglio();
+}
+function _anApriFattura(fid){
+  var f=(fatture||[]).find(function(x){ return String(x.id)===String(fid); });
+  if(!f){ toast('Fattura non trovata (forse già eliminata)'); return; }
+  _anChiudi();
+  // openEdit = scheda completa della fattura (lo stesso "Modifica" del Registro).
+  // NB: apriF apre solo la FOTO, e le fatture XML non ne hanno.
+  openEdit(f.id);
+}
+function _anCorreggiMov(mid){
+  _anChiudi();
+  _apriDaControlloIntegrita(mid);
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// RICERCA UNICA (19/09, punto 3 della roadmap)
+// Un solo campo che cerca in tutta l'app: fornitori, fatture, movimenti
+// banca, carta di credito e chiusure di cassa. Capisce da solo cosa stai
+// scrivendo:
+//   · un importo  ("404", "1.122,24", "€ 32,94") → tutto ciò che ha
+//     quell'importo, al centesimo;
+//   · una data    ("21/07", "21/07/2026")        → fatture, movimenti e
+//     chiusure di quel giorno;
+//   · del testo   ("morelli bonifico")          → tutte le parole devono
+//     comparire (nome, numero, descrizione, IBAN, riferimento, note).
+// Solo lettura: ogni risultato porta alla schermata giusta, dove si
+// modifica come sempre.
+// ══════════════════════════════════════════════════════════════════════════
+var _crBanca=null, _crBancaTs=0, _crTimer=null;
+async function _crCaricaBanca(){
+  if(_crBanca && Date.now()-_crBancaTs < 10*60000) return _crBanca;
+  try{
+    var rows = await sbFetchAll('movimenti_banca?select=id,data,importo,descrizione,fattura_id,fattura_label,abbinata,ignorata,banca&order=data.desc');
+    _crBanca = (rows||[]).map(_bancaNorm);
+    _crBancaTs = Date.now();
+  }catch(e){ if(!_crBanca) _crBanca = []; }
+  return _crBanca;
+}
+function _crMovimentiBanca(){
+  var map={};
+  (_crBanca||[]).forEach(function(m){ map[m.id]=m; });
+  (typeof _bancaMovimenti!=='undefined' && Array.isArray(_bancaMovimenti)?_bancaMovimenti:[]).forEach(function(m){ if(m&&m.id) map[m.id]=m; });
+  return Object.keys(map).map(function(k){ return map[k]; });
+}
+function _crParseImporto(q){
+  var s=String(q).replace(/[€\s]/g,'').replace(/^[+-]/,'');
+  if(!/^\d[\d.,]*$/.test(s)) return null;
+  var v;
+  if(s.indexOf(',')>=0) v=parseFloat(s.replace(/\./g,'').replace(',','.'));
+  else if(/^\d{1,3}(\.\d{3})+$/.test(s)) v=parseFloat(s.replace(/\./g,''));
+  else v=parseFloat(s);
+  return isNaN(v)?null:v;
+}
+function _crParseData(q){
+  var m=String(q).trim().match(/^(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.](\d{2,4}))?$/);
+  if(!m) return null;
+  var g=('0'+m[1]).slice(-2), me=('0'+m[2]).slice(-2);
+  if(+me<1||+me>12||+g<1||+g>31) return null;
+  var a=m[3]?(m[3].length===2?'20'+m[3]:m[3]):null;
+  return {suffisso:'-'+me+'-'+g, anno:a};
+}
+function _crTesto(s){ return (typeof _anNorm==='function'?_anNorm(s):String(s||'').toLowerCase()); }
+function _crEvidenzia(testo, parole){
+  var h=esc(testo||'');
+  (parole||[]).filter(function(p){ return p.length>=2; }).forEach(function(p){
+    var rx=new RegExp('('+esc(p).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','ig');
+    h=h.replace(rx,'<mark>$1</mark>');
+  });
+  return h;
+}
+function _crCerca(q){
+  q=String(q||'').trim();
+  var ris={fornitori:[], fatture:[], banca:[], carta:[], chiusure:[]};
+  if(q.length<2) return ris;
+  var imp=_crParseImporto(q), dt=_crParseData(q);
+  var parole=_crTesto(q).split(/\s+/).filter(Boolean);
+  var contieneTutte=function(h){ h=_crTesto(h); return parole.every(function(p){ return h.indexOf(p)>=0; }); };
+  var stessoImporto=function(x){ return imp!==null && Math.abs(Math.abs(x||0)-imp)<0.005; };
+  var stessaData=function(d){ if(!dt||!d) return false; d=String(d).slice(0,10); return d.slice(4)===dt.suffisso && (!dt.anno || d.slice(0,4)===dt.anno); };
+  var F=(typeof fatture!=='undefined'?fatture:[]);
+  // Fornitori (con numero di fatture e totale)
+  if(imp===null && !dt){
+    var perF={};
+    F.forEach(function(f){ var n=f.fornitore||''; if(!n) return; var k=_crTesto(n); if(!perF[k]) perF[k]={nome:n, n:0, tot:0, daPagare:0}; perF[k].n++; perF[k].tot+=(f.importo||0); if(f.stato==='da_pagare'||f.stato==='parziale') perF[k].daPagare++; });
+    ris.fornitori=Object.keys(perF).map(function(k){ return perF[k]; }).filter(function(x){ return contieneTutte(x.nome); }).sort(function(a,b){ return b.n-a.n; });
+  }
+  // Fatture
+  ris.fatture=F.filter(function(f){
+    if(imp!==null && (stessoImporto(f.importo) || _crTesto(f.numero).indexOf(_crTesto(q))>=0)) return true;
+    if(dt && stessaData(f.data)) return true;
+    if(imp===null && !dt) return contieneTutte([f.fornitore,f.numero,f.note,f.bonIban,f.bonRif,f.bonCaus,f.assInt,f.pagamento,f.numDdt].join(' '));
+    return false;
+  }).sort(function(a,b){ return String(b.data||'').localeCompare(String(a.data||'')); });
+  // Movimenti banca
+  ris.banca=_crMovimentiBanca().filter(function(m){
+    if(imp!==null) return stessoImporto(m.importo);
+    if(dt) return stessaData(m.data);
+    return contieneTutte([m.descrizione, m.fatturaLabel].join(' '));
+  }).sort(function(a,b){ return String(b.data||'').localeCompare(String(a.data||'')); });
+  // Carta
+  ris.carta=(typeof _cartaMovimenti!=='undefined'?_cartaMovimenti:[]).filter(function(m){
+    if(imp!==null) return stessoImporto(m.importo);
+    if(dt) return stessaData(m.data);
+    return contieneTutte([m.descrizione, m.titolare, m.fatturaLabel].join(' '));
+  }).sort(function(a,b){ return String(b.data||'').localeCompare(String(a.data||'')); });
+  // Chiusure di cassa
+  ris.chiusure=(typeof chiusure!=='undefined'?chiusure:[]).filter(function(c){
+    if(dt) return stessaData(c.data);
+    if(imp!==null){ var tot=c.totale_corrispettivi||c.totaleCorrispettivi||0; return stessoImporto(c.cassa)||stessoImporto(c.pos)||stessoImporto(tot); }
+    return false;
+  }).sort(function(a,b){ return String(b.data||'').localeCompare(String(a.data||'')); });
+  ris._parole=(imp===null&&!dt)?parole:[];
+  ris._tipo=imp!==null?'importo':(dt?'data':'testo');
+  return ris;
+}
+function _crRecenti(){ try{ var a=JSON.parse(localStorage.getItem('ceraldi_ricerche_recenti')||'[]'); return Array.isArray(a)?a:[]; }catch(e){ return []; } }
+function _crSalvaRecente(q){
+  q=String(q||'').trim(); if(q.length<2) return;
+  var a=_crRecenti().filter(function(x){ return x.toLowerCase()!==q.toLowerCase(); });
+  a.unshift(q);
+  try{ localStorage.setItem('ceraldi_ricerche_recenti', JSON.stringify(a.slice(0,8))); }catch(e){}
+}
+function _crApri(){
+  var ov=document.getElementById('cercaOverlay');
+  if(!ov){
+    ov=document.createElement('div');
+    ov.id='cercaOverlay';
+    ov.innerHTML=
+      '<div class="cr-bar">'+
+        '<div class="cr-field"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>'+
+        '<input id="cercaInp" type="search" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Fornitore, importo, data, numero…" oninput="_crDigita()" onkeydown="if(event.key===\'Escape\')_crChiudi()">'+
+        '<button class="cr-clear" onclick="var i=document.getElementById(\'cercaInp\');i.value=\'\';i.focus();_crDigita()" aria-label="Cancella">×</button></div>'+
+        '<button class="cr-annulla" onclick="_crChiudi()">Annulla</button>'+
+      '</div>'+
+      '<div id="cercaRis" class="cr-ris"></div>';
+    document.body.appendChild(ov);
+  }
+  ov.classList.remove('on'); void ov.offsetWidth; ov.classList.add('on');
+  var inp=document.getElementById('cercaInp');
+  setTimeout(function(){ try{ inp.focus(); inp.select(); }catch(e){} }, 60);
+  _crRender();
+  _crCaricaBanca().then(function(){ if(document.getElementById('cercaOverlay').classList.contains('on')) _crRender(); });
+}
+function _crChiudi(){ var ov=document.getElementById('cercaOverlay'); if(ov) ov.classList.remove('on'); try{ document.activeElement.blur(); }catch(e){} }
+function _crDigita(){ clearTimeout(_crTimer); _crTimer=setTimeout(_crRender, 140); }
+function _crUsa(q){ var i=document.getElementById('cercaInp'); i.value=q; _crRender(); }
+function _crRender(){
+  var box=document.getElementById('cercaRis'); if(!box) return;
+  var q=(document.getElementById('cercaInp')||{}).value||'';
+  var ov=document.getElementById('cercaOverlay'); if(ov) ov.classList.toggle('cr-has', !!q);
+  if(q.trim().length<2){
+    var rec=_crRecenti();
+    box.innerHTML=
+      (rec.length ? '<div class="cr-sez">Ricerche recenti<button onclick="try{localStorage.removeItem(\'ceraldi_ricerche_recenti\')}catch(e){};_crRender()">Cancella</button></div><div class="cr-chips">'+rec.map(function(r){ return '<button class="chip" data-q="'+esc(r)+'" onclick="_crUsa(this.dataset.q)">'+esc(r)+'</button>'; }).join('')+'</div>' : '')+
+      '<div class="cr-aiuto"><b>Cosa puoi cercare</b>'+
+        '<div><span>Un fornitore</span><i>morelli · kimbo · saima</i></div>'+
+        '<div><span>Un importo esatto</span><i>404 · 1.122,24</i></div>'+
+        '<div><span>Un giorno</span><i>21/07 · 21/07/2026</i></div>'+
+        '<div><span>Numero, IBAN, riferimento</span><i>1469/FE · IT60X…</i></div>'+
+      '</div>';
+    return;
+  }
+  var r=_crCerca(q), P=r._parole;
+  var totale=r.fornitori.length+r.fatture.length+r.banca.length+r.carta.length+r.chiusure.length;
+  if(!totale){
+    box.innerHTML='<div class="cr-vuoto"><div style="font-size:34px">🔍</div><b>Nessun risultato per «'+esc(q)+'»</b><span>'+(r._tipo==='importo'?'Nessuna fattura, movimento o chiusura con questo importo esatto.':(r._tipo==='data'?'Nessun dato registrato in questo giorno.':'Prova con meno parole o solo una parte del nome.'))+'</span></div>';
+    return;
+  }
+  var stato={pagata:'Pagata', da_pagare:'Da pagare', parziale:'Parziale'};
+  var sez=function(titolo, arr, max, riga, chiave){
+    if(!arr.length) return '';
+    var tutti = window._crEspansi && window._crEspansi[chiave];
+    var vis = tutti ? arr : arr.slice(0,max);
+    return '<div class="cr-sez">'+titolo+'<span>'+arr.length+'</span></div><div class="cr-grp">'+vis.map(riga).join('')+'</div>'+
+      (arr.length>vis.length ? '<button class="cr-altri" onclick="window._crEspansi=window._crEspansi||{};window._crEspansi[\''+chiave+'\']=1;_crRender()">Mostra tutti ('+arr.length+')</button>' : '');
+  };
+  var html='';
+  html+=sez('Fornitori', r.fornitori, 4, function(x){
+    return '<button class="cr-row" data-n="'+esc(x.nome)+'" onclick="_crVaiFornitore(this.dataset.n)"><span class="cr-ico ds-g ds-g-orange">'+esc((x.nome.replace(/[^A-Za-z0-9]/g,'')[0]||'?').toUpperCase())+'</span><span class="cr-main"><b>'+_crEvidenzia(x.nome,P)+'</b><span>'+x.n+' fattur'+(x.n===1?'a':'e')+' · '+fmt(x.tot)+(x.daPagare?' · '+x.daPagare+' da pagare':'')+'</span></span><span class="cr-chev">›</span></button>';
+  }, 'forn');
+  html+=sez('Fatture', r.fatture, 6, function(f){
+    var s=stato[f.stato]||'';
+    return '<button class="cr-row" data-id="'+esc(String(f.id))+'" onclick="_crVaiFattura(this.dataset.id)"><span class="cr-ico cr-ico-doc">📄</span><span class="cr-main"><b>'+_crEvidenzia(f.fornitore,P)+'</b><span>N° '+_crEvidenzia(f.numero||'—',P)+' · '+_anData(f.data)+(s?' · <em class="cr-st cr-st-'+f.stato+'">'+s+'</em>':'')+'</span></span><span class="cr-imp">'+fmt(f.importo)+'</span></button>';
+  }, 'fatt');
+  html+=sez('Movimenti banca', r.banca, 5, function(m){
+    var sub = m.abbinata && m.fatturaId ? '🔗 '+esc(m.fatturaLabel||'Collegato a una fattura') : (m.ignorata?'Ignorato':'Non abbinato · tocca per abbinare');
+    return '<button class="cr-row" data-id="'+esc(String(m.id))+'" onclick="_crVaiMovimento(this.dataset.id)"><span class="cr-ico cr-ico-doc">🏦</span><span class="cr-main"><b>'+_crEvidenzia(String(m.descrizione||'').slice(0,90),P)+'</b><span>'+_anData(m.data)+' · '+sub+'</span></span><span class="cr-imp" style="color:'+((m.importo||0)<0?'var(--red)':'var(--green)')+'">'+((m.importo||0)<0?'−':'+')+fmt(Math.abs(m.importo||0))+'</span></button>';
+  }, 'banca');
+  html+=sez('Carta di credito', r.carta, 4, function(m){
+    return '<button class="cr-row" onclick="_crVaiCarta()"><span class="cr-ico cr-ico-doc">💳</span><span class="cr-main"><b>'+_crEvidenzia(m.descrizione,P)+'</b><span>'+_anData(m.data)+(m.titolare?' · '+esc(m.titolare):'')+(m.abbinata?' · 🔗 abbinato':'')+'</span></span><span class="cr-imp">'+fmt(Math.abs(m.importo||0))+'</span></button>';
+  }, 'carta');
+  html+=sez('Chiusure di cassa', r.chiusure, 4, function(c){
+    var tot=c.totale_corrispettivi||c.totaleCorrispettivi||0;
+    return '<button class="cr-row" data-d="'+esc(c.data)+'" onclick="_crVaiChiusura(this.dataset.d)"><span class="cr-ico cr-ico-doc">🧾</span><span class="cr-main"><b>'+new Date(c.data+'T12:00:00').toLocaleDateString('it-IT',{weekday:'long',day:'numeric',month:'long',year:'numeric'})+'</b><span>Contanti '+fmt(c.cassa||0)+' · POS '+fmt(c.pos||0)+'</span></span><span class="cr-imp">'+fmt(tot)+'</span></button>';
+  }, 'chius');
+  box.innerHTML='<div class="cr-tot">'+totale+' risultat'+(totale===1?'o':'i')+(r._tipo==='importo'?' con importo '+fmt(_crParseImporto(q)):(r._tipo==='data'?' del giorno cercato':''))+'</div>'+html;
+}
+function _crVaiFornitore(nome){
+  _crSalvaRecente(nome); _crChiudi();
+  // 19/09 (punto 8): apre la scheda del fornitore (che ha anche "Vedi tutte nel Registro")
+  _sfApri(nome);
+}
+function _crVaiFattura(id){
+  var q=(document.getElementById('cercaInp')||{}).value; _crSalvaRecente(q);
+  var f=(fatture||[]).find(function(x){ return String(x.id)===String(id); });
+  if(!f){ toast('Fattura non trovata'); return; }
+  _crChiudi(); openEdit(f.id);
+}
+function _crVaiMovimento(id){
+  var q=(document.getElementById('cercaInp')||{}).value; _crSalvaRecente(q);
+  var m=_crMovimentiBanca().find(function(x){ return String(x.id)===String(id); });
+  _crChiudi();
+  if(m && m.abbinata && m.fatturaId){
+    var f=(fatture||[]).find(function(x){ return String(x.id)===String(m.fatturaId); });
+    if(f){ openEdit(f.id); return; }
+  }
+  _apriDaControlloIntegrita(id);
+}
+function _crVaiCarta(){
+  var q=(document.getElementById('cercaInp')||{}).value; _crSalvaRecente(q); _crChiudi();
+  goTab('incassi', document.querySelectorAll('.tab-item')[2]);
+  setTimeout(function(){ setIncTab('carta', document.getElementById('inctab-carta')); }, 60);
+}
+function _crVaiChiusura(data){
+  var q=(document.getElementById('cercaInp')||{}).value; _crSalvaRecente(q); _crChiudi();
+  goTab('incassi', document.querySelectorAll('.tab-item')[2]);
+  setTimeout(function(){
+    setIncTab('giorno', document.getElementById('inctab-giorno'));
+    var inp=document.getElementById('chgDataInp'); if(inp){ inp.value=data; caricaChiusuraGiorno(); }
+  }, 60);
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// NOTE DI CREDITO (19/09, punto 4 della roadmap)
+// Il collegamento NC → fattura esisteva già (marcatore [NC→id·…] nelle note
+// della nota di credito, _eseguiAggancioNC / _sganciaNC, selettore manuale),
+// ma avveniva da solo SOLO al momento dell'import e solo se la fattura era
+// già presente. Qui:
+//  · il riferimento scritto nell'XML (DatiFattureCollegate) arriva da una
+//    vista leggera del database (v_nc_riferimenti), senza scaricare gli XML;
+//  · all'avvio, le note non ancora agganciate il cui XML indica una fattura
+//    presente a registro (stesso fornitore, stesso numero, UNA sola
+//    corrispondenza) vengono agganciate da sole — stessa identica funzione
+//    del tasto manuale, annullabile con "Sgancia" (e dopo uno sgancio
+//    manuale non vengono più riagganciate automaticamente: [NC-NO-AUTO]);
+//  · le note rimaste senza aggancio compaiono nel Controllo anomalie.
+// ══════════════════════════════════════════════════════════════════════════
+window._ncRif = window._ncRif || null;
+var _ncAutoFatto = false;
+async function _ncCaricaRiferimenti(){
+  if(window._ncRif) return window._ncRif;
+  try{
+    var rows = await sbFetch('v_nc_riferimenti?select=id,rif_numero,rif_data');
+    var m = {};
+    (rows||[]).forEach(function(r){ if(r.rif_numero) m[String(r.id)] = {num:r.rif_numero, data:r.rif_data||''}; });
+    window._ncRif = m;
+  }catch(e){ window._ncRif = {}; }
+  return window._ncRif;
+}
+function _ncAgganciata(nc){ return /\[NC→\d+·/.test(nc.note||''); }
+function _ncNorm(x){ return String(x||'').toLowerCase().replace(/[^a-z0-9]/g,''); }
+async function _ncAutoAggancia(){
+  if(_ncAutoFatto || typeof fatture==='undefined' || !fatture.length) return;
+  _ncAutoFatto = true;
+  var rif = await _ncCaricaRiferimenti();
+  var fatte = 0;
+  var daFare = fatture.filter(function(nc){ return nc.tipo==='nota_credito' && !_ncAgganciata(nc) && !/\[NC-NO-AUTO\]/.test(nc.note||'') && rif[String(nc.id)]; });
+  for(var i=0;i<daFare.length;i++){
+    var nc = daFare[i], r = rif[String(nc.id)], n = _ncNorm(r.num);
+    if(!n) continue;
+    var cand = fatture.filter(function(f){ return f.id!==nc.id && f.tipo==='fattura' && _ncNorm(f.numero)===n && _anNomiCompatibili(f.fornitore, nc.fornitore); });
+    // Automatico SOLO se la fattura è ancora da pagare/parziale: lì il credito
+    // riduce semplicemente quanto devi. Su una fattura già pagata l'effetto è
+    // diverso (credito da farsi rimborsare) e lo decide Valerio a mano.
+    if(cand.length===1 && cand[0].stato==='pagata') continue;
+    if(cand.length!==1) continue; // 0 = fattura non ancora a registro; >1 = ambiguo → decide Valerio
+    try{ await _eseguiAggancioNC(nc.id, cand[0].id); fatte++; }
+    catch(e){ if(typeof _registraErrore==='function') _registraErrore('js','Aggancio automatico NC '+nc.numero+': '+(e.message||e)); }
+  }
+  if(fatte) toast('🔗 '+fatte+' not'+(fatte===1?'a':'e')+' di credito agganciat'+(fatte===1?'a':'e')+' in automatico (dall\'XML)');
+}
+document.addEventListener('DOMContentLoaded', function(){
+  // dopo il caricamento dei dati (cache + cloud), una volta per sessione
+  setTimeout(function(){ _ncAutoAggancia().then(function(){ if(typeof _anAggiornaHomeDebounce==='function') _anAggiornaHomeDebounce(); }).catch(function(){}); }, 9000);
+});
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// GRAFICI DI ANDAMENTO (19/09, punto 5 della roadmap) — tab Riepilogo
+//  1. Incassi (corrispettivi delle chiusure) contro acquisti (fatture) mese
+//     per mese, ultimi 12 mesi: la prima vista sul margine. Un solo asse,
+//     stessa unità (€). I mesi senza chiusure non diventano "0 incassi":
+//     nessuna barra e il dettaglio lo dice.
+//  2. Fornitori principali degli ultimi 12 mesi.
+//  3. Incasso medio per giorno della settimana.
+// Colori: blu/arancio della palette di riferimento, validati con lo script
+// (daltonismo e contrasto) sia su superficie chiara sia su #1C1C1E.
+// SVG disegnato a mano, nessuna libreria esterna. Tocca una barra per il
+// dettaglio; ogni grafico ha anche la vista a tabella.
+// ══════════════════════════════════════════════════════════════════════════
+var _GR_MESI=['Gen','Feb','Mar','Apr','Mag','Giu','Lug','Ago','Set','Ott','Nov','Dic'];
+function _grK(v){ v=Math.abs(v); return v>=1000 ? (Math.round(v/100)/10).toLocaleString('it-IT')+'k' : Math.round(v).toLocaleString('it-IT'); }
+function _grScala(max){
+  // "passo gradevole" per 3-4 linee di griglia
+  if(max<=0) return {top:1000, passo:500};
+  var grezzo=max/3, pot=Math.pow(10,Math.floor(Math.log10(grezzo))), n=grezzo/pot;
+  var passo=(n<=1?1:n<=2?2:n<=2.5?2.5:n<=5?5:10)*pot;
+  return {top:Math.ceil(max/passo)*passo, passo:passo};
+}
+function _grDati(){
+  var oggi=new Date(), mesi=[];
+  for(var i=11;i>=0;i--){ var d=new Date(oggi.getFullYear(), oggi.getMonth()-i, 1); mesi.push({k:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'), m:d.getMonth(), a:d.getFullYear(), acq:0, nFat:0, inc:0, giorni:0}); }
+  var idx={}; mesi.forEach(function(x,i){ idx[x.k]=i; });
+  var F=(typeof fatture!=='undefined'?fatture:[]);
+  F.forEach(function(f){ if(f.tipo==='ddt'||!f.data) return; var i=idx[String(f.data).slice(0,7)]; if(i===undefined) return; mesi[i].acq+=(f.importo||0); mesi[i].nFat++; });
+  var C=(typeof chiusure!=='undefined'?chiusure:[]);
+  var perGiorno=[[],[],[],[],[],[],[]];
+  C.forEach(function(c){
+    if(!c.data) return;
+    var tot=c.totale_corrispettivi||c.totaleCorrispettivi||((c.iva22||0)+(c.iva10||0)+(c.iva4||0));
+    var i=idx[String(c.data).slice(0,7)];
+    if(i!==undefined && tot>0){ mesi[i].inc+=tot; mesi[i].giorni++; }
+    if(i!==undefined && tot>0){ var g=(new Date(c.data+'T12:00:00').getDay()+6)%7; perGiorno[g].push(tot); }
+  });
+  // fornitori (ultimi 12 mesi)
+  var dal=mesi[0].k+'-01', perF={};
+  F.forEach(function(f){ if(f.tipo==='ddt'||!f.data||String(f.data)<dal) return; var n=f.fornitore||'—'; var k=n.toLowerCase().replace(/[^a-z0-9]/g,''); if(!perF[k]) perF[k]={nome:n, tot:0, n:0}; perF[k].tot+=(f.importo||0); perF[k].n++; });
+  var forn=Object.keys(perF).map(function(k){ return perF[k]; }).sort(function(a,b){ return b.tot-a.tot; });
+  var totAcq=mesi.reduce(function(s,x){ return s+x.acq; },0);
+  var gs=perGiorno.map(function(a,i){ return {g:['Lun','Mar','Mer','Gio','Ven','Sab','Dom'][i], media:a.length?a.reduce(function(s,v){return s+v;},0)/a.length:0, n:a.length}; });
+  return {mesi:mesi, forn:forn, totAcq:totAcq, gs:gs};
+}
+function _grTip(el, html){
+  var tip=document.getElementById('grTip'); if(!tip) return;
+  var box=el.closest('.gr-card'); var rb=box.getBoundingClientRect(), r=el.getBoundingClientRect();
+  tip.innerHTML=html; tip.style.display='block';
+  var x=r.left+r.width/2-rb.left, w=tip.offsetWidth;
+  x=Math.max(8+w/2, Math.min(rb.width-8-w/2, x));
+  tip.style.left=x+'px'; tip.style.top=(r.top-rb.top-8)+'px';
+  box.appendChild(tip);
+  box.querySelectorAll('.gr-hit.on').forEach(function(h){ h.classList.remove('on'); });
+  el.classList.add('on');
+}
+document.addEventListener('pointerdown', function(e){
+  if(e.target.closest && (e.target.closest('.gr-hit')||e.target.closest('#grTip'))) return;
+  var t=document.getElementById('grTip'); if(t) t.style.display='none';
+  document.querySelectorAll('.gr-hit.on').forEach(function(h){ h.classList.remove('on'); });
+}, {passive:true});
+
+function _grRender(){
+  var box=document.getElementById('grafAndamento'); if(!box) return;
+  var D=_grDati(), M=D.mesi;
+  var conInc=M.filter(function(x){ return x.giorni>0; });
+  var totInc=conInc.reduce(function(s,x){ return s+x.inc; },0);
+  var accAcq=conInc.reduce(function(s,x){ return s+x.acq; },0);
+  // ── Grafico 1: incassi vs acquisti ──
+  var W=340, H=198, padL=34, padB=30, padT=10, innerW=W-padL-4, innerH=H-padB-padT;
+  var sc=_grScala(Math.max.apply(null, M.map(function(x){ return Math.max(x.inc, x.acq); }).concat([1])));
+  var gw=innerW/12, bw=Math.max(5, Math.min(11, (gw-6)/2));
+  var y=function(v){ return padT+innerH-(Math.max(0,v)/sc.top)*innerH; };
+  var svg='<svg viewBox="0 0 '+W+' '+H+'" class="gr-svg" role="img" aria-label="Incassi e acquisti per mese, ultimi 12 mesi">';
+  for(var v=0; v<=sc.top+0.001; v+=sc.passo){ var yy=y(v); svg+='<line x1="'+padL+'" x2="'+(W-4)+'" y1="'+yy+'" y2="'+yy+'" class="gr-grid'+(v===0?' gr-base':'')+'"/><text x="'+(padL-5)+'" y="'+(yy+3)+'" class="gr-ax" text-anchor="end">'+_grK(v)+'</text>'; }
+  M.forEach(function(x,i){
+    var cx=padL+gw*i+gw/2, x1=cx-bw-1, x2=cx+1;
+    var bar=function(xp, val, cls){ if(!(val>0)) return ''; var top=y(val), h=Math.max(2,padT+innerH-top), r=Math.min(3,bw/2,h/2);
+      return '<path class="'+cls+'" d="M'+xp+','+(padT+innerH)+' V'+(top+r)+' Q'+xp+','+top+' '+(xp+r)+','+top+' H'+(xp+bw-r)+' Q'+(xp+bw)+','+top+' '+(xp+bw)+','+(top+r)+' V'+(padT+innerH)+' Z"/>'; };
+    svg+=bar(x1, x.inc, 'gr-s1')+bar(x2, x.acq, 'gr-s2');
+    // anno su una seconda riga, solo a gennaio (e sul primo mese): niente collisioni
+    svg+='<text x="'+cx+'" y="'+(padT+innerH+13)+'" class="gr-ax'+(i===11?' gr-ax-now':'')+'" text-anchor="middle">'+_GR_MESI[x.m]+'</text>';
+    if(x.m===0 || i===0) svg+='<text x="'+cx+'" y="'+(padT+innerH+25)+'" class="gr-ax gr-ax-anno" text-anchor="middle">'+x.a+'</text>';
+    var diff=x.inc-x.acq;
+    var tip='<b>'+_GR_MESI[x.m]+' '+x.a+'</b>'+
+      '<div><i class="gr-dot gr-d1"></i>Incassi <span>'+(x.giorni? fmt(x.inc) : 'nessuna chiusura')+'</span></div>'+
+      '<div><i class="gr-dot gr-d2"></i>Acquisti <span>'+fmt(x.acq)+'</span></div>'+
+      (x.giorni? '<div class="gr-tip-sep">Differenza <span style="color:'+(diff>=0?'var(--green)':'var(--red)')+'">'+(diff>=0?'+':'−')+fmt(Math.abs(diff))+'</span></div>' : '')+
+      '<em>'+x.nFat+' fattur'+(x.nFat===1?'a':'e')+(x.giorni?' · '+x.giorni+' giorn'+(x.giorni===1?'o':'i')+' di chiusura':'')+'</em>';
+    svg+='<rect class="gr-hit" x="'+(padL+gw*i)+'" y="'+padT+'" width="'+gw+'" height="'+innerH+'" data-tip="'+esc(tip)+'" onclick="_grTip(this,this.dataset.tip)"/>';
+  });
+  svg+='</svg>';
+  var tab1='<table class="gr-tab"><tr><th>Mese</th><th>Incassi</th><th>Acquisti</th></tr>'+M.slice().reverse().map(function(x){ return '<tr><td>'+_GR_MESI[x.m]+' '+x.a+'</td><td>'+(x.giorni?fmt(x.inc):'—')+'</td><td>'+fmt(x.acq)+'</td></tr>'; }).join('')+'</table>';
+  var rapporto = totInc>0 ? Math.round(accAcq/totInc*100) : null;
+  // ── Grafico 2: fornitori principali ──
+  var top=D.forn.slice(0,8), maxF=top.length?top[0].tot:1;
+  var righeF=top.map(function(f,i){
+    var perc=D.totAcq>0?Math.round(f.tot/D.totAcq*100):0;
+    var tip='<b>'+esc(f.nome)+'</b><div>Totale <span>'+fmt(f.tot)+'</span></div><div>Fatture <span>'+f.n+'</span></div><em>'+perc+'% degli acquisti degli ultimi 12 mesi</em>';
+    return '<div class="gr-hrow" data-n="'+esc(f.nome)+'" onclick="_sfApri(this.dataset.n)" title="Apri la scheda"><div class="gr-hlab">'+esc(f.nome)+'</div><div class="gr-htrack"><div class="gr-hbar" style="width:'+Math.max(2,f.tot/maxF*100)+'%;animation-delay:'+(i*45)+'ms"></div></div><div class="gr-hval">'+_grK(f.tot)+'</div></div>';
+  }).join('');
+  // ── Grafico 3: giorno della settimana ──
+  var maxG=Math.max.apply(null, D.gs.map(function(g){ return g.media; }).concat([1])), migliore=D.gs.reduce(function(b,g){ return g.media>b.media?g:b; }, D.gs[0]);
+  var righeG=D.gs.map(function(g,i){
+    var h=g.media/maxG*100;
+    var tip='<b>'+g.g+'</b><div>Incasso medio <span>'+fmt(g.media)+'</span></div><em>su '+g.n+' giorn'+(g.n===1?'o':'i')+' di chiusura</em>';
+    return '<div class="gr-vcol gr-hit" data-tip="'+esc(tip)+'" onclick="_grTip(this,this.dataset.tip)"><div class="gr-vval">'+(g===migliore?_grK(g.media):'')+'</div><div class="gr-vtrack"><div class="gr-vbar'+(g===migliore?' gr-vbar-top':'')+'" style="height:'+Math.max(g.media>0?3:0,h)+'%;animation-delay:'+(i*45)+'ms"></div></div><div class="gr-vlab">'+g.g+'</div></div>';
+  }).join('');
+
+  box.innerHTML=
+    '<div class="gr-card">'+
+      '<div class="gr-hd"><div><div class="gr-t">Incassi e acquisti</div><div class="gr-s">Ultimi 12 mesi · tocca un mese per il dettaglio</div></div></div>'+
+      '<div class="gr-leg"><span><i class="gr-dot gr-d1"></i>Incassi (corrispettivi)</span><span><i class="gr-dot gr-d2"></i>Acquisti (fatture)</span></div>'+
+      svg+
+      (rapporto!==null ? '<div class="gr-kpi"><div><span>Incassi</span><b>'+fmt(totInc)+'</b></div><div><span>Acquisti, stessi mesi</span><b>'+fmt(accAcq)+'</b></div><div><span>Acquisti / incassi</span><b>'+rapporto+'%</b></div></div>' : '')+
+      '<div class="gr-nota">Gli acquisti comprendono tutte le fatture (anche lavori e attrezzature), non solo la merce. Il confronto usa solo i mesi con chiusure registrate.</div>'+
+      '<details class="gr-det"><summary>Vedi come tabella</summary>'+tab1+'</details>'+
+    '</div>'+
+    (top.length ? '<div class="gr-card"><div class="gr-hd"><div><div class="gr-t">Fornitori principali</div><div class="gr-s">Ultimi 12 mesi · '+fmt(D.totAcq)+' in totale · tocca per la scheda</div></div></div><div class="gr-hlist">'+righeF+'</div></div>' : '')+
+    (D.gs.some(function(g){ return g.n>0; }) ? '<div class="gr-card"><div class="gr-hd"><div><div class="gr-t">Incasso medio per giorno</div><div class="gr-s">Media dei corrispettivi · il giorno migliore è '+migliore.g.toLowerCase()+'</div></div></div><div class="gr-vlist">'+righeG+'</div></div>' : '')+
+    '<div id="grTip" class="gr-tip" style="display:none"></div>';
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// STORICO MODIFICHE (19/09, punto 6 della roadmap)
+// Ogni modifica REALE a una fattura (da app, sync Aruba, assistente,
+// riconciliazioni) è registrata dal database stesso (trigger su `fatture` →
+// tabella `fatture_storico`, campo per campo: prima/dopo). Qui la si legge in
+// italiano e si può RIPRISTINARE qualunque versione precedente: il
+// ripristino è a sua volta una modifica registrata, quindi si può annullare
+// anche quello. Principio di Valerio: tutto ciò che si fa si può cambiare.
+// ══════════════════════════════════════════════════════════════════════════
+var _ST_LABEL = {
+  stato:'Stato', pagamento:'Metodo di pagamento', importo:'Importo', data:'Data fattura', scadenza:'Scadenza',
+  fornitore:'Fornitore', numero:'Numero', fatt_num:'N° fattura collegata', note:'Note', parz_pagato:'Importo già pagato',
+  data_pagamento:'Data pagamento', riconciliata:'Riconciliata con banca', riconciliazione:'Movimento collegato',
+  riconciliazione_storico:'Pagamenti registrati', deleted_at:'Nel cestino', bon_iban:'IBAN', bon_caus:'Causale bonifico',
+  bon_data:'Data bonifico', bon_rif:'Riferimento bonifico', assegno:'N° assegno', ass_int:'Intestatario assegno',
+  ass_banca:'Banca assegno', tipo:'Tipo documento', num_ddt:'N° DDT', rate:'Rate', iva:'IVA', totale_imponibile:'Imponibile',
+  totale_imposta:'Imposta', conto_pagamento:'Conto di pagamento'
+};
+var _ST_TECNICI = ['pagamento_origine','pagamento_impostato_il','pec_verificata','pec_id','source','xml_github_path','fattura_allegata_name','incompleta','iva_breakdown','created_at'];
+function _stValore(k, v){
+  if(v===null || v===undefined || v==='') return '—';
+  if(k==='stato') return ({da_pagare:'Da pagare', parziale:'Parziale', pagata:'Pagata'})[v]||v;
+  if(k==='riconciliata' || k==='pec_verificata') return v ? 'Sì' : 'No';
+  if(k==='importo' || k==='parz_pagato' || k==='totale_imponibile' || k==='totale_imposta') return fmt(+v);
+  if(k==='data' || k==='scadenza' || k==='data_pagamento' || k==='bon_data') return _anData(v);
+  if(k==='deleted_at') return 'Sì, dal '+_anData(v);
+  if(k==='tipo') return ({fattura:'Fattura', nota_credito:'Nota di credito', ddt:'DDT'})[v]||v;
+  if(k==='riconciliazione') return (v && typeof v==='object') ? ('Movimento del '+_anData(v.data)+' di '+fmt(Math.abs(v.importo||0))) : '—';
+  if(k==='riconciliazione_storico') return Array.isArray(v) ? (v.length+' pagament'+(v.length===1?'o':'i')) : '—';
+  if(k==='rate') return Array.isArray(v) ? (v.length ? v.length+' rat'+(v.length===1?'a':'e') : 'nessuna') : '—';
+  if(typeof v==='object') return JSON.stringify(v).slice(0,80);
+  var s=String(v); return s.length>90 ? s.slice(0,90)+'…' : s;
+}
+async function _stApri(){
+  if(!editId){ toast('Apri prima una fattura'); return; }
+  var id=editId;
+  _stChiudi();
+  var ov=document.createElement('div');
+  ov.id='stOverlay';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:880;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px)';
+  ov.onclick=function(e){ if(e.target===ov) _stChiudi(); };
+  var f=(fatture||[]).find(function(x){ return x.id===id; })||{};
+  ov.innerHTML='<div style="background:var(--bg);border-radius:20px 20px 0 0;width:100%;max-width:560px;max-height:88vh;overflow-y:auto;display:flex;flex-direction:column">'+
+    '<div class="edit-sheet-hd" style="background:var(--bg)"><div><h3>Storico modifiche</h3><div style="font-size:12px;color:var(--ink3);margin-top:2px">'+esc(f.fornitore||'')+' · N° '+esc(f.numero||'—')+'</div></div><button class="edit-close" onclick="_stChiudi()">×</button></div>'+
+    '<div id="stBody" style="padding:8px 16px 34px"><div class="an-vuoto"><span>Carico lo storico…</span></div></div></div>';
+  document.body.appendChild(ov);
+  var righe=[];
+  try{ righe = await sbFetch('fatture_storico?fattura_id=eq.'+encodeURIComponent(id)+'&select=id,quando,operazione,modifiche&order=quando.desc&limit=100'); }
+  catch(e){ document.getElementById('stBody').innerHTML='<div class="an-vuoto"><b>Storico non disponibile</b><span>'+esc(e.message||String(e))+'</span></div>'; return; }
+  window._stRighe=righe||[];
+  var body=document.getElementById('stBody'); if(!body) return;
+  if(!righe || !righe.length){
+    body.innerHTML='<div class="an-vuoto"><div style="font-size:34px">🕘</div><b>Nessuna modifica registrata</b><span>Lo storico parte dal 19/09/2026: da ora ogni modifica a questa fattura (tua, della sincronizzazione o dell\'assistente) comparirà qui e potrai annullarla.</span></div>';
+    return;
+  }
+  var opLab={modifica:'Modifica', eliminata:'Spostata nel cestino', ripristinata:'Recuperata dal cestino', cancellata_definitivamente:'Cancellata definitivamente'};
+  body.innerHTML='<div class="an-intro" style="margin-top:6px">Ogni voce mostra cosa è cambiato. «Ripristina» rimette i valori di prima di quella modifica — e anche il ripristino finisce nello storico, quindi si può sempre tornare indietro.</div>'+
+    righe.map(function(r, i){
+      var d=new Date(r.quando);
+      var quando=d.toLocaleDateString('it-IT',{day:'2-digit',month:'short',year:'numeric'})+' · '+d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});
+      var mod=r.modifiche||{}, chiavi=Object.keys(mod);
+      var visibili=chiavi.filter(function(k){ return _ST_TECNICI.indexOf(k)<0; }), tecnici=chiavi.length-visibili.length;
+      var campi=visibili.map(function(k){
+        var c=mod[k]||{};
+        return '<div class="st-campo"><span class="st-k">'+esc(_ST_LABEL[k]||k)+'</span><span class="st-v"><s>'+esc(_stValore(k,c.prima))+'</s> → <b>'+esc(_stValore(k,c.dopo))+'</b></span></div>';
+      }).join('');
+      return '<div class="an-item st-item" style="animation-delay:'+Math.min(i,8)*40+'ms">'+
+        '<div class="an-item-hd"><span class="an-pill '+(r.operazione==='modifica'?'an-g-bassa':'an-g-media')+'">'+esc(opLab[r.operazione]||r.operazione)+'</span><span class="st-quando">'+esc(quando)+'</span></div>'+
+        (campi || '<div class="an-item-txt">Solo dettagli tecnici</div>')+
+        (tecnici ? '<div class="st-tec">+ '+tecnici+' dettagl'+(tecnici===1?'io':'i')+' tecnic'+(tecnici===1?'o':'i')+'</div>' : '')+
+        (r.operazione!=='cancellata_definitivamente' ? '<button class="an-ign" data-i="'+i+'" onclick="_stRipristina(+this.dataset.i)">↺ Ripristina com\'era prima</button>' : '')+
+      '</div>';
+    }).join('');
+}
+function _stChiudi(){ var o=document.getElementById('stOverlay'); if(o) o.remove(); }
+async function _stRipristina(i){
+  var r=(window._stRighe||[])[i]; if(!r) return;
+  var id=editId; if(!id) return;
+  var mod=r.modifiche||{}, patch={}, nomi=[];
+  Object.keys(mod).forEach(function(k){ patch[k]=mod[k].prima===undefined?null:mod[k].prima; if(_ST_TECNICI.indexOf(k)<0) nomi.push(_ST_LABEL[k]||k); });
+  if(!Object.keys(patch).length) return;
+  if(!confirm('Rimettere com\'era prima di questa modifica?\n\n'+(nomi.length?nomi.join(', '):'Dettagli tecnici')+'\n\nAnche questo ripristino verrà registrato nello storico.')) return;
+  try{
+    patch.ts = Date.now();
+    await sbFetch('fatture?id=eq.'+encodeURIComponent(id), {method:'PATCH', headers:{'Prefer':'return=minimal'}, body:JSON.stringify(patch)});
+    var rows = await sbFetch('fatture?id=eq.'+encodeURIComponent(id)+'&select='+SLIM_COLS_FATTURE);
+    var idx=(fatture||[]).findIndex(function(x){ return x.id===id; });
+    if(rows && rows[0]){
+      var nuovo=dbToApp(rows[0]);
+      if(idx>=0){
+        var vecchio=fatture[idx];
+        ['foto','fatturaAllegata','hasFoto','hasAllegata'].forEach(function(k){ if((nuovo[k]===undefined||nuovo[k]===null) && vecchio[k]!==undefined) nuovo[k]=vecchio[k]; });
+        if(nuovo.deletedAt) fatture.splice(idx,1); else fatture[idx]=nuovo;
+      } else if(!nuovo.deletedAt){ fatture.unshift(nuovo); }
+      try{ save(fatture); }catch(e){}
+    }
+    toast('↺ Ripristinato');
+    _stChiudi();
+    renderLista(); if(typeof aggiornaAlertBanner==='function') aggiornaAlertBanner(); if(typeof aggiornaHeroCard==='function') aggiornaHeroCard();
+    if(fatture.some(function(x){ return x.id===id; })){ openEdit(id); setTimeout(_stApri, 250); } else closeEdit();
+  }catch(e){ toast('❌ Ripristino non riuscito'); if(typeof _registraErrore==='function') _registraErrore('database','Ripristino storico: '+(e.message||e)); }
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// SCHEDA FORNITORE (19/09, punto 8 della roadmap)
+// Tutto su un fornitore in un posto solo: identità (P.IVA e nome ufficiale
+// letti dall'XML), situazione (spesa, da pagare, scadute, crediti), andamento
+// 12 mesi, termini di pagamento (salvati sul database: valgono su tutti i
+// dispositivi), nomi diversi con la stessa P.IVA da unire, ultime fatture.
+// Il fornitore è riconosciuto per P.IVA quando c'è, altrimenti per nome.
+// Ogni modifica passa dalle fatture e finisce nello storico: reversibile.
+// ══════════════════════════════════════════════════════════════════════════
+function _sfKey(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]/g,''); }
+function _sfFattureDi(nome){
+  var F=(typeof fatture!=='undefined'?fatture:[]).filter(function(f){ return f.tipo!=='ddt'; });
+  var k=_sfKey(nome);
+  var perNome=F.filter(function(f){ return _sfKey(f.fornitore)===k; });
+  var pive={}; perNome.forEach(function(f){ if(f.piva) pive[f.piva]=(pive[f.piva]||0)+1; });
+  var piva=Object.keys(pive).sort(function(a,b){ return pive[b]-pive[a]; })[0]||'';
+  var tutte = piva ? F.filter(function(f){ return f.piva===piva || _sfKey(f.fornitore)===k; }) : perNome;
+  return {piva:piva, fatture:tutte.sort(function(a,b){ return String(b.data||'').localeCompare(String(a.data||'')); })};
+}
+function _sfCalcScadenza(data, giorni, fineMese){
+  if(!data) return '';
+  var d=new Date(String(data).slice(0,10)+'T12:00:00'); if(isNaN(d)) return '';
+  d.setDate(d.getDate()+(+giorni||0));
+  if(fineMese) d=new Date(d.getFullYear(), d.getMonth()+1, 0, 12);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+var _sfStato=null;
+async function _sfApri(nome){
+  _sfChiudi();
+  var ov=document.createElement('div');
+  ov.id='sfOverlay';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:890;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px)';
+  ov.onclick=function(e){ if(e.target===ov) _sfChiudi(); };
+  ov.innerHTML='<div style="background:var(--bg);border-radius:20px 20px 0 0;width:100%;max-width:560px;max-height:92vh;overflow-y:auto;display:flex;flex-direction:column" id="sfSheet"><div id="sfBody" style="padding:0 16px 34px"><div class="an-vuoto"><span>Carico la scheda…</span></div></div></div>';
+  document.body.appendChild(ov);
+  var dati=_sfFattureDi(nome);
+  var row=null;
+  try{ var r=await sbFetch('fornitori?nome=eq.'+encodeURIComponent(nome)+'&select=*'); row=(r&&r[0])||null; }catch(e){}
+  if(!row && dati.piva){ try{ var r2=await sbFetch('fornitori?piva=eq.'+encodeURIComponent(dati.piva)+'&select=*&limit=1'); row=(r2&&r2[0])||null; }catch(e){} }
+  _sfStato={nome:nome, dati:dati, row:row};
+  _sfRender();
+}
+function _sfChiudi(){ var o=document.getElementById('sfOverlay'); if(o) o.remove(); }
+function _sfRender(){
+  var box=document.getElementById('sfBody'); if(!box || !_sfStato) return;
+  var S=_sfStato, F=S.dati.fatture, nome=S.nome, row=S.row||{};
+  var oggi=new Date().toISOString().slice(0,10);
+  var dal=new Date(); dal.setMonth(dal.getMonth()-11); dal.setDate(1); var dalK=dal.toISOString().slice(0,7);
+  var fatt=F.filter(function(f){ return f.tipo!=='nota_credito'; }), nc=F.filter(function(f){ return f.tipo==='nota_credito'; });
+  var spesa12=F.filter(function(f){ return String(f.data||'').slice(0,7)>=dalK; }).reduce(function(s,f){ return s+(f.importo||0); },0);
+  var aperte=fatt.filter(function(f){ return f.stato==='da_pagare'||f.stato==='parziale'; });
+  var residuo=aperte.reduce(function(s,f){ return s+Math.max(0,(f.importo||0)-(f.stato==='parziale'?(f.parzPagato||0):0)); },0);
+  var scadute=aperte.filter(function(f){ return f.scadenza && f.scadenza<oggi; });
+  var ncAperte=nc.filter(function(n){ return !/\[NC→\d+·/.test(n.note||''); });
+  var creditiNc=ncAperte.reduce(function(s,n){ return s+Math.abs(n.importo||0); },0);
+  var ufficiale=(F.find(function(f){ return f.denominazioneXml; })||{}).denominazioneXml||'';
+  var primo=F.length?F[F.length-1].data:'';
+  // andamento 12 mesi
+  var mesi=[]; for(var i=11;i>=0;i--){ var d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-i); mesi.push({k:d.toISOString().slice(0,7), m:d.getMonth(), v:0}); }
+  F.forEach(function(f){ var mm=mesi.find(function(x){ return x.k===String(f.data||'').slice(0,7); }); if(mm) mm.v+=(f.importo||0); });
+  var maxM=Math.max.apply(null, mesi.map(function(x){ return x.v; }).concat([1]));
+  var barre=mesi.map(function(x,i){ var tip='<b>'+_GR_MESI[x.m]+' '+x.k.slice(0,4)+'</b><div>Spesa <span>'+fmt(x.v)+'</span></div>'; return '<div class="gr-vcol gr-hit" data-tip="'+esc(tip)+'" onclick="_grTip(this,this.dataset.tip)"><div class="gr-vtrack"><div class="gr-vbar gr-vbar-top" style="height:'+(x.v>0?Math.max(3,x.v/maxM*100):0)+'%;animation-delay:'+(i*30)+'ms;width:70%"></div></div><div class="gr-vlab" style="font-size:9px">'+_GR_MESI[x.m].charAt(0)+'</div></div>'; }).join('');
+  // nomi diversi con la stessa P.IVA
+  var nomi={}; F.forEach(function(f){ var n=f.fornitore||'—'; nomi[n]=(nomi[n]||0)+1; });
+  var varianti=Object.keys(nomi);
+  var obiettivo=ufficiale||nome;
+  var htmlVar = (S.dati.piva && varianti.length>1) ?
+    '<div class="gr-card sf-warn"><div class="gr-t" style="font-size:14px">'+varianti.length+' nomi diversi per lo stesso fornitore</div><div class="gr-s" style="margin-bottom:8px">Stessa partita IVA '+esc(S.dati.piva)+'. Nell\'XML il nome ufficiale è «'+esc(ufficiale||'—')+'».</div>'+
+      varianti.sort(function(a,b){ return nomi[b]-nomi[a]; }).map(function(v){ return '<div class="sf-var"><span>'+esc(v)+'</span><em>'+nomi[v]+' fattur'+(nomi[v]===1?'a':'e')+'</em></div>'; }).join('')+
+      '<button class="btn btn-p" style="margin-top:10px;padding:12px;font-size:14px" data-t="'+esc(obiettivo)+'" onclick="_sfUnisci(this.dataset.t)">Unisci tutto sotto «'+esc(obiettivo)+'»</button>'+
+      '<div class="gr-nota">Rinomina le fatture con gli altri nomi. Ogni cambio finisce nello storico della fattura e si può annullare.</div></div>' : '';
+  // termini di pagamento
+  var kdp=(typeof getPagDefault==='function')?getPagDefault(nome):null;
+  var metodo=row.metodo_pagamento||(kdp&&kdp.pagamento)||'';
+  var giorni=(row.termini_giorni===null||row.termini_giorni===undefined)?'':row.termini_giorni;
+  var fineMese=!!row.termini_fine_mese;
+  var ibanNoto=row.iban||((fatt.find(function(f){ return f.bonIban; })||{}).bonIban)||'';
+  var senzaScad=aperte.filter(function(f){ return !f.scadenza; });
+  var metodi=[['contanti','Contanti'],['bonifico','Bonifico'],['sdd','SDD'],['assegno','Assegno'],['carta','Carta']];
+  var htmlTermini='<div class="gr-card"><div class="gr-t" style="font-size:14px">Termini di pagamento</div><div class="gr-s" style="margin-bottom:10px">Salvati sul database: valgono su tutti i tuoi dispositivi.</div>'+
+    '<div class="sf-lbl">Metodo abituale</div><div class="sf-chips">'+metodi.map(function(m){ return '<button class="chip'+(metodo===m[0]?' active':'')+'" data-m="'+m[0]+'" onclick="_sfSet(\'metodo\',this.dataset.m)">'+m[1]+'</button>'; }).join('')+'</div>'+
+    '<div class="sf-lbl">Scadenza</div><div class="sf-chips">'+[['0','Subito'],['30','30 gg'],['60','60 gg'],['90','90 gg']].map(function(g){ return '<button class="chip'+(String(giorni)===g[0]?' active':'')+'" data-g="'+g[0]+'" onclick="_sfSet(\'giorni\',this.dataset.g)">'+g[1]+'</button>'; }).join('')+
+      '<input id="sfGiorni" type="number" inputmode="numeric" min="0" max="365" placeholder="altro" value="'+(['','0','30','60','90'].indexOf(String(giorni))<0?esc(String(giorni)):'')+'" oninput="_sfSet(\'giorni\',this.value,true)" style="width:78px;padding:7px 10px;font-size:13px"></div>'+
+    '<label class="sf-toggle"><input type="checkbox" id="sfFineMese" '+(fineMese?'checked':'')+' onchange="_sfSet(\'fineMese\',this.checked)"> <span>Fine mese (es. «30 gg fine mese»)</span></label>'+
+    '<div class="sf-lbl">IBAN</div><input id="sfIban" type="text" autocomplete="off" spellcheck="false" value="'+esc(ibanNoto)+'" placeholder="IT…" style="width:100%;padding:10px 12px;font-size:13px;margin-bottom:10px">'+
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><div class="sf-lbl">Email</div><input id="sfEmail" type="email" value="'+esc(row.email||'')+'" style="width:100%;padding:10px 12px;font-size:13px"></div><div><div class="sf-lbl">WhatsApp</div><input id="sfWa" type="tel" value="'+esc(row.whatsapp||'')+'" style="width:100%;padding:10px 12px;font-size:13px"></div></div>'+
+    '<button class="btn btn-p" style="margin-top:12px;padding:12px;font-size:14px" onclick="_sfSalva()">Salva</button>'+
+    (senzaScad.length ? '<div class="sf-hint">'+senzaScad.length+' fattur'+(senzaScad.length===1?'a aperta è':'e aperte sono')+' senza scadenza.'+(giorni!==''?' <button class="sf-link" onclick="_sfApplicaScadenze()">Calcola la scadenza con questi termini ›</button>':' Imposta i giorni e salva per calcolarla.')+'</div>' : '')+
+  '</div>';
+  var stati={pagata:'Pagata', da_pagare:'Da pagare', parziale:'Parziale'};
+  var righe=F.slice(0,8).map(function(f){
+    var isNc=f.tipo==='nota_credito';
+    return '<button class="cr-row" data-id="'+esc(String(f.id))+'" onclick="_sfApriFattura(this.dataset.id)"><span class="cr-main"><b>N° '+esc(f.numero||'—')+(isNc?' · nota di credito':'')+'</b><span>'+_anData(f.data)+(isNc?'':' · <em class="cr-st cr-st-'+f.stato+'">'+(stati[f.stato]||'')+'</em>')+(f.fornitore!==nome?' · come «'+esc(f.fornitore)+'»':'')+'</span></span><span class="cr-imp">'+fmt(f.importo)+'</span></button>';
+  }).join('');
+  var iniz=(String(nome).replace(/[^A-Za-z0-9]/g,'')[0]||'?').toUpperCase();
+  box.innerHTML=
+    '<div class="edit-sheet-hd" style="background:var(--bg);margin:0 -16px 12px;position:sticky;top:0;z-index:2"><div style="display:flex;align-items:center;gap:11px;min-width:0"><span class="ds-g ds-g-orange sf-av">'+esc(iniz)+'</span><div style="min-width:0"><h3 style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(nome)+'</h3><div style="font-size:12px;color:var(--ink3);margin-top:1px">'+(S.dati.piva?'P.IVA '+esc(S.dati.piva)+' · ':'')+F.length+' document'+(F.length===1?'o':'i')+(primo?' dal '+_anData(primo):'')+'</div></div></div><button class="edit-close" onclick="_sfChiudi()">×</button></div>'+
+    '<div class="gr-kpi" style="grid-template-columns:1fr 1fr;margin:0 0 12px">'+
+      '<div><span>Spesa ultimi 12 mesi</span><b>'+fmt(spesa12)+'</b></div>'+
+      '<div><span>Da pagare ('+aperte.length+')</span><b style="color:'+(residuo>0?'var(--red)':'inherit')+'">'+fmt(residuo)+'</b></div>'+
+      '<div><span>Scadute</span><b style="color:'+(scadute.length?'var(--red)':'inherit')+'">'+scadute.length+'</b></div>'+
+      '<div><span>Crediti da note non usati</span><b style="color:'+(creditiNc>0?'var(--green)':'inherit')+'">'+fmt(creditiNc)+'</b></div>'+
+    '</div>'+
+    '<div class="gr-card"><div class="gr-t" style="font-size:14px">Andamento spesa</div><div class="gr-s">Ultimi 12 mesi · tocca un mese</div><div class="gr-vlist" style="height:110px;grid-template-columns:repeat(12,1fr);gap:3px;margin-top:8px">'+barre+'</div></div>'+
+    htmlVar+htmlTermini+
+    '<div class="cr-sez" style="margin-top:4px">Ultimi documenti<span>'+F.length+'</span></div><div class="cr-grp">'+(righe||'<div style="padding:14px;color:var(--ink3);font-size:13px">Nessun documento</div>')+'</div>'+
+    '<button class="an-ign" style="margin-top:12px" data-n="'+esc(nome)+'" onclick="_sfVediRegistro(this.dataset.n)">Vedi tutte nel Registro ›</button>'+
+    '<div id="grTip" class="gr-tip" style="display:none"></div>';
+  _sfStato.sel={metodo:metodo, giorni:giorni, fineMese:fineMese};
+}
+function _sfSet(campo, val, daInput){
+  if(!_sfStato || !_sfStato.sel) return;
+  _sfStato.sel[campo]=val;
+  if(campo==='metodo') document.querySelectorAll('#sfBody [data-m]').forEach(function(b){ b.classList.toggle('active', b.dataset.m===val); });
+  if(campo==='giorni'){
+    document.querySelectorAll('#sfBody [data-g]').forEach(function(b){ b.classList.toggle('active', !daInput && b.dataset.g===String(val)); });
+    if(!daInput){ var gi=document.getElementById('sfGiorni'); if(gi) gi.value=''; }
+  }
+}
+async function _sfSalva(){
+  var S=_sfStato; if(!S) return;
+  var g=S.sel.giorni; g=(g===''||g===null||g===undefined)?null:Math.max(0,Math.min(365,parseInt(g,10)||0));
+  var rec={nome:S.nome, piva:S.dati.piva||null, metodo_pagamento:S.sel.metodo||null, termini_giorni:g, termini_fine_mese:!!(document.getElementById('sfFineMese')||{}).checked,
+    iban:((document.getElementById('sfIban')||{}).value||'').replace(/\s+/g,'').toUpperCase()||null,
+    email:((document.getElementById('sfEmail')||{}).value||'').trim()||null, whatsapp:((document.getElementById('sfWa')||{}).value||'').trim()||null, updated_at:new Date().toISOString()};
+  try{
+    await sbFetch('fornitori?on_conflict=nome',{method:'POST',headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify(rec)});
+    // allinea anche il "pagamento predefinito" già usato dall'app all'inserimento
+    // delle fatture (KDP), con la stessa funzione che lo sincronizza su Supabase
+    if(rec.metodo_pagamento){ try{ var db=cacheGet(KDP,{}); var prec=db[S.nome]; db[S.nome]={pagamento:rec.metodo_pagamento, stato:(prec&&prec.stato)||'da_pagare'}; sbSaveImpostazione(KDP,db).catch(function(){}); }catch(e){} }
+    S.row=Object.assign({}, S.row||{}, rec);
+    toast('✓ Scheda salvata');
+    _sfRender();
+  }catch(e){ toast('❌ Salvataggio non riuscito'); if(typeof _registraErrore==='function') _registraErrore('database','Scheda fornitore: '+(e.message||e)); }
+}
+async function _sfApplicaScadenze(){
+  var S=_sfStato; if(!S) return;
+  var g=S.row && S.row.termini_giorni; if(g===null||g===undefined){ toast('Salva prima i termini'); return; }
+  var fm=!!(S.row && S.row.termini_fine_mese);
+  var lista=S.dati.fatture.filter(function(f){ return f.tipo!=='nota_credito' && (f.stato==='da_pagare'||f.stato==='parziale') && !f.scadenza && f.data; });
+  if(!lista.length) return;
+  var es=lista[0];
+  if(!confirm('Calcolare la scadenza di '+lista.length+' fattur'+(lista.length===1?'a':'e')+' aperte con «'+g+' giorni'+(fm?' fine mese':'')+'»?\n\nEsempio: fattura del '+_anData(es.data)+' → scade il '+_anData(_sfCalcScadenza(es.data,g,fm))+'.\n\nOgni modifica va nello storico della fattura e si può annullare.')) return;
+  var ok=0;
+  for(var i=0;i<lista.length;i++){
+    var f=lista[i], sc=_sfCalcScadenza(f.data,g,fm);
+    try{ await sbFetch('fatture?id=eq.'+encodeURIComponent(f.id),{method:'PATCH',headers:{'Prefer':'return=minimal'},body:JSON.stringify({scadenza:sc, ts:Date.now()})}); f.scadenza=sc; ok++; }catch(e){}
+  }
+  try{ save(fatture); }catch(e){}
+  renderLista(); if(typeof aggiornaAlertBanner==='function') aggiornaAlertBanner(); if(typeof aggiornaHeroCard==='function') aggiornaHeroCard();
+  toast('✓ Scadenza calcolata per '+ok+' fattur'+(ok===1?'a':'e'));
+  _sfRender();
+}
+async function _sfUnisci(obiettivo){
+  var S=_sfStato; if(!S||!obiettivo) return;
+  var daCambiare=S.dati.fatture.filter(function(f){ return f.fornitore!==obiettivo; });
+  if(!daCambiare.length) return;
+  if(!confirm('Rinominare '+daCambiare.length+' fattur'+(daCambiare.length===1?'a':'e')+' in «'+obiettivo+'»?\n\nOgni cambio va nello storico della fattura e si può annullare.')) return;
+  var vecchi={};
+  for(var i=0;i<daCambiare.length;i++){
+    var f=daCambiare[i]; vecchi[f.fornitore]=1;
+    try{ await sbFetch('fatture?id=eq.'+encodeURIComponent(f.id),{method:'PATCH',headers:{'Prefer':'return=minimal'},body:JSON.stringify({fornitore:obiettivo, ts:Date.now()})}); f.fornitore=obiettivo; }catch(e){}
+  }
+  try{
+    if(typeof dbSaveForn==='function') await dbSaveForn(obiettivo);
+    if(fornitori.indexOf(obiettivo)<0) fornitori.push(obiettivo);
+    Object.keys(vecchi).forEach(function(v){
+      var ancora=(fatture||[]).some(function(x){ return x.fornitore===v; });
+      if(!ancora){ var ix=fornitori.indexOf(v); if(ix>=0) fornitori.splice(ix,1); if(typeof dbDeleteForn==='function') dbDeleteForn(v); }
+    });
+    fornitori.sort(); if(typeof saveF==='function') saveF(fornitori); if(typeof aggiornaDL==='function') aggiornaDL();
+  }catch(e){}
+  try{ save(fatture); }catch(e){}
+  renderLista();
+  toast('✓ Nomi unificati');
+  _sfApri(obiettivo);
+}
+function _sfApriFattura(id){
+  var f=(fatture||[]).find(function(x){ return String(x.id)===String(id); }); if(!f) return;
+  _sfChiudi(); openEdit(f.id);
+}
+function _sfVediRegistro(nome){
+  _sfChiudi();
+  goTab('lista', document.querySelectorAll('.tab-item')[1]);
+  setTimeout(function(){ var s=document.getElementById('searchInp'); if(s){ s.value=nome; renderLista(); } window.scrollTo(0,0); }, 60);
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// BONIFICA GUIDATA DEL REGISTRO (19/09, punto 9 della roadmap)
+// Fatture "da pagare" scadute da oltre un mese (o, senza scadenza, emesse da
+// oltre 60 giorni): quasi sempre già pagate e mai segnate, e gonfiano
+// "Da pagare", "Scadute" e le uscite previste. Misurato sui dati reali: 298
+// fatture, € 153.372; solo 8 con un pagamento corrispondente in banca (gli
+// estratti conto partono dal 2026), 112 in contanti.
+// Quindi NON si sistemano da sole: si decide per fornitore, in pochi tocchi.
+//  · "Pagamento trovato in banca" → apre la riconciliazione già esistente
+//    (apriRiconciliaDaFattura / _cfAbbina), nessuna logica nuova.
+//  · Per fornitore → "Segna pagate" (data fattura / scadenza / data scelta)
+//    oppure "Sono davvero da pagare" (escluse dalla bonifica, scelta
+//    condivisa tra dispositivi).
+// Ogni modifica passa dallo storico della fattura: si annulla quando vuoi.
+// ══════════════════════════════════════════════════════════════════════════
+var _BF_KEY='fatture_bonifica_davvero_aperte';
+var _bfOk=null, _bfSel={}, _bfAperto={};
+function _bfVecchie(){
+  var oggi=new Date(); var lim=new Date(oggi.getTime()-30*86400000).toISOString().slice(0,10);
+  var lim2=new Date(oggi.getTime()-60*86400000).toISOString().slice(0,10);
+  var ok=_bfOk||{};
+  return (typeof fatture!=='undefined'?fatture:[]).filter(function(f){
+    if(f.tipo!=='fattura' || !(f.stato==='da_pagare'||f.stato==='parziale') || ok[String(f.id)]) return false;
+    return f.scadenza ? String(f.scadenza).slice(0,10)<lim : (f.data && String(f.data).slice(0,10)<lim2);
+  });
+}
+async function _bfCaricaOk(){
+  if(_bfOk) return _bfOk;
+  try{ var r=await sbFetch('ceraldi_stato_condiviso?id=eq.'+_BF_KEY+'&select=data'); _bfOk=(r&&r[0]&&r[0].data&&r[0].data.ids)||{}; }catch(e){ _bfOk={}; }
+  return _bfOk;
+}
+async function _bfSalvaOk(ids, aggiungi){
+  var base={};
+  try{ var r=await sbFetch('ceraldi_stato_condiviso?id=eq.'+_BF_KEY+'&select=data'); base=(r&&r[0]&&r[0].data&&r[0].data.ids)||{}; }catch(e){ base=Object.assign({},_bfOk||{}); }
+  ids.forEach(function(id){ if(aggiungi) base[String(id)]=new Date().toISOString(); else delete base[String(id)]; });
+  _bfOk=base;
+  try{ await sbFetch('ceraldi_stato_condiviso?on_conflict=id',{method:'POST',headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify({id:_BF_KEY,data:{ids:base},updated_at:new Date().toISOString()})}); }catch(e){ toast('⚠️ Salvato solo su questo dispositivo'); }
+}
+function _bfProveBanca(lista){
+  // un solo movimento in uscita, non abbinato, stesso importo, entro 150 giorni dalla fattura
+  var movs=(typeof _crMovimentiBanca==='function'?_crMovimentiBanca():[]).filter(function(m){ return (m.importo||0)<0 && !m.abbinata && !m.ignorata; });
+  var out=[];
+  lista.forEach(function(f){
+    var d0=String(f.data||'').slice(0,10); if(!d0) return;
+    var d1=new Date(new Date(d0+'T12:00:00').getTime()+150*86400000).toISOString().slice(0,10);
+    var c=movs.filter(function(m){ return Math.abs(Math.abs(m.importo)-(f.importo||0))<0.01 && m.data>=d0 && m.data<=d1; });
+    if(c.length===1) out.push({f:f, m:c[0]});
+  });
+  return out;
+}
+async function _bfApri(){
+  _bfChiudi();
+  var ov=document.createElement('div');
+  ov.id='bfOverlay';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:885;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px)';
+  ov.onclick=function(e){ if(e.target===ov) _bfChiudi(); };
+  ov.innerHTML='<div style="background:var(--bg);border-radius:20px 20px 0 0;width:100%;max-width:560px;max-height:92vh;overflow-y:auto;display:flex;flex-direction:column">'+
+    '<div class="edit-sheet-hd" style="background:var(--bg)"><h3>Sistema le fatture aperte</h3><button class="edit-close" onclick="_bfChiudi()">×</button></div>'+
+    '<div id="bfBody" style="padding:4px 16px 36px"><div class="an-vuoto"><span>Preparo l\'elenco…</span></div></div></div>';
+  document.body.appendChild(ov);
+  await Promise.all([_bfCaricaOk(), (typeof _crCaricaBanca==='function'?_crCaricaBanca():null)]);
+  _bfRender();
+}
+function _bfChiudi(){ var o=document.getElementById('bfOverlay'); if(o) o.remove(); }
+function _bfRender(){
+  var box=document.getElementById('bfBody'); if(!box) return;
+  var lista=_bfVecchie();
+  if(!lista.length){ box.innerHTML='<div class="an-vuoto"><div style="font-size:38px">✅</div><b>Registro in ordine</b><span>Nessuna fattura scaduta da oltre un mese ancora aperta.</span></div>'; return; }
+  var tot=lista.reduce(function(s,f){ return s+(f.importo||0); },0);
+  var prove=_bfProveBanca(lista), conProva={}; prove.forEach(function(p){ conProva[String(p.f.id)]=1; });
+  var perF={};
+  lista.forEach(function(f){ if(conProva[String(f.id)]) return; var k=f.fornitore||'—'; (perF[k]=perF[k]||[]).push(f); });
+  var gruppi=Object.keys(perF).map(function(k){ var a=perF[k].sort(function(x,y){ return String(x.data).localeCompare(String(y.data)); }); return {nome:k, fatt:a, tot:a.reduce(function(s,f){ return s+(f.importo||0); },0)}; }).sort(function(a,b){ return b.tot-a.tot; });
+  var html='<div class="bf-hero"><div><b>'+lista.length+'</b><span>fatture scadute da oltre un mese</span></div><div><b>'+fmt(tot)+'</b><span>risultano ancora da pagare</span></div></div>'+
+    '<div class="an-intro">Quasi sempre sono fatture già pagate e mai segnate: finché restano aperte, «Da pagare», «Scadute» e le uscite previste risultano gonfiati. Ogni modifica finisce nello storico della fattura e si può annullare.</div>';
+  if(prove.length){
+    html+='<div class="an-sez">Pagamento trovato in banca<span>'+prove.length+'</span></div><div class="cr-grp">'+prove.map(function(p){
+      return '<div class="cr-row" style="cursor:default"><span class="cr-main"><b>'+esc(p.f.fornitore)+' · N° '+esc(p.f.numero||'—')+'</b><span>Fattura '+_anData(p.f.data)+' · movimento '+_anData(p.m.data)+' di '+fmt(Math.abs(p.m.importo))+'</span></span><button class="an-fix" data-id="'+esc(String(p.f.id))+'" onclick="_bfCollega(this.dataset.id)">Collega</button></div>';
+    }).join('')+'</div>';
+  }
+  html+='<div class="an-sez">Per fornitore<span>'+gruppi.length+'</span></div>';
+  html+=gruppi.map(function(g, gi){
+    var metodi={}; g.fatt.forEach(function(f){ var p=f.pagamento||'—'; metodi[p]=(metodi[p]||0)+1; });
+    var metodo=Object.keys(metodi).sort(function(a,b){ return metodi[b]-metodi[a]; })[0];
+    var aperto=_bfAperto[g.nome];
+    var sel=_bfSel[g.nome]||(_bfSel[g.nome]={}); g.fatt.forEach(function(f){ if(sel[f.id]===undefined) sel[f.id]=true; });
+    var nSel=g.fatt.filter(function(f){ return sel[f.id]; }).length;
+    return '<div class="an-item bf-g" style="animation-delay:'+Math.min(gi,8)*35+'ms">'+
+      '<button class="bf-hd" data-g="'+esc(g.nome)+'" onclick="_bfToggle(this.dataset.g)"><span class="cr-main"><b>'+esc(g.nome)+'</b><span>'+g.fatt.length+' fattur'+(g.fatt.length===1?'a':'e')+' · dal '+_anData(g.fatt[0].data)+' al '+_anData(g.fatt[g.fatt.length-1].data)+(metodo&&metodo!=='—'?' · di solito '+esc(metodo):'')+'</span></span><span class="cr-imp">'+fmt(g.tot)+'</span><span class="bf-chev'+(aperto?' on':'')+'">›</span></button>'+
+      (aperto ?
+        '<div class="bf-list">'+g.fatt.map(function(f){ return '<label class="bf-f"><input type="checkbox" '+(sel[f.id]?'checked':'')+' data-g="'+esc(g.nome)+'" data-id="'+esc(String(f.id))+'" onchange="_bfSelF(this.dataset.g,this.dataset.id,this.checked)"><span class="cr-main"><b>N° '+esc(f.numero||'—')+'</b><span>'+_anData(f.data)+(f.scadenza?' · scad. '+_anData(f.scadenza):'')+(f.stato==='parziale'?' · parziale':'')+'</span></span><span class="cr-imp">'+fmt(f.importo)+'</span></label>'; }).join('')+'</div>'+
+        '<div class="sf-lbl" style="margin-top:12px">Segna come pagate le '+nSel+' selezionate, con data di pagamento:</div>'+
+        '<div class="sf-chips"><button class="chip" data-g="'+esc(g.nome)+'" onclick="_bfPaga(this.dataset.g,\'fattura\')">Data della fattura</button><button class="chip" data-g="'+esc(g.nome)+'" onclick="_bfPaga(this.dataset.g,\'scadenza\')">Alla scadenza</button><input type="date" class="bf-data" data-g="'+esc(g.nome)+'" onchange="_bfPaga(this.dataset.g,\'data\',this.value)" style="padding:6px 10px;font-size:13px"></div>'+
+        '<button class="an-ign" data-g="'+esc(g.nome)+'" onclick="_bfDavveroAperte(this.dataset.g)">Sono davvero ancora da pagare</button>'
+      : '')+
+    '</div>';
+  }).join('');
+  var ign=Object.keys(_bfOk||{}).length;
+  if(ign) html+='<div class="gr-nota" style="text-align:center;margin-top:14px">'+ign+' fattur'+(ign===1?'a segnata':'e segnate')+' come «davvero da pagare» non compaiono qui. <button class="sf-link" onclick="_bfRipristinaTutte()">Rimettile nell\'elenco</button></div>';
+  box.innerHTML=html;
+}
+function _bfToggle(nome){ _bfAperto[nome]=!_bfAperto[nome]; _bfRender(); }
+function _bfSelF(nome, id, v){ (_bfSel[nome]=_bfSel[nome]||{})[id]=v; _bfRender(); }
+function _bfSelezionate(nome){
+  var sel=_bfSel[nome]||{};
+  return _bfVecchie().filter(function(f){ return (f.fornitore||'—')===nome && sel[f.id]; });
+}
+async function _bfPaga(nome, modo, dataScelta){
+  var lista=_bfSelezionate(nome); if(!lista.length){ toast('Nessuna fattura selezionata'); return; }
+  if(modo==='data' && !dataScelta) return;
+  var desc={fattura:'alla data di ciascuna fattura', scadenza:'alla scadenza di ciascuna (o alla data fattura se manca)', data:'il '+_anData(dataScelta)}[modo];
+  if(!confirm('Segnare come PAGATE '+lista.length+' fattur'+(lista.length===1?'a':'e')+' di '+nome+' ('+fmt(lista.reduce(function(s,f){ return s+(f.importo||0); },0))+'), '+desc+'?\n\nSi può annullare dallo storico di ogni fattura.')) return;
+  var ok=0;
+  for(var i=0;i<lista.length;i++){
+    var f=lista[i];
+    var dp = modo==='data' ? dataScelta : (modo==='scadenza' && f.scadenza ? String(f.scadenza).slice(0,10) : String(f.data).slice(0,10));
+    try{
+      await sbFetch('fatture?id=eq.'+encodeURIComponent(f.id),{method:'PATCH',headers:{'Prefer':'return=minimal'},body:JSON.stringify({stato:'pagata', data_pagamento:dp, ts:Date.now()})});
+      f.stato='pagata'; f.dataPagamento=dp; ok++;
+    }catch(e){ if(typeof _registraErrore==='function') _registraErrore('database','Bonifica: '+(e.message||e)); }
+  }
+  try{ save(fatture); }catch(e){}
+  renderLista(); if(typeof aggiornaAlertBanner==='function') aggiornaAlertBanner(); if(typeof aggiornaHeroCard==='function') aggiornaHeroCard();
+  toast('✓ '+ok+' fattur'+(ok===1?'a segnata':'e segnate')+' come pagat'+(ok===1?'a':'e'));
+  _bfRender();
+}
+async function _bfDavveroAperte(nome){
+  var lista=_bfSelezionate(nome); if(!lista.length) return;
+  await _bfSalvaOk(lista.map(function(f){ return f.id; }), true);
+  toast('✓ Restano da pagare, tolte da questo elenco');
+  _bfRender();
+}
+async function _bfRipristinaTutte(){
+  await _bfSalvaOk(Object.keys(_bfOk||{}), false);
+  _bfRender();
+}
+function _bfCollega(id){
+  var f=(fatture||[]).find(function(x){ return String(x.id)===String(id); }); if(!f) return;
+  _bfChiudi();
+  apriRiconciliaDaFattura(String(f.id));
+}
+
 init();
 </script>
 
@@ -23480,6 +24923,193 @@ body > div[style*="position:fixed"][style*="align-items:center"][style*="backgro
 .ds-g-red{background:linear-gradient(145deg,#FF8A80,#FF453A 55%,#D92D22)!important;--gs:rgba(255,69,58,.5)}
 .fisc-row:active .ds-g,.rcard-hd:active .ds-g{transform:scale(.9) rotate(-4deg)}
 .ds-g{transition:transform .3s var(--ease-spring)}
+
+/* Pallino rosso sull'icona Impostazioni quando ci sono errori nuovi (Diagnostica) */
+.hdr-btn{position:relative}
+.hdr-btn.ha-errori::after{content:'';position:absolute;top:5px;right:5px;width:9px;height:9px;border-radius:50%;background:#FF3B30;box-shadow:0 0 0 2px var(--surface);animation:dsChipOn .4s var(--ease-spring)}
+
+
+/* ── Controllo anomalie (punto 2 roadmap) ── */
+.an-card{display:flex;align-items:center;gap:12px;margin:-8px 0 20px;padding:13px 14px;border-radius:20px;background:var(--surface);border:.5px solid rgba(255,59,48,.22);box-shadow:0 1px 2px rgba(0,0,0,.04),0 10px 24px -14px rgba(255,59,48,.45);cursor:pointer;transition:transform .2s var(--ease-ios);animation:dsSlideIn .5s var(--ease-out) backwards}
+.an-card:active{transform:scale(.975)}
+.an-card-ico{width:38px;height:38px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.an-card-t{font-size:14.5px;font-weight:800;letter-spacing:-.25px;color:var(--ink);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.an-card-n{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:99px;background:var(--red);color:#fff;letter-spacing:.1px}
+.an-card-s{font-size:12px;color:var(--ink3);margin-top:2px;line-height:1.35}
+.an-card-s::first-letter{text-transform:uppercase}
+.an-card-chev{color:var(--ink3);font-size:21px;opacity:.6}
+.an-mini{display:block;width:100%;margin:-10px 0 18px;padding:9px 12px;border:none;border-radius:14px;background:transparent;color:var(--ink3);font:inherit;font-size:12px;font-weight:600;text-align:center;cursor:pointer}
+.an-intro{font-size:12.5px;color:var(--ink3);line-height:1.45;margin:6px 4px 14px}
+.an-sez{display:flex;align-items:baseline;justify-content:space-between;font-size:13px;font-weight:800;color:var(--ink);letter-spacing:-.1px;margin:18px 4px 8px}
+.an-sez span{font-size:11px;font-weight:600;color:var(--ink3)}
+.an-item{background:var(--surface);border:.5px solid var(--ds-hair);border-radius:18px;padding:13px 14px;margin-bottom:10px;box-shadow:var(--ds-shadow);animation:dsSlideIn .45s var(--ease-out) backwards}
+.an-item-ign{opacity:.7}
+.an-item-hd{display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap}
+.an-item-t{font-size:14px;font-weight:800;letter-spacing:-.2px;color:var(--ink)}
+.an-pill{font-size:10px;font-weight:700;padding:2.5px 8px;border-radius:99px;text-transform:uppercase;letter-spacing:.4px}
+.an-g-alta{background:var(--red-light);color:var(--red)}
+.an-g-media{background:var(--orange-light);color:#b36a00}
+html[data-theme="dark"] .an-g-media{color:var(--orange)}
+.an-g-bassa{background:var(--surface2);color:var(--ink2)}
+.an-item-txt{font-size:12.5px;color:var(--ink2);line-height:1.45}
+.an-rows{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+.an-row{display:flex;align-items:center;gap:10px;width:100%;padding:9px 10px;border:none;border-radius:12px;background:var(--surface2);font:inherit;text-align:left;color:var(--ink);cursor:pointer}
+.an-row-mov{cursor:default}
+.an-row-ico{font-size:16px;flex-shrink:0}
+.an-row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.an-row-main b{font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.an-row-main span{font-size:11px;color:var(--ink3);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.an-row-chev{color:var(--ink3);font-size:18px}
+.an-fix{flex-shrink:0;padding:7px 11px;border:none;border-radius:99px;background:var(--ds-grad);color:#fff;font:inherit;font-size:11.5px;font-weight:700;cursor:pointer;box-shadow:var(--ds-grad-shadow)}
+.an-ign{margin-top:10px;width:100%;padding:9px;border:.5px solid var(--ds-hair);border-radius:12px;background:transparent;font:inherit;font-size:12.5px;font-weight:700;color:var(--ink2);cursor:pointer}
+.an-row:active,.an-fix:active,.an-ign:active{transform:scale(.97)}
+.an-vuoto{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;padding:28px 10px;color:var(--ink3);font-size:12.5px}
+.an-vuoto b{font-size:15px;color:var(--ink)}
+.an-det{margin-top:16px}
+.an-det summary{font-size:12.5px;font-weight:700;color:var(--ink3);cursor:pointer;padding:6px 4px;list-style:none}
+.an-det summary::-webkit-details-marker{display:none}
+
+
+/* ── Ricerca unica (punto 3 roadmap) ── */
+#cercaOverlay{position:fixed;inset:0;z-index:950;background:var(--bg);display:none;flex-direction:column}
+#cercaOverlay.on{display:flex;animation:dsFade .22s ease}
+.cr-bar{display:flex;align-items:center;gap:10px;padding:calc(12px + env(safe-area-inset-top)) 14px 10px;border-bottom:.5px solid var(--ds-hair);background:var(--bg)}
+.cr-field{flex:1;display:flex;align-items:center;gap:8px;padding:0 10px 0 12px;border-radius:14px;background:var(--surface);border:.5px solid var(--ds-hair);box-shadow:var(--ds-shadow);color:var(--ink3);animation:crIn .35s var(--ease-spring)}
+@keyframes crIn{from{transform:scale(.96);opacity:.4}to{transform:none;opacity:1}}
+.cr-field:focus-within{box-shadow:0 0 0 4px rgba(10,132,255,.14),var(--ds-shadow);color:var(--blue)}
+#cercaInp{flex:1;min-width:0;border:none!important;background:transparent!important;box-shadow:none!important;padding:12px 0!important;font:inherit;font-size:16px;color:var(--ink);outline:none}
+#cercaInp::-webkit-search-cancel-button{display:none}
+.cr-clear{display:none;width:22px;height:22px;border-radius:50%;border:none;background:var(--ink3);color:var(--surface);font-size:15px;line-height:1;cursor:pointer;opacity:.6}
+#cercaOverlay.cr-has .cr-clear{display:block}
+.cr-annulla{border:none;background:none;color:var(--blue);font:inherit;font-size:15px;font-weight:600;cursor:pointer;padding:6px 2px}
+.cr-ris{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:6px 14px calc(30px + env(safe-area-inset-bottom))}
+.cr-tot{font-size:12px;color:var(--ink3);font-weight:600;margin:10px 4px 2px}
+.cr-sez{display:flex;align-items:center;justify-content:space-between;font-size:13px;font-weight:800;color:var(--ink);margin:16px 4px 8px;letter-spacing:-.1px}
+.cr-sez span{font-size:11px;font-weight:700;color:var(--ink3);background:var(--surface2);padding:2px 8px;border-radius:99px}
+.cr-sez button{border:none;background:none;color:var(--blue);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.cr-grp{background:var(--surface);border:.5px solid var(--ds-hair);border-radius:18px;box-shadow:var(--ds-shadow);overflow:hidden;animation:dsSlideIn .35s var(--ease-out) backwards}
+.cr-row{display:flex;align-items:center;gap:11px;width:100%;padding:11px 13px;border:none;border-bottom:.5px solid var(--ds-hair);background:none;font:inherit;text-align:left;color:var(--ink);cursor:pointer}
+.cr-row:last-child{border-bottom:none}
+.cr-row:active{background:rgba(120,120,128,.1)}
+.cr-ico{width:34px;height:34px;border-radius:11px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:15px;font-weight:800;color:#fff}
+.cr-ico-doc{background:var(--surface2);color:var(--ink)}
+.cr-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.cr-main b{font-size:13.5px;font-weight:700;letter-spacing:-.15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cr-main > span{font-size:11.5px;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cr-imp{font-size:13.5px;font-weight:800;letter-spacing:-.3px;white-space:nowrap;flex-shrink:0}
+.cr-chev{color:var(--ink3);font-size:18px;opacity:.6}
+.cr-st{font-style:normal;font-weight:700}
+.cr-st-da_pagare{color:var(--red)} .cr-st-parziale{color:var(--orange)} .cr-st-pagata{color:var(--green)}
+.cr-row mark{background:rgba(255,204,0,.35);color:inherit;border-radius:3px;padding:0 1px}
+.cr-altri{display:block;width:100%;margin-top:6px;padding:9px;border:none;background:none;color:var(--blue);font:inherit;font-size:12.5px;font-weight:700;cursor:pointer}
+.cr-chips{display:flex;flex-wrap:wrap;gap:6px}
+.cr-aiuto{margin-top:22px;padding:14px;border-radius:18px;background:var(--surface);border:.5px solid var(--ds-hair);box-shadow:var(--ds-shadow);font-size:12.5px;color:var(--ink2)}
+.cr-aiuto b{display:block;font-size:13px;color:var(--ink);margin-bottom:8px}
+.cr-aiuto div{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-top:.5px solid var(--ds-hair)}
+.cr-aiuto i{font-style:normal;color:var(--ink3);text-align:right}
+.cr-vuoto{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;padding:48px 16px;color:var(--ink3);font-size:12.5px}
+.cr-vuoto b{font-size:15px;color:var(--ink)}
+
+
+/* ── Grafici di andamento (punto 5 roadmap) — colori validati (CVD + contrasto) ── */
+:root{--gr-1:#2a78d6;--gr-2:#eb6834}
+html[data-theme="dark"]{--gr-1:#3987e5;--gr-2:#d95926}
+.gr-card{position:relative;background:var(--surface);border:.5px solid var(--ds-hair);border-radius:20px;box-shadow:var(--ds-shadow);padding:15px 14px 12px;margin-bottom:12px}
+.gr-hd{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px}
+.gr-t{font-size:15px;font-weight:800;letter-spacing:-.3px;color:var(--ink)}
+.gr-s{font-size:11.5px;color:var(--ink3);margin-top:2px}
+.gr-leg{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;font-weight:600;color:var(--ink2);margin:2px 0 6px}
+.gr-leg span{display:inline-flex;align-items:center;gap:6px}
+.gr-dot{display:inline-block;width:9px;height:9px;border-radius:3px;flex-shrink:0}
+.gr-d1{background:var(--gr-1)} .gr-d2{background:var(--gr-2)}
+.gr-svg{width:100%;height:auto;display:block;overflow:visible}
+.gr-grid{stroke:var(--ds-hair);stroke-width:1}
+.gr-base{stroke:var(--ink3);opacity:.35}
+.gr-ax{font-size:9.5px;fill:var(--ink3);font-family:inherit;font-variant-numeric:tabular-nums}
+.gr-ax-now{fill:var(--ink);font-weight:700}
+.gr-ax-anno{font-size:8.5px;font-weight:700;opacity:.8}
+.gr-s1{fill:var(--gr-1)} .gr-s2{fill:var(--gr-2)}
+.gr-svg path{transform-box:fill-box;transform-origin:bottom;animation:grSale .7s var(--ease-out) backwards}
+@keyframes grSale{from{transform:scaleY(0)}to{transform:none}}
+.gr-hit{fill:transparent;cursor:pointer}
+rect.gr-hit.on{fill:rgba(120,120,128,.1)}
+.gr-tip{position:absolute;z-index:5;transform:translate(-50%,-100%);min-width:170px;max-width:240px;padding:9px 11px;border-radius:12px;background:rgba(28,28,30,.94);color:#fff;font-size:11.5px;line-height:1.5;box-shadow:0 10px 26px -8px rgba(0,0,0,.45);pointer-events:none;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);animation:dsPop .25s var(--ease-spring)}
+.gr-tip b{display:block;font-size:12.5px;margin-bottom:3px}
+.gr-tip div{display:flex;align-items:center;gap:6px}
+.gr-tip div span{margin-left:auto;font-weight:700;font-variant-numeric:tabular-nums;padding-left:10px}
+.gr-tip .gr-tip-sep{border-top:.5px solid rgba(255,255,255,.18);margin-top:4px;padding-top:4px}
+.gr-tip em{display:block;font-style:normal;color:rgba(255,255,255,.6);font-size:10.5px;margin-top:3px}
+.gr-kpi{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px}
+.gr-kpi div{background:var(--surface2);border-radius:12px;padding:8px 9px}
+.gr-kpi span{display:block;font-size:10px;color:var(--ink3);font-weight:600;line-height:1.25}
+.gr-kpi b{display:block;font-size:13.5px;font-weight:800;letter-spacing:-.3px;margin-top:2px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.gr-nota{font-size:10.5px;color:var(--ink3);line-height:1.4;margin-top:8px}
+.gr-det{margin-top:8px}
+.gr-det summary{font-size:12px;font-weight:700;color:var(--blue);cursor:pointer;list-style:none;padding:4px 0}
+.gr-det summary::-webkit-details-marker{display:none}
+.gr-tab{width:100%;border-collapse:collapse;font-size:12px;margin-top:6px;font-variant-numeric:tabular-nums}
+.gr-tab th{text-align:right;font-size:10.5px;color:var(--ink3);font-weight:700;padding:5px 4px;border-bottom:.5px solid var(--ds-hair)}
+.gr-tab th:first-child,.gr-tab td:first-child{text-align:left}
+.gr-tab td{text-align:right;padding:5px 4px;border-bottom:.5px solid var(--ds-hair);color:var(--ink2)}
+.gr-hlist{display:flex;flex-direction:column;gap:3px}
+.gr-hrow{display:grid;grid-template-columns:minmax(0,40%) 1fr auto;align-items:center;gap:8px;padding:5px 6px;border-radius:10px}
+.gr-hrow.on{background:rgba(120,120,128,.1)}
+.gr-hlab{font-size:12px;font-weight:600;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gr-htrack{height:10px;border-radius:0 4px 4px 0}
+.gr-hbar{height:100%;background:var(--gr-1);border-radius:0 4px 4px 0;transform-origin:left;animation:grDestra .7s var(--ease-out) backwards}
+@keyframes grDestra{from{transform:scaleX(0)}to{transform:none}}
+.gr-hval{font-size:12px;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums;min-width:38px;text-align:right}
+.gr-vlist{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;height:150px;align-items:end;padding-top:4px}
+.gr-vcol{display:flex;flex-direction:column;align-items:center;height:100%;border-radius:10px;padding:0 2px 2px}
+.gr-vcol.on{background:rgba(120,120,128,.1)}
+.gr-vval{font-size:10.5px;font-weight:700;color:var(--ink);height:16px;font-variant-numeric:tabular-nums}
+.gr-vtrack{flex:1;width:100%;display:flex;align-items:flex-end;justify-content:center}
+.gr-vbar{width:62%;max-width:26px;background:var(--gr-1);opacity:.55;border-radius:4px 4px 0 0;transform-origin:bottom;animation:grSale .7s var(--ease-out) backwards}
+.gr-vbar-top{opacity:1}
+.gr-vlab{font-size:10.5px;color:var(--ink3);font-weight:600;margin-top:5px}
+
+
+/* ── Storico modifiche (punto 6 roadmap) ── */
+.st-quando{margin-left:auto;font-size:11px;color:var(--ink3);font-variant-numeric:tabular-nums}
+.st-campo{display:flex;flex-direction:column;gap:1px;padding:6px 0;border-top:.5px solid var(--ds-hair)}
+.st-campo:first-of-type{border-top:none}
+.st-k{font-size:10.5px;font-weight:700;color:var(--ink3);text-transform:uppercase;letter-spacing:.4px}
+.st-v{font-size:12.5px;color:var(--ink2);word-break:break-word}
+.st-v s{color:var(--ink3);text-decoration-color:rgba(255,59,48,.6)}
+.st-v b{color:var(--ink)}
+.st-tec{font-size:11px;color:var(--ink3);margin-top:4px}
+
+
+/* ── Scheda fornitore (punto 8 roadmap) ── */
+.sf-av{width:40px;height:40px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:800;flex-shrink:0}
+.sf-lbl{font-size:11px;font-weight:700;color:var(--ink3);margin:10px 0 6px;letter-spacing:.2px}
+.sf-chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.sf-toggle{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;color:var(--ink2)}
+.sf-toggle input{width:20px;height:20px;accent-color:var(--blue)}
+.sf-hint{margin-top:12px;padding:10px 12px;border-radius:12px;background:var(--orange-light);color:#8a5200;font-size:12.5px;line-height:1.45}
+html[data-theme="dark"] .sf-hint{color:var(--orange)}
+.sf-link{border:none;background:none;padding:0;font:inherit;font-weight:700;color:var(--blue);cursor:pointer}
+.sf-warn{border-color:rgba(255,149,0,.35)!important}
+.sf-var{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-top:.5px solid var(--ds-hair);font-size:13px;font-weight:600}
+.sf-var em{font-style:normal;color:var(--ink3);font-weight:500;flex-shrink:0}
+.gr-hrow{cursor:pointer}
+.gr-hrow:active{background:rgba(120,120,128,.1)}
+
+
+/* ── Bonifica guidata (punto 9 roadmap) ── */
+.bf-hero{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0 10px}
+.bf-hero div{background:var(--surface);border:.5px solid var(--ds-hair);border-radius:16px;padding:12px;box-shadow:var(--ds-shadow)}
+.bf-hero b{display:block;font-size:22px;font-weight:800;letter-spacing:-.6px}
+.bf-hero span{font-size:11.5px;color:var(--ink3)}
+.bf-g{padding:0!important;overflow:hidden}
+.bf-hd{display:flex;align-items:center;gap:10px;width:100%;padding:12px 14px;border:none;background:none;font:inherit;text-align:left;color:var(--ink);cursor:pointer}
+.bf-chev{color:var(--ink3);font-size:20px;transition:transform .3s var(--ease-spring)}
+.bf-chev.on{transform:rotate(90deg)}
+.bf-g > .sf-lbl,.bf-g > .sf-chips,.bf-g > .an-ign{margin-left:14px;margin-right:14px}
+.bf-g > .an-ign{width:calc(100% - 28px);margin-bottom:14px}
+.bf-list{border-top:.5px solid var(--ds-hair);animation:dsSlideIn .35s var(--ease-out) backwards}
+.bf-f{display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:.5px solid var(--ds-hair);cursor:pointer}
+.bf-f input{width:20px;height:20px;accent-color:var(--blue);flex-shrink:0}
 
 /* ── Riduci movimento: tutto fermo ── */
 @media (prefers-reduced-motion: reduce){
