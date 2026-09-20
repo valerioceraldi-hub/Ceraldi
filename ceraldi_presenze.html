@@ -250,6 +250,11 @@ input[type="email"],input[type="password"],input[type="text"],input[type="time"]
 /* ── TOAST ───────────────────────────────────────────── */
 #toast{position:fixed;left:50%;transform:translateX(-50%) translateY(20px);bottom:calc(64px + var(--safe-b) + 10px);background:var(--text);color:var(--surface);padding:10px 20px;border-radius:50px;font-size:13px;font-weight:600;z-index:999;opacity:0;transition:all .22s;pointer-events:none;white-space:nowrap}
 #toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+.btn-google{width:100%;min-height:46px;border-radius:12px;border:1.5px solid var(--border);background:var(--card);color:var(--text);font-family:inherit;font-size:15px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:9px}
+.login-oppure{text-align:center;font-size:12px;color:var(--muted);margin:10px 0 12px}
+.pg-attesa{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;padding:30px 22px}
+.pg-attesa b{font-size:18px;color:var(--text)}
+.pg-attesa span{font-size:14px;color:var(--muted);line-height:1.5;max-width:320px}
 </style>
   <!-- docx.js per generazione modelli Word lato client -->
 </head>
@@ -807,9 +812,14 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
   <div class="login-hero">
     <h1>Ceraldi <em>Presenze</em></h1>
     <p>Accedi per timbrare o gestire i turni</p>
-    <div style="font-size:11px;color:var(--muted);margin-top:4px">Versione 50</div>
+    <div style="font-size:11px;color:var(--muted);margin-top:4px">Versione 52</div>
   </div>
   <div class="login-card">
+    <button class="btn-google" id="l-google" onclick="loginGoogle()" type="button">
+      <svg width="17" height="17" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.3l7.9 6.1C12.5 13.6 17.8 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.7c4.3-4 6.9-9.9 6.9-17.1z"/><path fill="#FBBC05" d="M10.6 28.6A14.5 14.5 0 0 1 9.5 24c0-1.6.3-3.2.8-4.6l-7.9-6.1A24 24 0 0 0 0 24c0 3.9.9 7.5 2.7 10.7l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.7c-2.1 1.4-4.8 2.3-8.5 2.3-6.2 0-11.5-4.1-13.4-9.9l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/></svg>
+      <span>Continua con Google</span>
+    </button>
+    <div class="login-oppure">oppure con email e password</div>
     <div class="field-lbl">Email</div>
     <input class="field-inp" type="email" id="l-email" placeholder="nome@esempio.it" autocomplete="email">
     <div class="field-lbl">Password</div>
@@ -5194,6 +5204,38 @@ async function confermaRecuperoPassword() {
   btn.disabled = false; btn.textContent = 'Imposta nuova password';
 }
 
+async function loginGoogle() {
+  showMsg('l-msg', 'Apro Google…', 'ok');
+  const { error } = await sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + location.pathname } });
+  if (error) showMsg('l-msg', 'Accesso con Google non riuscito: ' + error.message, 'err');
+}
+
+// Permessi condivisi fra le app (tabella ceraldi_accessi)
+async function controllaPermessoPresenze() {
+  try {
+    const { data, error } = await sb.rpc('ceraldi_mio_accesso');
+    if (error) throw error;
+    const liv = (data && data.permessi && data.permessi.presenze) || '';
+    if (data && data.stato === 'in_attesa') return { ok: false, attesa: true };
+    if (data && (data.stato === 'bloccato' || data.stato === 'rifiutato')) return { ok: false, msg: 'Il tuo account è stato disattivato. Contatta l\'amministratore.' };
+    if (!liv) return { ok: false, msg: 'Il tuo account non ha accesso a Presenze. Chiedi a un amministratore di abilitarti.' };
+    return { ok: true, livello: liv };
+  } catch(e) {
+    return { ok: true, rete: true };   // senza rete non blocco chi ha già un profilo
+  }
+}
+
+function mostraAttesaApprovazione(email) {
+  const el = $('pg-login');
+  if (el) el.style.display = 'none';
+  let a = document.getElementById('pg-attesa');
+  if (!a) { a = document.createElement('div'); a.id = 'pg-attesa'; a.className = 'pg-attesa'; a.style.cssText = 'position:fixed;inset:0;background:var(--bg);z-index:9000'; document.body.appendChild(a); }
+  a.innerHTML = '<b>Richiesta inviata</b><span>' + (email || '') + '</span>' +
+    '<span>Un amministratore deve darti il via libera e scegliere cosa puoi vedere. Ti conviene avvisarlo.</span>' +
+    '<button class="btn-primary" style="max-width:280px" onclick="location.reload()">Ho ricevuto il via libera</button>' +
+    '<a href="javascript:void(0)" style="font-size:13px;color:var(--accent)" onclick="sb.auth.signOut().then(function(){location.reload()})">Esci</a>';
+}
+
 async function doLogin() {
   const email = $('l-email').value.trim();
   const pwd   = $('l-pwd').value;
@@ -5211,9 +5253,20 @@ async function doLogin() {
 async function bootApp(user) {
   try {
     resetStatoApp(); // protegge anche dal login consecutivo senza logout
+    const perm = await controllaPermessoPresenze();
+    if (!perm.ok) {
+      if (perm.attesa) { mostraAttesaApprovazione(user && user.email); return; }
+      showMsg('l-msg', perm.msg, 'err');
+      await sb.auth.signOut();
+      $('pg-login').style.display = 'flex';
+      return;
+    }
     const { data: p, error: perr } = await sb.from('presenze_profili').select('*').eq('id', user.id).single();
-    if (perr) { showMsg('l-msg', 'Errore DB: ' + perr.message, 'err'); $('pg-login').style.display='flex'; return; }
-    if (!p)   { showMsg('l-msg', 'Profilo non trovato — contatta admin', 'err'); $('pg-login').style.display='flex'; return; }
+    if (perr) {
+      if (perr.code === 'PGRST116') { mostraAttesaApprovazione(user && user.email); return; }
+      showMsg('l-msg', 'Errore DB: ' + perr.message, 'err'); $('pg-login').style.display='flex'; return;
+    }
+    if (!p)   { mostraAttesaApprovazione(user && user.email); return; }
     if (p.eliminato) {
       showMsg('l-msg', 'Il tuo account è stato disattivato. Contatta l\'amministratore.', 'err');
       await sb.auth.signOut();
@@ -12310,26 +12363,9 @@ async function certificaContatto(tipo) {
   _certDipId = d.id;
   const valore = tipo === 'tel' ? ($('ana-tel').value.trim() || d.telefono) : d.email;
   if (!valore) { toast('Nessun ' + (tipo === 'tel' ? 'numero' : 'indirizzo email') + ' da certificare'); return; }
-  // Genera OTP 6 cifre
-  const otp = String(Math.floor(100000 + Math.random() * 900000));
-  const scade = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-  // Salva OTP nella tabella dedicata (o in presenze_otp con tipo cert)
-  // Inserisce OTP — tenta con tipo (richiede migrazione DB), fallback senza
-  // Salva OTP — tenta prima con campo tipo, poi senza (migrazione DB in corso)
-  let _otpSaved = false;
-  // presenza_id potrebbe essere NOT NULL — usiamo UUID zero come placeholder per cert
-  const _nullPresenzaId = '00000000-0000-0000-0000-000000000000';
-  const _ins1 = await sb.from('presenze_otp').insert({
-    presenza_id: _nullPresenzaId, dipendente_id: d.id, codice: otp, expires_at: scade, tipo: 'cert_' + tipo
-  });
-  if (!_ins1.error) {
-    _otpSaved = true;
-  } else {
-    // Fallback senza colonna tipo
-    const _ins2 = await sb.from('presenze_otp').insert({ presenza_id: _nullPresenzaId, dipendente_id: d.id, codice: otp, expires_at: scade });
-    if (!_ins2.error) _otpSaved = true;
-    else { toast('\u26A0\uFE0F Errore DB: ' + _ins2.error.message); }
-  }
+  // Il codice lo genera il server: nessuno può leggerlo dalla tabella (20/09)
+  const { data: otp, error: _otpErr } = await sb.rpc('presenze_otp_crea', { p_dipendente: d.id, p_tipo: 'cert_' + tipo, p_minuti: 15 });
+  if (_otpErr || !otp) { toast('\u26A0\uFE0F Codice non generato: ' + ((_otpErr && _otpErr.message) || 'errore')); return; }
   // Invia OTP al dipendente via Telegram
   const nomeDip = d.nome + (d.cognome ? ' ' + d.cognome : '');
   const tgMsg = (tipo === 'tel' ? '\u{1F4F1}' : '\u{1F4E7}') + ' <b>Ceraldi Presenze \u2014 Verifica contatto</b>\n\n'
@@ -12352,21 +12388,11 @@ async function certificaContatto(tipo) {
 
 async function confermaCertOTP() {
   if (!_certTipo || !_certDipId) return;
-  // Cerca OTP valido non usato
-  const { data: otps } = await sb.from('presenze_otp')
-    .select('id,codice,expires_at')
-    .eq('dipendente_id', _certDipId)
-    .eq('tipo', 'cert_' + _certTipo)
-    .eq('used', false)
-    .gt('expires_at', new Date().toISOString())
-    .order('created_at', { ascending: false })
-    .limit(1);
-  if (!otps || !otps.length) {
-    $('certOTP-msg').textContent = 'OTP scaduto — genera uno nuovo';
+  const { data: _consumato, error: _cErr } = await sb.rpc('presenze_otp_consuma', { p_dipendente: _certDipId, p_tipo: 'cert_' + _certTipo });
+  if (_cErr || !_consumato) {
+    $('certOTP-msg').textContent = 'Codice scaduto — generane uno nuovo';
     return;
   }
-  // Marca come usato
-  await sb.from('presenze_otp').update({ used: true }).eq('id', otps[0].id);
   // Salva certificazione nel profilo
   const campoData = _certTipo === 'tel' ? 'tel_certificato_il' : 'email_certificato_il';
   await sb.from('presenze_profili').update({ [campoData]: new Date().toISOString() }).eq('id', _certDipId);
@@ -12520,21 +12546,11 @@ let _otpDipPresenzaId = null;
 async function convalidaTimbr() {
   const codice = $('convDip-input').value.trim();
   if (codice.length !== 6) { showMsg('convDip-msg','Inserisci 6 cifre','err'); return; }
-  const { data: otps } = await sb.from('presenze_otp')
-    .select('id,codice,expires_at')
-    .eq('presenza_id', _otpDipPresenzaId)
-    .eq('tipo', 'admin_gen')
-    .eq('used', false)
-    .gt('expires_at', new Date().toISOString());
-  if (!otps || !otps.length) {
-    showMsg('convDip-msg','Codice non valido o scaduto \u2014 chiedi all\u2019admin di generarne uno nuovo','err'); return;
+  const { data: _val, error: _vErr } = await sb.rpc('presenze_otp_verifica', { p_codice: codice, p_presenza: _otpDipPresenzaId, p_tipi: ['admin_gen'] });
+  if (_vErr || !_val) {
+    showMsg('convDip-msg','Codice errato o scaduto \u2014 chiedi all\u2019admin di generarne uno nuovo','err'); return;
   }
-  const otp = otps.find(o => o.codice === codice);
-  if (!otp) { showMsg('convDip-msg','Codice errato — riprova','err'); return; }
-  const ok = await DB.safe(() => Promise.all([
-    DB.presenze.update(_otpDipPresenzaId, { confermata_dip: true }),
-    DB.otp.update(otp.id, { used: true })
-  ]), 'Errore durante il salvataggio');
+  const ok = await DB.safe(() => DB.presenze.update(_otpDipPresenzaId, { confermata_dip: true }), 'Errore durante il salvataggio');
   if (!ok) return;
   // notifica convalida OTP rimossa
   toast('✓ Timbratura convalidata');
@@ -18297,26 +18313,13 @@ function openOTPAdmin(presenzaId, nomeDip) {
 async function verificaOTP() {
   const codice = $('otp-input').value.trim();
   if (codice.length !== 6) { showMsg('otp-msg','Inserisci 6 cifre','err'); return; }
-  // Cerca OTP valido
-  const { data: otps } = await sb.from('presenze_otp')
-    .select('id,codice,expires_at')
-    .eq('presenza_id', _otpPresenzaId)
-    .eq('used', false)
-    .gt('expires_at', new Date().toISOString());
-  if (!otps || !otps.length) {
-    showMsg('otp-msg','Nessun codice valido — chiedi al dipendente di generarne uno nuovo','err'); return;
-  }
-  const otp = otps.find(o => o.codice === codice);
-  if (!otp) {
-    showMsg('otp-msg','Codice errato — riprova','err');
+  const { data: _val2, error: _vErr2 } = await sb.rpc('presenze_otp_verifica', { p_codice: codice, p_presenza: _otpPresenzaId });
+  if (_vErr2 || !_val2) {
+    showMsg('otp-msg','Codice errato o scaduto — riprova','err');
     $('otp-input').value = '';
     return;
   }
-  // OTP corretto: marca presenza come confermata e OTP come usato
-  const ok = await DB.safe(() => Promise.all([
-    DB.presenze.update(_otpPresenzaId, { confermata_dip: true }),
-    DB.otp.update(otp.id, { used: true })
-  ]), 'Errore durante il salvataggio');
+  const ok = await DB.safe(() => DB.presenze.update(_otpPresenzaId, { confermata_dip: true }), 'Errore durante il salvataggio');
   if (!ok) return;
   toast('✓ Presenza verificata e confermata');
   closeSheet('sh-otpAdmin');
@@ -19244,31 +19247,19 @@ function apriCertDip(tipo) {
 async function confermaCertDip() {
   const codice = $('certDip-input').value.trim();
   if (codice.length !== 6) { showMsg('certDip-msg','Inserisci 6 cifre','err'); return; }
-  // Cerca OTP valido — filtro tipo lato client (colonna potrebbe non esistere ancora)
-  const { data: otpsRaw, error: otpErr } = await sb.from('presenze_otp')
-    .select('id,codice,expires_at,tipo')
-    .eq('dipendente_id', ME.id)
-    .eq('used', false)
-    .gt('expires_at', new Date().toISOString())
-    .order('created_at', { ascending: false })
-    .limit(10);
-  if (otpErr) { showMsg('certDip-msg','Errore DB: ' + otpErr.message,'err'); return; }
-  const otps = (otpsRaw || []).filter(o =>
-    !o.tipo || o.tipo === 'cert_' + _certDipTipo || o.tipo === 'presenza'
-  );
+  const { data: _valDip, error: _vErrDip } = await sb.rpc('presenze_otp_verifica', {
+    p_codice: codice, p_dipendente: ME.id, p_tipi: ['cert_' + _certDipTipo, 'presenza']
+  });
+  if (_vErrDip) { showMsg('certDip-msg','Errore: ' + _vErrDip.message,'err'); return; }
+  if (!_valDip) { showMsg('certDip-msg','Codice errato o scaduto — chiedi all\u2019admin di generarne uno nuovo','err'); $('certDip-input').value=''; return; }
+  const otps = [1];
   if (!otps.length) {
     // Mostra quanti record totali ci sono (debug)
     const totRaw = otpsRaw ? otpsRaw.length : 0;
     showMsg('certDip-msg','Nessun codice valido trovato' + (totRaw ? ' ('+totRaw+' OTP trovati ma tipo non corrispondente)' : ' — il codice potrebbe non essere stato salvato. Richiedi all’admin di ricertificare.'), 'err'); return;
   }
-  const otp = otps.find(o => o.codice === codice);
-  if (!otp) { showMsg('certDip-msg','Codice errato — riprova','err'); $('certDip-input').value=''; return; }
-  // Marca OTP usato e salva cert
   const campoData = _certDipTipo === 'tel' ? 'tel_certificato_il' : 'email_certificato_il';
-  await Promise.all([
-    sb.from('presenze_otp').update({ used: true }).eq('id', otp.id),
-    sb.from('presenze_profili').update({ [campoData]: new Date().toISOString() }).eq('id', ME.id)
-  ]);
+  await sb.from('presenze_profili').update({ [campoData]: new Date().toISOString() }).eq('id', ME.id);
   toast('\u2713 ' + (_certDipTipo === 'tel' ? 'Telefono' : 'Email') + ' verificato con successo');
   closeSheet('sh-certDip');
   caricaProfiloDip();
