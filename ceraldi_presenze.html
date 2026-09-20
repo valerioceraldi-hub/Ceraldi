@@ -812,7 +812,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
   <div class="login-hero">
     <h1>Ceraldi <em>Presenze</em></h1>
     <p>Accedi per timbrare o gestire i turni</p>
-    <div style="font-size:11px;color:var(--muted);margin-top:4px">Versione 52</div>
+    <div style="font-size:11px;color:var(--muted);margin-top:4px">Versione 53</div>
   </div>
   <div class="login-card">
     <button class="btn-google" id="l-google" onclick="loginGoogle()" type="button">
@@ -6850,9 +6850,9 @@ async function openSheetCambioTurno() {
   if (sel) sel.innerHTML = '<option value="">— seleziona collega —</option>';
   try {
     if (!ME || !ME.id) throw new Error('Profilo non ancora caricato, riprova tra un istante');
-    const { data: colleghi, error: colErr } = await sb.from('presenze_profili')
-      .select('id,nome,cognome').eq('ruolo','dipendente').eq('attivo',true).neq('id', ME.id).order('nome');
+    const { data: tuttiColleghi, error: colErr } = await sb.rpc('presenze_colleghi');
     if (colErr) throw new Error(colErr.message);
+    const colleghi = (tuttiColleghi||[]).filter(c => c.ruolo === 'dipendente' && c.attivo && c.id !== ME.id);
     (colleghi||[]).forEach(c => {
       const opt = document.createElement('option');
       opt.value = c.id;
@@ -6878,7 +6878,8 @@ async function inviaRichiestaCambioTurno() {
   const btn = $('ct-btn');
   btn.disabled = true; btn.textContent = 'Invio in corso…';
 
-  const { data: collega } = await sb.from('presenze_profili').select('nome,cognome').eq('id',collegaId).single();
+  const { data: _colleghiTutti } = await sb.rpc('presenze_colleghi');
+  const collega = (_colleghiTutti||[]).find(c => c.id === collegaId) || null;
   const nomeRichiedente = ME.nome + (ME.cognome ? ' '+ME.cognome : '');
   const nomeCollega = collega ? (collega.nome||'')+(collega.cognome?' '+collega.cognome:'') : '—';
 
@@ -16279,9 +16280,7 @@ async function esportaStipendi() {
 // admin attivi che hanno un telegram_chat_id collegato, con lo stesso
 // pattern già usato per il broadcast ai dipendenti.
 async function inviaNotificaTelegram(testo, deepLink) {
-  const { data: admins } = await sb.from('presenze_profili')
-    .select('telegram_chat_id').eq('ruolo','admin').eq('attivo',true)
-    .not('telegram_chat_id','is',null);
+  const { data: admins } = await sb.rpc('presenze_chat_admin');
   const link = deepLink ? '\n\n<a href="' + APP_URL + deepLink + '">➡️ Apri nell\'app</a>' : '';
   const destinatari = (admins && admins.length) ? admins.map(a=>a.telegram_chat_id) : [TG_CHAT]; // ripiego se nessun admin risulta collegato
   for (const chatId of destinatari) {
@@ -16308,8 +16307,8 @@ async function inviaNotificaTelegram(testo, deepLink) {
 async function inviaNotificaDipendente(dipId, testo, deepLink) {
   if (!TG_TOKEN_DIP) return; // Bot non configurato
   // Recupera il chat_id del dipendente
-  const { data: prof } = await sb.from('presenze_profili')
-    .select('telegram_chat_id,nome,cognome').eq('id', dipId).single();
+  const { data: _chatRows } = await sb.rpc('presenze_chat_dipendente', { p_id: dipId });
+  const prof = (_chatRows && _chatRows[0]) || null;
   if (!prof || !prof.telegram_chat_id) return; // Non collegato
   const link = APP_URL + (deepLink || '');
   const testoCompleto = testo + '\n\n<a href="' + link + '">\u27a1\ufe0f Apri nell\'app</a>';
