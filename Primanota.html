@@ -210,7 +210,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 .fi-act-btn.warning{background:var(--orange-light);color:#b36a00}
 .fi-act-btn.success{background:var(--green-light);color:#1a7a3a}
 
-.filtri{display:flex;gap:6px;margin-bottom:14px;overflow-x:auto;padding-bottom:2px;-webkit-overflow-scrolling:touch}
+.filtri{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;padding-bottom:2px}
 .filtri::-webkit-scrollbar{display:none}
 .fil-btn{flex-shrink:0;padding:6px 14px;border:1.5px solid var(--sep);border-radius:99px;background:var(--surface);font-family:'Inter',-apple-system,sans-serif;font-size:12px;font-weight:600;color:var(--ink2);cursor:pointer;transition:all .15s}
 .fil-btn.active{background:var(--blue);color:#fff;border-color:var(--blue)}
@@ -231,9 +231,9 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 .rcard-arr.open{transform:rotate(90deg)}
 .rcard-body{display:none;padding:0 16px 16px;border-top:1px solid var(--bg)}
 .rcard-body.open{display:block;animation:fadeIn .2s ease}
-.chip-row{display:flex;gap:6px;margin-bottom:12px;overflow-x:auto;padding-bottom:2px;-webkit-overflow-scrolling:touch}
+.chip-row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;padding-bottom:2px}
 .chip-row::-webkit-scrollbar{display:none}
-.chip{flex-shrink:0;padding:6px 14px;border:none;border-radius:99px;background:var(--surface2);font-family:'Inter',-apple-system,sans-serif;font-size:13px;font-weight:500;color:var(--ink2);cursor:pointer}
+.chip{padding:6px 14px;border:none;border-radius:99px;background:var(--surface2);font-family:'Inter',-apple-system,sans-serif;font-size:13px;font-weight:500;color:var(--ink2);cursor:pointer}
 /* Righe a piena larghezza in stile "Impostazioni" — tab Fiscale (31/08) */
 .fisc-row{display:flex;align-items:center;gap:12px;padding:13px 4px;border-bottom:1px solid var(--sep);cursor:pointer}
 .fisc-row:last-child{border-bottom:none}
@@ -491,7 +491,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v9.98.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.0.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -1121,7 +1121,7 @@ html[data-theme="dark"] .reg-import-link{border-color:rgba(255,255,255,.08)}
   </div>
 
   <!-- Preset rapidi (chip) -->
-  <div class="chip-row" id="lPresetRow" style="margin-bottom:8px;overflow-x:auto;white-space:nowrap;padding-bottom:4px;-webkit-overflow-scrolling:touch">
+  <div class="chip-row" id="lPresetRow" style="margin-bottom:8px;flex-wrap:wrap;padding-bottom:4px;-webkit-overflow-scrolling:touch">
     <button class="chip active" data-preset="tutte" onclick="setPresetRegistro('tutte',this)">Tutte</button>
     <button class="chip" data-preset="da_pagare" onclick="setPresetRegistro('da_pagare',this)">&#128308; Da pagare</button>
     <button class="chip" data-preset="questo_mese" onclick="setPresetRegistro('questo_mese',this)">📅 Questo mese</button>
@@ -1872,6 +1872,7 @@ html[data-theme="dark"] .reg-import-link{border-color:rgba(255,255,255,.08)}
        funzione di prima, solo raggruppate qui invece che sparse in 4
        schermate diverse. -->
   <div id="inc-importazioni" class="inc-sec" style="display:none">
+    <div id="esCard" class="es-card"></div>
     <div class="fa-hero" onclick="_faApri()">
       <div class="fa-hero-ico ds-g ds-g-indigo"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 13.8 9l5.7 1.5-5.7 1.6L12 17.5l-1.8-5.4L4.5 10.5 10.2 9z"/></svg></div>
       <div><b>Importa qualsiasi file</b><span>Estratti conto di ogni banca, carte di credito: PDF, Excel o CSV. Se il formato è nuovo l'app lo impara e lo verifica con i saldi.</span></div>
@@ -7848,6 +7849,66 @@ function nettoFattura(f){
   return Math.round(((f.importo||0) - totNc) * 100) / 100;
 }
 
+// Residuo davvero da pagare (20/09 — Valerio: "fattura SIRO 744 con nota di
+// credito 14,09: nel selettore chiede 715,82, che non esiste"). Le note di
+// credito vengono già registrate come pagato parziale: sottrarle di nuovo al
+// netto le contava due volte. Qui si prende il minore fra i due modi, così
+// vale anche per le note vecchie che non toccarono il parzPagato.
+function residuoFattura(f){
+  if(!f) return 0;
+  if(f.stato==='pagata' || f.stato==='annullata') return 0;
+  var lordo = Math.abs(f.importo||0) - (f.parzPagato||0);
+  var netto = nettoFattura(f);
+  return Math.max(0, Math.round(Math.min(lordo, netto)*100)/100);
+}
+// Chiamare le cose col loro nome: fattura, nota di credito o DDT
+function _docNome(f, opz){
+  opz = opz || {};
+  var t = f && f.tipo;
+  var n = t==='nota_credito' ? (opz.plurale?'note di credito':'nota di credito')
+        : t==='ddt' ? (opz.plurale?'DDT':'DDT')
+        : (opz.plurale?'fatture':'fattura');
+  return opz.maiuscola ? n.charAt(0).toUpperCase()+n.slice(1) : n;
+}
+function _docCoppia(a, b, opz){
+  opz = opz || {};
+  var ta=(a&&a.tipo)||'fattura', tb=(b&&b.tipo)||'fattura';
+  var n;
+  if(ta===tb) n = 'Due ' + _docNome(a, {plurale:true});
+  else n = 'Una ' + _docNome(a) + ' e una ' + _docNome(b);
+  return opz.minuscola ? n.charAt(0).toLowerCase()+n.slice(1) : n;
+}
+// Da dove arriva il movimento: conto Banco BPM, SumUp o carta di credito Nexi
+function _fonteMov(m){
+  if(!m) return {et:'', cl:'fo-bpm'};
+  if(m._carta) return {et:'Carta Nexi', cl:'fo-nexi'};
+  var b = m.banca||'';
+  if(b==='SumUp') return {et:'SumUp', cl:'fo-sumup'};
+  if(b==='Nexi') return {et:'Carta Nexi', cl:'fo-nexi'};
+  if(b==='PayPal') return {et:'PayPal', cl:'fo-paypal'};
+  return {et: (!b || b==='BPM') ? 'Banco BPM' : b, cl:'fo-bpm'};
+}
+function _fonteTag(m){
+  var F=_fonteMov(m); if(!F.et) return '';
+  var t='<span class="fonte-tag '+F.cl+'">'+esc(F.et)+'</span>';
+  // Se il conto è la banca ma il pagamento è passato da un circuito, dillo
+  var d=String((m&&m.descrizione)||'').toUpperCase();
+  if(F.et==='Banco BPM'){
+    var via = /PAYPAL/.test(d) ? 'PayPal' : (/NEXI/.test(d) ? 'Nexi' : (/SUMUP/.test(d) ? 'SumUp' : (/STRIPE/.test(d) ? 'Stripe' : '')));
+    if(via) t += '<span class="fonte-tag fonte-via">via '+via+'</span>';
+  }
+  return t;
+}
+// Vedere l'XML ovunque si abbini o si riconcili
+function _haXml(f){
+  if(!f) return false;
+  return !!((f.fatturaAllegata && f.fatturaAllegata.length>0) || (f.xmlGithubPath && f.xmlGithubPath.length>0) || f.hasAllegata || f.source==='aruba');
+}
+function _btnXml(f, stile){
+  if(!_haXml(f)) return '';
+  return '<button type="button" class="btn-xml'+(stile==='mini'?' btn-xml-mini':'')+'" data-fx="'+esc(String(f.id))+'" onclick="event.stopPropagation();aprifatturaAllegata(isNaN(+this.dataset.fx)?this.dataset.fx:+this.dataset.fx)">\u{1F4C4} Vedi XML</button>';
+}
+
 function closeEdit(){
   document.getElementById('editMo').classList.remove('on');
   document.body.style.overflow='';
@@ -8924,7 +8985,7 @@ function _trovaCombinazioniEsatte(imp, fornitoriAmmessi, dataMovimento){
     return true;
   }).map(function(f){
     const impF = nettoFattura(f);
-    const resto = f.stato==='parziale' ? Math.max(0, impF-(f.parzPagato||0)) : impF;
+    const resto = residuoFattura(f);
     return {f:f, resto:resto};
   }).filter(function(x){ return Math.abs(x.resto)>0.01; });
 
@@ -9857,8 +9918,8 @@ function _expContiene(testo, filtro){
 
 function _fatturaPagatoResiduo(f){
   var tot = nettoFattura(f);
-  var pagato = f.stato==='pagata' ? tot : (f.stato==='parziale' ? (f.parzPagato||0) : 0);
-  var residuo = Math.max(0, Math.round((tot-pagato)*100)/100);
+  var residuo = residuoFattura(f);
+  var pagato = Math.max(0, Math.round((tot-residuo)*100)/100);
   var pct = tot>0 ? Math.round((pagato/tot)*1000)/10 : 0;
   return {tot:tot, pagato:Math.round(pagato*100)/100, residuo:residuo, pct:pct};
 }
@@ -13802,6 +13863,7 @@ async function onCsvNumiaSelected(input){
     // lo vedo nei vari report") — prima qui c'era solo un toast, che sparisce
     // da solo in pochi secondi e non dice periodo coperto né righe scartate.
     // Ora un riepilogo che resta a video finché non lo chiudi tu.
+    try{ _esSalvaFile('numia', file, {dal:stat.dataMin||null, al:stat.dataMax||null, righe:stat.inseriti||0, note:'incassi POS Numia'}); }catch(_e){}
     _mostraRiepilogoImportNumia(stat, file.name);
   }catch(e){
     console.error(e);
@@ -16355,6 +16417,10 @@ async function onCartaPDFSelected(input){
         // volta sola (vedi create_carta_estratti_riepilogo.sql).
         console.warn('Riepilogo estratto non salvato:', riepErr);
       }
+      try{
+        var _dCarta = res.transazioni.map(function(t){ return t.data; }).sort();
+        _esSalvaFile('carta', file, {dal:_dCarta[0], al:_dCarta[_dCarta.length-1], righe:res.transazioni.length, note:'estratto Nexi'});
+      }catch(_e){}
       var map = {}; _cartaMovimenti.forEach(function(r){ map[r.id]=r; });
       res.transazioni.forEach(function(r){ map[r.id]=r; });
       _cartaMovimenti = Object.values(map).sort(function(a,b){ return b.data.localeCompare(a.data); });
@@ -16467,7 +16533,7 @@ function renderRiconciliazioneCarta(){
     window._cartaConsigliati = consigliati;
     consigliati.forEach(function(d,idx){
       html += '<div style="padding:9px 0;border-top:1px solid var(--sep)">';
-      html += '<div style="font-size:11px;color:var(--ink3)">'+_fmtDataBreveCarta(d.mov.data)+' · '+esc(d.mov.descrizione)+'</div>';
+      html += '<div style="font-size:11px;color:var(--ink3)">'+_fonteTag(d.mov)+' '+_fmtDataBreveCarta(d.mov.data)+' · '+esc(d.mov.descrizione)+'</div>';
       html += '<div style="font-size:12px;font-weight:600;margin:2px 0">→ '+esc(d.fatt.fornitore)+' N°'+esc(d.fatt.numero||'')+'</div>';
       html += '<div style="font-size:11px;color:var(--ink3);margin-bottom:2px">'
         + (d.fatt.data ? 'Fattura '+_fmtDataBreveCarta(d.fatt.data) : '')
@@ -16668,7 +16734,7 @@ function _apriPickerAbbinamentoCarta(idx){
 
   var hdr = document.createElement('div');
   hdr.style.cssText = 'padding:16px 20px 10px;border-bottom:1px solid var(--sep);display:flex;align-items:center;justify-content:space-between;flex-shrink:0';
-  hdr.innerHTML = '<div><div style="font-size:17px;font-weight:700">🔍 Abbina a una fattura</div><div style="font-size:12px;color:var(--ink3)">'+esc(m.descrizione)+' · '+fmt(m.importo)+'</div></div>';
+  hdr.innerHTML = '<div><div style="font-size:17px;font-weight:700">🔍 Abbina a una fattura</div><div style="font-size:12px;color:var(--ink3)">'+_fonteTag(m)+' '+esc(m.descrizione)+' · '+fmt(m.importo)+'</div></div>';
   var closeBtn = document.createElement('button');
   closeBtn.innerHTML = '&#215;';
   closeBtn.style.cssText = 'background:var(--surface2);border:none;border-radius:99px;width:32px;height:32px;font-size:18px;cursor:pointer';
@@ -17897,6 +17963,7 @@ async function onBancaCSVSelected(input){
 
     var dateOrdinate = mov.map(m=>m.data).sort();
     var dal = dateOrdinate[0], al = dateOrdinate[dateOrdinate.length-1];
+    try{ _esSalvaFile('banca', file, {dal:dal, al:al, righe:mov.length, note:'lista movimenti CSV'}); }catch(_e){}
     var entrate = mov.filter(m=>m.importo>0).reduce((s,m)=>s+m.importo,0);
     var uscite = mov.filter(m=>m.importo<0).reduce((s,m)=>s+m.importo,0);
 
@@ -18262,6 +18329,7 @@ async function onBancaPDFSelected(input){
           })
         });
       }catch(pdfErr){ console.warn('Copia PDF estratto banca non salvata:', pdfErr); }
+      try{ _esSalvaFile('banca', file, {dal:_bancaMovimenti[_bancaMovimenti.length-1].data, al:_bancaMovimenti[0].data, righe:mov.length, note:'estratto PDF'+(_quadraturaMsg?' · non quadra':'')}); }catch(_e){}
       renderRiconciliazione();
       if(_quadraturaMsg){
         if(info) info.textContent = '⚠️ ' + mov.length + ' movimenti salvati — ma L\'ESTRATTO NON QUADRA (vedi avviso)';
@@ -18406,6 +18474,10 @@ async function onSumUpBizCSVSelected(input){
       }catch(e){ console.warn('pos_banca patch '+d+':', e); }
     }
 
+    try{
+      var _dSu=[].concat(res.bonifici||[], res.entrate||[]).map(function(m){ return m.data; }).filter(Boolean).sort();
+      _esSalvaFile('sumup', file, {dal:_dSu[0]||null, al:_dSu[_dSu.length-1]||null, righe:(res.bonifici||[]).length+(res.entrate||[]).length, note:'estratto SumUp'});
+    }catch(_e){}
     await caricaMovimentiBanca();
     renderRiconciliazione();
 
@@ -20549,7 +20621,7 @@ function renderRiconciliazione(){
     {key:'scartati',    label:'🚫 Scartati',      n:nonAbbinatiAltroScartato.length+ignorati.length, color:'var(--ink3)'},
     {key:'tutti',       label:'📦 Altro',         n:movMeseAltro.length, color:'var(--ink)'}
   ];
-  html += '<div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:12px;padding-bottom:2px">';
+  html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;padding-bottom:2px">';
   _tabs.forEach(function(t){
     var att = _tabAttivo===t.key;
     html += '<button onclick="_setReconTab(\''+t.key+'\')" style="flex-shrink:0;padding:8px 12px;border-radius:10px;border:1.5px solid '+(att?t.color:'var(--sep)')+';background:'+(att?t.color:'var(--surface)')+';color:'+(att?'#fff':'var(--ink)')+';font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">'+t.label+' ('+t.n+')</button>';
@@ -20747,7 +20819,7 @@ function _cfRender(mostraTutte, filtro){
     var parole = forn.split(/\s+/).filter(function(p){ return p.length>3; });
     var matchForn = parole.some(function(p){ return descLow.indexOf(p)>=0; });
     var impF=nettoFattura(f);
-    var resto=f.stato==='parziale'?Math.max(0,impF-(f.parzPagato||0)):impF;
+    var resto=residuoFattura(f);
     var matchImp = Math.min(Math.abs(impF-imp),Math.abs(resto-imp))<=Math.max(2,imp*0.15);
     return matchForn || matchImp;
   }).sort(function(a,b){
@@ -20788,7 +20860,7 @@ function _cfRender(mostraTutte, filtro){
 
   var candidati = candidatiFornitore.length ? candidatiFornitore : tuttiOrdinati.filter(function(f){
     var impF=nettoFattura(f);
-    var resto=f.stato==='parziale'?Math.max(0,impF-(f.parzPagato||0)):impF;
+    var resto=residuoFattura(f);
     return Math.min(Math.abs(impF-imp),Math.abs(resto-imp))<=Math.max(2,imp*0.15);
   }).slice(0,10);
 
@@ -21292,7 +21364,7 @@ function _cfMultiplo(){
   if(window._cfMovCorrente === m && window._cfMatchNudiCorrente && window._cfMatchNudiCorrente.length){
     selezionate = window._cfMatchNudiCorrente.map(function(f){
       var impF = nettoFattura(f);
-      var resto = f.stato==='parziale' ? Math.max(0, impF-(f.parzPagato||0)) : impF;
+      var resto = residuoFattura(f);
       return {fatt:f, importoPagato: resto};
     });
   }
@@ -21594,7 +21666,7 @@ function apriRiconciliaDaFattura(fatturaId){
   const f = (fatture||[]).find(function(x){ return String(x.id)===String(fatturaId); });
   if(!f) return;
   const impF = nettoFattura(f);
-  const resto = f.stato==='parziale' ? Math.max(0, impF-(f.parzPagato||0)) : impF;
+  const resto = residuoFattura(f);
   const tutti = (_bancaMovimenti||[]).filter(function(m){ return !m.abbinata && !m.ignorata && (m.importo||0) < 0; })
     // 20/09: anche le spese con carta di credito Nexi non ancora abbinate
     .concat(((typeof _cartaMovimenti!=='undefined'?_cartaMovimenti:[])||[]).filter(function(c){ return !c.abbinata && !c.ignorata && (parseFloat(c.importo)||0)>0; }).map(function(c){
@@ -21612,7 +21684,7 @@ function apriRiconciliaDaFattura(fatturaId){
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:900;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px)';
   ov.innerHTML = '<div style="background:var(--bg);border-radius:20px 20px 0 0;width:100%;max-width:560px;max-height:90vh;overflow-y:auto">'+
     '<div class="edit-sheet-hd" style="background:var(--bg);position:sticky;top:0;z-index:2;flex-direction:column;align-items:stretch;gap:8px">'+
-      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><div style="min-width:0"><h3>Trova il movimento bancario</h3><div style="font-size:12.5px;color:var(--ink3);margin-top:2px;line-height:1.35">'+esc(f.fornitore||'')+' N° '+esc(f.numero||'')+' · '+_anData(f.data)+' · da abbinare '+fmt(resto)+'</div></div><button class="edit-close" onclick="document.getElementById(\'_riconciliaDaFattOv\').remove()">×</button></div>'+
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><div style="min-width:0"><h3>Trova il movimento bancario</h3><div style="font-size:12.5px;color:var(--ink3);margin-top:2px">'+esc(f.fornitore||'')+' \u00b7 N\u00b0 '+esc(f.numero||'')+' \u00b7 '+_anData(f.data)+' \u00b7 da abbinare <b>'+fmt(resto)+'</b>'+(Math.abs(resto-Math.abs(f.importo||0))>0.01?' <em>(totale '+fmt(Math.abs(f.importo||0))+(f.parzPagato?', gi\u00e0 pagato '+fmt(f.parzPagato):'')+')</em>':'')+'</div>'+(_haXml(f)?'<div style="margin-top:6px">'+_btnXml(f)+'</div>':'')+'</div>'+'<button onclick="this.closest(\'#_riconciliaDaFattOv\').remove()" style="background:var(--surface2);border:none;width:30px;height:30px;border-radius:50%;font-size:17px;color:var(--ink2);flex:0 0 auto;cursor:pointer">\u00d7</button></div>'+
       '<input id="rfQ" type="search" placeholder="Cerca: nome, importo (621,59) o data (21/08)" autocomplete="off" oninput="_rfSet(\'q\',this.value)" style="width:100%;padding:11px 12px;font-size:14px;border-radius:12px">'+
       '<div class="rf-chips" id="rfChips"></div>'+
     '</div>'+
@@ -21666,10 +21738,10 @@ function _rfRender(){
   vis.forEach(function(m, idx){
     var impMov=Math.abs(m.importo||0), combacia=Math.abs(impMov-S.resto)<0.50;
     var dd=Math.round((new Date(m.data+'T12:00:00')-new Date(String(f.data).slice(0,10)+'T12:00:00'))/86400000);
-    h+='<div class="rf-mov'+(combacia?' rf-ok':'')+'"><div class="rf-top"><div style="min-width:0"><div class="rf-dt">'+_anData(m.data)+' <em>'+(isNaN(dd)?'':(dd>=0?dd+' gg dopo la fattura':(-dd)+' gg prima'))+'</em>'+(m.banca&&m.banca!=='BPM'?' <em>· '+esc(m.banca)+'</em>':'')+'</div><div class="rf-ds">'+esc(m.descrizione||'')+'</div>'+(combacia?'<div class="rf-badge">✓ Importo identico al da pagare</div>':'')+'</div><div class="rf-imp">'+fmt(impMov)+'</div></div>'+
+    h+='<div class="rf-mov'+(combacia?' rf-ok':'')+'"><div class="rf-top"><div style="min-width:0"><div class="rf-dt">'+_anData(m.data)+' <em>'+(isNaN(dd)?'':(dd>=0?dd+' gg dopo la fattura':(-dd)+' gg prima'))+'</em> '+_fonteTag(m)+'</div><div class="rf-ds">'+esc(m.descrizione||'')+'</div>'+(combacia?'<div class="rf-badge">✓ Importo identico al da pagare</div>':'')+'</div><div class="rf-imp">'+fmt(impMov)+'</div></div>'+
       (m._carta ? '<div class="rf-btns"><button class="rf-b rf-b-p" data-mid="'+esc(String(m.id))+'" onclick="var o=document.getElementById(\'_riconciliaDaFattOv\');if(o)o.remove();_abbinaCarta(this.dataset.mid,\''+fid+'\').then(function(){ if(typeof renderLista===\'function\')renderLista(); });">Abbina alla spesa con carta</button></div></div>' :
-      '<div class="rf-btns"><button class="rf-b rf-b-p" onclick="_cfAbbina('+idx+',\''+fid+'\',false);var o=document.getElementById(\'_riconciliaDaFattOv\');if(o)o.remove();if(typeof renderLista===\'function\')renderLista();">Abbina e salda ('+fmt(S.impF)+')</button>'+
-      (Math.abs(impMov-S.impF)>0.50?'<button class="rf-b" onclick="_cfAbbina('+idx+',\''+fid+'\',true);var o=document.getElementById(\'_riconciliaDaFattOv\');if(o)o.remove();if(typeof renderLista===\'function\')renderLista();">Solo acconto ('+fmt(impMov)+')</button>':'')+'</div></div>');
+      '<div class="rf-btns"><button class="rf-b rf-b-p" onclick="_cfAbbina('+idx+',\''+fid+'\',false);var o=document.getElementById(\'_riconciliaDaFattOv\');if(o)o.remove();if(typeof renderLista===\'function\')renderLista();">Abbina e salda ('+fmt(S.resto)+')</button>'+
+      (Math.abs(impMov-S.resto)>0.50?'<button class="rf-b" onclick="_cfAbbina('+idx+',\''+fid+'\',true);var o=document.getElementById(\'_riconciliaDaFattOv\');if(o)o.remove();if(typeof renderLista===\'function\')renderLista();">Solo acconto ('+fmt(impMov)+')</button>':'')+'</div></div>');
   });
   if(L.length>vis.length) h+='<button class="an-ign" onclick="_rfSet(\'mostra\','+(S.mostra+60)+')">Mostra altri '+Math.min(60,L.length-vis.length)+' ›</button>';
   box.innerHTML=h;
@@ -23735,7 +23807,7 @@ function _anCalcola(F, movs, entrate){
       return;
     }
     out.push({chiave:'doppiopag|'+k+'|'+pieni.map(function(m){ return m.id; }).sort().join(','), tipo:'pagamento_doppio', gravita:'alta',
-      titolo: identici ? 'Stesso addebito presente due volte' : 'Fattura pagata due volte?',
+      titolo: identici ? 'Stesso addebito presente due volte' : (_docNome(f,{maiuscola:true})+' pagata due volte?'),
       testo: identici
         ? ('Ci sono '+pieni.length+' addebiti identici ('+_anData(pieni[0].data)+', '+fmt(imp)+') collegati a questa fattura. Se sull\'estratto conto l\'addebito è uno solo, è un doppione dell\'importazione; se sono davvero due, uno appartiene a un altro acquisto.')
         : ('Ci sono '+pieni.length+' pagamenti diversi, ognuno pari all\'intero importo di '+fmt(imp)+', collegati a questa fattura. O '+fmt(imp*(pieni.length-1))+' sono da farsi restituire dal fornitore, oppure uno dei pagamenti è per un\'altra fattura.'),
@@ -23751,16 +23823,16 @@ function _anCalcola(F, movs, entrate){
       var numSim=_anNumeriSimili(a.numero, b.numero), fornSim=_anNomiCompatibili(a.fornitore, b.fornitore);
       var ids=[String(a.id),String(b.id)].sort().join(',');
       if(numSim && fornSim){
-        out.push({chiave:'doppione|'+ids, tipo:'doppione', gravita:'alta', titolo:'Fattura registrata due volte',
+        out.push({chiave:'doppione|'+ids, tipo:'doppione', gravita:'alta', titolo:_docNome(a,{maiuscola:true})+' registrata due volte',
           testo:'Stesso fornitore, stessa data, stesso importo e numero '+(_anFull(a.numero)===_anFull(b.numero)?'identico':'quasi identico («'+a.numero+'» e «'+b.numero+'»)')+': è la stessa fattura inserita due volte, quindi la spesa risulta contata doppia. Elimina quella in più (finisce nel Cestino, recuperabile).',
           fatture:[a,b], movimenti:[], rischio:Math.abs(a.importo)});
       } else if(numSim){
-        out.push({chiave:'doppioneforn|'+ids, tipo:'doppione', gravita:'alta', titolo:'Stessa fattura sotto due fornitori',
+        out.push({chiave:'doppioneforn|'+ids, tipo:'doppione', gravita:'alta', titolo:'Stess'+(a.tipo==='nota_credito'?'a nota di credito':'a fattura')+' sotto due fornitori',
           testo:'Numero «'+a.numero+'», data e importo identici, ma registrata sia per '+a.fornitore+' sia per '+b.fornitore+'. Di solito una delle due ha il fornitore sbagliato, oppure è un doppione.',
           fatture:[a,b], movimenti:[], rischio:Math.abs(a.importo)});
       } else if(fornSim){
         out.push({chiave:'simile|'+ids, tipo:'simile', gravita:'bassa', titolo:'Stesso giorno, stesso importo',
-          testo:'Due fatture di '+a.fornitore+' con la stessa data e lo stesso importo ('+fmt(Math.abs(a.importo))+'), numeri «'+a.numero+'» e «'+b.numero+'». Spesso sono fatture diverse: se è così, segna "non è un problema".',
+          testo:_docCoppia(a,b)+' di '+a.fornitore+' con la stessa data e lo stesso importo ('+fmt(Math.abs(a.importo))+'), numeri «'+a.numero+'» e «'+b.numero+'». Spesso sono fatture diverse: se è così, segna "non è un problema".',
           fatture:[a,b], movimenti:[], rischio:0});
       }
     }
@@ -23902,13 +23974,15 @@ async function _anAggiornaHome(forza){
 // ── Anomalie: foglio con l'elenco completo ──
 function _anRigaFattura(f){
   var st={pagata:'Pagata', da_pagare:'Da pagare', parziale:'Parziale'}[f.stato]||f.stato||'';
-  return '<button class="an-row" data-fid="'+esc(String(f.id))+'" onclick="_anApriFattura(this.dataset.fid)">'+
-    '<span class="an-row-ico">📄</span><span class="an-row-main"><b>'+esc(f.fornitore||'—')+'</b><span>N° '+esc(f.numero||'—')+' · '+_anData(f.data)+' · '+fmt(Math.abs(f.importo||0))+(st?' · '+esc(st):'')+'</span></span><span class="an-row-chev">›</span></button>';
+  var _ico = f.tipo==='nota_credito' ? '🧾' : (f.tipo==='ddt' ? '📦' : '📄');
+  var _tip = f.tipo==='nota_credito' ? 'Nota di credito · ' : (f.tipo==='ddt' ? 'DDT · ' : '');
+  return '<div class="an-row-wrap"><button class="an-row" data-fid="'+esc(String(f.id))+'" onclick="_anApriFattura(this.dataset.fid)">'+
+    '<span class="an-row-ico">'+_ico+'</span><span class="an-row-main"><b>'+esc(f.fornitore||'—')+'</b><span>'+_tip+'N° '+esc(f.numero||'—')+' · '+_anData(f.data)+' · '+fmt(Math.abs(f.importo||0))+(st?' · '+esc(st):'')+'</span></span><span class="an-row-chev">›</span></button>'+_btnXml(f,'mini')+'</div>';
 }
 function _anRigaMovimento(m, a, ignorata){
   var dop = a && (a.tipo==='pagamento_doppio'||a.tipo==='pagamento_doppio_rimborsato') && !ignorata && (m.importo||0)<0;
   var identici = a && /identici/.test(a.titolo||'');
-  return '<div class="an-row an-row-mov an-row-mov2"><span class="an-row-ico">🏦</span><span class="an-row-main"><b>'+_anData(m.data)+' · '+fmt(Math.abs(m.importo||0))+'</b><span>'+esc(String(m.descrizione||'').slice(0,120))+'</span></span>'+
+  return '<div class="an-row an-row-mov an-row-mov2"><span class="an-row-ico">🏦</span><span class="an-row-main"><b>'+_anData(m.data)+' · '+fmt(Math.abs(m.importo||0))+' '+_fonteTag(m)+'</b><span>'+esc(String(m.descrizione||'').slice(0,120))+'</span></span>'+
     '<span class="an-mov-btns">'+
       (dop ? (identici
         ? '<button class="an-fix an-fix-w" data-mid="'+esc(String(m.id))+'" onclick="_anScollegaMov(this.dataset.mid,true)">È il doppione: togli</button>'
@@ -23940,11 +24014,11 @@ function _anSceltaDoppione(a){
       (cons?'<div class="an-cons">Consigliata: '+esc(P.perche.join(', '))+'</div>':'')+
       '<button class="an-scelta-doc" data-fid="'+esc(String(f.id))+'" onclick="_anApriFattura(this.dataset.fid)"><b>'+esc(f.fornitore||'—')+'</b><span>N° '+esc(f.numero||'—')+' · '+_anData(f.data)+' · '+fmt(Math.abs(f.importo||0))+'</span>'+
         '<span class="an-tags">'+(P.xml?'<i class="t-ok">XML</i>':'<i class="t-no">senza XML</i>')+(P.mov.length||f.riconciliata?'<i class="t-ok">banca collegata</i>':'')+(st?'<i>'+st+'</i>':'')+(f.denominazioneXml&&f.denominazioneXml!==f.fornitore?'<i>XML: '+esc(f.denominazioneXml)+'</i>':'')+'</span>'+
-        '<span class="an-apri">Apri la scheda ›</span></button>'+
+        '<span class="an-apri">Apri la scheda ›</span></button>'+_btnXml(f,'mini')+
       '<button class="an-tieni" data-k="'+esc(String(f.id))+'" data-d="'+esc(String(altro.id))+'" data-c="'+esc(a.chiave)+'" onclick="_anRisolviDoppione(this.dataset.k,this.dataset.d,this.dataset.c)">Tieni questa, elimina l\'altra</button>'+
     '</div>';
   };
-  return '<div class="an-sceltatit">'+(a.tipo==='simile'?'Se è la stessa fattura, quale tieni?':'Quale tieni?')+'</div><div class="an-scelte">'+card(A,pa,B)+card(B,pb,A)+'</div>'+
+  return '<div class="an-sceltatit">'+(a.tipo==='simile'?('Se è '+(A.tipo==='nota_credito'?'la stessa nota di credito':'la stessa fattura')+', quale tieni?'):'Quale tieni?')+'</div><div class="an-scelte">'+card(A,pa,B)+card(B,pb,A)+'</div>'+
     '<div class="an-scelta-nota">Quella eliminata va nel Cestino (recuperabile 30 giorni). Se era lei ad avere il pagamento o il collegamento alla banca, passano a quella che tieni.</div>';
 }
 async function _anRisolviDoppione(tieniId, eliminaId, chiave){
@@ -24897,7 +24971,7 @@ function _bfRender(){
     '<div class="an-intro">Quasi sempre sono fatture già pagate e mai segnate: finché restano aperte, «Da pagare», «Scadute» e le uscite previste risultano gonfiati. Ogni modifica finisce nello storico della fattura e si può annullare.</div>';
   if(prove.length){
     html+='<div class="an-sez">Pagamento trovato in banca<span>'+prove.length+'</span></div><div class="cr-grp">'+prove.map(function(p){
-      return '<div class="cr-row" style="cursor:default"><span class="cr-main"><b>'+esc(p.f.fornitore)+' · N° '+esc(p.f.numero||'—')+'</b><span>Fattura '+_anData(p.f.data)+' · movimento '+_anData(p.m.data)+' di '+fmt(Math.abs(p.m.importo))+'</span></span><button class="an-fix" data-id="'+esc(String(p.f.id))+'" onclick="_bfCollega(this.dataset.id)">Collega</button></div>';
+      return '<div class="cr-row" style="cursor:default"><span class="cr-main"><b>'+esc(p.f.fornitore)+' · N° '+esc(p.f.numero||'—')+'</b><span>'+_docNome(p.f,{maiuscola:true})+' '+_anData(p.f.data)+' · movimento '+_anData(p.m.data)+' di '+fmt(Math.abs(p.m.importo))+' '+_fonteTag(p.m)+'</span></span>'+_btnXml(p.f,'mini')+'<button class="an-fix" data-id="'+esc(String(p.f.id))+'" onclick="_bfCollega(this.dataset.id)">Collega</button></div>';
     }).join('')+'</div>';
   }
   html+='<div class="an-sez">Per fornitore<span>'+gruppi.length+'</span></div>';
@@ -24913,7 +24987,7 @@ function _bfRender(){
     return '<div class="an-item bf-g" style="animation-delay:'+Math.min(gi,8)*35+'ms">'+
       '<button class="bf-hd" data-g="'+esc(g.nome)+'" onclick="_bfToggle(this.dataset.g)"><span class="cr-main"><b>'+esc(g.nome)+'</b><span>'+g.fatt.length+' fattur'+(g.fatt.length===1?'a':'e')+' · dal '+_anData(g.fatt[0].data)+' al '+_anData(g.fatt[g.fatt.length-1].data)+(metodo&&metodo!=='—'?' · di solito '+esc(metodo):'')+'</span></span><span class="cr-imp">'+fmt(g.tot)+'</span><span class="bf-chev'+(aperto?' on':'')+'">›</span></button>'+
       (aperto ?
-        '<div class="bf-list">'+g.fatt.map(function(f){ return '<label class="bf-f"><input type="checkbox" '+(sel[f.id]?'checked':'')+' data-g="'+esc(g.nome)+'" data-id="'+esc(String(f.id))+'" onchange="_bfSelF(this.dataset.g,this.dataset.id,this.checked)"><span class="cr-main"><b>N° '+esc(f.numero||'—')+'</b><span>'+_anData(f.data)+(f.scadenza?' · scad. '+_anData(f.scadenza):'')+(f.stato==='parziale'?' · parziale':'')+'</span>'+TAG[tr[f.id]]+'</span><span class="cr-imp">'+fmt(f.importo)+'</span></label>'; }).join('')+'</div>'+
+        '<div class="bf-list">'+g.fatt.map(function(f){ return '<label class="bf-f"><input type="checkbox" '+(sel[f.id]?'checked':'')+' data-g="'+esc(g.nome)+'" data-id="'+esc(String(f.id))+'" onchange="_bfSelF(this.dataset.g,this.dataset.id,this.checked)"><span class="cr-main"><b>N° '+esc(f.numero||'—')+'</b><span>'+_anData(f.data)+(f.scadenza?' · scad. '+_anData(f.scadenza):'')+(f.stato==='parziale'?' · parziale':'')+'</span>'+TAG[tr[f.id]]+'</span><span class="cr-imp">'+fmt(f.importo)+'</span>'+_btnXml(f,'mini')+'</label>'; }).join('')+'</div>'+
         (nNessuna ? '<button class="bf-cont" data-g="'+esc(g.nome)+'" onclick="_bfSelSenzaTraccia(this.dataset.g)"><b>Seleziona le '+nNessuna+' senza traccia in banca</b><span>Nessun bonifico, addebito o carta con quell\'importo o quel nome: imposta «Contanti»</span></button>' : '')+
         (nNd===g.fatt.length ? '<div class="bf-nota-m">L\'estratto conto di quel periodo non è ancora caricato: dopo l\'import l\'app ti dirà quali risultano pagate in banca e quali no.</div>' : '')+
         '<div class="sf-lbl" style="margin-top:12px">1 · Come le hai pagate?</div>'+
@@ -27307,6 +27381,7 @@ async function _authEntra(){
   _authNascondi();
   if(window._authApri) window._authApri();
   try{ _accAvvisa(); }catch(e){}
+  try{ _esAvvio(); }catch(e){}
   if(!_authAppAvviata){ _authAppAvviata = true; init(); }
 }
 async function _authEsci(silenzioso){
@@ -27536,6 +27611,208 @@ function _accAvvisa(){
   var n = (_authSess.acc && _authSess.acc.in_attesa) || 0;
   if(n > 0 && typeof toast === 'function') setTimeout(function(){ toast('🔑 ' + n + (n === 1 ? ' richiesta di accesso in attesa' : ' richieste di accesso in attesa')); }, 2200);
 }
+// ══════════════════════════════════════════════════════════════════
+// ARCHIVIO ESTRATTI (20/09) — ogni estratto importato resta tracciato:
+// che periodo copre, quando è stato caricato e il file originale
+// conservato su Supabase. Più il promemoria mensile di quelli mancanti.
+// ══════════════════════════════════════════════════════════════════
+var _ES_TIPI = [
+  { k:'banca', ico:'🏦', n:'Estratto conto Banco BPM', sub:'movimenti del conto' },
+  { k:'carta', ico:'💳', n:'Estratto carta Nexi',      sub:'spese con la carta di credito' },
+  { k:'numia', ico:'🧾', n:'Incassi POS Numia',        sub:'transazioni del POS' },
+  { k:'sumup', ico:'📲', n:'Incassi SumUp',            sub:'transazioni e accrediti SumUp' }
+];
+var _esRighe = null;
+
+function _esMeseEt(ym){
+  if(!ym) return '';
+  var M=['gennaio','febbraio','marzo','aprile','maggio','giugno','luglio','agosto','settembre','ottobre','novembre','dicembre'];
+  var p=String(ym).split('-');
+  return (M[parseInt(p[1],10)-1]||'')+' '+p[0];
+}
+function _esMeseDi(d){ return String(d||'').slice(0,7); }
+function _esMesePrec(){
+  var d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-1);
+  return d.toISOString().slice(0,7);
+}
+function _esMesiTra(da, a){
+  var out=[], d=new Date(da+'-01T12:00:00'), fine=new Date(a+'-01T12:00:00');
+  while(d<=fine){ out.push(d.toISOString().slice(0,7)); d.setMonth(d.getMonth()+1); }
+  return out;
+}
+async function _esCarica(forza){
+  if(_esRighe && !forza) return _esRighe;
+  try{
+    _esRighe = await sbFetch('estratti_archivio?select=*&order=periodo_a.desc.nullslast,importato_il.desc');
+  }catch(e){ _esRighe = _esRighe || []; }
+  return _esRighe;
+}
+function _esDi(tipo){ return (_esRighe||[]).filter(function(r){ return r.tipo===tipo; }); }
+function _esCoperti(tipo){
+  var set={};
+  _esDi(tipo).forEach(function(r){
+    var da=_esMeseDi(r.periodo_da)||_esMeseDi(r.periodo_a), a=_esMeseDi(r.periodo_a)||da;
+    if(!da) return;
+    _esMesiTra(da, a).forEach(function(m){ set[m]=1; });
+  });
+  return set;
+}
+// Mesi scoperti dal primo estratto in poi, fino al mese scorso compreso
+function _esMancanti(tipo){
+  var righe=_esDi(tipo); if(!righe.length) return [];
+  var coperti=_esCoperti(tipo), mesi=Object.keys(coperti).sort();
+  if(!mesi.length) return [];
+  return _esMesiTra(mesi[0], _esMesePrec()).filter(function(m){ return !coperti[m]; });
+}
+function _esUltimo(tipo){
+  var r=_esDi(tipo);
+  if(!r.length) return null;
+  return r.slice().sort(function(a,b){ return String(b.periodo_a||b.importato_il).localeCompare(String(a.periodo_a||a.importato_il)); })[0];
+}
+
+// ── Salvataggio del file originale ───────────────────────────────
+async function _esSalvaFile(tipo, file, meta){
+  meta = meta || {};
+  var riga = {
+    tipo: tipo,
+    formato: (file && /\.([a-z0-9]+)$/i.test(file.name)) ? file.name.split('.').pop().toLowerCase() : (meta.formato||null),
+    periodo_da: meta.dal || null,
+    periodo_a: meta.al || null,
+    file_name: (file && file.name) || meta.nome || null,
+    file_mime: (file && file.type) || null,
+    file_size: (file && file.size) || null,
+    righe: meta.righe != null ? meta.righe : null,
+    note: meta.note || null,
+    importato_da: (typeof _authSess!=='undefined' && _authSess && _authSess.user) ? _authSess.user.id : null,
+    impronta: tipo+'|'+((file&&file.name)||meta.nome||'')+'|'+((file&&file.size)||0)+'|'+(meta.dal||'')+'|'+(meta.al||'')
+  };
+  // 1) file originale nell'archivio (se fallisce, la traccia si salva lo stesso)
+  if(file){
+    try{
+      var anno=(meta.al||meta.dal||new Date().toISOString().slice(0,10)).slice(0,4);
+      var pulito=String(file.name).replace(/[^A-Za-z0-9._-]/g,'_').slice(-80);
+      var percorso=tipo+'/'+anno+'/'+Date.now()+'_'+pulito;
+      var r=await fetch(SB_URL+'/storage/v1/object/estratti/'+encodeURI(percorso), {
+        method:'POST',
+        headers:{ apikey:SB_KEY, Authorization:SB_H.Authorization, 'x-upsert':'true', 'Content-Type': file.type||'application/octet-stream' },
+        body:file
+      });
+      if(r.ok) riga.storage_path=percorso;
+      else if(typeof _registraErrore==='function') _registraErrore('archivio','upload estratto '+tipo+' → '+r.status, (await r.text()).slice(0,200));
+    }catch(e){ if(typeof _registraErrore==='function') _registraErrore('archivio','upload estratto '+tipo, String(e).slice(0,200)); }
+  }
+  // 2) traccia in archivio
+  try{
+    await sbFetch('estratti_archivio?on_conflict=impronta', {
+      method:'POST',
+      headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},
+      body: JSON.stringify(riga)
+    });
+    _esRighe = null;
+    _esCarica(true).then(function(){ _esRenderCard(); }).catch(function(){});
+  }catch(e){ if(typeof _registraErrore==='function') _registraErrore('archivio','salvataggio traccia '+tipo, String(e).slice(0,200)); }
+  return riga;
+}
+async function _esScarica(id){
+  var r=(_esRighe||[]).find(function(x){ return String(x.id)===String(id); });
+  if(!r) return;
+  if(!r.storage_path){ alert('Di questo estratto è rimasta solo la scheda: il file originale non era ancora conservato quando è stato importato.'); return; }
+  try{
+    toast('⏳ Scarico il file…');
+    var res=await fetch(SB_URL+'/storage/v1/object/estratti/'+encodeURI(r.storage_path), { headers:{ apikey:SB_KEY, Authorization:SB_H.Authorization } });
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    var blob=await res.blob();
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(blob); a.download=r.file_name||('estratto-'+r.tipo+'.dat');
+    document.body.appendChild(a); a.click();
+    setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+  }catch(e){ toast('⚠️ Non riesco a scaricarlo: '+e.message); }
+}
+
+// ── Scheda riassuntiva dentro Importazioni ───────────────────────
+function _esRenderCard(){
+  var box=document.getElementById('esCard'); if(!box) return;
+  if(_esRighe===null){ box.innerHTML='<div class="es-riga"><span class="es-ico">📚</span><div class="es-main"><b>Estratti caricati</b><span>carico…</span></div></div>'; return; }
+  var mancTot=0;
+  var righe=_ES_TIPI.map(function(t){
+    var u=_esUltimo(t.k), manc=_esMancanti(t.k);
+    mancTot+=manc.length;
+    var stato, cls;
+    if(!u){ stato='mai importato'; cls='es-neutro'; }
+    else if(manc.length){ stato='manca '+(manc.length===1?_esMeseEt(manc[0]):manc.length+' mesi'); cls='es-manca'; }
+    else { stato='in regola'; cls='es-ok'; }
+    var ult=u ? ('ultimo: '+(u.periodo_a?_esMeseEt(_esMeseDi(u.periodo_a)):'—')) : 'nessun file in archivio';
+    return '<div class="es-riga"><span class="es-ico">'+t.ico+'</span><div class="es-main"><b>'+t.n+'</b><span>'+ult+' · '+_esDi(t.k).length+' in archivio</span></div><em class="es-tag '+cls+'">'+stato+'</em></div>';
+  }).join('');
+  box.innerHTML='<div class="es-hd"><div><b>📚 Estratti caricati</b><span>'+(mancTot?mancTot+' da recuperare':'tutto aggiornato')+'</span></div><button class="btn btn-s es-b" onclick="_esApri()">Apri archivio</button></div>'+righe;
+}
+
+// ── Archivio completo ────────────────────────────────────────────
+function _esApri(){
+  var ov=document.getElementById('_esOv');
+  if(ov) ov.remove();
+  ov=document.createElement('div');
+  ov.id='_esOv';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:900;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px)';
+  ov.innerHTML='<div class="es-box"><div class="es-box-hd"><div><b>📚 Archivio estratti</b><span>ogni file importato, con il periodo che copre</span></div>'+
+    '<button class="es-x" onclick="document.getElementById(\'_esOv\').remove()" aria-label="Chiudi">×</button></div>'+
+    '<div class="es-box-body" id="esBody"><div class="an-vuoto"><div class="fa-spin"></div><span>Carico l\'archivio…</span></div></div></div>';
+  ov.onclick=function(e){ if(e.target===ov) ov.remove(); };
+  document.body.appendChild(ov);
+  _esCarica(true).then(_esRenderArchivio).catch(function(e){
+    var b=document.getElementById('esBody'); if(b) b.innerHTML='<div class="an-vuoto"><span>Non riesco a leggere l\'archivio: '+esc(e.message||'')+'</span></div>';
+  });
+}
+function _esRenderArchivio(){
+  var b=document.getElementById('esBody'); if(!b) return;
+  var h='';
+  _ES_TIPI.forEach(function(t){
+    var righe=_esDi(t.k), manc=_esMancanti(t.k);
+    h+='<div class="es-sez"><span>'+t.ico+' '+t.n+'</span><em>'+t.sub+'</em></div>';
+    if(manc.length){
+      h+='<div class="es-alert"><b>Da recuperare:</b> '+manc.map(_esMeseEt).join(', ')+'</div>';
+    }
+    if(!righe.length){
+      h+='<div class="es-vuoto">Nessun estratto ancora importato.</div>';
+    } else {
+      h+='<div class="es-lista">'+righe.map(function(r){
+        var per = r.periodo_da&&r.periodo_a
+          ? (_esMeseDi(r.periodo_da)===_esMeseDi(r.periodo_a) ? _esMeseEt(_esMeseDi(r.periodo_a)) : (_anData(r.periodo_da)+' → '+_anData(r.periodo_a)))
+          : 'periodo non indicato';
+        var quando = r.importato_il ? new Date(r.importato_il).toLocaleDateString('it-IT',{day:'2-digit',month:'short',year:'numeric'}) : '';
+        var peso = r.file_size ? (r.file_size>1048576 ? (r.file_size/1048576).toFixed(1)+' MB' : Math.max(1,Math.round(r.file_size/1024))+' KB') : '';
+        return '<div class="es-item"><div class="es-item-main"><b>'+esc(per)+'</b>'+
+          '<span>'+esc(r.file_name||'file non conservato')+(peso?' · '+peso:'')+(r.righe?' · '+r.righe+' righe':'')+'</span>'+
+          '<span class="es-quando">caricato il '+quando+(r.note?' · '+esc(r.note):'')+'</span></div>'+
+          (r.storage_path
+            ? '<button class="es-dl" data-id="'+esc(String(r.id))+'" onclick="_esScarica(this.dataset.id)">⬇️ Scarica</button>'
+            : '<em class="es-nofile">solo scheda</em>')+
+        '</div>';
+      }).join('')+'</div>';
+    }
+  });
+  h+='<div class="es-nota">Il file originale resta conservato su Supabase: serve al commercialista e in caso di controlli. Gli estratti importati prima di oggi hanno la scheda ma non il file.</div>';
+  b.innerHTML=h;
+}
+
+// ── Promemoria mensile ───────────────────────────────────────────
+function _esPromemoria(){
+  var mese=_esMesePrec(), chiave='fatture_es_avviso_'+mese;
+  try{ if(localStorage.getItem(chiave)) return; }catch(e){}
+  var mancanti=_ES_TIPI.filter(function(t){ return _esMancanti(t.k).length; });
+  if(!mancanti.length) return;
+  try{ localStorage.setItem(chiave,'1'); }catch(e){}
+  var nomi=mancanti.map(function(t){ return t.n.replace('Estratto conto ','').replace('Estratto ',''); }).join(', ');
+  setTimeout(function(){ if(typeof toast==='function') toast('📚 Estratti da importare: '+nomi); }, 3400);
+}
+async function _esAvvio(){
+  try{
+    await _esCarica(true);
+    _esRenderCard();
+    _esPromemoria();
+  }catch(e){}
+}
+
 _authAvvio();
 </script>
 
@@ -28020,7 +28297,7 @@ html[data-theme="dark"] .sf-hint{color:var(--orange)}
 .rs-switch:checked{background:#34c759}
 .rs-switch:checked::after{transform:translateX(19px)}
 /* ── Punto 12: conto economico e previsione ── */
-.ce-chips{display:flex;gap:6px;overflow-x:auto;margin:10px -14px 4px;padding:0 14px 4px;scrollbar-width:none}
+.ce-chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px;padding:0 0 4px}
 .ce-chips::-webkit-scrollbar{display:none}
 .ce-chips .chip{flex-shrink:0}
 .ce-dl{display:block;font-style:normal;font-size:10.5px;color:var(--ink3);margin-top:2px;font-weight:500}
@@ -28129,9 +28406,12 @@ html[data-theme="dark"] .sf-hint{color:var(--orange)}
 .ec-pc span{flex:1;font-size:13px;min-width:0}
 .ec-pc input{width:92px;padding:7px 9px;font-size:13px;text-align:right}
 /* ── 20/09: trova il movimento bancario ── */
-.rf-chips{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
-.rf-chips::-webkit-scrollbar{display:none}
-.rf-chips .chip{flex-shrink:0;font-size:12.5px;padding:6px 11px}
+/* 20/09 (Valerio: "con il PC non riesco a scorrere la barra orizzontale"):
+   i filtri vanno a capo da soli — niente più scorrimento laterale */
+.rf-chips{display:flex;flex-wrap:wrap;gap:6px;padding-bottom:2px}
+.rf-chips .chip{font-size:12.5px;padding:6px 11px}
+.rf-chips .rf-sep{flex-basis:100%;height:0;margin:0}
+@media (min-width:520px){ .rf-chips .rf-sep{flex-basis:auto;width:1px;height:20px;align-self:center;background:var(--sep);margin:0 3px} }
 .rf-sep{width:1px;flex-shrink:0;background:var(--ds-hair,var(--sep));margin:4px 2px}
 .rf-conta{font-size:11.5px;color:var(--ink3);margin:6px 2px 8px}
 .rf-mov{background:var(--surface);border:1px solid var(--ds-hair,var(--sep));border-radius:14px;padding:11px 12px;margin-bottom:8px}
@@ -28169,9 +28449,9 @@ html[data-theme="dark"] .sf-hint{color:var(--orange)}
 .ec-tab.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 4px rgba(0,0,0,.12)}
 /* ── 20/09: sezione Fornitori ── */
 .fn-q{width:100%;padding:11px 12px;font-size:14px;border-radius:12px;margin-bottom:8px;box-sizing:border-box}
-.fn-chips{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;margin:0 0 8px;padding-bottom:2px}
+.fn-chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 8px;padding-bottom:2px}
 .fn-chips::-webkit-scrollbar{display:none}
-.fn-chips .chip{flex-shrink:0;font-size:12.5px;padding:6px 11px}
+.fn-chips .chip{font-size:12.5px;padding:6px 11px}
 .fn-sum{font-size:12px;color:var(--ink3);margin:4px 2px 8px}
 .fn-row{display:flex;align-items:center;gap:11px;width:100%;padding:10px 4px;border:none;border-bottom:.5px solid var(--ds-hair,var(--sep));background:none;font-family:inherit;color:var(--ink);text-align:left;cursor:pointer}
 .fn-av{width:34px;height:34px;border-radius:10px;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;color:var(--ink3);flex-shrink:0}
@@ -28319,6 +28599,56 @@ html[data-theme="dark"] .sf-hint{color:var(--orange)}
 #accPanel .acc-vuoto{display:flex;flex-direction:column;align-items:center;gap:10px;color:var(--ink3);font-size:14px;padding:30px 0}
 #accPanel .acc-msg{padding:0 18px 14px;font-size:13px;color:var(--ink2);text-align:center}
 #accPanel .acc-msg:empty{display:none}
+/* Fonte del movimento e accesso all'XML (20/09) */
+.fonte-tag{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:99px;vertical-align:1px;letter-spacing:.2px;white-space:nowrap}
+.fo-bpm{background:var(--blue-light);color:var(--blue)}
+.fo-nexi{background:var(--purple-light);color:var(--purple)}
+.fo-sumup{background:var(--green-light);color:var(--green)}
+.fo-paypal{background:var(--orange-light);color:var(--orange)}
+.fonte-via{background:var(--surface3);color:var(--ink3);margin-left:4px}
+.btn-xml{border:1px solid var(--sep);background:var(--surface);color:var(--ink2);border-radius:9px;padding:6px 10px;font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap}
+.btn-xml:active{background:var(--surface2)}
+.btn-xml-mini{padding:4px 9px;font-size:11.5px;margin:6px 0 0 auto;display:block}
+.an-row-wrap{display:flex;align-items:center;gap:6px}
+.an-row-wrap .an-row{flex:1;min-width:0}
+.an-row-wrap .btn-xml-mini{margin:0;flex:0 0 auto}
+/* ── Archivio estratti (20/09) ── */
+.es-card{background:var(--surface);border-radius:var(--radius);padding:14px 16px;box-shadow:var(--shadow);margin-bottom:12px}
+.es-card:empty{display:none}
+.es-hd{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.es-hd b{font-size:16px;display:block}
+.es-hd span{font-size:12px;color:var(--ink3)}
+.es-b{padding:8px 14px!important;width:auto!important;font-size:13px}
+.es-riga{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--sep)}
+.es-riga:first-of-type{border-top:none}
+.es-ico{font-size:19px;flex:0 0 auto}
+.es-main{flex:1;min-width:0}
+.es-main b{display:block;font-size:14px;font-weight:600;color:var(--ink)}
+.es-main span{display:block;font-size:12px;color:var(--ink3)}
+.es-tag{font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;font-style:normal;white-space:nowrap}
+.es-ok{background:var(--green-light);color:var(--green)}
+.es-manca{background:var(--orange-light);color:#b36a00}
+.es-neutro{background:var(--surface2);color:var(--ink3)}
+#_esOv .es-box{background:var(--bg);width:100%;max-width:560px;max-height:90vh;border-radius:20px 20px 0 0;display:flex;flex-direction:column;overflow:hidden}
+#_esOv .es-box-hd{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:16px 18px;background:var(--surface);border-bottom:1px solid var(--sep)}
+#_esOv .es-box-hd b{font-size:17px;display:block}
+#_esOv .es-box-hd span{font-size:12px;color:var(--ink3)}
+#_esOv .es-x{background:var(--surface2);border:none;width:30px;height:30px;border-radius:50%;font-size:18px;color:var(--ink2);cursor:pointer;flex:0 0 auto}
+#_esOv .es-box-body{overflow-y:auto;padding:14px 16px 26px;-webkit-overflow-scrolling:touch}
+#_esOv .es-sez{display:flex;align-items:baseline;gap:8px;margin:16px 2px 8px;flex-wrap:wrap}
+#_esOv .es-sez span{font-size:15px;font-weight:700;color:var(--ink)}
+#_esOv .es-sez em{font-size:12px;color:var(--ink3);font-style:normal}
+#_esOv .es-alert{background:var(--orange-light);color:#8a5200;border-radius:10px;padding:9px 12px;font-size:13px;margin-bottom:8px;line-height:1.45}
+#_esOv .es-vuoto{font-size:13px;color:var(--ink3);padding:4px 2px 8px}
+#_esOv .es-lista{display:flex;flex-direction:column;gap:6px}
+#_esOv .es-item{display:flex;align-items:center;gap:10px;background:var(--surface);border-radius:12px;padding:11px 13px}
+#_esOv .es-item-main{flex:1;min-width:0}
+#_esOv .es-item-main b{font-size:14px;display:block;color:var(--ink)}
+#_esOv .es-item-main span{display:block;font-size:12px;color:var(--ink3);word-break:break-word}
+#_esOv .es-quando{font-size:11px!important;color:var(--ink3)}
+#_esOv .es-dl{border:1px solid var(--sep);background:var(--surface2);color:var(--ink);border-radius:9px;padding:7px 11px;font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap}
+#_esOv .es-nofile{font-size:11.5px;color:var(--ink3);font-style:normal;white-space:nowrap}
+#_esOv .es-nota{font-size:12px;color:var(--ink3);line-height:1.5;margin:20px 2px 0}
 /* ── Riduci movimento: tutto fermo ── */
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{animation-duration:.01ms!important;animation-delay:0s!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
