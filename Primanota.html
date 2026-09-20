@@ -491,7 +491,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.1.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.2.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -24958,9 +24958,15 @@ function _sfRender(){
 }
 function _sfCategoriaHtml(nome){
   if(typeof _CE_CAT==='undefined') return '';
-  var scelta=(window._ceMap||{})[_sfKey(nome)]||'', ind=_ceIndovina(nome);
-  return '<div class="gr-card"><div class="gr-t" style="font-size:14px">Categoria di spesa</div><div class="gr-s" style="margin-bottom:10px">'+(scelta?'Scelta da te.':(ind?'Indovinata dal nome: «'+esc(_ceLabel(ind))+'». Tocca per confermare o cambiare.':'Non ancora classificato.'))+' Serve per il conto economico.</div>'+
-    '<div class="sf-chips">'+_CE_CAT.map(function(c){ var on=(scelta||ind)===c.k; return '<button class="chip'+(on?' active':'')+(on&&!scelta?' ce-chip-ind':'')+'" data-c="'+c.k+'" onclick="_sfSetCategoria(this.dataset.c)">'+c.l+'</button>'; }).join('')+'</div></div>';
+  var P=(typeof _ceProposta==='function') ? _ceProposta(nome) : {cat:(window._ceMap||{})[_sfKey(nome)]||null, fonte:'manuale', ok:true, nota:''};
+  var f=(typeof _CE_FONTI!=='undefined') ? _CE_FONTI[P.fonte] : null;
+  var spiega = !P.cat ? 'Non ancora classificato.'
+    : P.ok ? 'Scelta da te.'
+    : (f?f.i+' '+f.t:'Proposta automatica')+(P.nota?' ('+esc(P.nota)+')':'')+': «'+esc(_ceLabel(P.cat))+'». Tocca per confermare o cambiare.';
+  return '<div class="gr-card"><div class="gr-t" style="font-size:14px">Categoria di spesa</div><div class="gr-s" style="margin-bottom:10px">'+spiega+' Serve per il conto economico.</div>'+
+    '<div class="sf-chips">'+_CE_CAT.map(function(c){ var on=P.cat===c.k; return '<button class="chip'+(on?' active':'')+(on&&!P.ok?' ce-chip-ind':'')+'" data-c="'+c.k+'" onclick="_sfSetCategoria(this.dataset.c)">'+c.l+'</button>'; }).join('')+'</div>'+
+    (P.cat && !P.ok ? '<button class="ce-conf" data-c="'+esc(P.cat)+'" onclick="_sfSetCategoria(this.dataset.c)">✓ Confermo: '+esc(_ceLabel(P.cat))+'</button>' : '')+
+  '</div>';
 }
 async function _sfSetCategoria(k){
   if(!_sfStato) return;
@@ -25499,36 +25505,102 @@ window._ceSaldo = window._ceSaldo || null;
 window._ceMese = window._ceMese || null;
 window._ceAperta = null;
 function _ceLabel(k){ var c=_CE_CAT.find(function(x){ return x.k===k; }); return c?c.l:(_CE_EXTRA[k]||'Da classificare'); }
+// 20/09 — Valerio: "Classifica fornitori ne trova solo una piccola parte".
+// Prima le regole erano scritte a mano dentro l'if e i fornitori indovinati
+// sparivano dall'elenco (nessuno poteva più correggerli). Ora ogni regola sta
+// in una riga con il suo motivo, così l'app può dire PERCHÉ ha proposto una
+// categoria e Valerio conferma o cambia.
+var _CE_REGOLE=[
+  {c:'caffe',       p:'torrefazione / caffè',              r:/kimbo|saima|passalacqua|caff[eèé]|torrefaz|lavazza|\billy\b|borbone|nespresso|mokarabia|foodness|ginseng|solubil/},
+  {c:'pasticceria', p:'forno, pasticceria o gelato',       r:/vandemoortele|dolciaria|acquaviva|buongelo|gelinova|gelat|pasticc|forno|panific|cornett|surgel|croissant|coni galasso|brioch|sfogli/},
+  {c:'latticini',   p:'latte, formaggi o uova',            r:/cilatte|\blatt|latticin|caseific|formagg|uova|eurouova|collefasani|mozzarell|granarolo|parmalat|burro/},
+  {c:'bevande',     p:'bevande, vini o alcolici',          r:/distiller|caffo|camel|enoteca|drink|bevande|bibite|bever|villa sandi|perlage|\bvini?\b|birr|brewing|spillatura|sweet drink|san benedetto|ferrarelle|coca.?cola|acquaverde|novacqua|cinoglosso|fontanina/},
+  {c:'dolciumi',    p:'dolciumi confezionati',             r:/perfetti|san carlo|venchi|amarelli|domori|pastiglie leone|liquiriz|cioccolat|caramell|dolciumi|snack|ferrero|nestl|van melle/},
+  {c:'utenze',      p:'luce, acqua, gas o telefono',       r:/enel|acqua bene|\babc\b|\btim\b|telecom|vodafone|fastweb|wind|iliad|edison|hera|a2a|plenitude|\bgas\b|energia|iren|sorgenia|acea/},
+  {c:'auto',        p:'auto, noleggio o carburante',       r:/leasys|ald automotive|arval|ayvens|leasing|noleggio|autostrad|telepass|carburant|kuwait|petrol|\bq8\b|tamoil|esso\b/},
+  {c:'edili',       p:'lavori edili o ristrutturazione',   r:/costruzion|edil|levigazion|marmi|sbordone|serrament|ceramich|pittur|ristruttur|cartongess|santamaria import/},
+  {c:'arredi',      p:'arredi, macchinari o attrezzature', r:/arred|master frost|frigor|attrezzatur|macchin|zecchini|hotellerie|electronics|tecmarket|elettrodomest|berkel|vidoelettronica|any lamp|lampad/},
+  {c:'lavori',      p:'manutenzione o riparazione',        r:/manutenz|ascensor|timas|climari|climatizz|termoidr|idraul|elettric|refriger|fire solution|antincend|riparaz|chiavi|impiant|fabbro|vetr|leroy|brico|ricambi|barbetta|vdm |\bgto\b|romana tecnologie/},
+  {c:'pulizia',     p:'pulizia, igiene o disinfestazione', r:/rentokil|anthirat|disinfest|derattizz|detersiv|pulizi|igien|sanific|\bgtm\b/},
+  {c:'personale',   p:'buoni pasto o divise',              r:/edenred|buoni pasto|ticket|skechers|divise|abbigliamento|pellegrini|day ristoservice/},
+  {c:'digitale',    p:'software o servizi online',         r:/aruba|infocert|tinexta|namirial|software|informatic|pick solutions|hp italy|microsoft|google|apple|rekordata|cromo|microtecnica|register spa|\bwix\b|openapi|fattura24|subito\.it|cloud|hosting|\bpec\b/},
+  {c:'pubblicita',  p:'stampa, grafica o sponsor',         r:/grafich|tipograf|pubblicit|stampa|paraiso|sponsor|volantin|insegn|\basd\b|f\.c\./},
+  {c:'servizi',     p:'consulenze e servizi',              r:/ferrantini|studio |consulen|commercialist|avvocat|notai|eureka|cooperativa|onlus|assicuraz|sicurezza|today service|agenzia|servizi\b/},
+  {c:'consumo',     p:'imballaggi e materiale di consumo', r:/amazon|\bcarta\b|packaging|imball|plast|artecarta|party|ristosubito|ristopanno|monouso|idea casa|sanson|italesse|2m italia|alfa service|bicchier|tovagl/},
+  {c:'merce',       p:'alimentari e ingrosso',             r:/ingross|food|aliment|market|fiorentino|cozzolino|scaramuzza|duegi|top spina|big food|me\.pa|carpino|martellozzo|di cosmo|ge\.fi\.al|fla s|frutta|ortofrut|cofrut|turcofrutta|carni|salum|agricol|zuccher|granzuccheri|naturissime|langellotti|morelli|miraglia|galasso|glutine|euromercato|g\.i\.a\.l|\bgial\b|rondinella|anatrella|nasti|sommella|napolitano|laricogar|distribuzion|commerciale|europa 23|amodio/}
+];
 function _ceIndovina(nome){
   var n=' '+String(nome||'').toLowerCase()+' ';
-  if(/kimbo|saima|passalacqua|caff[eèé]|torrefaz|lavazza|\billy\b|borbone|nespresso|mokarabia/.test(n)) return 'caffe';
-  if(/vandemoortele|dolciaria|acquaviva|buongelo|gelinova|gelat|pasticc|forno|panific|cornett|surgel|croissant/.test(n)) return 'pasticceria';
-  if(/cilatte|\blatt|latticin|caseific|formagg|uova|eurouova|collefasani|mozzarell|granarolo|parmalat/.test(n)) return 'latticini';
-  if(/distiller|caffo|camel|enoteca|drink|bevande|bibite|bever|villa sandi|perlage|\bvini?\b|birr|spillatura|sweet drink|san benedetto|ferrarelle|coca.?cola/.test(n)) return 'bevande';
-  if(/perfetti|san carlo|venchi|amarelli|domori|pastiglie leone|liquiriz|cioccolat|caramell|dolciumi|snack|ferrero|nestl/.test(n)) return 'dolciumi';
-  if(/enel|acqua bene|\babc\b|\btim\b|telecom|vodafone|fastweb|wind|iliad|edison|hera|a2a|plenitude|\bgas\b|energia|iren|sorgenia|acea|novacqua/.test(n)) return 'utenze';
-  if(/leasys|ald automotive|arval|ayvens|leasing|noleggio|autostrad|telepass|carburant|kuwait|petrol|\bq8\b|tamoil|esso\b/.test(n)) return 'auto';
-  if(/costruzion|edil|levigazion|marmi|serrament|ceramich|pittur|ristruttur|cartongess/.test(n)) return 'edili';
-  if(/arred|master frost|frigor|attrezzatur|macchin|zecchini|hotellerie|electronics|tecmarket|elettrodomest|berkel/.test(n)) return 'arredi';
-  if(/manutenz|ascensor|timas|climari|climatizz|termoidr|idraul|elettric|refriger|fire solution|antincend|riparaz|chiavi|impiant|fabbro|vetr|leroy|brico|ricambi/.test(n)) return 'lavori';
-  if(/rentokil|anthirat|disinfest|derattizz|detersiv|pulizi|igien|sanific/.test(n)) return 'pulizia';
-  if(/edenred|buoni pasto|ticket|skechers|divis|abbigliamento|pellegrini|day ristoservice/.test(n)) return 'personale';
-  if(/aruba|infocert|tinexta|namirial|software|informatic|pick solutions|hp italy|microsoft|google|apple|rekordata|cromo|microtecnica|register|wix/.test(n)) return 'digitale';
-  if(/grafich|tipograf|pubblicit|stampa|paraiso|sponsor|volantin|insegn|\basd\b|f\.c\./.test(n)) return 'pubblicita';
-  if(/ferrantini|studio |consulen|commercialist|avvocat|notai|eureka|cooperativa|assicuraz|sicurezza|today service/.test(n)) return 'servizi';
-  if(/amazon|\bcarta\b|packaging|imball|plast|artecarta|party|ristosubito|monouso|idea casa|sanson/.test(n)) return 'consumo';
-  if(/ingross|food|aliment|market|fiorentino|cozzolino|scaramuzza|duegi|top spina|big food|me\.pa|carpino|martellozzo|di cosmo|ge\.fi\.al|fla s|frutta|ortofrut|cofrut|turcofrutta|carni|salum|agricol|zuccher|granzuccheri|naturissime|langellotti|morelli|miraglia|galasso|glutine|euromercato/.test(n)) return 'merce';
+  for(var i=0;i<_CE_REGOLE.length;i++){ if(_CE_REGOLE[i].r.test(n)) return _CE_REGOLE[i].c; }
   return null;
+}
+function _ceIndovinaPerche(nome){
+  var n=' '+String(nome||'').toLowerCase()+' ';
+  for(var i=0;i<_CE_REGOLE.length;i++){ if(_CE_REGOLE[i].r.test(n)) return _CE_REGOLE[i].p; }
+  return '';
+}
+// Secondo indizio, quando il nome non dice niente: le aliquote IVA delle sue
+// fatture. Solo 4%/5%/10% = quasi sempre merce alimentare.
+function _ceAliqMappa(){
+  var F=(typeof fatture!=='undefined'?fatture:[]);
+  if(window._ceAliqN===F.length && window._ceAliq) return window._ceAliq;
+  var M={};
+  F.forEach(function(f){
+    if(f.tipo==='ddt') return;
+    var b=f.ivaBreakdown || f.iva_breakdown; if(!b || typeof b!=='object') return;
+    var k=_sfKey(f.fornitore); var x=M[k]||(M[k]={n:0, al:{}});
+    Object.keys(b).forEach(function(a){ var v=parseFloat(a); if(!isNaN(v)) x.al[v]=(x.al[v]||0)+1; });
+    x.n++;
+  });
+  window._ceAliq=M; window._ceAliqN=F.length;
+  return M;
+}
+function _ceDaAliquote(nome){
+  var x=_ceAliqMappa()[_sfKey(nome)];
+  if(!x || x.n<2) return null;
+  var al=Object.keys(x.al).map(Number);
+  if(!al.length) return null;
+  if(al.every(function(a){ return a===4||a===5||a===10; })) return {cat:'merce', nota:'fatture con IVA '+al.join('% e ')+'%: merce alimentare'};
+  return null;
+}
+// Proposta completa per un fornitore: categoria + da dove viene + se è già
+// stata confermata da Valerio.
+function _ceProposta(nome){
+  var k=_sfKey(nome), meta=(window._ceMeta||{})[k];
+  if(meta && meta.cat) return {cat:meta.cat, fonte:meta.fonte||'manuale', nota:meta.nota||'', ok:!!meta.ok};
+  var g=_ceIndovina(nome);
+  if(g) return {cat:g, fonte:'nome', nota:_ceIndovinaPerche(nome), ok:false};
+  var a=_ceDaAliquote(nome);
+  if(a) return {cat:a.cat, fonte:'iva', nota:a.nota, ok:false};
+  return {cat:null, fonte:null, nota:'', ok:false};
+}
+var _CE_FONTI={manuale:{i:'✓', t:'scelta da te'}, ai:{i:'✨', t:'proposta dall\'AI'}, nome:{i:'🔎', t:'dal nome'}, iva:{i:'🧾', t:'dalle aliquote IVA'}};
+// Quanti fornitori aspettano una mano: senza categoria o con una proposta
+// non ancora confermata (conta tutti i fornitori, non solo quelli del mese).
+function _ceContaDaFare(){
+  var visti={}, manca=0, conferma=0;
+  (typeof fatture!=='undefined'?fatture:[]).forEach(function(f){
+    if(f.tipo==='ddt') return;
+    var k=_sfKey(f.fornitore); if(!k || visti[k]) return; visti[k]=1;
+    var p=_ceProposta(f.fornitore);
+    if(!p.cat) manca++; else if(!p.ok) conferma++;
+  });
+  return {manca:manca, conferma:conferma, tot:manca+conferma};
 }
 function _ceCatDi(nome){
   var k=_sfKey(nome);
-  return window._ceMap[k] || _ceIndovina(nome) || null;
+  return window._ceMap[k] || _ceIndovina(nome) || (function(){ var a=_ceDaAliquote(nome); return a?a.cat:null; })() || null;
 }
 async function _ceCarica(forza){
   if(window._ceCaricato && !forza) return;
   try{
-    var r=await sbFetchAll('fornitori?select=nome,categoria_spesa&categoria_spesa=not.is.null');
-    var m={}; (r||[]).forEach(function(x){ m[_sfKey(x.nome)]=x.categoria_spesa; }); window._ceMap=m;
+    var r=await sbFetchAll('fornitori?select=nome,categoria_spesa,categoria_fonte,categoria_confermata,categoria_nota&categoria_spesa=not.is.null');
+    var m={}, meta={};
+    (r||[]).forEach(function(x){
+      var k=_sfKey(x.nome); m[k]=x.categoria_spesa;
+      meta[k]={cat:x.categoria_spesa, fonte:x.categoria_fonte||'manuale', ok:x.categoria_confermata!==false, nota:x.categoria_nota||''};
+    });
+    window._ceMap=m; window._ceMeta=meta;
   }catch(e){}
   try{
     var s=await sbFetch('ceraldi_stato_condiviso?id=eq.banca_saldo&select=data');
@@ -25536,11 +25608,17 @@ async function _ceCarica(forza){
   }catch(e){}
   window._ceCaricato=true;
 }
-async function _ceSalvaCategoria(nome, cat){
-  window._ceMap[_sfKey(nome)]=cat||undefined;
+async function _ceSalvaCategoria(nome, cat, fonte, nota){
+  fonte=fonte||'manuale';
+  var k=_sfKey(nome);
+  window._ceMeta=window._ceMeta||{};
+  if(cat){ window._ceMap[k]=cat; window._ceMeta[k]={cat:cat, fonte:fonte, ok:fonte==='manuale', nota:nota||''}; }
+  else { delete window._ceMap[k]; delete window._ceMeta[k]; }
   try{
     await sbFetch('fornitori?on_conflict=nome',{method:'POST',headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},
-      body:JSON.stringify({nome:nome, categoria_spesa:cat||null, updated_at:new Date().toISOString()})});
+      body:JSON.stringify({nome:nome, categoria_spesa:cat||null, categoria_fonte:cat?fonte:null,
+        categoria_confermata:!!cat && fonte==='manuale', categoria_nota:(cat&&nota)||null,
+        categoria_agg_il:new Date().toISOString(), updated_at:new Date().toISOString()})});
     return true;
   }catch(e){ toast('❌ Categoria non salvata'); return false; }
 }
@@ -25637,7 +25715,11 @@ function _ceRender(){
         '<div><span>Resta</span><b style="color:'+(marg>=0?'var(--green)':'var(--red)')+'">'+(marg<0?'−':'')+fmt(Math.abs(marg))+'</b>'+(margPerc!==null?'<em class="ce-dl">'+margPerc+'% degli incassi</em>':'')+'</div>'+
       '</div>'+
       (righe.length?'<div class="ce-sez">Dove vanno i soldi · tocca una voce</div>'+(righe.some(function(r){ return r.tipo==='banca'; })?'<div class="gr-leg" style="margin:0 2px 4px"><span><i class="gr-dot gr-d1"></i>Fatture</span><span><i class="gr-dot gr-d2"></i>Pagato in banca senza fattura</span></div>':'')+'<div class="gr-hlist">'+htmlRighe+'</div>':'<div class="gr-nota">Nessun costo registrato in questo mese.</div>')+
-      (D.nonClass.length?'<button class="ce-cta" onclick="_ceClassificaApri()"><b>'+D.nonClass.length+' fornitor'+(D.nonClass.length===1?'e':'i')+' da classificare</b><span>Scegli la categoria una volta: vale per sempre ›</span></button>':'')+
+      (function(){
+        var C=_ceContaDaFare(); if(!C.tot) return '';
+        var pezzi=[]; if(C.manca) pezzi.push(C.manca+' senza categoria'); if(C.conferma) pezzi.push(C.conferma+' propost'+(C.conferma===1?'a':'e')+' da confermare');
+        return '<button class="ce-cta" onclick="_ceClassificaApri()"><b>'+C.tot+' fornitor'+(C.tot===1?'e':'i')+' da sistemare</b><span>'+pezzi.join(' · ')+' — l\'app propone, tu confermi ›</span></button>';
+      })()+
       '<div class="gr-nota">Incassi = corrispettivi delle chiusure ('+D.giorni+' giorn'+(D.giorni===1?'o':'i')+'). Costi = fatture per data documento ('+D.nFatt+'), più stipendi, F24, mutuo e commissioni pagati in banca nel mese'+(D.bancaMese?'':' (estratto di questo mese non ancora caricato)')+'. È una vista di gestione, non il bilancio.</div>'+
     '</div>'+
     _cePrevHtml();
@@ -25645,27 +25727,196 @@ function _ceRender(){
 function _ceSetMese(mk){ window._ceMese=mk; window._ceAperta=null; _ceRender(); }
 function _ceApri(k){ window._ceAperta = window._ceAperta===k ? null : k; _ceRender(); }
 
-// ── Classificazione rapida dei fornitori ──
+// ══════════════════════════════════════════════════════════════════════
+// CLASSIFICA I FORNITORI (riscritta il 20/09) — Valerio: "ne trova solo una
+// piccola parte, risolvi. Inoltre fai fare all'app una prima associazione
+// in base ai dati che ha oppure attraverso api esterna, così viene
+// catalogato in automatico il fornitore e magari io confermo o modifico".
+//
+// Prima: solo i fornitori degli ultimi 12 mesi E senza nessuna ipotesi →
+// spariva la gran parte (quelli indovinati dal nome non si potevano né
+// vedere né correggere). Adesso ci sono TUTTI, raggruppati per: da
+// confermare / senza categoria / confermati, con la proposta già pronta e
+// il motivo per cui è stata fatta.
+// ══════════════════════════════════════════════════════════════════════
+var _ceClS=null;
 function _ceClassificaApri(){
-  var dal=new Date(); dal.setMonth(dal.getMonth()-12); var dalK=dal.toISOString().slice(0,10);
-  var perN={};
-  (fatture||[]).forEach(function(f){ if(f.tipo==='ddt' || String(f.data||'')<dalK) return; if(_ceCatDi(f.fornitore)) return; var n=f.fornitore||'—'; perN[n]=(perN[n]||0)+(+f.importo||0); });
-  var lista=Object.keys(perN).map(function(n){ return {n:n, v:perN[n]}; }).sort(function(a,b){ return b.v-a.v; });
-  var ov=document.createElement('div'); ov.id='ceOverlay';
+  _ceClS={filtro:'dafare', periodo:'tutti', q:'', lavoro:'', aiFatti:0};
+  var ov=document.getElementById('ceOverlay'); if(ov) ov.remove();
+  ov=document.createElement('div'); ov.id='ceOverlay';
   ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:890;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px)';
   ov.onclick=function(e){ if(e.target===ov) _ceClassificaChiudi(); };
-  var opts=_CE_CAT.map(function(c){ return '<option value="'+c.k+'">'+c.l+'</option>'; }).join('');
-  ov.innerHTML='<div style="background:var(--bg);border-radius:20px 20px 0 0;width:100%;max-width:560px;max-height:88vh;overflow-y:auto"><div style="padding:0 16px 34px">'+
-    '<div class="edit-sheet-hd" style="background:var(--bg);margin:0 -16px 10px;position:sticky;top:0;z-index:2"><h3>Classifica i fornitori</h3><button class="edit-close" onclick="_ceClassificaChiudi()">×</button></div>'+
-    '<div class="gr-s" style="margin:0 2px 12px">Ultimi 12 mesi, dal più importante. La scelta si salva subito e si cambia quando vuoi dalla scheda del fornitore.</div>'+
-    (lista.length?'<div class="cr-grp">'+lista.map(function(x){ return '<div class="ce-cl"><div class="ce-cl-n"><b>'+esc(x.n)+'</b><span>'+fmt(x.v)+'</span></div><select data-n="'+esc(x.n)+'" onchange="_ceClassificaSet(this)"><option value="">Scegli…</option>'+opts+'</select></div>'; }).join('')+'</div>':'<div class="an-vuoto"><span>Tutti i fornitori hanno una categoria ✓</span></div>')+
-  '</div></div>';
+  ov.innerHTML='<div style="background:var(--bg);border-radius:20px 20px 0 0;width:100%;max-width:560px;max-height:90vh;overflow-y:auto"><div id="ceClBody" style="padding:0 16px 34px"></div></div>';
   document.body.appendChild(ov);
+  _ceClRender();
+  if(!window._ceCaricato && typeof _ceCarica==='function') _ceCarica().then(function(){ _ceClRender(); });
 }
-function _ceClassificaChiudi(){ var o=document.getElementById('ceOverlay'); if(o) o.remove(); _ceRender(); }
-async function _ceClassificaSet(sel){
-  var ok=await _ceSalvaCategoria(sel.dataset.n, sel.value);
-  if(ok && sel.value){ var r=sel.closest('.ce-cl'); if(r) r.classList.add('ce-cl-ok'); }
+function _ceClassificaChiudi(){ var o=document.getElementById('ceOverlay'); if(o) o.remove(); _ceClS=null; if(typeof _ceRender==='function') _ceRender(); }
+// Un fornitore per riga, con tutte le sue fatture sommate (anche se il nome
+// è scritto in due modi diversi: fa fede la grafia più usata).
+function _ceClLista(){
+  var dal=null;
+  if(_ceClS && _ceClS.periodo==='12m'){ var d=new Date(); d.setMonth(d.getMonth()-12); dal=d.toISOString().slice(0,10); }
+  var M={};
+  (typeof fatture!=='undefined'?fatture:[]).forEach(function(f){
+    if(f.tipo==='ddt') return;
+    if(dal && String(f.data||'')<dal) return;
+    var nome=f.fornitore||'—', k=_sfKey(nome);
+    var x=M[k]||(M[k]={k:k, nomi:{}, n:0, tot:0, ultima:'', piva:''});
+    x.nomi[nome]=(x.nomi[nome]||0)+1;
+    x.n++; x.tot+=(+f.importo||0);
+    if(String(f.data||'')>x.ultima) x.ultima=String(f.data||'');
+    if(f.piva && !x.piva) x.piva=String(f.piva);
+  });
+  return Object.keys(M).map(function(k){
+    var x=M[k];
+    x.nome=Object.keys(x.nomi).sort(function(a,b){ return x.nomi[b]-x.nomi[a]; })[0]||'—';
+    var p=_ceProposta(x.nome);
+    x.cat=p.cat; x.fonte=p.fonte; x.nota=p.nota; x.ok=p.ok;
+    x.gruppo = !x.cat ? 'manca' : (x.ok ? 'fatto' : 'conferma');
+    return x;
+  }).sort(function(a,b){ return b.tot-a.tot; });
+}
+function _ceClRiga(x){
+  var f=_CE_FONTI[x.fonte];
+  var sub=x.n+' document'+(x.n===1?'o':'i')+' · '+fmt(x.tot)+(x.ultima?' · ultima '+_anData(x.ultima):'');
+  var opts='<option value="">— scegli —</option>'+_CE_CAT.map(function(c){ return '<option value="'+c.k+'"'+(x.cat===c.k?' selected':'')+'>'+c.l+'</option>'; }).join('');
+  // se una categoria confermata tempo fa non va d'accordo con il nome, lo dico
+  // (senza cambiare niente): serve per ripulire le vecchie scelte sbagliate
+  var dubbio = '';
+  if(x.ok){ var g=_ceIndovina(x.nome); if(g && g!==x.cat) dubbio=' · 🔎 dal nome sembrerebbe «'+esc(_ceLabel(g))+'»'; }
+  var badge = x.cat
+    ? '<span class="ce-why'+(x.ok?' ce-why-ok':'')+'">'+(f?f.i+' '+f.t:'')+(x.nota?' · '+esc(x.nota):'')+dubbio+'</span>'
+    : '<span class="ce-why ce-why-no">nessuna proposta — scegli tu o chiedi all\'AI</span>';
+  return '<div class="ce-cl'+(x.ok?' ce-cl-fatto':'')+'" data-k="'+esc(x.k)+'">'+
+      '<div class="ce-cl-n"><b>'+esc(x.nome)+'</b><span>'+sub+'</span>'+badge+'</div>'+
+      '<div class="ce-cl-az">'+
+        '<select data-n="'+esc(x.nome)+'" onchange="_ceClCambia(this)">'+opts+'</select>'+
+        (x.cat && !x.ok ? '<button class="ce-ok" data-n="'+esc(x.nome)+'" data-c="'+esc(x.cat)+'" data-p="'+esc(x.nota||'')+'" onclick="_ceClConferma(this)" title="Confermo questa categoria">✓</button>' : '')+
+      '</div></div>';
+}
+function _ceClRender(){
+  var box=document.getElementById('ceClBody'); if(!box || !_ceClS) return;
+  var S=_ceClS, L=_ceClLista();
+  var nC=L.filter(function(x){ return x.gruppo==='conferma'; }).length;
+  var nM=L.filter(function(x){ return x.gruppo==='manca'; }).length;
+  var nF=L.filter(function(x){ return x.gruppo==='fatto'; }).length;
+  var q=(S.q||'').toLowerCase().trim();
+  var vis=L.filter(function(x){
+    if(q && x.nome.toLowerCase().indexOf(q)<0) return false;
+    if(S.filtro==='dafare') return x.gruppo!=='fatto';
+    if(S.filtro==='confermati') return x.gruppo==='fatto';
+    return true;
+  });
+  var chip=function(k,t,n){ return '<button class="chip'+(S.filtro===k?' active':'')+'" onclick="_ceClSet(\'filtro\',\''+k+'\')">'+t+(n!==undefined?' '+n:'')+'</button>'; };
+  var chipP=function(k,t){ return '<button class="chip'+(S.periodo===k?' active':'')+'" onclick="_ceClSet(\'periodo\',\''+k+'\')">'+t+'</button>'; };
+  var daAi=L.filter(function(x){ return !x.cat; }).length;
+  var html=
+    '<div class="edit-sheet-hd" style="background:var(--bg);margin:0 -16px 10px;position:sticky;top:0;z-index:2"><h3>Classifica i fornitori</h3><button class="edit-close" onclick="_ceClassificaChiudi()">×</button></div>'+
+    '<div class="gr-s" style="margin:0 2px 10px">'+L.length+' fornitori in tutto. L\'app propone una categoria da sola: tu confermi con ✓ o la cambi dal menù. Serve per il conto economico e per la commercialista.</div>'+
+    '<div class="ce-kpi">'+
+      '<div><span>Da confermare</span><b>'+nC+'</b></div>'+
+      '<div><span>Senza categoria</span><b>'+nM+'</b></div>'+
+      '<div><span>Confermati</span><b>'+nF+'</b></div>'+
+    '</div>'+
+    '<div class="chip-row" style="margin:10px 0 6px">'+chip('dafare','Da sistemare',nC+nM)+chip('confermati','Confermati',nF)+chip('tutti','Tutti',L.length)+'</div>'+
+    '<div class="chip-row" style="margin:0 0 8px">'+chipP('tutti','Tutti gli anni')+chipP('12m','Ultimi 12 mesi')+'</div>'+
+    '<input id="ceClQ" class="ce-cerca" placeholder="Cerca un fornitore…" value="'+esc(S.q||'')+'" oninput="_ceClSet(\'q\',this.value)">'+
+    (S.lavoro?'<div class="ce-lav">'+esc(S.lavoro)+'</div>':'')+
+    (daAi?'<button class="ce-ai" onclick="_ceClAi()"'+(S.lavoro?' disabled':'')+'>✨ Fai proporre all\'AI le '+daAi+' rimaste<span>Legge nome, P.IVA e aliquote e propone la categoria · poi confermi tu</span></button>':'')+
+    (nC?'<button class="ce-cta" onclick="_ceClConfermaTutte()"'+(S.lavoro?' disabled':'')+'><b>✓ Conferma tutte le '+nC+' proposte</b><span>Le salva come scelte tue: puoi sempre cambiarle dopo</span></button>':'')+
+    (vis.length?'<div class="cr-grp" style="margin-top:12px">'+vis.map(_ceClRiga).join('')+'</div>'
+               :'<div class="an-vuoto" style="margin-top:14px"><span>'+(q?'Nessun fornitore con questo nome.':'Tutto classificato ✓')+'</span></div>');
+  box.innerHTML=html;
+  if(S.q){ var i=document.getElementById('ceClQ'); if(i && document.activeElement!==i){ i.focus(); i.setSelectionRange(i.value.length,i.value.length); } }
+}
+function _ceClSet(campo, val){
+  if(!_ceClS) return;
+  _ceClS[campo]=val;
+  if(campo==='q'){ clearTimeout(_ceClS._t); _ceClS._t=setTimeout(_ceClRender, 220); return; }
+  _ceClRender();
+}
+async function _ceClCambia(sel){
+  var nome=sel.dataset.n, cat=sel.value;
+  var riga=sel.closest('.ce-cl'); if(riga) riga.classList.add('ce-cl-salva');
+  var ok=await _ceSalvaCategoria(nome, cat, 'manuale', '');
+  if(ok) toast(cat?'✓ '+_ceLabel(cat):'Categoria tolta');
+  _ceClRender();
+}
+async function _ceClConferma(btn){
+  var ok=await _ceSalvaCategoria(btn.dataset.n, btn.dataset.c, 'manuale', '');
+  if(ok) toast('✓ '+_ceLabel(btn.dataset.c));
+  _ceClRender();
+}
+async function _ceClConfermaTutte(){
+  if(!_ceClS) return;
+  var da=_ceClLista().filter(function(x){ return x.gruppo==='conferma'; });
+  if(!da.length) return;
+  _ceClS.lavoro='Confermo '+da.length+' fornitori…'; _ceClRender();
+  var fatti=0;
+  for(var i=0;i<da.length;i++){
+    var ok=await _ceSalvaCategoria(da[i].nome, da[i].cat, 'manuale', '');
+    if(ok) fatti++;
+    _ceClS.lavoro='Confermo… '+(i+1)+' di '+da.length; if(i%5===0) _ceClRender();
+  }
+  _ceClS.lavoro=''; _ceClRender();
+  toast('✓ '+fatti+' fornitori confermati');
+}
+// ── Prima associazione automatica con l'AI ──
+// Usa la chiave Anthropic già impostata (la stessa dell'Assistente). Manda
+// solo nome, P.IVA, quante fatture, quanto si è speso e le aliquote IVA:
+// niente di riservato. Le risposte restano PROPOSTE finché Valerio non le
+// conferma.
+async function _ceAiProponi(lista, onAvanzamento){
+  if(!getApiKey()) throw new Error('Serve la chiave Anthropic: Impostazioni → API Key');
+  var cats=_CE_CAT.map(function(c){ return c.k+' = '+c.l; }).join('\n');
+  var fatti=0, esiti=[];
+  for(var b=0;b<lista.length;b+=30){
+    var lotto=lista.slice(b, b+30);
+    var righe=lotto.map(function(x,i){
+      var al=_ceAliqMappa()[x.k];
+      var aliq=al?Object.keys(al.al).map(function(a){ return a+'%'; }).join(' '):'';
+      return i+'. '+x.nome+(x.piva?' (P.IVA '+x.piva+')':'')+' — '+x.n+' fatture, '+Math.round(x.tot)+' € in totale'+(aliq?', IVA '+aliq:'');
+    }).join('\n');
+    var sys='Classifichi i fornitori di una caffetteria-bar italiana (Napoli) nelle categorie di spesa del suo conto economico. Conosci le aziende italiane: usa nome e partita IVA per capire cosa vendono. Rispondi SOLO con JSON valido, senza testo prima o dopo.';
+    var usr='Categorie ammesse (usa esattamente la chiave a sinistra):\n'+cats+'\n\n'+
+      'Indizi utili: IVA 4% o 10% = alimentari; IVA 22% = servizi, attrezzature o materiale non alimentare; tante fatture piccole e frequenti = fornitore di merce; una sola fattura grande = lavori o attrezzature.\n\n'+
+      'Fornitori da classificare:\n'+righe+'\n\n'+
+      'Rispondi con: {"r":[{"i":<numero del fornitore>,"c":"<chiave categoria>","p":"<massimo 6 parole sul perché>","s":<1 poco sicuro, 2 abbastanza, 3 sicuro>}]}\n'+
+      'Una voce per ogni fornitore, nello stesso ordine. Se proprio non sai, usa "altro" con s=1.';
+    var res=await _fetchConTimeout('https://api.anthropic.com/v1/messages',{method:'POST', headers:AI_HEADERS(),
+      body:JSON.stringify({model:'claude-sonnet-4-5', max_tokens:3000, system:sys, messages:[{role:'user',content:usr},{role:'assistant',content:'{"r":['}]})}, 90000);
+    if(!res.ok) throw new Error('AI non raggiungibile ('+res.status+')');
+    var j=await res.json();
+    var txt='{"r":['+((j.content||[]).map(function(c){ return c.text||''; }).join(''));
+    txt=txt.slice(0, txt.lastIndexOf('}')+1);
+    var R; try{ R=JSON.parse(txt); }catch(e){ throw new Error('Risposta dell\'AI non leggibile'); }
+    var valide={}; _CE_CAT.forEach(function(c){ valide[c.k]=1; });
+    for(var z=0; z<(R.r||[]).length; z++){
+      var v=R.r[z], x=lotto[v && v.i!==undefined ? v.i : z];
+      if(!x || !v || !valide[v.c]) continue;
+      var nota=String(v.p||'').slice(0,60)+(v.s===1?' (da controllare)':'');
+      var ok=await _ceSalvaCategoria(x.nome, v.c, 'ai', nota);
+      if(ok){ fatti++; esiti.push({nome:x.nome, cat:v.c}); }
+    }
+    if(onAvanzamento) onAvanzamento(Math.min(b+30, lista.length), lista.length);
+  }
+  return {fatti:fatti, esiti:esiti};
+}
+async function _ceClAi(){
+  if(!_ceClS) return;
+  var da=_ceClLista().filter(function(x){ return !x.cat; });
+  if(!da.length){ toast('Hanno già tutti una proposta'); return; }
+  if(!getApiKey()){ toast('⚠️ Serve la chiave API: Impostazioni → API Key'); return; }
+  _ceClS.lavoro='✨ L\'AI sta guardando '+da.length+' fornitori…'; _ceClRender();
+  try{
+    var r=await _ceAiProponi(da, function(f,t){ if(_ceClS){ _ceClS.lavoro='✨ Proposte pronte per '+f+' di '+t+'…'; _ceClRender(); } });
+    if(_ceClS){ _ceClS.lavoro=''; _ceClS.filtro='dafare'; _ceClRender(); }
+    toast('✨ '+r.fatti+' propost'+(r.fatti===1?'a':'e')+' — ora confermale');
+  }catch(e){
+    if(_ceClS){ _ceClS.lavoro=''; _ceClRender(); }
+    toast('⚠️ '+(e.message||'AI non disponibile').slice(0,70));
+  }
 }
 
 // ── Previsione del saldo in banca ──
@@ -28554,6 +28805,26 @@ html[data-theme="dark"] .sf-hint{color:var(--orange)}
 .ce-cl-ok{opacity:.5}
 .ce-cl-ok select{border-color:var(--green)}
 .ce-chip-ind{opacity:.7;border-style:dashed!important}
+/* Classifica fornitori (20/09): proposta visibile, conferma con un tocco */
+.ce-kpi{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:2px 0 0}
+.ce-kpi>div{background:var(--surface2);border-radius:12px;padding:9px 10px;display:flex;flex-direction:column;gap:1px}
+.ce-kpi span{font-size:11px;color:var(--ink3)}
+.ce-kpi b{font-size:18px;letter-spacing:-.4px}
+.ce-cerca{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--sep);border-radius:11px;background:var(--surface2);color:var(--ink);font-family:inherit;font-size:14px;margin-bottom:8px}
+.ce-lav{padding:9px 12px;border-radius:11px;background:var(--surface2);color:var(--ink2);font-size:12.5px;margin-bottom:8px}
+.ce-ai{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;padding:11px 13px;border:none;border-radius:12px;background:var(--ds-grad,var(--blue));color:#fff;font-family:inherit;text-align:left;cursor:pointer;margin-bottom:8px}
+.ce-ai b,.ce-ai{font-size:13.5px;font-weight:700}
+.ce-ai span{font-size:11.5px;font-weight:500;opacity:.9}
+.ce-ai:disabled{opacity:.55}
+.ce-cl-az{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.ce-cl-az select{max-width:150px;padding:7px 8px;font-size:12.5px;border-radius:9px}
+.ce-ok{width:34px;height:34px;flex-shrink:0;border:none;border-radius:10px;background:var(--green);color:#fff;font-size:15px;font-weight:700;cursor:pointer}
+.ce-why{font-size:11px;color:var(--ink3);margin-top:2px;display:block;line-height:1.35;white-space:normal}
+.ce-why-ok{color:var(--green)}
+.ce-why-no{color:var(--orange)}
+.ce-cl-fatto{opacity:.62}
+.ce-cl-salva{opacity:.45}
+.ce-conf{width:100%;margin-top:10px;padding:10px;border:none;border-radius:11px;background:var(--green);color:#fff;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer}
 .ce-mini{border:none;background:var(--surface2);color:var(--blue);font-family:inherit;font-size:12px;font-weight:600;padding:6px 10px;border-radius:9px;cursor:pointer;flex-shrink:0}
 .ce-saldo-in{display:flex;gap:8px;margin-top:10px}
 .ce-saldo-in input{flex:1;min-width:0;padding:11px 12px;font-size:14px}
