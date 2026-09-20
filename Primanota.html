@@ -491,7 +491,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v9.97.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v9.98.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -2861,6 +2861,10 @@ var _authApertoP = new Promise(function(r){ window._authApri = r; });
 async function sbFetch(path, opts={}){
   await _authApertoP;
   const method = (opts.method||'GET').toUpperCase();
+  if(method!=='GET' && typeof _accSoloLettura==='function' && _accSoloLettura() && path.indexOf('app_errori')<0){
+    if(typeof toast==='function') toast('👁️ Accesso in sola lettura: modifica non salvata');
+    const e0 = new Error('Sola lettura'); e0.status = 403; throw e0;
+  }
   // GET non ha bisogno di Prefer — lo usiamo solo su scritture
   const headers = method==='GET'
     ? {...SB_H}
@@ -27144,7 +27148,11 @@ async function _authControllaAccesso(){
   var r = await fetch(SB_URL + '/rest/v1/rpc/ceraldi_mio_accesso', { method: 'POST', headers: Object.assign({}, SB_H), body: '{}' });
   if(!r.ok){ var e = new Error('Controllo accesso: ' + r.status); e.status = r.status; throw e; }
   var acc = await r.json();
-  _authSess.acc = { ruolo: acc.ruolo, nome: acc.nome, ok: !!(acc.attivo && Array.isArray(acc.app) && acc.app.indexOf('fatture') >= 0), il: Date.now() };
+  var liv = (acc.permessi || {}).fatture || '';
+  _authSess.acc = { stato: acc.stato, ruolo: acc.ruolo, nome: acc.nome, profilo: acc.profilo,
+                    permessi: acc.permessi || {}, in_attesa: acc.in_attesa || 0,
+                    ok: !!(acc.stato === 'attivo' && (liv === 'completo' || liv === 'lettura')),
+                    lettura: liv === 'lettura', il: Date.now() };
   _authScrivi(_authSess);
   return _authSess.acc;
 }
@@ -27167,7 +27175,7 @@ async function _authDaIndirizzo(){
 }
 
 // ── Schermata ─────────────────────────────────────────────────────
-var _authStato = { vista: 'login', modo: 'password', email: '', codiceInviato: false, msg: '', attesa: false };
+var _authStato = { vista: 'login', modo: 'password', email: '', nome: '', codiceInviato: false, msg: '', attesa: false };
 function _authEl(){
   var el = document.getElementById('authGate');
   if(!el){ el = document.createElement('div'); el.id = 'authGate'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true'); el.setAttribute('aria-label', 'Accesso'); document.body.appendChild(el); }
@@ -27187,6 +27195,20 @@ function _authRender(){
     '<div class="ag-logo">🧾</div><div class="ag-tit">Fatture</div><div class="ag-sub">Caffetteria Ceraldi</div>';
   if(S.vista === 'caricamento'){
     h += '<div class="ag-attesa"><div class="fa-spin"></div><span>Controllo l\'accesso…</span></div>';
+  } else if(S.vista === 'attesa'){
+    h += '<div class="ag-neg"><b>Richiesta inviata</b>' +
+         '<span>' + esc((_authSess && _authSess.user && _authSess.user.email) || '') + '</span>' +
+         '<span>Ora serve il via libera di un amministratore, che riceve la tua richiesta dentro l\'app e sceglie cosa puoi vedere. Ti conviene avvisarlo.</span></div>' +
+         '<button class="ag-btn ag-pri" onclick="_authEntra()">Ho ricevuto il via libera, entra</button>' +
+         '<button class="ag-link" onclick="_authEsci(true)">Esci</button>';
+  } else if(S.vista === 'richiesta'){
+    h += '<div class="ag-nota">Lascia il tuo nome e la tua email: ricevi un codice per confermare l\'indirizzo, poi un amministratore decide cosa puoi vedere.</div>' +
+         '<label class="ag-lbl" for="agNome">Nome e cognome</label>' +
+         '<input id="agNome" class="ag-in" type="text" autocomplete="name" value="' + esc(S.nome || '') + '" oninput="_authStato.nome=this.value" placeholder="Mario Rossi">' +
+         '<label class="ag-lbl" for="agEmail">Email</label>' +
+         '<input id="agEmail" class="ag-in" type="email" autocomplete="email" inputmode="email" value="' + esc(S.email) + '" oninput="_authStato.email=this.value" placeholder="nome@esempio.it">' +
+         '<button class="ag-btn ag-pri" onclick="_authRichiedi()"' + (S.attesa ? ' disabled' : '') + '>' + (S.attesa ? 'Invio…' : 'Richiedi l\'accesso') + '</button>' +
+         '<button class="ag-link" onclick="_authStato.vista=\'login\';_authStato.msg=\'\';_authRender()">Torna all\'accesso</button>';
   } else if(S.vista === 'negato'){
     var em = (_authSess && _authSess.user && _authSess.user.email) || '';
     h += '<div class="ag-neg"><b>Questo account non ha accesso a Fatture.</b>' +
@@ -27218,6 +27240,7 @@ function _authRender(){
            '<button class="ag-btn ag-pri" onclick="_authVerificaCodice()"' + (S.attesa ? ' disabled' : '') + '>' + (S.attesa ? 'Verifica…' : 'Verifica ed entra') + '</button>' +
            '<button class="ag-link" onclick="_authStato.codiceInviato=false;_authRender()">Non è arrivato? Invia di nuovo</button>';
     }
+    if(S.vista === 'login') h += '<button class="ag-link" style="margin-top:2px" onclick="_authStato.vista=\'richiesta\';_authStato.msg=\'\';_authRender()">Non hai ancora l\'accesso? Richiedilo</button>';
   }
   h += '<div class="ag-msg" role="status" aria-live="polite">' + esc(S.msg || '') + '</div></div>';
   el.innerHTML = h;
@@ -27276,13 +27299,14 @@ async function _authEntra(){
   _authMostra('caricamento');
   try{
     var acc = await _authControllaAccesso();
-    if(!acc.ok){ _authMostra('negato'); return; }
+    if(!acc.ok){ _authMostra(acc.stato === 'in_attesa' ? 'attesa' : 'negato'); return; }
   }catch(e){
     // Senza rete: se questo dispositivo era già stato autorizzato, entra coi dati salvati
     if(!(_authSess && _authSess.acc && _authSess.acc.ok)){ _authMostra('login', 'Nessuna connessione per controllare l\'accesso. Riprova.'); return; }
   }
   _authNascondi();
   if(window._authApri) window._authApri();
+  try{ _accAvvisa(); }catch(e){}
   if(!_authAppAvviata){ _authAppAvviata = true; init(); }
 }
 async function _authEsci(silenzioso){
@@ -27298,8 +27322,16 @@ function _authRigaImpostazioni(){
   if(!_authSess || !_authSess.user) return '';
   var nome = (_authSess.acc && _authSess.acc.nome) || '';
   var sub = esc(_authSess.user.email || '') + (_authSess.metodo ? ' · ' + esc(_authSess.metodo) : '') + ' · tocca per uscire';
-  return '<div class="imp-group-label">Account</div><div class="imp-group">' +
-    _impRow('👤', esc(nome || 'Il tuo account'), sub, "_authEsci()") + '</div>';
+  var h = '<div class="imp-group-label">Account</div><div class="imp-group">' +
+    _impRow('👤', esc(nome || 'Il tuo account'), sub, "_authEsci()");
+  if(typeof _accSonoAdmin === 'function' && _accSonoAdmin()){
+    var n = (_authSess.acc && _authSess.acc.in_attesa) || 0;
+    h += _impRow('🔑', 'Utenti e accessi' + (n ? ' <span class="imp-badge">' + n + '</span>' : ''),
+      n ? (n === 1 ? '1 richiesta in attesa di approvazione' : n + ' richieste in attesa di approvazione') : 'Chi può entrare nelle app e con quali permessi',
+      "chiudiImpostazioni();_accApri()");
+  }
+  if(typeof _accSoloLettura === 'function' && _accSoloLettura()) h += _impRow('👁️', 'Accesso in sola lettura', 'Puoi consultare ed esportare, non modificare', "", {noChevron:true});
+  return h + '</div>';
 }
 
 async function _authAvvio(){
@@ -27319,6 +27351,191 @@ async function _authAvvio(){
 document.addEventListener('visibilitychange', function(){ if(!document.hidden && _authSess) _authPronto(); });
 setInterval(function(){ if(_authSess) _authPronto(); }, 5 * 60 * 1000);
 
+// ══════════════════════════════════════════════════════════════════
+// UTENTI E ACCESSI (20/09) — chi non è in lista chiede l'accesso da
+// solo; l'admin riceve la richiesta in app, sceglie i permessi e
+// approva. Ogni permesso è per singola app e può essere di sola
+// lettura.
+// ══════════════════════════════════════════════════════════════════
+var _ACC_APP = [
+  { k: 'fatture',   n: 'Fatture',   d: 'Contabilità, banca, cassa, bonifici' },
+  { k: 'presenze',  n: 'Presenze',  d: 'Turni, timbrature, buste paga' },
+  { k: 'ordini',    n: 'Ordini',    d: 'Catalogo e ordini ai fornitori' },
+  { k: 'richieste', n: 'Richieste', d: 'Richieste del personale' }
+];
+var _ACC_LIV = [
+  { k: '', n: 'Nessun accesso' },
+  { k: 'lettura', n: 'Solo lettura' },
+  { k: 'completo', n: 'Completo' }
+];
+var _ACC_PROFILI = {
+  amministratore: { n: 'Amministratore', d: 'Tutto, compresa la gestione degli utenti', p: { fatture: 'completo', presenze: 'completo', ordini: 'completo', richieste: 'completo' }, admin: true },
+  commercialista: { n: 'Commercialista', d: 'Legge ed esporta la contabilità, non può modificare', p: { fatture: 'lettura' } },
+  socio:          { n: 'Socio',          d: 'Vede la contabilità e gli ordini, senza gestire il personale', p: { fatture: 'completo', ordini: 'completo' } },
+  dipendente:     { n: 'Dipendente',     d: 'Le proprie presenze e le richieste', p: { presenze: 'proprio', richieste: 'completo' } },
+  personalizzato: { n: 'Personalizzato', d: 'Scegli tu app per app', p: {} }
+};
+function _accLivello(app){ var p = (_authSess && _authSess.acc && _authSess.acc.permessi) || {}; return p[app] || ''; }
+function _accSoloLettura(){ return _accLivello('fatture') === 'lettura'; }
+function _accSonoAdmin(){ return !!(_authSess && _authSess.acc && _authSess.acc.ruolo === 'admin' && _authSess.acc.stato === 'attivo'); }
+
+var _accStato = { righe: [], caricate: false, msg: '', apertura: null, filtro: 'tutti' };
+
+async function _accCarica(){
+  var r = await fetch(SB_URL + '/rest/v1/ceraldi_accessi?select=*&order=stato.asc,richiesto_il.desc', { headers: Object.assign({}, SB_H) });
+  if(!r.ok) throw new Error('HTTP ' + r.status);
+  _accStato.righe = await r.json();
+  _accStato.caricate = true;
+}
+async function _accSalva(id, patch){
+  var r = await fetch(SB_URL + '/rest/v1/ceraldi_accessi?id=eq.' + encodeURIComponent(id), {
+    method: 'PATCH', headers: Object.assign({}, SB_H, { Prefer: 'return=representation' }), body: JSON.stringify(patch)
+  });
+  if(!r.ok){ var t = await r.text(); throw new Error(t.slice(0, 120)); }
+  var d = await r.json();
+  var i = _accStato.righe.findIndex(function(x){ return x.id === id; });
+  if(i >= 0 && d && d[0]) _accStato.righe[i] = d[0];
+  return d && d[0];
+}
+function _accEtichettaStato(s){
+  return { in_attesa: '<span class="acc-tag acc-att">In attesa</span>', attivo: '<span class="acc-tag acc-ok">Attivo</span>',
+           bloccato: '<span class="acc-tag acc-no">Bloccato</span>', rifiutato: '<span class="acc-tag acc-no">Rifiutato</span>' }[s] || '';
+}
+function _accRiassunto(r){
+  var p = r.permessi || {}, v = [];
+  _ACC_APP.forEach(function(a){ if(p[a.k]) v.push(a.n + (p[a.k] === 'lettura' ? ' (lettura)' : p[a.k] === 'proprio' ? ' (proprie)' : '')); });
+  return v.length ? v.join(' · ') : 'Nessun permesso';
+}
+function _accQuando(t){
+  if(!t) return '';
+  var g = Math.floor((Date.now() - new Date(t).getTime()) / 86400000);
+  if(g <= 0) return 'oggi';
+  if(g === 1) return 'ieri';
+  return g + ' giorni fa';
+}
+
+function _accApri(){
+  var el = document.getElementById('accPanel');
+  if(!el){ el = document.createElement('div'); el.id = 'accPanel'; document.body.appendChild(el); }
+  _accStato.msg = '';
+  _accRender();
+  if(!_accStato.caricate){
+    _accCarica().then(_accRender).catch(function(e){ _accStato.msg = 'Non riesco a leggere la lista: ' + e.message; _accRender(); });
+  }
+}
+function _accChiudi(){ var el = document.getElementById('accPanel'); if(el) el.remove(); if(typeof _impRenderHome === 'function' && document.getElementById('impBody')) _impRenderHome(); }
+
+function _accRender(){
+  var el = document.getElementById('accPanel'); if(!el) return;
+  var righe = _accStato.righe.slice();
+  var attesa = righe.filter(function(r){ return r.stato === 'in_attesa'; });
+  var altri = righe.filter(function(r){ return r.stato !== 'in_attesa'; });
+  var h = '<div class="acc-box"><div class="acc-head"><b>Utenti e accessi</b>' +
+    '<button class="acc-x" onclick="_accChiudi()" aria-label="Chiudi">×</button></div><div class="acc-body">';
+  if(!_accStato.caricate){
+    h += '<div class="acc-vuoto"><div class="fa-spin"></div><span>Carico…</span></div>';
+  } else {
+    h += '<div class="acc-sez">Richieste di accesso' + (attesa.length ? ' · ' + attesa.length : '') + '</div>';
+    if(!attesa.length) h += '<div class="acc-nota">Nessuna richiesta in sospeso. Chi vuole accedere apre l\'app, preme "Richiedi l\'accesso" e compare qui.</div>';
+    attesa.forEach(function(r){ h += _accCard(r, true); });
+    h += '<div class="acc-sez" style="margin-top:22px">Persone con un account</div>';
+    if(!altri.length) h += '<div class="acc-nota">Nessuno, per ora.</div>';
+    altri.forEach(function(r){ h += _accCard(r, false); });
+  }
+  h += '</div><div class="acc-msg" role="status" aria-live="polite">' + esc(_accStato.msg || '') + '</div></div>';
+  el.innerHTML = h;
+}
+function _accCard(r, nuova){
+  var aperta = _accStato.apertura === r.id;
+  var io = _authSess && _authSess.user && _authSess.user.id === r.id;
+  var h = '<div class="acc-card' + (nuova ? ' acc-card-new' : '') + '">' +
+    '<div class="acc-riga1"><div class="acc-nome">' + esc(r.nome || r.email) + (io ? ' <span class="acc-io">tu</span>' : '') + '</div>' + _accEtichettaStato(r.stato) + '</div>' +
+    '<div class="acc-mail">' + esc(r.email) + (r.provider && r.provider !== 'email' ? ' · ' + esc(r.provider) : '') + '</div>' +
+    '<div class="acc-perm">' + (nuova ? 'Richiesto ' + _accQuando(r.richiesto_il) : esc((r.profilo ? (_ACC_PROFILI[r.profilo] ? _ACC_PROFILI[r.profilo].n : r.profilo) + ' — ' : '')) + _accRiassunto(r)) + '</div>';
+  if(!aperta){
+    h += '<div class="acc-azioni">' +
+      '<button class="acc-b acc-b-pri" onclick="_accStato.apertura=\'' + r.id + '\';_accRender()">' + (nuova ? 'Approva…' : 'Modifica permessi') + '</button>';
+    if(nuova) h += '<button class="acc-b" onclick="_accDecidi(\'' + r.id + '\',\'rifiutato\')">Rifiuta</button>';
+    else if(r.stato === 'attivo' && !io) h += '<button class="acc-b acc-b-dan" onclick="_accDecidi(\'' + r.id + '\',\'bloccato\')">Blocca</button>';
+    else if(r.stato !== 'attivo') h += '<button class="acc-b" onclick="_accDecidi(\'' + r.id + '\',\'attivo\')">Riattiva</button>';
+    h += '</div>';
+  } else {
+    h += '<div class="acc-edit">' +
+      '<div class="acc-lbl">Profilo</div><div class="acc-prof">';
+    Object.keys(_ACC_PROFILI).forEach(function(k){
+      h += '<button class="acc-chip' + ((r.profilo || (nuova ? '' : 'personalizzato')) === k ? ' on' : '') + '" onclick="_accProfilo(\'' + r.id + '\',\'' + k + '\')">' + esc(_ACC_PROFILI[k].n) + '</button>';
+    });
+    h += '</div>';
+    var prof = _ACC_PROFILI[r.profilo];
+    if(prof) h += '<div class="acc-nota" style="margin:2px 0 10px">' + esc(prof.d) + '</div>';
+    _ACC_APP.forEach(function(a){
+      var liv = (r.permessi || {})[a.k] || '';
+      h += '<div class="acc-app"><div><div class="acc-app-n">' + a.n + '</div><div class="acc-app-d">' + a.d + '</div></div><div class="acc-liv">';
+      _ACC_LIV.forEach(function(l){
+        var sel = (liv === l.k) || (l.k === 'completo' && liv === 'proprio');
+        h += '<button class="acc-lv' + (sel ? ' on' : '') + '" onclick="_accPermesso(\'' + r.id + '\',\'' + a.k + '\',\'' + l.k + '\')">' + (liv === 'proprio' && l.k === 'completo' ? 'Le proprie' : l.n) + '</button>';
+      });
+      h += '</div></div>';
+    });
+    h += '<label class="acc-admin"><input type="checkbox" ' + (r.ruolo === 'admin' ? 'checked' : '') + ' onchange="_accAdmin(\'' + r.id + '\',this.checked)"> Può gestire utenti e permessi</label>' +
+      '<div class="acc-azioni">' +
+      '<button class="acc-b acc-b-pri" onclick="_accDecidi(\'' + r.id + '\',\'attivo\')">' + (nuova ? 'Approva e attiva' : 'Salva e attiva') + '</button>' +
+      '<button class="acc-b" onclick="_accStato.apertura=null;_accRender()">Chiudi</button></div></div>';
+  }
+  return h + '</div>';
+}
+function _accTrova(id){ return _accStato.righe.find(function(x){ return x.id === id; }); }
+function _accProfilo(id, k){
+  var r = _accTrova(id); if(!r) return;
+  r.profilo = k;
+  if(k !== 'personalizzato') r.permessi = JSON.parse(JSON.stringify(_ACC_PROFILI[k].p));
+  r.ruolo = _ACC_PROFILI[k].admin ? 'admin' : 'utente';
+  _accRender();
+}
+function _accPermesso(id, app, liv){
+  var r = _accTrova(id); if(!r) return;
+  r.permessi = r.permessi || {};
+  if(liv) r.permessi[app] = (r.permessi[app] === 'proprio' && liv === 'completo') ? 'proprio' : liv; else delete r.permessi[app];
+  r.profilo = 'personalizzato';
+  _accRender();
+}
+function _accAdmin(id, v){ var r = _accTrova(id); if(r){ r.ruolo = v ? 'admin' : 'utente'; _accRender(); } }
+async function _accDecidi(id, stato){
+  var r = _accTrova(id); if(!r) return;
+  if(stato === 'rifiutato' && !confirm('Rifiutare la richiesta di ' + (r.nome || r.email) + '?')) return;
+  if(stato === 'bloccato' && !confirm('Bloccare l\'accesso a ' + (r.nome || r.email) + '? Non entrerà più da nessun dispositivo.')) return;
+  if(stato === 'attivo' && !Object.keys(r.permessi || {}).length && !confirm('Nessun permesso assegnato: la persona entrerà senza poter vedere niente. Continuare?')) return;
+  _accStato.msg = 'Salvo…'; _accRender();
+  try{
+    await _accSalva(id, { stato: stato, ruolo: r.ruolo || 'utente', profilo: r.profilo || null, permessi: r.permessi || {},
+                          deciso_il: new Date().toISOString(), deciso_da: (_authSess && _authSess.user && _authSess.user.id) || null });
+    _accStato.apertura = null;
+    _accStato.msg = { attivo: '✓ Accesso attivato', rifiutato: 'Richiesta rifiutata', bloccato: 'Accesso bloccato' }[stato] || '✓ Salvato';
+    if(_authSess && _authSess.acc) _authSess.acc.in_attesa = _accStato.righe.filter(function(x){ return x.stato === 'in_attesa'; }).length;
+    _accRender();
+  }catch(e){ _accStato.msg = 'Non salvato: ' + e.message; _accRender(); }
+}
+
+// ── Richiesta di accesso dalla schermata di login ────────────────
+async function _authRichiedi(){
+  var em = _authEmailValida(); if(!em) return;
+  var nome = ((document.getElementById('agNome') || {}).value || '').trim();
+  if(nome.length < 3){ _authStato.msg = 'Scrivi nome e cognome.'; _authRender(); return; }
+  _authStato.attesa = true; _authStato.msg = ''; _authRender();
+  try{
+    await _authPost('otp?redirect_to=' + encodeURIComponent(_authRedirect()), { email: em, create_user: true, data: { nome: nome, origine: 'richiesta' } });
+    _authStato.codiceInviato = true; _authStato.attesa = false; _authStato.modo = 'codice'; _authStato.vista = 'login';
+    _authStato.msg = 'Ti ho mandato un codice a ' + em + ' per confermare l\'indirizzo.';
+    _authRender();
+  }catch(e){ _authStato.attesa = false; _authStato.msg = _authErrore(e); _authRender(); }
+}
+
+// Avviso all'admin quando ci sono richieste in sospeso
+function _accAvvisa(){
+  if(!_accSonoAdmin()) return;
+  var n = (_authSess.acc && _authSess.acc.in_attesa) || 0;
+  if(n > 0 && typeof toast === 'function') setTimeout(function(){ toast('🔑 ' + n + (n === 1 ? ' richiesta di accesso in attesa' : ' richieste di accesso in attesa')); }, 2200);
+}
 _authAvvio();
 </script>
 
@@ -28061,6 +28278,47 @@ html[data-theme="dark"] .sf-hint{color:var(--orange)}
 #authGate .ag-neg{display:flex;flex-direction:column;gap:6px;text-align:center;font-size:14px;color:var(--ink2);line-height:1.45;margin:6px 0 8px}
 #authGate .ag-neg b{color:var(--ink);font-size:16px}
 #authGate .ag-attesa{display:flex;flex-direction:column;align-items:center;gap:10px;color:var(--ink3);font-size:14px;padding:16px 0}
+/* ── Utenti e accessi ── */
+.imp-badge{display:inline-block;min-width:18px;padding:0 5px;border-radius:9px;background:var(--red);color:#fff;font-size:11px;font-weight:700;line-height:18px;text-align:center;vertical-align:1px}
+#accPanel{position:fixed;inset:0;z-index:19000;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center}
+#accPanel .acc-box{background:var(--bg);width:100%;max-width:560px;max-height:92vh;border-radius:18px 18px 0 0;display:flex;flex-direction:column;overflow:hidden}
+#accPanel .acc-head{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--sep);background:var(--surface)}
+#accPanel .acc-head b{font-size:17px;color:var(--ink)}
+#accPanel .acc-x{background:var(--surface2);border:none;width:30px;height:30px;border-radius:50%;font-size:18px;color:var(--ink2);cursor:pointer}
+#accPanel .acc-body{overflow-y:auto;padding:14px 16px 20px;-webkit-overflow-scrolling:touch}
+#accPanel .acc-sez{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--ink3);margin:4px 4px 8px}
+#accPanel .acc-nota{font-size:13px;color:var(--ink3);line-height:1.45;margin:0 4px 10px}
+#accPanel .acc-card{background:var(--surface);border-radius:14px;padding:14px;margin-bottom:10px;border:1px solid transparent}
+#accPanel .acc-card-new{border-color:var(--orange)}
+#accPanel .acc-riga1{display:flex;align-items:center;justify-content:space-between;gap:8px}
+#accPanel .acc-nome{font-size:16px;font-weight:600;color:var(--ink)}
+#accPanel .acc-io{font-size:11px;color:var(--ink3);font-weight:500}
+#accPanel .acc-mail{font-size:13px;color:var(--ink2);margin-top:2px;word-break:break-all}
+#accPanel .acc-perm{font-size:13px;color:var(--ink3);margin-top:6px;line-height:1.4}
+#accPanel .acc-tag{font-size:11px;font-weight:700;padding:3px 8px;border-radius:99px;white-space:nowrap}
+#accPanel .acc-ok{background:var(--green-light);color:var(--green)}
+#accPanel .acc-att{background:var(--orange-light);color:var(--orange)}
+#accPanel .acc-no{background:var(--red-light);color:var(--red)}
+#accPanel .acc-azioni{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+#accPanel .acc-b{flex:1;min-width:120px;min-height:40px;border-radius:10px;border:none;background:var(--surface2);color:var(--ink);font-family:inherit;font-size:14px;font-weight:600;cursor:pointer}
+#accPanel .acc-b-pri{background:var(--blue);color:#fff}
+#accPanel .acc-b-dan{background:var(--red-light);color:var(--red)}
+#accPanel .acc-edit{margin-top:12px;border-top:1px solid var(--sep);padding-top:12px}
+#accPanel .acc-lbl{font-size:12px;font-weight:700;color:var(--ink2);margin-bottom:6px}
+#accPanel .acc-prof{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+#accPanel .acc-chip{border:1px solid var(--sep);background:var(--surface2);color:var(--ink2);border-radius:99px;padding:6px 12px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer}
+#accPanel .acc-chip.on{background:var(--blue);border-color:var(--blue);color:#fff}
+#accPanel .acc-app{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid var(--sep);flex-wrap:wrap}
+#accPanel .acc-app-n{font-size:14px;font-weight:600;color:var(--ink)}
+#accPanel .acc-app-d{font-size:12px;color:var(--ink3)}
+#accPanel .acc-liv{display:flex;gap:3px;background:var(--surface2);border-radius:9px;padding:3px}
+#accPanel .acc-lv{border:none;background:none;color:var(--ink2);border-radius:7px;padding:6px 9px;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
+#accPanel .acc-lv.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+#accPanel .acc-admin{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink2);margin-top:12px}
+#accPanel .acc-admin input{width:18px;height:18px}
+#accPanel .acc-vuoto{display:flex;flex-direction:column;align-items:center;gap:10px;color:var(--ink3);font-size:14px;padding:30px 0}
+#accPanel .acc-msg{padding:0 18px 14px;font-size:13px;color:var(--ink2);text-align:center}
+#accPanel .acc-msg:empty{display:none}
 /* ── Riduci movimento: tutto fermo ── */
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{animation-duration:.01ms!important;animation-delay:0s!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
