@@ -491,7 +491,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v9.96.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v9.97.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -2856,14 +2856,21 @@ async function _aiCicloConStrumenti(systemPrompt, bollaRisposta){
 // per TUTTE le fatture pagate con più di un bonifico/movimento, non solo questa.
 const SLIM_COLS_FATTURE = 'id,tipo,fornitore,numero,fatt_num,num_ddt,data,importo,pagamento,pagamento_origine,pagamento_impostato_il,assegno,ass_int,ass_banca,bon_iban,bon_caus,bon_data,bon_rif,riconciliata,riconciliazione,riconciliazione_storico,piva,denominazione_xml,note,stato,scadenza,fattura_allegata_name,xml_github_path,source,rate,ts,parz_pagato,data_pagamento,pec_verificata,pec_verificata_at,pec_id,iva,iva_breakdown,totale_imponibile,totale_imposta,incompleta,deleted_at';
 
+// Accesso (20/09): nessuna lettura/scrittura parte prima che la persona abbia fatto l'accesso
+var _authApertoP = new Promise(function(r){ window._authApri = r; });
 async function sbFetch(path, opts={}){
+  await _authApertoP;
   const method = (opts.method||'GET').toUpperCase();
   // GET non ha bisogno di Prefer — lo usiamo solo su scritture
   const headers = method==='GET'
     ? {...SB_H}
     : {...SB_H, 'Prefer': opts.headers?.['Prefer'] || (method==='DELETE'?'return=minimal':'return=representation')};
   if(opts.headers) Object.assign(headers, opts.headers);
-  const res = await fetch(SB_URL+'/rest/v1/'+path, {...opts, headers});
+  if(typeof _authPronto==='function'){ try{ await _authPronto(); }catch(_){} headers.Authorization = SB_H.Authorization; }
+  let res = await fetch(SB_URL+'/rest/v1/'+path, {...opts, headers});
+  if(res.status===401 && typeof _authRefresh==='function' && _authSess && !opts._riprovato){
+    if(await _authRefresh()){ headers.Authorization = SB_H.Authorization; res = await fetch(SB_URL+'/rest/v1/'+path, {...opts, headers}); }
+  }
   if(!res.ok){
     const e = await res.text();
     const msg = 'SB '+method+' '+path.slice(0,40)+' → '+res.status+': '+e.slice(0,120);
@@ -4564,6 +4571,8 @@ function _impRenderHome(){
       <h3 style="font-size:18px;font-weight:700;margin-bottom:20px;text-align:center;position:relative">&#9881;&#65039; Impostazioni
         <button onclick="chiudiImpostazioni()" style="position:absolute;right:0;top:50%;transform:translateY(-50%);background:var(--surface2);border:none;border-radius:99px;width:30px;height:30px;font-size:16px;color:var(--ink3);cursor:pointer;line-height:1">&times;</button>
       </h3>
+
+      ${typeof _authRigaImpostazioni==='function'?_authRigaImpostazioni():''}
 
       <div class="imp-group-label">Intelligenza artificiale</div>
       <div class="imp-group">
@@ -27060,7 +27069,257 @@ function _azRender(body){
     '</div></div>';
 }
 
-init();
+// ══════════════════════════════════════════════════════════════════
+// ACCESSO (20/09) — login con Google, password o codice via email.
+// Stesso account di Presenze. Solo chi ha il permesso "fatture"
+// (oggi: gli admin) entra. La sessione resta sul dispositivo e si
+// rinnova da sola; tutte le chiamate al database partono col token
+// della persona invece che con la chiave pubblica.
+// ══════════════════════════════════════════════════════════════════
+var _AUTH_K = 'cf_auth_v1';
+var _authSess = null;
+var _authRefreshInCorso = null;
+var _authCfg = null;
+
+function _authLeggi(){ try{ return JSON.parse(localStorage.getItem(_AUTH_K)||'null'); }catch(e){ return null; } }
+function _authScrivi(s){ try{ if(s) localStorage.setItem(_AUTH_K, JSON.stringify(s)); else localStorage.removeItem(_AUTH_K); }catch(e){} }
+function _authApplica(s){
+  _authSess = s;
+  SB_H.Authorization = 'Bearer ' + (s && s.access_token ? s.access_token : SB_KEY);
+  _authScrivi(s);
+}
+function _authDaRisposta(j, prec){
+  var ora = Math.floor(Date.now()/1000);
+  return {
+    access_token: j.access_token,
+    refresh_token: j.refresh_token || (prec && prec.refresh_token),
+    expires_at: j.expires_at || (ora + (parseInt(j.expires_in,10)||3600)),
+    user: j.user ? { id: j.user.id, email: j.user.email } : (prec && prec.user) || null,
+    metodo: (prec && prec.metodo) || null,
+    acc: (prec && prec.acc) || null
+  };
+}
+async function _authPost(percorso, corpo){
+  var r = await fetch(SB_URL + '/auth/v1/' + percorso, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', apikey: SB_KEY }, body: JSON.stringify(corpo||{})
+  });
+  var t = await r.text(); var j = {}; try{ j = t ? JSON.parse(t) : {}; }catch(e){}
+  if(!r.ok){ var e = new Error(j.error_description || j.msg || j.message || ('Errore ' + r.status)); e.status = r.status; e.codice = j.error_code || j.error || ''; throw e; }
+  return j;
+}
+function _authErrore(e){
+  var m = (e && e.message) || '';
+  var c = (e && e.codice) || '';
+  if(/invalid login credentials|invalid_credentials/i.test(m + c)) return 'Email o password non corretti.';
+  if(/otp_expired|expired|invalid/i.test(c) || /token has expired|is invalid/i.test(m)) return 'Codice scaduto o sbagliato. Richiedine uno nuovo.';
+  if(/signups not allowed|user not found|otp_disabled/i.test(m + c)) return 'Questa email non è registrata. Chiedi a un amministratore di aggiungerti.';
+  if(/rate limit|over_email_send_rate_limit|email rate/i.test(m + c)) return 'Troppe email inviate di recente. Riprova tra qualche minuto o usa la password.';
+  if(/failed to fetch|network/i.test(m)) return 'Nessuna connessione. Controlla la rete e riprova.';
+  return m || 'Qualcosa non è andato. Riprova.';
+}
+
+// Rinnovo del token (una sola richiesta alla volta)
+async function _authRefresh(){
+  if(!_authSess || !_authSess.refresh_token) return false;
+  if(_authRefreshInCorso) return _authRefreshInCorso;
+  _authRefreshInCorso = (async function(){
+    try{
+      var j = await _authPost('token?grant_type=refresh_token', { refresh_token: _authSess.refresh_token });
+      _authApplica(_authDaRisposta(j, _authSess));
+      return true;
+    }catch(e){
+      // Rifiutato dal server (non un problema di rete): la sessione non vale più
+      if(e && e.status && e.status >= 400 && e.status < 500){ _authApplica(null); _authMostra('login', 'Sessione scaduta: accedi di nuovo.'); }
+      return false;
+    }finally{ _authRefreshInCorso = null; }
+  })();
+  return _authRefreshInCorso;
+}
+async function _authPronto(){
+  if(!_authSess) return;
+  if((_authSess.expires_at||0) - Math.floor(Date.now()/1000) < 120) await _authRefresh();
+}
+
+async function _authControllaAccesso(){
+  var r = await fetch(SB_URL + '/rest/v1/rpc/ceraldi_mio_accesso', { method: 'POST', headers: Object.assign({}, SB_H), body: '{}' });
+  if(!r.ok){ var e = new Error('Controllo accesso: ' + r.status); e.status = r.status; throw e; }
+  var acc = await r.json();
+  _authSess.acc = { ruolo: acc.ruolo, nome: acc.nome, ok: !!(acc.attivo && Array.isArray(acc.app) && acc.app.indexOf('fatture') >= 0), il: Date.now() };
+  _authScrivi(_authSess);
+  return _authSess.acc;
+}
+
+// Ritorno da Google (o dal link nell'email): i token arrivano nell'indirizzo
+async function _authDaIndirizzo(){
+  var h = location.hash || '';
+  if(h.indexOf('access_token=') < 0 && h.indexOf('error') < 0) return null;
+  var p = new URLSearchParams(h.slice(1));
+  try{ history.replaceState(null, '', location.pathname + location.search); }catch(e){}
+  if(p.get('error')) return { errore: p.get('error_description') || p.get('error') };
+  var s = _authDaRisposta({ access_token: p.get('access_token'), refresh_token: p.get('refresh_token'), expires_in: p.get('expires_in'), expires_at: parseInt(p.get('expires_at'),10) || null }, null);
+  s.metodo = p.get('type') === 'magiclink' ? 'link email' : 'Google';
+  _authApplica(s);
+  try{
+    var r = await fetch(SB_URL + '/auth/v1/user', { headers: { apikey: SB_KEY, Authorization: 'Bearer ' + s.access_token } });
+    if(r.ok){ var u = await r.json(); s.user = { id: u.id, email: u.email }; _authApplica(s); }
+  }catch(e){}
+  return { ok: true };
+}
+
+// ── Schermata ─────────────────────────────────────────────────────
+var _authStato = { vista: 'login', modo: 'password', email: '', codiceInviato: false, msg: '', attesa: false };
+function _authEl(){
+  var el = document.getElementById('authGate');
+  if(!el){ el = document.createElement('div'); el.id = 'authGate'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true'); el.setAttribute('aria-label', 'Accesso'); document.body.appendChild(el); }
+  return el;
+}
+function _authMostra(vista, msg){
+  _authStato.vista = vista || 'login';
+  _authStato.msg = msg || '';
+  _authStato.attesa = false;
+  _authRender();
+}
+function _authNascondi(){ var el = document.getElementById('authGate'); if(el) el.remove(); }
+function _authRender(){
+  var S = _authStato, el = _authEl();
+  var g = _authCfg && _authCfg.external ? !!_authCfg.external.google : null;
+  var h = '<div class="ag-box">' +
+    '<div class="ag-logo">🧾</div><div class="ag-tit">Fatture</div><div class="ag-sub">Caffetteria Ceraldi</div>';
+  if(S.vista === 'caricamento'){
+    h += '<div class="ag-attesa"><div class="fa-spin"></div><span>Controllo l\'accesso…</span></div>';
+  } else if(S.vista === 'negato'){
+    var em = (_authSess && _authSess.user && _authSess.user.email) || '';
+    h += '<div class="ag-neg"><b>Questo account non ha accesso a Fatture.</b>' +
+         '<span>' + esc(em) + '</span>' +
+         '<span>Fatture è riservata agli amministratori. Se pensi sia un errore, chiedi a Valerio di controllare il tuo profilo in Presenze.</span></div>' +
+         '<button class="ag-btn ag-sec" onclick="_authEsci(true)">Esci e usa un altro account</button>';
+  } else {
+    h += '<button class="ag-btn ag-google" onclick="_authGoogle()"' + (g === false ? ' disabled' : '') + '>' +
+         '<svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.3l7.9 6.1C12.5 13.6 17.8 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.7c4.3-4 6.9-9.9 6.9-17.1z"/><path fill="#FBBC05" d="M10.6 28.6A14.5 14.5 0 0 1 9.5 24c0-1.6.3-3.2.8-4.6l-7.9-6.1A24 24 0 0 0 0 24c0 3.9.9 7.5 2.7 10.7l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.7c-2.1 1.4-4.8 2.3-8.5 2.3-6.2 0-11.5-4.1-13.4-9.9l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/></svg>' +
+         '<span>Continua con Google</span></button>' +
+         (g === false ? '<div class="ag-nota">Accesso con Google non ancora attivato.</div>' : '') +
+         '<div class="ag-sep"><span>oppure con la tua email</span></div>' +
+         '<label class="ag-lbl" for="agEmail">Email</label>' +
+         '<input id="agEmail" class="ag-in" type="email" autocomplete="username" inputmode="email" value="' + esc(S.email) + '" oninput="_authStato.email=this.value" placeholder="nome@esempio.it">' +
+         '<div class="ag-tabs" role="tablist">' +
+           '<button role="tab" aria-selected="' + (S.modo === 'password') + '" class="' + (S.modo === 'password' ? 'on' : '') + '" onclick="_authStato.modo=\'password\';_authStato.msg=\'\';_authRender()">Password</button>' +
+           '<button role="tab" aria-selected="' + (S.modo === 'codice') + '" class="' + (S.modo === 'codice' ? 'on' : '') + '" onclick="_authStato.modo=\'codice\';_authStato.msg=\'\';_authRender()">Codice via email</button>' +
+         '</div>';
+    if(S.modo === 'password'){
+      h += '<label class="ag-lbl" for="agPwd">Password</label>' +
+           '<input id="agPwd" class="ag-in" type="password" autocomplete="current-password" placeholder="La stessa di Presenze" onkeydown="if(event.key===\'Enter\')_authPassword()">' +
+           '<button class="ag-btn ag-pri" onclick="_authPassword()"' + (S.attesa ? ' disabled' : '') + '>' + (S.attesa ? 'Accesso…' : 'Entra') + '</button>';
+    } else if(!S.codiceInviato){
+      h += '<div class="ag-nota">Ti mandiamo un codice di 6 cifre via email. Niente password da ricordare.</div>' +
+           '<button class="ag-btn ag-pri" onclick="_authInviaCodice()"' + (S.attesa ? ' disabled' : '') + '>' + (S.attesa ? 'Invio…' : 'Invia il codice') + '</button>';
+    } else {
+      h += '<label class="ag-lbl" for="agOtp">Codice ricevuto</label>' +
+           '<input id="agOtp" class="ag-in ag-otp" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="123456" onkeydown="if(event.key===\'Enter\')_authVerificaCodice()">' +
+           '<button class="ag-btn ag-pri" onclick="_authVerificaCodice()"' + (S.attesa ? ' disabled' : '') + '>' + (S.attesa ? 'Verifica…' : 'Verifica ed entra') + '</button>' +
+           '<button class="ag-link" onclick="_authStato.codiceInviato=false;_authRender()">Non è arrivato? Invia di nuovo</button>';
+    }
+  }
+  h += '<div class="ag-msg" role="status" aria-live="polite">' + esc(S.msg || '') + '</div></div>';
+  el.innerHTML = h;
+  var f = S.vista === 'login' ? (S.modo === 'codice' && S.codiceInviato ? 'agOtp' : (S.email ? (S.modo === 'password' ? 'agPwd' : null) : 'agEmail')) : null;
+  if(f){ var fi = document.getElementById(f); if(fi) setTimeout(function(){ try{ fi.focus(); }catch(e){} }, 50); }
+}
+function _authEmailValida(){
+  var e = (_authStato.email || '').trim().toLowerCase();
+  _authStato.email = e;
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)){ _authStato.msg = 'Scrivi un indirizzo email valido.'; _authRender(); return null; }
+  return e;
+}
+function _authRedirect(){ return location.origin + location.pathname; }
+
+function _authGoogle(){
+  _authStato.msg = ''; _authStato.vista = 'caricamento'; _authRender();
+  location.href = SB_URL + '/auth/v1/authorize?provider=google&redirect_to=' + encodeURIComponent(_authRedirect());
+}
+async function _authPassword(){
+  var em = _authEmailValida(); if(!em) return;
+  var pw = (document.getElementById('agPwd') || {}).value || '';
+  if(!pw){ _authStato.msg = 'Scrivi la password.'; _authRender(); return; }
+  _authStato.attesa = true; _authStato.msg = ''; _authRender();
+  try{
+    var j = await _authPost('token?grant_type=password', { email: em, password: pw });
+    var s = _authDaRisposta(j, null); s.metodo = 'password';
+    _authApplica(s);
+    await _authEntra();
+  }catch(e){ _authStato.attesa = false; _authStato.msg = _authErrore(e); _authRender(); }
+}
+async function _authInviaCodice(){
+  var em = _authEmailValida(); if(!em) return;
+  _authStato.attesa = true; _authStato.msg = ''; _authRender();
+  try{
+    await _authPost('otp?redirect_to=' + encodeURIComponent(_authRedirect()), { email: em, create_user: false });
+    _authStato.codiceInviato = true; _authStato.attesa = false;
+    _authStato.msg = 'Codice inviato a ' + em + '. Controlla anche lo spam.';
+    _authRender();
+  }catch(e){ _authStato.attesa = false; _authStato.msg = _authErrore(e); _authRender(); }
+}
+async function _authVerificaCodice(){
+  var em = _authEmailValida(); if(!em) return;
+  var c = ((document.getElementById('agOtp') || {}).value || '').replace(/\D/g, '');
+  if(c.length < 6){ _authStato.msg = 'Il codice ha 6 cifre.'; _authRender(); return; }
+  _authStato.attesa = true; _authStato.msg = ''; _authRender();
+  try{
+    var j = await _authPost('verify', { type: 'email', email: em, token: c });
+    var s = _authDaRisposta(j, null); s.metodo = 'codice email';
+    _authApplica(s);
+    await _authEntra();
+  }catch(e){ _authStato.attesa = false; _authStato.msg = _authErrore(e); _authRender(); }
+}
+
+var _authAppAvviata = false;
+async function _authEntra(){
+  _authMostra('caricamento');
+  try{
+    var acc = await _authControllaAccesso();
+    if(!acc.ok){ _authMostra('negato'); return; }
+  }catch(e){
+    // Senza rete: se questo dispositivo era già stato autorizzato, entra coi dati salvati
+    if(!(_authSess && _authSess.acc && _authSess.acc.ok)){ _authMostra('login', 'Nessuna connessione per controllare l\'accesso. Riprova.'); return; }
+  }
+  _authNascondi();
+  if(window._authApri) window._authApri();
+  if(!_authAppAvviata){ _authAppAvviata = true; init(); }
+}
+async function _authEsci(silenzioso){
+  if(!silenzioso && !confirm('Uscire da Fatture su questo dispositivo?')) return;
+  var tok = _authSess && _authSess.access_token;
+  if(tok){ try{ await fetch(SB_URL + '/auth/v1/logout', { method: 'POST', headers: { apikey: SB_KEY, Authorization: 'Bearer ' + tok } }); }catch(e){} }
+  _authApplica(null);
+  if(_authAppAvviata){ location.reload(); return; }
+  _authStato.codiceInviato = false;
+  _authMostra('login');
+}
+function _authRigaImpostazioni(){
+  if(!_authSess || !_authSess.user) return '';
+  var nome = (_authSess.acc && _authSess.acc.nome) || '';
+  var sub = esc(_authSess.user.email || '') + (_authSess.metodo ? ' · ' + esc(_authSess.metodo) : '') + ' · tocca per uscire';
+  return '<div class="imp-group-label">Account</div><div class="imp-group">' +
+    _impRow('👤', esc(nome || 'Il tuo account'), sub, "_authEsci()") + '</div>';
+}
+
+async function _authAvvio(){
+  _authMostra('caricamento');
+  fetch(SB_URL + '/auth/v1/settings', { headers: { apikey: SB_KEY } }).then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(c){ _authCfg = c; if(_authStato.vista === 'login') _authRender(); }).catch(function(){});
+  var daInd = await _authDaIndirizzo();
+  if(daInd && daInd.errore){ _authMostra('login', 'Accesso non riuscito: ' + daInd.errore); return; }
+  var s = _authSess || _authLeggi();
+  if(!s || !s.access_token){ _authMostra('login'); return; }
+  _authApplica(s);
+  await _authPronto();
+  if(!_authSess){ return; } // rinnovo rifiutato: la schermata di accesso è già visibile
+  await _authEntra();
+}
+// Rinnovo quando l'app torna in primo piano e ogni 5 minuti
+document.addEventListener('visibilitychange', function(){ if(!document.hidden && _authSess) _authPronto(); });
+setInterval(function(){ if(_authSess) _authPronto(); }, 5 * 60 * 1000);
+
+_authAvvio();
 </script>
 
 <style>
@@ -27775,6 +28034,33 @@ html[data-theme="dark"] .sf-hint{color:var(--orange)}
 .au-b{flex:1;min-width:130px;padding:10px;border:none;border-radius:11px;background:var(--ds-grad,var(--blue));color:#fff;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer}
 .au-b2{background:var(--surface2);color:var(--ink)}
 .au-b:disabled{opacity:.6}
+/* ── Accesso ── */
+#authGate{position:fixed;inset:0;z-index:20000;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:max(24px,env(safe-area-inset-top)) 16px max(24px,env(safe-area-inset-bottom));overflow-y:auto}
+#authGate .ag-box{width:100%;max-width:380px;background:var(--surface);border-radius:20px;padding:28px 22px 20px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:10px}
+#authGate .ag-logo{font-size:40px;text-align:center;line-height:1}
+#authGate .ag-tit{font-size:24px;font-weight:700;text-align:center;color:var(--ink)}
+#authGate .ag-sub{font-size:14px;color:var(--ink3);text-align:center;margin:-6px 0 8px}
+#authGate .ag-btn{min-height:48px;border-radius:12px;border:none;font-family:inherit;font-size:16px;font-weight:600;line-height:1.2;display:flex;align-items:center;justify-content:center;gap:10px;cursor:pointer;width:100%}
+#authGate .ag-btn:disabled{opacity:.55;cursor:default}
+#authGate .ag-google{background:var(--surface);color:var(--ink);border:1px solid var(--sep)}
+#authGate .ag-pri{background:var(--blue);color:#fff;margin-top:4px}
+#authGate .ag-sec{background:var(--surface2);color:var(--ink)}
+#authGate .ag-link{background:none;border:none;color:var(--blue);font-family:inherit;font-size:14px;font-weight:500;padding:8px;cursor:pointer}
+#authGate .ag-sep{display:flex;align-items:center;gap:10px;color:var(--ink3);font-size:13px;margin:6px 0}
+#authGate .ag-sep::before,#authGate .ag-sep::after{content:"";flex:1;height:1px;background:var(--sep)}
+#authGate .ag-lbl{font-size:13px;font-weight:600;color:var(--ink2);margin-bottom:-4px}
+#authGate .ag-in{min-height:46px;border-radius:12px;border:1px solid var(--sep);background:var(--surface2);color:var(--ink);padding:0 14px;font-size:16px;font-family:inherit;width:100%;box-sizing:border-box}
+#authGate .ag-in:focus{outline:2px solid var(--blue);outline-offset:1px}
+#authGate .ag-otp{letter-spacing:6px;font-size:22px;text-align:center;font-variant-numeric:tabular-nums}
+#authGate .ag-tabs{display:flex;background:var(--surface2);border-radius:10px;padding:3px;gap:3px;margin-top:4px}
+#authGate .ag-tabs button{flex:1;min-height:36px;border:none;border-radius:8px;background:none;color:var(--ink2);font-family:inherit;font-size:14px;font-weight:600;cursor:pointer}
+#authGate .ag-tabs button.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+#authGate .ag-nota{font-size:13px;color:var(--ink3);line-height:1.4}
+#authGate .ag-msg{font-size:14px;color:var(--ink2);text-align:center;min-height:18px;line-height:1.4}
+#authGate .ag-msg:empty{display:none}
+#authGate .ag-neg{display:flex;flex-direction:column;gap:6px;text-align:center;font-size:14px;color:var(--ink2);line-height:1.45;margin:6px 0 8px}
+#authGate .ag-neg b{color:var(--ink);font-size:16px}
+#authGate .ag-attesa{display:flex;flex-direction:column;align-items:center;gap:10px;color:var(--ink3);font-size:14px;padding:16px 0}
 /* ── Riduci movimento: tutto fermo ── */
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{animation-duration:.01ms!important;animation-delay:0s!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
