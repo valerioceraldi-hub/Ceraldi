@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.9.1</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.9.2</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -28623,50 +28623,37 @@ async function _ebCaricaStato(){
 }
 
 async function _ebAvviaCollegamento(){
-  // 21/09: "non succede niente" al click — la funzione faceva DUE await di
-  // rete (e a volte un confirm/prompt) prima di chiamare window.open(url).
-  // Su Safari/iOS, specialmente da PWA aggiunta alla Home, un popup aperto
-  // dopo degli await non è più considerato conseguenza diretta del click e
-  // viene bloccato IN SILENZIO: nessun errore, nessuna console, nessun
-  // popup — esattamente il sintomo segnalato. Fix: apro la scheda vuota
-  // SUBITO (sincrona rispetto al click, quindi mai bloccata) e le imposto
-  // l'indirizzo vero solo quando arriva dalla Edge Function; se qualcosa
-  // va storto la richiudo e mostro l'errore al posto di una scheda bianca.
-  var scheda = null;
-  try{ scheda = window.open('', '_blank'); }catch(e){ scheda = null; }
-  if(scheda){ try{ scheda.document.write('<p style="font:15px -apple-system,sans-serif;padding:24px">Preparo il collegamento con la banca…</p>'); }catch(e){} }
+  // 21/09, 3° giro — CAMBIO DI APPROCCIO chiesto da Valerio: i primi due
+  // tentativi giravano intorno a window.open() (finestra separata), che in
+  // un contesto PWA/mobile è un terreno instabile in tre modi diversi —
+  // (1) popup bloccato in silenzio se aperto dopo un await, (2) un
+  // confirm()/prompt() successivo che finisce nascosto dietro la scheda
+  // nuova perché il focus del browser salta lì, (3) alcune webview (PWA
+  // aggiunta alla Home su iOS) non aprono MAI una seconda scheda e basta,
+  // restituendo comunque un oggetto "scheda" apparentemente valido che poi
+  // non naviga da nessuna parte — combacia col sintomo "resta fermo lì".
+  // Niente più finestre secondarie: si porta la banca DENTRO la pagina
+  // stessa (stesso schema di un "Accedi con Google" da mobile). Non c'è
+  // nessun popup da bloccare perché non si apre nessun popup. Il ritorno
+  // (banca-collega-callback) mostra un bottone per tornare all'app.
   try{
     toast('⏳ Cerco Banco BPM su Enable Banking…');
     var r1 = await _ebChiamata('banca-collega', {azione:'aspsps', country:'IT', cerca:'banco bpm'});
-    if(r1.errore){ toast('⚠️ '+r1.errore); if(scheda) scheda.close(); return; }
+    if(r1.errore){ toast('⚠️ '+r1.errore); return; }
     var elenco = r1.aspsps||[];
-    if(!elenco.length){ toast('⚠️ Enable Banking non ha "Banco BPM" tra le banche italiane — controlla il nome esatto'); if(scheda) scheda.close(); return; }
-    // 21/09, 2° giro (Valerio: "resta fermo lì senza seguito", riprodotto
-    // sia in webview che in browser normale): qui c'erano un prompt() e un
-    // confirm(). Aprire una scheda con window.open sposta il focus del
-    // browser sulla scheda NUOVA — quindi un dialogo bloccante che compare
-    // dopo, sulla scheda ORIGINALE, resta invisibile dietro quella nuova:
-    // tutto sembra fermo perché in realtà aspetta un click che non si vede.
-    // Niente più dialoghi bloccanti: scelta automatica della banca (o la
-    // prima trovata) con avviso non bloccante nella scheda già aperta.
+    if(!elenco.length){ toast('⚠️ Enable Banking non ha "Banco BPM" tra le banche italiane — controlla il nome esatto'); return; }
     var scelta = elenco.find(function(a){ return /^banco bpm$/i.test(a.name||''); }) || elenco[0];
     var psuType = (scelta.psu_types||[]).includes('business') ? 'business' : ((scelta.psu_types||[])[0]||'business');
-    if(scheda){ try{ scheda.document.body.innerHTML = '<p style="font:15px -apple-system,sans-serif;padding:24px">Preparo il collegamento con «'+String(scelta.name||'').replace(/</g,'')+'»…</p>'; }catch(e){} }
     toast('⏳ Preparo il collegamento con "'+scelta.name+'"…');
     var r2 = await _ebChiamata('banca-collega', {azione:'avvia', aspsp_name:scelta.name, aspsp_country:scelta.country, psu_type:psuType, giorni_validita: scelta.maximum_consent_validity||90});
-    if(r2.errore || !r2.url){ toast('⚠️ '+(r2.errore||'nessun url ricevuto')); if(scheda) scheda.close(); return; }
-    if(scheda){ scheda.location.href = r2.url; }
-    else{
-      // Popup bloccato anche da vuota (raro, ma capita con impostazioni
-      // molto restrittive): niente scheda fantasma silenziosa, do un link
-      // esplicito da toccare così l'apertura resta un'azione dell'utente.
-      var box = document.getElementById('ebStato');
-      if(box) box.innerHTML = '<a href="'+esc(r2.url)+'" target="_blank" rel="noopener" style="font-size:13px;font-weight:700">🔗 Il browser ha bloccato l\'apertura automatica — tocca qui per continuare sul sito della banca</a>';
-      toast('⚠️ Il browser ha bloccato la finestra — usa il link comparso sopra');
-      return;
-    }
-    toast('Continua sul sito della banca, poi torna qui e controlla lo stato');
-  }catch(e){ if(scheda){ try{ scheda.close(); }catch(e2){} } toast('⚠️ '+String(e.message||e)); }
+    if(r2.errore || !r2.url){ toast('⚠️ '+(r2.errore||'nessun url ricevuto')); return; }
+    // Ricordo dove tornare: quando banca-collega-callback finisce, il
+    // bottone "Torna all'app" userà questo indirizzo (o quello di default
+    // se manca), e all'apertura successiva l'app ricontrolla subito lo
+    // stato del collegamento invece di aspettare che Valerio tocchi ⚙️.
+    try{ localStorage.setItem('ceraldi_eb_tornando', '1'); }catch(e){}
+    window.location.href = r2.url;
+  }catch(e){ toast('⚠️ '+String(e.message||e)); }
 }
 
 async function _ebSincronizza(){
@@ -28917,6 +28904,18 @@ async function _authEntra(){
   try{ _esAvvio(); }catch(e){}
   try{ _ntfAvvio(); }catch(e){}
   if(!_authAppAvviata){ _authAppAvviata = true; init(); }
+  // 21/09: dopo il collegamento banca (ora navigazione diretta, non più
+  // popup) Valerio torna sull'app da questa stessa pagina — la riapre
+  // direttamente sulla sezione Banca e ricontrolla subito lo stato, invece
+  // di lasciarlo tornare su una home qualunque senza nessun riscontro.
+  try{
+    if(localStorage.getItem('ceraldi_eb_tornando')==='1'){
+      localStorage.removeItem('ceraldi_eb_tornando');
+      setTimeout(function(){
+        try{ apriImpostazioni(); _impRenderSub('banca_eb'); }catch(e){}
+      }, 400);
+    }
+  }catch(e){}
 }
 async function _authEsci(silenzioso){
   if(!silenzioso && !confirm('Uscire da Fatture su questo dispositivo?')) return;
