@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.9.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.9.1</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -28641,20 +28641,18 @@ async function _ebAvviaCollegamento(){
     if(r1.errore){ toast('⚠️ '+r1.errore); if(scheda) scheda.close(); return; }
     var elenco = r1.aspsps||[];
     if(!elenco.length){ toast('⚠️ Enable Banking non ha "Banco BPM" tra le banche italiane — controlla il nome esatto'); if(scheda) scheda.close(); return; }
-    var scelta = elenco[0];
-    if(elenco.length>1){
-      var idx = elenco.findIndex(a=>/^banco bpm$/i.test(a.name||''));
-      if(idx<0){
-        var righe = elenco.map((a,i)=>(i+1)+'. '+a.name).join('\n');
-        var n = prompt('Più banche corrispondono — quale numero?\n'+righe, '1');
-        var pos = parseInt(n,10)-1;
-        if(!(pos>=0 && pos<elenco.length)){ if(scheda) scheda.close(); return; }
-        scelta = elenco[pos];
-      } else scelta = elenco[idx];
-    }
+    // 21/09, 2° giro (Valerio: "resta fermo lì senza seguito", riprodotto
+    // sia in webview che in browser normale): qui c'erano un prompt() e un
+    // confirm(). Aprire una scheda con window.open sposta il focus del
+    // browser sulla scheda NUOVA — quindi un dialogo bloccante che compare
+    // dopo, sulla scheda ORIGINALE, resta invisibile dietro quella nuova:
+    // tutto sembra fermo perché in realtà aspetta un click che non si vede.
+    // Niente più dialoghi bloccanti: scelta automatica della banca (o la
+    // prima trovata) con avviso non bloccante nella scheda già aperta.
+    var scelta = elenco.find(function(a){ return /^banco bpm$/i.test(a.name||''); }) || elenco[0];
     var psuType = (scelta.psu_types||[]).includes('business') ? 'business' : ((scelta.psu_types||[])[0]||'business');
-    if(!confirm('Collegare "'+scelta.name+'" ('+scelta.country+')? Verrai portato sul sito della banca per autorizzare l\'accesso.')){ if(scheda) scheda.close(); return; }
-    toast('⏳ Preparo il collegamento…');
+    if(scheda){ try{ scheda.document.body.innerHTML = '<p style="font:15px -apple-system,sans-serif;padding:24px">Preparo il collegamento con «'+String(scelta.name||'').replace(/</g,'')+'»…</p>'; }catch(e){} }
+    toast('⏳ Preparo il collegamento con "'+scelta.name+'"…');
     var r2 = await _ebChiamata('banca-collega', {azione:'avvia', aspsp_name:scelta.name, aspsp_country:scelta.country, psu_type:psuType, giorni_validita: scelta.maximum_consent_validity||90});
     if(r2.errore || !r2.url){ toast('⚠️ '+(r2.errore||'nessun url ricevuto')); if(scheda) scheda.close(); return; }
     if(scheda){ scheda.location.href = r2.url; }
