@@ -499,7 +499,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.5.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.6.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -26643,7 +26643,8 @@ function _ecCostruisci(o){
         if(!inP(v.data) || !v.imp) return;
         pagati++;
         add({data:v.data, causale:'PAG', causDescr:'Pagamento fornitore', doc:{data:f.data, num:f.numero}, controparte:f.fornitore, piva:f.piva||'', descr:'Pag. fatt. '+(f.numero||'')+' '+(f.fornitore||'')+(v.descr?' · '+String(v.descr).slice(0,60):''),
-          righe:[{k:'fornitori', dare:v.imp, avere:0},{k:v.fin, dare:0, avere:v.imp}]});
+          righe:[{k:'fornitori', dare:v.imp, avere:0},{k:v.fin, dare:0, avere:v.imp}],
+          fid:f.id, pagData:v.data, pagImp:v.imp});
       });
     });
   }
@@ -26684,14 +26685,14 @@ function _ecCostruisci(o){
       var ds=String(m.descrizione||'').slice(0,90);
       if(m.importo>0){
         var contro = /giroconto|ceraldi group/i.test(ds) ? 'giroconti' : /finanziament/i.test(ds) ? 'finsoci' : (cat==='numia' || /sumup|numia|pos/i.test(ds)) ? 'pos' : (cat==='versamento' ? 'cassa' : 'sospent');
-        if(contro==='sospent') avvisi.push({tipo:'Entrata da classificare', testo:_ecGg(m.data)+' '+fmt(imp)+' · '+ds});
+        if(contro==='sospent') avvisi.push({tipo:'Entrata da classificare', testo:_ecGg(m.data)+' '+fmt(imp)+' · '+ds, imp:imp});
         var CE={pos:['INCPOS','Accredito incassi POS'], cassa:['VERS','Versamento contanti'], giroconti:['GIRO','Giroconto tra conti propri'], finsoci:['FINS','Finanziamento dei soci'], sospent:['ENT','Entrata da classificare (rimborsi, altro)']}[contro];
         add({data:m.data, causale:CE[0], causDescr:CE[1], doc:{data:m.data,num:''}, controparte:'', piva:'', descr:ds,
           righe:[{k:fin, dare:imp, avere:0},{k:contro, dare:0, avere:imp}]});
       } else {
         var mp=/giroconto/i.test(ds) ? ['giroconti','GIRO','Giroconto tra conti propri'] : /finanziament/i.test(ds) ? ['finsoci','RFINS','Rimborso finanziamento soci'] : null;
         if(!mp) mp={stipendi:['dipendenti','STIP','Pagamento retribuzioni'], numia:['c_banca','COMM','Commissioni POS'], f24:['erario','F24','Versamento F24'], mutuo:['mutuo','MUT','Rata mutuo'], spese:['c_banca','COMM','Commissioni e spese bancarie'], nexi:['carta','CARTA','Addebito carta di credito Nexi'], paypal:['sospusc','SOSP','Addebito PayPal da classificare']}[cat];
-        if(!mp){ mp=['sospusc','SOSP','Uscita da classificare']; avvisi.push({tipo:'Uscita da classificare', testo:_ecGg(m.data)+' '+fmt(imp)+' · '+ds}); }
+        if(!mp){ mp=['sospusc','SOSP','Uscita da classificare']; avvisi.push({tipo:'Uscita da classificare', testo:_ecGg(m.data)+' '+fmt(imp)+' · '+ds, imp:imp}); }
         add({data:m.data, causale:mp[1], causDescr:mp[2], doc:{data:m.data,num:''}, controparte:(typeof _rcBeneficiario==='function'?_rcBeneficiario(m.descrizione):''), piva:'', descr:ds,
           righe:[{k:mp[0], dare:imp, avere:0},{k:fin, dare:0, avere:imp}]});
       }
@@ -26783,12 +26784,57 @@ function _ecXlsx(G){
   liq.forEach(function(l){ lq.push([_ceMeseLbl(l.mese,true), l.deb, l.cred, l.saldo, l.saldo>=0?'da versare entro il 16 del mese dopo':'a credito, si riporta', l.saldo>=0?'60'+l.mese.slice(5,7):'']); });
   lq.push([]); lq.push(['Nota','Calcolo per data documento delle fatture e delle chiusure. Il commercialista può spostare le fatture ricevute in ritardo: verificare prima di versare.']);
   sh('Liquidazione IVA', lq, [18,24,30,14,34,16], [1,2,3], []);
-  // 5. Bilancio di verifica
-  var bv=[['Conto','Descrizione','Totale DARE','Totale AVERE','Saldo DARE','Saldo AVERE','Natura']];
-  _EC_CONTI.forEach(function(b){ var p=G.perConto[b.k]; if(!p) return; var c=_ecConto(b.k), s=_ecR2(p.d-p.a);
-    bv.push([c.c,c.d,_ecR2(p.d),_ecR2(p.a),s>0?s:null,s<0?-s:null,/^c_|^r_/.test(b.k)?'Conto economico':'Stato patrimoniale']); });
-  bv.push([]); bv.push(['','TOTALI',G.totD,G.totA]);
-  sh('Bilancio di verifica', bv, [8,40,15,15,15,15,18], [2,3,4,5], []);
+  // 5. Bilancio di verifica (rifatto il 21/09 — Valerio: "mi porta circa 2
+  //    milioni, sono cifre spropositate"). Il totale NON era sbagliato: è la
+  //    somma di tutte le righe del giornale, dove ogni euro passa più volte
+  //    (fattura + pagamento, corrispettivo + accredito POS…). Però presentato
+  //    così sembrava un importo reale. Ora il foglio si apre con i numeri che
+  //    contano davvero, separa conto economico e stato patrimoniale, e mette
+  //    in evidenza quello che è rimasto da classificare.
+  var _bvSom=function(pred){ var d=0,a=0; _EC_CONTI.forEach(function(b){ var p=G.perConto[b.k]; if(!p||!pred(b.k)) return; d+=p.d; a+=p.a; }); return {d:_ecR2(d), a:_ecR2(a), s:_ecR2(d-a)}; };
+  var eCosti=_bvSom(function(k){ return /^c_/.test(k); });
+  var eRicavi=_bvSom(function(k){ return /^r_/.test(k); });
+  var bv=[
+    ['BILANCIO DI VERIFICA — solo i movimenti di questo periodo'],
+    ['Periodo '+_ecGg(o.dal)+' – '+_ecGg(o.al)],
+    [],
+    ['I NUMERI CHE CONTANO'],
+    ['Ricavi registrati (corrispettivi e altri ricavi)', _ecR2(eRicavi.a-eRicavi.d)],
+    ['Costi registrati (da fattura)', _ecR2(eCosti.d-eCosti.a)],
+    ['Differenza (ricavi − costi da fattura, NON è l\'utile)', _ecR2((eRicavi.a-eRicavi.d)-(eCosti.d-eCosti.a))],
+    ['IVA a debito sui corrispettivi', _ecR2((G.perConto['ivadeb']||{a:0}).a-(G.perConto['ivadeb']||{d:0}).d)],
+    ['IVA a credito sugli acquisti', _ecR2((G.perConto['ivacred']||{d:0}).d-(G.perConto['ivacred']||{a:0}).a)],
+    ['Ancora da classificare (entrate + uscite)', _ecR2(Math.abs(((G.perConto['sospent']||{d:0,a:0}).a-(G.perConto['sospent']||{d:0,a:0}).d))+Math.abs(((G.perConto['sospusc']||{d:0,a:0}).d-(G.perConto['sospusc']||{d:0,a:0}).a)))],
+    [],
+    ['Come leggere il totale in fondo: è la somma di TUTTE le righe registrate, non una cifra di denaro.'],
+    ['Lo stesso euro compare più volte (la fattura e poi il suo pagamento, il corrispettivo e poi l\'accredito POS in banca).'],
+    ['Non ci sono i saldi di apertura, né il costo del personale, ammortamenti e ratei: quelli li aggiunge il commercialista.'],
+    [],
+    ['Conto','Descrizione','Totale DARE','Totale AVERE','Saldo DARE','Saldo AVERE','Nota']
+  ];
+  var bvSez=function(titolo, pred){
+    var righe=_EC_CONTI.filter(function(b){ return G.perConto[b.k] && pred(b.k); });
+    if(!righe.length) return;
+    bv.push(['', titolo.toUpperCase()]);
+    var td=0, ta=0;
+    righe.forEach(function(b){
+      var p=G.perConto[b.k], c=_ecConto(b.k), sd=_ecR2(p.d-p.a); td+=p.d; ta+=p.a;
+      var nota = (b.k==='sospent'||b.k==='sospusc') ? 'DA CLASSIFICARE: assegna questi movimenti'
+        : (b.k==='dipendenti') ? 'qui c\'è solo il pagamento: il costo del personale viene dai cedolini'
+        : (b.k==='erario'||b.k==='mutuo'||b.k==='ritenute') ? 'qui c\'è solo il versamento, non il debito che lo precede'
+        : (b.k==='pos'||b.k==='giroconti') ? 'conto di transito: a fine periodo dovrebbe tendere a zero'
+        : '';
+      bv.push([c.c, c.d, _ecR2(p.d), _ecR2(p.a), sd>0?sd:null, sd<0?-sd:null, nota]);
+    });
+    bv.push(['', 'Totale '+titolo, _ecR2(td), _ecR2(ta)]);
+    bv.push([]);
+  };
+  bvSez('Conto economico — ricavi', function(k){ return /^r_/.test(k); });
+  bvSez('Conto economico — costi', function(k){ return /^c_/.test(k); });
+  bvSez('Stato patrimoniale', function(k){ return !/^c_|^r_/.test(k); });
+  bv.push(['','TOTALE DI TUTTE LE RIGHE (non è denaro)',G.totD,G.totA]);
+  bv.push(['','Quadratura', G.totD===G.totA?'OK: dare e avere coincidono':'ATTENZIONE: dare e avere non coincidono']);
+  sh('Bilancio di verifica', bv, [10,46,15,15,15,15,54], [2,3,4,5], []);
   // 6. Mastrini
   var ms=[['Conto','Descrizione conto','Data','N. reg.','Causale','Descrizione','DARE','AVERE','Saldo progressivo']];
   _EC_CONTI.forEach(function(b){ if(!G.perConto[b.k]) return; var c=_ecConto(b.k), sal=0;
@@ -26798,9 +26844,41 @@ function _ecXlsx(G){
   // 7. Partitario fornitori
   var pf={};
   G.reg.forEach(function(r){ r.righe.forEach(function(x){ if(x.k!=='fornitori') return; var k=r.controparte||'—'; (pf[k]=pf[k]||[]).push({r:r,x:x}); }); });
-  var pt=[['Fornitore','P.IVA','Data','Causale','Documento','Descrizione','DARE (pagato/NC)','AVERE (fatturato)','Saldo (da pagare)']];
-  Object.keys(pf).sort().forEach(function(k){ var sal=0; pf[k].forEach(function(e){ sal+=e.x.avere-e.x.dare; pt.push([k,e.r.piva||'',_ecDate(e.r.data),e.r.causale,e.r.doc.num||'',e.r.descr,e.x.dare||null,e.x.avere||null,_ecR2(sal)]); }); pt.push(['','','','','','Saldo '+k,null,null,_ecR2(sal)]); pt.push([]); });
-  sh('Partitario fornitori', pt, [30,13,11,7,14,44,14,14,14], [6,7,8], [2]);
+  // 21/09 (Valerio: "nel partitario inserisci anche i metodi di pagamento
+  // con la data e, se c'è la riconciliazione bancaria, tutti i dati
+  // associati"). Ogni riga porta con sé il metodo, il conto, la data del
+  // pagamento e — quando c'è — il movimento vero con i suoi riferimenti.
+  var _pfFatt={}; (typeof fatture!=='undefined'?fatture:[]).forEach(function(f){ _pfFatt[String(f.id)]=f; });
+  var _pfTr={};
+  var _pfTraccia=function(fid){
+    if(!fid) return null;
+    var k=String(fid);
+    if(!(k in _pfTr)) _pfTr[k]=_pfFatt[k]?_ecTraccia(_pfFatt[k]):null;
+    return _pfTr[k];
+  };
+  // Dettagli di pagamento della singola registrazione
+  var _pfDett=function(r){
+    var T=_pfTraccia(r.fid), f=r.fid?_pfFatt[String(r.fid)]:null, D={met:'',conto:'',data:'',rif:'',mov:'',nota:'',id:''};
+    if(f) D.met=_EC_METODO[f.pagamento]||(f.pagamento||'');
+    if(r.causale==='PAG' && T){
+      // il movimento di quel giorno per quell'importo (o l'unico che c'è)
+      var m=T.mov.filter(function(x){ return String(x.data||'').slice(0,10)===String(r.pagData||'').slice(0,10) && Math.abs(x.importo-(+r.pagImp||0))<0.02; })[0]
+          || (T.mov.length===1?T.mov[0]:null);
+      D.data=_ecGg(r.pagData||'');
+      if(m){ D.conto=(m.tipo==='Contanti'?m.conto:(m.conto||m.tipo)); D.rif=m.rif||''; D.mov=String(m.descr||'').replace(/\s+/g,' ').slice(0,120); D.nota=m.nota||''; D.id=String(m.id||''); }
+      else { D.conto=T.conto||''; D.mov='nessun movimento collegato'; }
+      if(!D.rif && T.estremi && T.estremi.length) D.rif=T.estremi.join(' · ');
+    } else if(f){
+      D.data=f.scadenza?('scade il '+_ecGg(f.scadenza)):'';
+      D.conto=T&&T.conto?T.conto:'';
+      D.rif=(T&&T.estremi&&T.estremi.length)?T.estremi.join(' · '):'';
+      D.mov=(T&&T.nc&&T.nc.length)?('note di credito: '+T.nc.map(function(n){ return 'n° '+n.num+' '+n.importo.toFixed(2).replace('.',',')+'€'; }).join(' · ')):'';
+    }
+    return D;
+  };
+  var pt=[['Fornitore','P.IVA','Data','Causale','Documento','Descrizione','DARE (pagato/NC)','AVERE (fatturato)','Saldo (da pagare)','Metodo','Conto / banca','Data pagamento','Riferimenti','Movimento collegato','Nota sul movimento','ID movimento']];
+  Object.keys(pf).sort().forEach(function(k){ var sal=0; pf[k].forEach(function(e){ sal+=e.x.avere-e.x.dare; var D=_pfDett(e.r); pt.push([k,e.r.piva||'',_ecDate(e.r.data),e.r.causale,e.r.doc.num||'',e.r.descr,e.x.dare||null,e.x.avere||null,_ecR2(sal),D.met,D.conto,D.data,D.rif,D.mov,D.nota,D.id]); }); pt.push(['','','','','','Saldo '+k,null,null,_ecR2(sal)]); pt.push([]); });
+  sh('Partitario fornitori', pt, [30,13,11,7,14,44,14,14,14,12,14,14,30,70,30,16], [6,7,8], [2]);
   // 8. Scadenzario
   var sc=[['Fornitore','P.IVA','N. doc.','Data doc.','Scadenza','Totale documento','Residuo al '+_ecGg(o.al),'Metodo abituale','Giorni di ritardo']];
   var alD=new Date(o.al+'T12:00:00');
@@ -26815,9 +26893,17 @@ function _ecXlsx(G){
     if(ric.length>1) sh('Riconciliazione', ric, [12,10,16,15,26,70,34,16,30,12,13,10,10,13,16,16], [3,10,13], [0,9]);
   }catch(e){}
   // 9. Controlli
-  var ck=[['Tipo','Cosa verificare']]; G.avvisi.forEach(function(a){ ck.push([a.tipo,a.testo]); });
-  if(G.avvisi.length===0) ck.push(['—','Nessun controllo da segnalare']);
-  sh('Controlli', ck, [28,110], [], []);
+  // 21/09 — prima i soldi non classificati, dal più grosso: sono quelli che
+  // fanno sballare il bilancio (nel periodo provato, un'entrata da 119.000 €).
+  var avv=G.avvisi.slice().sort(function(x,y){ return (+y.imp||0)-(+x.imp||0); });
+  var nonCl=avv.filter(function(a){ return +a.imp>0; });
+  var ck=[['Tipo','Importo','Cosa verificare']];
+  if(nonCl.length){
+    ck.push(['DA CLASSIFICARE', _ecR2(nonCl.reduce(function(t,a){ return t+(+a.imp||0); },0)), nonCl.length+' movimenti di banca senza una destinazione: finché restano così, il bilancio non torna']);
+  }
+  avv.forEach(function(a){ ck.push([a.tipo, (+a.imp||null), a.testo]); });
+  if(!G.avvisi.length) ck.push(['—', null, 'Nessun controllo da segnalare']);
+  sh('Controlli', ck, [28,14,110], [1], []);
   // 10. Piano dei conti usato
   var pc=[['Codice','Descrizione','Chiave interna']]; _EC_CONTI.forEach(function(b){ var c=_ecConto(b.k); pc.push([c.c,c.d,b.k]); });
   sh('Piano dei conti', pc, [9,46,14], [], []);
@@ -26958,7 +27044,11 @@ function _ecRender(){
   if(o.modo==='pacchetto'){
     box.innerHTML = h + '<div id="fsBody"></div>';
     if(typeof _fsPacchettoRender==='function'){
+      // 21/09 — BUG REALE: con un periodo personalizzato (intervallo,
+      // trimestre, anno) _fsMeseSel restava null e la scheda "Pacchetto"
+      // si apriva vuota (errore "Cannot read properties of null").
       if(o.per==='mese' && /^\d{4}-\d{2}$/.test(o.perVal||'')) _fsMeseSel=o.perVal;
+      else if(!_fsMeseSel) _fsMeseSel=(/^\d{4}-\d{2}/.test(o.al||'') ? String(o.al).slice(0,7) : _fsMesePrec());
       _fsPacchettoRender();
     }
     return;
