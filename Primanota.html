@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.9.2</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.9.3</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -28634,8 +28634,17 @@ async function _ebAvviaCollegamento(){
   // non naviga da nessuna parte — combacia col sintomo "resta fermo lì".
   // Niente più finestre secondarie: si porta la banca DENTRO la pagina
   // stessa (stesso schema di un "Accedi con Google" da mobile). Non c'è
-  // nessun popup da bloccare perché non si apre nessun popup. Il ritorno
-  // (banca-collega-callback) mostra un bottone per tornare all'app.
+  // nessun popup da bloccare perché non si apre nessun popup.
+  //
+  // 21/09, 4° giro — causa VERA (screenshot del pannello Enable Banking di
+  // Valerio): l'app ha in whitelist SOLO il proprio indirizzo GitHub Pages
+  // come Redirect URL, non quello della Edge Function. La banca lo valida
+  // carattere per carattere: mandarne uno diverso dà sempre "HTTP 400:
+  // Redirect URI not allowed", qualunque cosa faccia il codice qui intorno.
+  // Ora la scelta del redirect_url è fissa lato server (REDIRECT_URL in
+  // banca-collega.ts, uguale a quanto autorizzato) — il ritorno arriva
+  // qui nella pagina stessa con ?code=&state= in coda all'indirizzo, e lo
+  // intercetta _ebGestisciRitornoBanca() all'avvio dell'app.
   try{
     toast('⏳ Cerco Banco BPM su Enable Banking…');
     var r1 = await _ebChiamata('banca-collega', {azione:'aspsps', country:'IT', cerca:'banco bpm'});
@@ -28647,10 +28656,9 @@ async function _ebAvviaCollegamento(){
     toast('⏳ Preparo il collegamento con "'+scelta.name+'"…');
     var r2 = await _ebChiamata('banca-collega', {azione:'avvia', aspsp_name:scelta.name, aspsp_country:scelta.country, psu_type:psuType, giorni_validita: scelta.maximum_consent_validity||90});
     if(r2.errore || !r2.url){ toast('⚠️ '+(r2.errore||'nessun url ricevuto')); return; }
-    // Ricordo dove tornare: quando banca-collega-callback finisce, il
-    // bottone "Torna all'app" userà questo indirizzo (o quello di default
-    // se manca), e all'apertura successiva l'app ricontrolla subito lo
-    // stato del collegamento invece di aspettare che Valerio tocchi ⚙️.
+    // Ricordo che sto tornando da un collegamento in corso: alla riapertura
+    // dell'app (subito dopo, stessa pagina) l'app si apre da sola sulla
+    // sezione Banca invece di lasciare Valerio a ritrovare il menu da solo.
     try{ localStorage.setItem('ceraldi_eb_tornando', '1'); }catch(e){}
     window.location.href = r2.url;
   }catch(e){ toast('⚠️ '+String(e.message||e)); }
@@ -28665,6 +28673,34 @@ async function _ebSincronizza(){
     if(typeof ricaricaBancaCompleta==='function') await ricaricaBancaCompleta();
     _ebCaricaStato();
   }catch(e){ toast('⚠️ '+String(e.message||e)); }
+}
+
+// 21/09, 4° giro: la banca ora reindirizza DIRETTAMENTE su questa pagina
+// (?code=...&state=... in coda all'indirizzo, o ?error=... se Valerio ha
+// annullato) — non più su una Edge Function separata, perché l'unico
+// Redirect URL che Enable Banking accetta è quello dell'app stessa
+// (vedi REDIRECT_URL in banca-collega.ts). Chiamata da _authEntra() ad
+// ogni avvio riuscito: se non c'è nulla da fare è un no-op immediato.
+async function _ebGestisciRitornoBanca(){
+  var qs;
+  try{ qs = new URLSearchParams(window.location.search); }catch(e){ return false; }
+  var code = qs.get('code'), state = qs.get('state');
+  var erroreBanca = qs.get('error') || qs.get('error_description');
+  if(!code && !erroreBanca) return false; // navigazione normale, niente da completare
+  // Ripulisce subito l'indirizzo (tolti code/state/error dalla barra) così
+  // un refresh della pagina non ritenta uno scambio già consumato lato server.
+  try{ window.history.replaceState(null, '', window.location.pathname); }catch(e){}
+  if(erroreBanca){ toast('⚠️ La banca ha risposto: '+erroreBanca); }
+  else if(code && state){
+    toast('⏳ Completo il collegamento con la banca…');
+    try{
+      var r = await _ebChiamata('banca-collega', {azione:'completa', code:code, state:state});
+      if(r.errore) toast('⚠️ '+r.errore);
+      else toast('✅ Conto collegato'+(r.iban ? (' — IBAN '+r.iban) : ''));
+    }catch(e){ toast('⚠️ '+String(e.message||e)); }
+  }
+  setTimeout(function(){ try{ apriImpostazioni(); _impRenderSub('banca_eb'); }catch(e){} }, 300);
+  return true;
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -28904,18 +28940,26 @@ async function _authEntra(){
   try{ _esAvvio(); }catch(e){}
   try{ _ntfAvvio(); }catch(e){}
   if(!_authAppAvviata){ _authAppAvviata = true; init(); }
-  // 21/09: dopo il collegamento banca (ora navigazione diretta, non più
-  // popup) Valerio torna sull'app da questa stessa pagina — la riapre
-  // direttamente sulla sezione Banca e ricontrolla subito lo stato, invece
-  // di lasciarlo tornare su una home qualunque senza nessun riscontro.
-  try{
-    if(localStorage.getItem('ceraldi_eb_tornando')==='1'){
-      localStorage.removeItem('ceraldi_eb_tornando');
-      setTimeout(function(){
-        try{ apriImpostazioni(); _impRenderSub('banca_eb'); }catch(e){}
-      }, 400);
+  // 21/09: dopo il collegamento banca (navigazione diretta sulla stessa
+  // pagina, non più popup) Valerio torna qui — se la banca ha rimandato
+  // ?code=/?error= li completa e apre da sola la sezione Banca; altrimenti,
+  // come rete di sicurezza, il solo flag (es. Valerio ha chiuso la scheda
+  // della banca senza completare) apre comunque quella sezione senza tentare
+  // nessuno scambio.
+  setTimeout(async function(){
+    var gestito = false;
+    try{ gestito = !!(await _ebGestisciRitornoBanca()); }catch(e){}
+    if(!gestito){
+      try{
+        if(localStorage.getItem('ceraldi_eb_tornando')==='1'){
+          localStorage.removeItem('ceraldi_eb_tornando');
+          try{ apriImpostazioni(); _impRenderSub('banca_eb'); }catch(e){}
+        }
+      }catch(e){}
+    } else {
+      try{ localStorage.removeItem('ceraldi_eb_tornando'); }catch(e){}
     }
-  }catch(e){}
+  }, 400);
 }
 async function _authEsci(silenzioso){
   if(!silenzioso && !confirm('Uscire da Fatture su questo dispositivo?')) return;
