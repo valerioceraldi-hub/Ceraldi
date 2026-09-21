@@ -812,7 +812,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
   <div class="login-hero">
     <h1>Ceraldi <em>Presenze</em></h1>
     <p>Accedi per timbrare o gestire i turni</p>
-    <div style="font-size:11px;color:var(--muted);margin-top:4px">Versione 53</div>
+    <div style="font-size:11px;color:var(--muted);margin-top:4px">Versione 54</div>
   </div>
   <div class="login-card">
     <button class="btn-google" id="l-google" onclick="loginGoogle()" type="button">
@@ -3077,14 +3077,12 @@ const QR_TTL = 180;
 // turno doppio). Da riportare a true quando la funzione turni sarà
 // ultimata. Vedi mostraScostamentiTurniTimbrature() e salvaTurno().
 const TURNI_AVVISI_ATTIVI = false;
-const TG_TOKEN     = '8418394812:AAGNiOoqK3MndKtex9kH1j0_cpyyXLdbp-I'; // Bot admin dedicato — @CeraldiPresenzeAdmin_bot (separato da Ordini)
-// ⚠️ SICUREZZA: finché TG_PROXY_URL è vuoto, i token sopra restano
-// esposti nell'HTML pubblico. Dopo il deploy della Edge Function
-// 'telegram-notify' (vedi file telegram-notify.ts nel repo), impostare:
-//   const TG_PROXY_URL = 'https://qaqqptpprmfjlolordaq.supabase.co/functions/v1/telegram-notify';
-// e SVUOTARE i due token qui sopra (''): l'app passerà dal proxy e i
-// token vivranno solo nei secrets di Supabase.
-const TG_PROXY_URL = '';
+// 20/09/2026 — FATTO: i token dei bot NON stanno più in questa pagina
+// (che è pubblica su GitHub). Vivono nella cassaforte `app_segreti` su
+// Supabase e li usa solo la Edge Function `notifica`. Qui restano due
+// etichette che dicono quale bot usare.
+const TG_TOKEN     = 'admin';  // bot admin  — @CeraldiPresenzeAdmin_bot
+const TG_PROXY_URL = SB_URL + '/functions/v1/notifica';
 
 // ⚠️ ASSISTENTE IA (solo admin): dopo aver deployato la Edge Function
 // 'claude-proxy' su Supabase, l'URL sarà sempre questo (stesso progetto),
@@ -3097,10 +3095,14 @@ const ASSISTENTE_PROXY_URL = SB_URL + '/functions/v1/claude-proxy';
 // continuano a funzionare identici.
 async function tgApi(token, payload) {
   if (TG_PROXY_URL) {
+    // La centralina accetta solo utenti loggati e solo chat conosciute
+    // (Valerio o un dipendente registrato): serve il token della sessione.
+    let jwt = SB_KEY;
+    try { const { data } = await sb.auth.getSession(); if (data && data.session) jwt = data.session.access_token; } catch (e) {}
     return fetch(TG_PROXY_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bot: token === TG_TOKEN ? 'admin' : 'dip', payload })
+      headers: { 'Content-Type': 'application/json', 'apikey': SB_KEY, 'Authorization': 'Bearer ' + jwt },
+      body: JSON.stringify({ bot: token === TG_TOKEN_DIP ? 'dip' : 'admin', payload })
     });
   }
   return fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
@@ -3110,7 +3112,7 @@ async function tgApi(token, payload) {
   });
 }
 const TG_CHAT      = '5441779658';                                          // Tuo chat_id
-const TG_TOKEN_DIP = '8860975812:AAGp-fHYQfeGNpAFQQUa-NpL7aw8S2BwlbI'; // Bot dipendenti @CeraldiPresenze_bot
+const TG_TOKEN_DIP = 'dip';    // bot dipendenti — @CeraldiPresenze_bot (token sul server)
 const APP_URL      = 'https://valerioceraldi-hub.github.io/Ceraldi/ceraldi_presenze.html';
 /* ── MODALITÀ CHIOSCO (tablet condiviso al banco) ─────
    Attivazione: apri l'app una volta con ?kiosk=1 (resta memorizzata sul
@@ -16514,25 +16516,11 @@ async function scollegaTelegramDipendente() {
   caricaProfiloDip();
 }
 
-async function getNomeBotDip() {
-  // Se il token è stato svuotato (proxy attivo), usa lo username noto del
-  // bot: serve solo a costruire il link t.me/... per il collegamento.
-  if (!TG_TOKEN_DIP) return 'CeraldiPresenze_bot';
-  try {
-    const r = await fetch('https://api.telegram.org/bot'+TG_TOKEN_DIP+'/getMe');
-    const d = await r.json();
-    return d.result?.username || 'CeraldiPresenze_bot';
-  } catch(e) { return 'CeraldiPresenze_bot'; }
-}
-
-async function getNomeBotAdmin() {
-  if (!TG_TOKEN) return 'CeraldiPresenzeAdmin_bot';
-  try {
-    const r = await fetch('https://api.telegram.org/bot'+TG_TOKEN+'/getMe');
-    const d = await r.json();
-    return d.result?.username || 'CeraldiPresenzeAdmin_bot';
-  } catch(e) { return 'CeraldiPresenzeAdmin_bot'; }
-}
+// I token non stanno più qui, quindi non si può più chiedere a Telegram
+// come si chiama il bot: gli username sono fissi e servono solo a
+// costruire il link t.me/… per il collegamento.
+async function getNomeBotDip()   { return 'CeraldiPresenze_bot'; }
+async function getNomeBotAdmin() { return 'CeraldiPresenzeAdmin_bot'; }
 
 /* ── WEB PUSH ────────────────────────────────────────── */
 
