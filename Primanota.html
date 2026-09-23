@@ -777,7 +777,7 @@ html[data-theme="dark"] .reg-import-link{border-color:rgba(255,255,255,.08)}
   <!-- Saluto — data e fascia oraria reali, aggiornati ad ogni ingresso -->
   <div class="home-greet stg" style="--i:0">
     <div class="home-greet-date" id="homeData">&nbsp;</div>
-    <div class="home-greet-title"><span id="homeSaluto">Ciao</span>, <span class="hg-name">Valerio</span></div>
+    <div class="home-greet-title"><span id="homeSaluto">Ciao</span>, <span class="hg-name" id="homeNome">Valerio</span></div>
   </div>
 
   <!-- Hero card — panoramica del mese -->
@@ -2328,6 +2328,27 @@ function isFornitoreAbbinato(fornitore){
   // Stessa filosofia già applicata lato Ordini sull'auto-aggiunta fornitori.
   return key?db[key]!==false:false;
 }
+// FIX 23/09 (audit punto 9 — segnalato da Valerio: fornitori trovati abbinati
+// a Ceraldi Ordini senza che lui abbia mai dato il comando). Causa: il
+// confronto "contiene" qui sopra (usato SOLO per la lista in Impostazioni,
+// dove serve solo a pre-selezionare comodamente la spunta) veniva usato
+// anche per decidere — in autoEstraiPrezzi, il vero punto in cui i prezzi
+// di una fattura partono verso Ceraldi Ordini — se un fornitore fosse
+// abbinato. Con quel confronto, un fornitore MAI spuntato da Valerio (es.
+// "SUD INGROSSO DI VINCENZO SRL", arrivato per la prima volta) veniva
+// trattato come abbinato solo perché il suo nome CONTIENE o È CONTENUTO nel
+// nome di un fornitore diverso già spuntato (es. "DI VINCENZO GROUP SRL") —
+// un'approvazione data per UN fornitore finiva per abilitarne silenziosamente
+// un altro, mai visto né approvato. Qui, dove si decide se mandare davvero i
+// prezzi, serve un confronto ESATTO (solo spazi/maiuscole normalizzati): un
+// fornitore nuovo o diverso resta non abbinato finché non viene spuntato lui
+// stesso, per il suo nome esatto.
+function isFornitoreAbbinatoEsatto(fornitore){
+  if(!fornitore)return false;
+  var db=cacheGet(KABBINA,{});var normF=(fornitore||'').trim().toLowerCase();
+  var key=Object.keys(db).find(function(k){return k.toLowerCase()===normF;});
+  return key?db[key]!==false:false;
+}
 // FIX (12/08, causa vera della "sparizione" dei fornitori abbinati): prima
 // ogni singolo tocco sul checkbox scriveva SUBITO su Supabase (DELETE+POST)
 // senza aspettare la scrittura precedente. Toccando molti fornitori di
@@ -3538,7 +3559,16 @@ async function dbUpdate(f){
       if(updated[0].fattura_allegata && updated[0].fattura_allegata.length > 10){
         try{ localStorage.setItem('cf_xml_'+f.id, updated[0].fattura_allegata); }catch(e){}
       }
-    } else localStorage.removeItem(FATTURE_TS_KEY); // fallback: forza ricarica
+    } else {
+      // FIX (audit 23/09, punto 8 — caso Cilatte N°397): con 'Prefer: return=representation',
+      // se il PATCH tocca 0 righe (RLS/permessi che bloccano la scrittura, oppure id non più
+      // esistente) Supabase risponde 200 con array VUOTO, non un errore — il vecchio codice
+      // lo trattava come un caso di successo silenzioso (nessun toast), quindi Valerio vedeva
+      // "salvato" nell'interfaccia (i chiamanti mostravano il loro toast ottimistico PRIMA di
+      // controllare questo valore) mentre sul Cloud non cambiava nulla. Ora avvisiamo sempre.
+      if(updated && updated.length === 0) toast('⚠️ Salvataggio non applicato (0 righe aggiornate) — verifica permessi/accesso');
+      localStorage.removeItem(FATTURE_TS_KEY); // fallback: forza ricarica
+    }
     // BUG REALE (trovato in audit 23/08): mancava questo return. dbUpdate
     // restituiva sempre undefined, anche a salvataggio riuscito — 13 punti
     // diversi nel file fanno `const r = await dbUpdate(...); if(r&&r[0])
@@ -3574,7 +3604,18 @@ async function dbUpdatePartial(id, campiParziali){
       headers:{...SB_H,'Prefer':'return=representation'},
       body:JSON.stringify(body)
     });
-    if(updated && updated[0]) _updateCacheRow(updated[0]);
+    if(updated && updated[0]){
+      _updateCacheRow(updated[0]);
+    } else {
+      // FIX (audit 23/09, stesso bug di dbUpdate): con return=representation, 0 righe
+      // toccate (RLS/permessi, o riga non più esistente) torna un array VUOTO, non un
+      // errore — prima si restituiva comunque nuovoTs (valore "verità") come se fosse
+      // andato tutto bene. Ora un salvataggio che non ha toccato nulla è trattato da
+      // fallimento vero, cosicché chi chiama questa funzione (es. rimozione allegato,
+      // punto 8) possa davvero saperlo invece di crederlo riuscito.
+      if(updated && updated.length===0) toast('⚠️ Salvataggio parziale non applicato (0 righe) — verifica permessi/accesso');
+      return null;
+    }
     return nuovoTs;
   }catch(e){
     console.error('UpdatePartial error', e);
@@ -5681,6 +5722,25 @@ function _homeEntrata(){
   var h = ora.getHours();
   var saluto = h>=5 && h<13 ? 'Buongiorno' : (h>=13 && h<18 ? 'Buon pomeriggio' : 'Buonasera');
   var s = document.getElementById('homeSaluto'); if(s) s.textContent = saluto;
+  // FIX 23/09 (audit punto 2 — segnalato da Valerio: un nuovo utente, dopo essersi
+  // registrato, vedeva "Buonasera Valerio"). Causa: il nome nell'HTML era scritto a
+  // mano ("Valerio") e nessun codice lo aggiornava mai — chiunque accedesse, con
+  // qualunque account, vedeva sempre lo stesso nome hardcoded. Il nome vero
+  // dell'utente collegato è già disponibile (usato in Impostazioni→Account) in
+  // _authSess.acc.nome, popolato dal server al login (RPC ceraldi_mio_accesso,
+  // affidabile: non è un default né un dato di cache che potrebbe essere di un
+  // altro utente) — qui lo usiamo per mostrare SEMPRE il nome di chi è davvero
+  // collegato in quel momento, con un ripiego neutro (mai un altro nome) se non è
+  // ancora disponibile (es. primissimo istante dopo il login).
+  var nEl = document.getElementById('homeNome');
+  if(nEl){
+    var nomeUtente = (window._authSess && _authSess.acc && _authSess.acc.nome) ? String(_authSess.acc.nome).trim() : '';
+    if(!nomeUtente && window._authSess && _authSess.user && _authSess.user.email) nomeUtente = _authSess.user.email.split('@')[0];
+    nEl.textContent = nomeUtente || '';
+    // Se non c'è ancora un nome affidabile, meglio "Ciao" da solo che un nome sbagliato.
+    var virgola = nEl.previousSibling;
+    if(virgola && virgola.nodeType===3) virgola.textContent = nomeUtente ? ', ' : '';
+  }
   var d = document.getElementById('homeData');
   if(d) d.textContent = ora.toLocaleDateString('it-IT',{weekday:'long', day:'numeric', month:'long'});
   var pill = document.getElementById('homeMesePill');
@@ -8208,17 +8268,45 @@ async function salvaEdit(){
     });
   }
   const _r4605=await dbUpdate(fatture[idx]); if(_r4605&&_r4605[0])_updateCacheRow(_r4605[0]);
-  // Spunta "riconciliata" tolta a mano → libera anche il movimento collegato,
+  // Spunta "riconciliata" tolta a mano → libera anche il/i movimento/i collegato/i,
   // così le due facce della stessa riconciliazione restano d'accordo.
-  if(_eraRiconciliata && !_eRiconciliataOra && _vecchioMovId && _r4605){
+  // FIX 23/09 (audit punto 15 — caso reale KIMBO N°0070020417: la fattura risultava
+  // agganciata a DUE assegni diversi, e togliere la spunta non liberava nulla in
+  // Riconciliazione banca). Causa: qui sotto ci si fidava SOLO di _vecchioMovId, cioè
+  // del puntatore "in avanti" f.riconciliazione.movId — ma il puntatore autorevole di
+  // chi-è-collegato-a-chi è quello "all'indietro", su movimenti_banca.fattura_id (è
+  // quello che usa anche la UI per il badge "🏦 Riconciliata"/il conteggio movimenti).
+  // Verificato sui dati reali: i due possono disallinearsi (es. dopo un nuovo
+  // abbinamento automatico che aggiorna il movimento ma non l'aveva anche riscritto
+  // sulla fattura, o un doppio abbinamento mai emerso prima) — in quel caso il vecchio
+  // codice liberava il movimento SBAGLIATO (quello scritto sulla fattura, magari già di
+  // un'altra fattura) o nessuno, e quello vero restava agganciato per sempre. Ora si
+  // interroga SEMPRE il Cloud (non la cache, che potrebbe essere anch'essa disallineata)
+  // per l'elenco reale di TUTTI i movimenti che puntano a questa fattura, e si liberano
+  // tutti — gestisce sia il caso singolo sia un eventuale doppio aggancio residuo.
+  if(_eraRiconciliata && !_eRiconciliataOra && _r4605){
     try{
-      const _movLib = (window._bancaMovimenti||[]).find(x=>String(x.id)===String(_vecchioMovId));
-      if(_movLib && String(_movLib.fatturaId||'')===String(editId)){
-        _movLib.abbinata = false; _movLib.fatturaId = null; _movLib.fatturaLabel = '';
-        await salvaMovimentoBanca(_movLib);
-        toast('Movimento bancario liberato: torna tra quelli da classificare');
+      const _movReali = await sbFetch('movimenti_banca?fattura_id=eq.'+encodeURIComponent(editId)+'&select=id');
+      const _idDaLiberare = new Set((_movReali||[]).map(function(m){ return String(m.id); }));
+      if(_vecchioMovId) _idDaLiberare.add(String(_vecchioMovId)); // include comunque il vecchio puntatore, per sicurezza
+      let _liberati = 0;
+      for(const _movIdLib of _idDaLiberare){
+        let _movLib = (window._bancaMovimenti||[]).find(x=>String(x.id)===_movIdLib);
+        if(!_movLib){
+          // Non in cache locale (es. cache incompleta su questo dispositivo) — recupera
+          // la riga COMPLETA dal Cloud (salvaMovimentoBanca fa un upsert dell'intera riga:
+          // passargli un oggetto parziale cancellerebbe data/importo/tipo/banca reali).
+          const _riga = await sbFetch('movimenti_banca?id=eq.'+encodeURIComponent(_movIdLib)+'&select=*');
+          if(_riga && _riga[0]) _movLib = _bancaNorm(_riga[0]);
+        }
+        if(_movLib && String(_movLib.fatturaId||'')===String(editId)){
+          _movLib.abbinata = false; _movLib.fatturaId = null; _movLib.fatturaLabel = '';
+          await salvaMovimentoBanca(_movLib);
+          _liberati++;
+        }
       }
-    }catch(e){ console.warn('rilascio movimento:', e); }
+      if(_liberati>0) toast(_liberati===1?'Movimento bancario liberato: torna tra quelli da classificare':(_liberati+' movimenti bancari liberati: tornano tra quelli da classificare'));
+    }catch(e){ console.warn('rilascio movimento:', e); toast('⚠️ Riconciliazione tolta dalla fattura, ma non sono riuscito a verificare/liberare il movimento in banca — controllalo a mano'); }
   }
   // Salva foto separatamente se cambiata
   if(_eFotoCorrente !== (fatture[idx].foto||'')){
@@ -12127,9 +12215,24 @@ async function onFattAllegataSelected(input){
     if(!xmlText){ toast('❌ Impossibile leggere il file .p7m'); return; }
     const idx = fatture.findIndex(x=>x.id===ddtId);
     if(idx<0) return;
+    // FIX (audit 23/09, punto 8 — caso Cilatte N°397, XML "scomparso" dopo un'importazione
+    // manuale): prima il codice non controllava MAI l'esito di dbUpdate qui — mostrava
+    // "Fattura allegata!" anche se il salvataggio su Supabase era fallito (RLS, rete, sessione
+    // scaduta), lasciando l'allegato presente solo in memoria fino al prossimo ricaricamento,
+    // quando spariva senza alcun avviso. Ora il successo si dichiara solo se il Cloud conferma
+    // davvero la riga aggiornata; altrimenti si annulla la modifica locale e si avvisa.
+    const prevAllegata = fatture[idx].fatturaAllegata, prevNome = fatture[idx].fatturaAllegataName;
     fatture[idx].fatturaAllegata = xmlText;
     fatture[idx].fatturaAllegataName = file.name.replace(/\.p7m$/i,'.xml');
-    save(fatture); await dbUpdate(fatture[idx]); renderLista();
+    save(fatture);
+    const esito = await dbUpdate(fatture[idx]);
+    if(!esito || !esito.length){
+      fatture[idx].fatturaAllegata = prevAllegata; fatture[idx].fatturaAllegataName = prevNome;
+      save(fatture); renderLista();
+      toast('❌ Allegato NON salvato sul Cloud — riprova (controlla connessione/accesso)');
+      return;
+    }
+    renderLista();
     toast('📎 Fattura allegata (XML da .p7m)!');
     setTimeout(()=>aprifatturaAllegata(ddtId), 300);
     return;
@@ -12139,9 +12242,18 @@ async function onFattAllegataSelected(input){
     const dataUrl = e.target.result;
     const idx = fatture.findIndex(x=>x.id===ddtId);
     if(idx<0) return;
+    const prevAllegata = fatture[idx].fatturaAllegata, prevNome = fatture[idx].fatturaAllegataName;
     fatture[idx].fatturaAllegata = dataUrl;
     fatture[idx].fatturaAllegataName = file.name;
-    save(fatture); await dbUpdate(fatture[idx]); renderLista();
+    save(fatture);
+    const esito = await dbUpdate(fatture[idx]);
+    if(!esito || !esito.length){
+      fatture[idx].fatturaAllegata = prevAllegata; fatture[idx].fatturaAllegataName = prevNome;
+      save(fatture); renderLista();
+      toast('❌ Allegato NON salvato sul Cloud — riprova (controlla connessione/accesso)');
+      return;
+    }
+    renderLista();
     toast('📎 Fattura allegata!');
     setTimeout(()=>aprifatturaAllegata(ddtId), 300);
   };
@@ -12273,7 +12385,16 @@ async function eliminaFatturaAllegata(){
     if(idx>=0){
       fatture[idx].fatturaAllegata='';
       fatture[idx].fatturaAllegataName='';
-      save(fatture); await dbUpdate(fatture[idx]); renderLista();
+      save(fatture);
+      // FIX (audit 23/09): dbUpdate() include 'fattura_allegata' nel PATCH SOLO se
+      // f.fatturaAllegata è non vuoto (per non rispedire XML pesanti ad ogni salvataggio
+      // normale) — quindi chiamarlo qui, con il campo appena svuotato, ometteva del tutto
+      // 'fattura_allegata' dal PATCH e l'allegato restava intatto su Supabase per sempre,
+      // mentre l'interfaccia lo mostrava già rimosso. dbUpdatePartial scrive esattamente
+      // (e solo) i campi passati, quindi qui pulisce davvero anche sul Cloud.
+      const esito = await dbUpdatePartial(_fattMoDdtId, {fattura_allegata:'', fattura_allegata_name:''});
+      renderLista();
+      if(!esito){ toast('⚠️ Rimozione non confermata dal Cloud — riprova'); closeMo(); chiudiFattMo(); return; }
     }
     closeMo(); chiudiFattMo();
     toast('File rimosso');
@@ -12350,7 +12471,7 @@ async function autoEstraiPrezzi(xmlText,fattObj){
     if(fattObj.tipo==='nota_credito'&&tdInfo.isAcquisto){
       try{await sbFetch('fatture?id=eq.'+fatturaId,{method:'PATCH',headers:{...SB_H,'Prefer':'return=minimal'},body:JSON.stringify({tipo:tdInfo.tipo})});var _idx=fatture.findIndex(function(x){return x.id===fatturaId;});if(_idx>=0){fatture[_idx].tipo=tdInfo.tipo;fattObj.tipo=tdInfo.tipo;}toast('🔧 '+tdInfo.label+' (era N/C)');}catch(e){}
     }
-    if(!isFornitoreAbbinato(fornitore))return;
+    if(!isFornitoreAbbinatoEsatto(fornitore))return;
     try{var ck=await fetch(SB_URL+'/rest/v1/prezzi_da_fatture?fattura_id=eq.'+encodeURIComponent(fatturaId)+'&select=id&limit=1',{headers:SB_H});if(ck.ok){var d=await ck.json();if(d&&d.length>0){toast('ℹ️ Prezzi già presenti');return;}}}catch(e){return;}
     var righe=gaA('DettaglioLinee');if(!righe.length){toast('⚠️ Nessuna riga DettaglioLinee');return;}
     var toInsert=[];
@@ -20390,6 +20511,46 @@ function renderRiconciliazione(){
   // toast informa (una sola volta per giorno, non ad ogni re-render) e la
   // sezione qui sotto diventa un pannello di sola lettura ("cosa è stato
   // recuperato automaticamente"), senza nessuna azione da fare.
+  // FIX 23/09 (audit punto 13 — caso reale confermato sui dati: il 14/09 mancante era
+  // stato recuperato correttamente il 18/09 dentro la chiusura del 15/09, poi il 22/09
+  // lo stesso giorno è stato recuperato DI NUOVO dentro la chiusura del 19/09 — stesso
+  // importo (2334€ SumUp) contato due volte). Causa: il recupero scrive una "istantanea"
+  // nella chiusura che RISULTA la prima successiva nel momento in cui gira questo codice,
+  // ma non c'è mai un controllo che invalidi un recupero precedente quando la situazione
+  // cambia — es. una chiusura intermedia arrivata più tardi (Scriptable/RT fuori ordine,
+  // vedi punto 14) o una cache locale del dispositivo che in quel momento non aveva ancora
+  // scaricato la chiusura vera. Prima di cercare nuovi giorni mancanti, ripulisci ogni
+  // recupero ormai obsoleto: o il giorno recuperato ha ora una sua chiusura vera, oppure
+  // un'altra chiusura è diventata la reale prima successiva a quel giorno — in entrambi i
+  // casi il vecchio recupero è un doppione e va rimosso (mai sommato a pos_sumup/pos_numia
+  // veri, quindi rimuoverlo non altera nessun totale fiscale: tocca solo le 3 colonne
+  // dedicate e reversibili).
+  if(typeof chiusure!=='undefined' && chiusure.length){
+    var _chOrdPulizia = chiusure.filter(function(c){return c.data>='2026-01-01' && !c.deletedAt;}).map(function(c){return c.data;}).sort();
+    chiusure.forEach(function(c){
+      if(!c.recupero_da_giorno) return;
+      var giornoRec = c.recupero_da_giorno;
+      var haChiusuraPropria = chiusure.some(function(x){return x.data===giornoRec && x!==c && !x.deletedAt;});
+      var succReale = _chOrdPulizia.filter(function(d){return d>giornoRec;}).sort()[0];
+      var nonEPiuIlSuccessore = succReale && succReale!==c.data;
+      if(haChiusuraPropria || nonEPiuIlSuccessore){
+        var _keyPul = 'pulizia_'+c.id+'_'+giornoRec;
+        window._recuperiAutoFatti = window._recuperiAutoFatti || {};
+        if(window._recuperiAutoFatti[_keyPul]) return; // già ripulito in questa sessione
+        window._recuperiAutoFatti[_keyPul] = true;
+        var _motivoPul = haChiusuraPropria ? 'ha ora una chiusura propria' : ('è stato preso in carico dalla chiusura del '+succReale);
+        c.pos_sumup_recuperato = null; c.pos_numia_recuperato = null; c.recupero_da_giorno = null;
+        c.updated_at = new Date().toISOString();
+        sbFetch('chiusure_giornaliere?id=eq.'+c.id, {method:'PATCH', headers:Object.assign({}, SB_H, {'Prefer':'return=minimal'}), body: JSON.stringify({pos_sumup_recuperato:null, pos_numia_recuperato:null, recupero_da_giorno:null, updated_at:c.updated_at})})
+          .then(function(){
+            if(typeof salvaChiusureLocale==='function') salvaChiusureLocale();
+            toast('🧹 Doppione rimosso: il recupero del '+giornoRec+' nella chiusura del '+c.data+' era un duplicato ('+_motivoPul+')');
+          })
+          .catch(function(e){ delete window._recuperiAutoFatti[_keyPul]; });
+      }
+    });
+  }
+
   var posChiusureMancanti = []; // solo informativo/di sola lettura, per la SEZIONE 1bis
   if(typeof chiusure!=='undefined' && chiusure.length){
     var _chOrd = chiusure.filter(function(c){return c.data>='2026-01-01';}).map(function(c){return c.data;}).sort();
@@ -28832,12 +28993,26 @@ function _authRender(){
          '<button class="ag-btn ag-pri" onclick="_authEntra()">Ho ricevuto il via libera, entra</button>' +
          '<button class="ag-link" onclick="_authEsci(true)">Esci</button>';
   } else if(S.vista === 'richiesta'){
-    h += '<div class="ag-nota">Lascia il tuo nome e la tua email: ricevi un codice per confermare l\'indirizzo, poi un amministratore decide cosa puoi vedere.</div>' +
-         '<label class="ag-lbl" for="agNome">Nome e cognome</label>' +
-         '<input id="agNome" class="ag-in" type="text" autocomplete="name" value="' + esc(S.nome || '') + '" oninput="_authStato.nome=this.value" placeholder="Mario Rossi">' +
-         '<label class="ag-lbl" for="agEmail">Email</label>' +
-         '<input id="agEmail" class="ag-in" type="email" autocomplete="email" inputmode="email" value="' + esc(S.email) + '" oninput="_authStato.email=this.value" placeholder="nome@esempio.it">' +
-         '<button class="ag-btn ag-pri" onclick="_authRichiedi()"' + (S.attesa ? ' disabled' : '') + '>' + (S.attesa ? 'Invio…' : 'Richiedi l\'accesso') + '</button>' +
+    // FIX 23/09 (audit punto 3 — segnalato da Valerio: un utente riusciva a
+    // completare la registrazione senza tutti i dati/consensi necessari).
+    // Causa: il modulo chiedeva solo nome ed email — telefono e consenso
+    // privacy non esistevano proprio come campi, quindi non potevano essere
+    // né richiesti né salvati. Aggiunti qui come campi obbligatori veri: il
+    // bottone resta disattivato finché non sono tutti compilati/spuntati
+    // (vedi _authRichiestaValida sotto), e i valori vengono salvati subito
+    // sull'account (non solo mostrati) — vedi _authRichiedi().
+    h += '<div class="ag-nota">Lascia i tuoi dati: ricevi un codice per confermare l\'indirizzo, poi un amministratore decide cosa puoi vedere.</div>' +
+         '<label class="ag-lbl" for="agNome">Nome e cognome *</label>' +
+         '<input id="agNome" class="ag-in" type="text" autocomplete="name" value="' + esc(S.nome || '') + '" oninput="_authStato.nome=this.value;_authRichiestaAggiorna()" placeholder="Mario Rossi">' +
+         '<label class="ag-lbl" for="agEmail">Email *</label>' +
+         '<input id="agEmail" class="ag-in" type="email" autocomplete="email" inputmode="email" value="' + esc(S.email) + '" oninput="_authStato.email=this.value;_authRichiestaAggiorna()" placeholder="nome@esempio.it">' +
+         '<label class="ag-lbl" for="agTel">Telefono *</label>' +
+         '<input id="agTel" class="ag-in" type="tel" autocomplete="tel" inputmode="tel" value="' + esc(S.telefono || '') + '" oninput="_authStato.telefono=this.value;_authRichiestaAggiorna()" placeholder="333 1234567">' +
+         '<label class="ag-consenso" style="display:flex;gap:8px;align-items:flex-start;margin:10px 2px;font-size:13px;line-height:1.35">' +
+           '<input id="agConsenso" type="checkbox" style="margin-top:3px" ' + (S.consenso ? 'checked' : '') + ' onchange="_authStato.consenso=this.checked;_authRichiestaAggiorna()">' +
+           '<span>Ho letto l\'informativa privacy e acconsento al trattamento dei miei dati per gestire l\'accesso a questa app. *</span>' +
+         '</label>' +
+         '<button class="ag-btn ag-pri" onclick="_authRichiedi()"' + ((S.attesa || !_authRichiestaValida()) ? ' disabled' : '') + '>' + (S.attesa ? 'Invio…' : 'Richiedi l\'accesso') + '</button>' +
          '<button class="ag-link" onclick="_authStato.vista=\'login\';_authStato.msg=\'\';_authRender()">Torna all\'accesso</button>';
   } else if(S.vista === 'negato'){
     var em = (_authSess && _authSess.user && _authSess.user.email) || '';
@@ -29102,8 +29277,8 @@ function _accCard(r, nuova){
   var io = _authSess && _authSess.user && _authSess.user.id === r.id;
   var h = '<div class="acc-card' + (nuova ? ' acc-card-new' : '') + '">' +
     '<div class="acc-riga1"><div class="acc-nome">' + esc(r.nome || r.email) + (io ? ' <span class="acc-io">tu</span>' : '') + '</div>' + _accEtichettaStato(r.stato) + '</div>' +
-    '<div class="acc-mail">' + esc(r.email) + (r.provider && r.provider !== 'email' ? ' · ' + esc(r.provider) : '') + '</div>' +
-    '<div class="acc-perm">' + (nuova ? 'Richiesto ' + _accQuando(r.richiesto_il) : esc((r.profilo ? (_ACC_PROFILI[r.profilo] ? _ACC_PROFILI[r.profilo].n : r.profilo) + ' — ' : '')) + _accRiassunto(r)) + '</div>';
+    '<div class="acc-mail">' + esc(r.email) + (r.provider && r.provider !== 'email' ? ' · ' + esc(r.provider) : '') + (nuova && r.telefono ? ' · 📞 ' + esc(r.telefono) : '') + '</div>' +
+    '<div class="acc-perm">' + (nuova ? 'Richiesto ' + _accQuando(r.richiesto_il) + (r.consenso_privacy ? ' · consenso privacy dato' : ' · ⚠️ consenso privacy mancante') : esc((r.profilo ? (_ACC_PROFILI[r.profilo] ? _ACC_PROFILI[r.profilo].n : r.profilo) + ' — ' : '')) + _accRiassunto(r)) + '</div>';
   if(!aperta){
     h += '<div class="acc-azioni">' +
       '<button class="acc-b acc-b-pri" onclick="_accStato.apertura=\'' + r.id + '\';_accRender()">' + (nuova ? 'Approva…' : 'Modifica permessi') + '</button>';
@@ -29169,13 +29344,42 @@ async function _accDecidi(id, stato){
 }
 
 // ── Richiesta di accesso dalla schermata di login ────────────────
+// FIX 23/09 (audit punto 3): telefono valido (almeno 8 cifre, il resto può
+// essere spazi/+/parentesi/trattini) e consenso privacy spuntato sono ORA
+// obbligatori quanto nome ed email — non solo "consigliati": senza tutti e
+// quattro il bottone resta disattivato (vedi _authRender) e comunque, per
+// sicurezza, _authRichiedi() li ricontrolla anche lato codice prima di
+// mandare qualunque cosa, così non si passa aggirando la sola interfaccia.
+function _authTelefonoValido(t){ return (String(t||'').replace(/[^0-9]/g,'').length >= 8); }
+function _authRichiestaValida(){
+  var S = _authStato;
+  var nomeOk = String(S.nome || '').trim().length >= 3;
+  var emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(S.email || '').trim());
+  var telOk = _authTelefonoValido(S.telefono);
+  var consensoOk = !!S.consenso;
+  return nomeOk && emailOk && telOk && consensoOk;
+}
+function _authRichiestaAggiorna(){
+  // Riabilita/disabilita il bottone "Richiedi l'accesso" a ogni tocco, senza
+  // ridisegnare tutto il modulo (altrimenti il campo che si sta scrivendo
+  // perderebbe il focus a ogni carattere).
+  var b = document.querySelector('.ag-box .ag-pri');
+  if(b && b.textContent.indexOf('Richied') >= 0) b.disabled = !_authRichiestaValida();
+}
 async function _authRichiedi(){
   var em = _authEmailValida(); if(!em) return;
   var nome = ((document.getElementById('agNome') || {}).value || '').trim();
   if(nome.length < 3){ _authStato.msg = 'Scrivi nome e cognome.'; _authRender(); return; }
+  var telInput = (document.getElementById('agTel') || {}).value || '';
+  _authStato.telefono = telInput;
+  if(!_authTelefonoValido(telInput)){ _authStato.msg = 'Scrivi un numero di telefono valido (almeno 8 cifre).'; _authRender(); return; }
+  var consensoDato = !!(document.getElementById('agConsenso') || {}).checked;
+  _authStato.consenso = consensoDato;
+  if(!consensoDato){ _authStato.msg = 'Serve il consenso al trattamento dei dati per procedere.'; _authRender(); return; }
   _authStato.attesa = true; _authStato.msg = ''; _authRender();
   try{
-    await _authPost('otp?redirect_to=' + encodeURIComponent(_authRedirect()), { email: em, create_user: true, data: { nome: nome, origine: 'richiesta' } });
+    await _authPost('otp?redirect_to=' + encodeURIComponent(_authRedirect()), { email: em, create_user: true,
+      data: { nome: nome, origine: 'richiesta', telefono: telInput.trim(), consenso_privacy: true, consenso_privacy_il: new Date().toISOString() } });
     _authStato.codiceInviato = true; _authStato.attesa = false; _authStato.modo = 'codice'; _authStato.vista = 'login';
     _authStato.msg = 'Ti ho mandato un codice a ' + em + ' per confermare l\'indirizzo.';
     _authRender();
