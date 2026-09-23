@@ -19884,19 +19884,18 @@ function renderRiconciliazione(){
     var _matchCertoGiaAgganciato = matchCerto && (_bancaMovimenti||[]).some(function(x){
       return x.abbinata && x.fatturaId===matchCerto.id && x.id!==m.id;
     });
-    // FIX (23/09, causa radice dei 63 casi "contesa" nel Controllo anomalie —
-    // "riconciliazioni scritte solo a metà"): il controllo sopra protegge la
-    // FATTURA (matchCerto) da farsi rubare il movimento da un secondo match
-    // automatico, ma nessun controllo proteggeva il MOVIMENTO nel verso
-    // opposto — se "m" era già collegato a un'ALTRA fattura (magari corretta),
-    // questo giro automatico lo riassegnava comunque a matchCerto in silenzio,
-    // senza mai toccare la vecchia fattura: quella restava "pagata" per
-    // sempre con un movimento che nel frattempo è passato a un'altra. È
-    // esattamente il pattern trovato sui dati reali (63 casi, l'ultimo di ieri
-    // 22/09). Ora, se il movimento è già di un'altra fattura, il match NON
-    // si applica da solo: finisce in "da confermare" come già avviene per
-    // assegni e per i casi analoghi sopra.
-    var _movGiaAltrove = matchCerto && m.abbinata && m.fatturaId && String(m.fatturaId)!==String(matchCerto.id);
+    // Protezione simmetrica a quella sopra (23/09): se il movimento è già
+    // collegato a un'ALTRA fattura che esiste, non lo si riassegna in
+    // silenzio — finisce in "da confermare" con un avviso. NB: di norma qui
+    // non si arriva nemmeno (i movimenti già collegati a una fattura
+    // esistente escono prima, al ramo "Movimento con fatturaId"): è una rete
+    // di sicurezza. Se invece la fattura collegata non esiste più (eliminata)
+    // si lascia riassegnare, come prima: è un riferimento orfano, non un
+    // conflitto. [Correzione: il 23/09 avevo indicato questo punto come
+    // causa delle 63 "contese" del Controllo anomalie — verificato poi sui
+    // dati che erano quasi tutte pagamenti cumulativi corretti.]
+    var _movGiaAltrove = matchCerto && m.abbinata && m.fatturaId && String(m.fatturaId)!==String(matchCerto.id) &&
+      (fatture||[]).some(function(x){ return String(x.id)===String(m.fatturaId); });
 
     // Stessa cautela dell'assegno: se questa fattura ha già un pagamento
     // impostato a mano o da Prima Nota, il match automatico NON si applica in
@@ -22623,8 +22622,9 @@ async function _cfAbbina(movIdx, fattId, isParziale){
     catch(e){ toast('⚠️ Il vecchio movimento collegato a questa fattura non si è scollegato — controllalo in Riconciliazione'); }
   }
   m.abbinata=true; m.fatturaId=f.id; m.fatturaLabel=(f.fornitore||'')+' N°'+(f.numero||'');
-  // FIX (23/09, causa radice delle "riconciliazioni scritte solo a metà" nel
-  // Controllo anomalie — 84 casi trovati): questo salvataggio veniva lanciato
+  // FIX (23/09 — un modo concreto in cui una riconciliazione può restare
+  // scritta a metà; i casi segnalati quel giorno si sono poi rivelati quasi
+  // tutti pagamenti cumulativi corretti): questo salvataggio veniva lanciato
   // SENZA await e senza .catch. Se falliva (RLS, rete, Supabase momentaneamente
   // giù), l'errore restava un "unhandled promise rejection" invisibile: il
   // codice continuava comunque a segnare la fattura come riconciliata/pagata
@@ -24820,93 +24820,465 @@ function _anCalcola(F, movs, entrate){
       testo:'Sono nel registro ma senza XML né PDF: non si possono ricontrollare, non finiscono nel registro IVA acquisti e la commercialista non riceve l\'allegato. Apri la fattura e usa «Allega documento» per aggiungere il file.',
       fatture:senzaDoc.slice(0,12), movimenti:[], rischio:0});
   }
-  // 8) RICONCILIAZIONI A METÀ (21/09, dall'audit dell'architettura).
-  //    Una riconciliazione è scritta in DUE posti: sulla fattura
-  //    (riconciliata + riconciliazione.movId) e sul movimento (abbinata +
-  //    fattura_id). Le due scritture partono da percorsi diversi, non sono
-  //    una transazione unica e nessuno controllava che restassero d'accordo.
-  //    Se la seconda fallisce (rete assente, permessi) o se si toglie la
-  //    spunta da una parte sola, resta mezzo collegamento: la fattura risulta
-  //    pagata, ma il movimento torna libero e può essere abbinato una seconda
-  //    volta a un'altra fattura — cioè la stessa uscita pagherebbe due debiti.
-  //    Nessuna schermata lo diceva. Verificato sui dati veri: 36 casi.
-  var _movIdx = {};
-  if(window._anMovIndex) Object.keys(window._anMovIndex).forEach(function(k){ _movIdx[k] = window._anMovIndex[k]; });
-  (movs||[]).forEach(function(m){ if(m && m.id) _movIdx[String(m.id)] = {abbinata:!!m.abbinata, fatturaId:m.fatturaId||null}; });
-  if(Object.keys(_movIdx).length){
-    var incoer = [];
-    F.forEach(function(f){
-      if(!f.riconciliata || !f.riconciliazione || !f.riconciliazione.movId) return;
-      if(f.tipo==='ddt') return;
-      var mid = String(f.riconciliazione.movId);
-      var mv = _movIdx[mid];
-      if(!mv){ incoer.push({f:f, caso:'sparito', mid:mid}); return; }
-      if(!mv.abbinata || String(mv.fatturaId||'') !== String(f.id)){
-        // riparabile solo se quel movimento non è già impegnato altrove
-        var libero = !mv.fatturaId || String(mv.fatturaId)===String(f.id);
-        incoer.push({f:f, caso: libero ? 'riparabile' : 'contesa', mid:mid});
-      }
-    });
-    if(incoer.length){
-      var nRip = incoer.filter(function(x){ return x.caso==='riparabile'; }).length;
-      var nSpar = incoer.filter(function(x){ return x.caso==='sparito'; }).length;
-      var nCont = incoer.filter(function(x){ return x.caso==='contesa'; }).length;
-      var dett = [];
-      if(nRip) dett.push(nRip+' dove basta riallineare il movimento');
-      if(nSpar) dett.push(nSpar+' dove il movimento indicato non esiste più (di solito un estratto conto reimportato)');
-      if(nCont) dett.push(nCont+' dove quel movimento risulta già di un\'altra fattura');
-      window._anRiconcIncoer = incoer;
-      // Testo riscritto il 23/09 (Valerio: "non capisco come funziona e cosa
-      // fa") — spiega separatamente i due casi reali invece di un unico
-      // paragrafo generico, e dice esplicitamente cosa fare per ciascuno.
-      var _spiegSpar = nSpar ? (nSpar+' fattur'+(nSpar===1?'a':'e')+' dic'+(nSpar===1?'e':'ono')+' di essere pagate da un movimento che non esiste più in banca (di solito: hai reimportato l\'estratto conto e gli ID sono cambiati). Di solito è innocuo — apri la fattura e riconferma il pagamento; se non trovi il movimento, verifica a mano.') : '';
-      var _spiegCont = nCont ? (nCont+' fattur'+(nCont===1?'a risulta':'e risultano')+' "Pagata" con un movimento bancario che nel frattempo è stato assegnato a un\'ALTRA fattura — quindi quel pagamento potrebbe non esistere davvero per questa fattura: rischio concreto di doppio debito o di credito che sembra saldato e non lo è. Apri ciascuna fattura e verifica se è stata davvero pagata (cerca il movimento giusto in Riconciliazione).') : '';
-      var _spiegRip = nRip ? (nRip+' collegament'+(nRip===1?'o':'i') +' sono sicuri da sistemare da sol'+(nRip===1?'o':'i')+' col pulsante qui sotto (nessun importo cambia, si riallinea solo il collegamento).') : '';
-      out.push({chiave:'riconcincoer|'+incoer.map(function(x){ return x.f.id; }).sort().join(','), tipo:'riconc_incoerente',
-        gravita: (nCont || incoer.length>10) ? 'alta' : 'media',
-        titolo: incoer.length+' riconciliazion'+(incoer.length===1?'e scritta':'i scritte')+' solo a metà',
-        testo:'Un pagamento va scritto in due posti — sulla fattura e sul movimento bancario — e ogni tanto uno dei due non si salva. Questo elenco mostra dove sono rimasti disallineati: '+[_spiegCont,_spiegSpar,_spiegRip].filter(Boolean).join(' '),
-        fatture:incoer.slice(0,12).map(function(x){ return x.f; }),
-        // 23/09 (Valerio: "non si capiva a quale dei due movimenti collegare
-        // la fattura") — prima la card mostrava solo l'elenco delle fatture,
-        // senza dire QUALE movimento è in conflitto né con chi, quindi non
-        // c'era modo di decidere. Ora si porta dietro anche il dettaglio per
-        // riga (caso + id movimento) così _anHtmlVoce può mostrare i due
-        // movimenti a confronto con due bottoni di decisione.
-        casiIncoer:incoer.slice(0,12), movimenti:[], rischio:0, riparaRiconc:nRip});
-    }
-  }
+  // 8) PAGAMENTI BANCARI INCOERENTI — riscritto il 23/09.
+  //    La versione del 21/09 ("riconciliazioni scritte solo a metà") guardava
+  //    una fattura alla volta e segnalava ogni volta che il movimento indicato
+  //    dalla fattura non puntava indietro proprio a lei. Sui dati veri erano
+  //    84 avvisi, ma 82 erano falsi allarmi:
+  //    - pagamenti cumulativi (un bonifico/assegno per più fatture): il
+  //      movimento può puntare a UNA sola fattura, le altre del gruppo
+  //      risultavano tutte "a metà" (es. TIMAS 3×153,72 = 461,16);
+  //    - gruppi con più assegni: ogni fattura registra solo il primo
+  //      (es. ARTECARTA, 2 assegni da 977,38 per 1.954,76 di fatture);
+  //    - carta Nexi e PayPal: non stanno in movimenti_banca, venivano dati
+  //      per "spariti" pur essendo collegati correttamente.
+  //    Il rischio vero è uno solo: che un pagamento risulti aver saldato PIÙ
+  //    fatture di quanto è uscito dal conto. Quindi ora si ragiona per
+  //    pagamento: si raccolgono tutti i movimenti e tutte le fatture collegati
+  //    fra loro (da un lato o dall'altro) e si confrontano i due totali.
+  out = out.concat(_anControllaPagamenti(F));
   var ord={alta:0, media:1, bassa:2};
   out.sort(function(p,q){ return (ord[p.gravita]-ord[q.gravita]) || ((q.rischio||0)-(p.rischio||0)); });
   return out;
 }
 
-// Riallinea i due lati di una riconciliazione scritta a metà (vedi punto 8 di
-// _anCalcola). Tocca SOLO i casi sicuri: movimento che esiste e che non è già
-// impegnato su un'altra fattura. Gli altri restano elencati, da guardare a mano.
-async function _anRiparaRiconciliazioni(){
-  var lista = (window._anRiconcIncoer||[]).filter(function(x){ return x.caso==='riparabile'; });
-  if(!lista.length){ toast('Niente da riallineare in automatico'); return; }
-  if(!confirm('Riallineo '+lista.length+' collegament'+(lista.length===1?'o':'i')+'?\n\nIl movimento bancario verrà segnato come pagamento della fattura che già lo indica. Nessun importo e nessuno stato di fattura viene modificato.')) return;
-  var fatti=0, falliti=0;
+// ═══ Pagamenti bancari incoerenti (punto 8 di _anCalcola, riscritto 23/09) ═══
+// Stato attuale dei movimenti bancari: indice scaricato (tutti i movimenti,
+// poche colonne) + copia in memoria dell'app, che è più fresca.
+function _anMappaMovimenti(){
+  var idx = window._anMovIndex;
+  if(!idx) return null;
+  var MV = {};
+  Object.keys(idx).forEach(function(k){ MV[k] = Object.assign({id:k}, idx[k]); });
+  (typeof _bancaMovimenti!=='undefined' && Array.isArray(_bancaMovimenti) ? _bancaMovimenti : []).forEach(function(m){
+    if(!m || !m.id) return;
+    var k = String(m.id), b = MV[k] || {id:k};
+    b.abbinata = !!m.abbinata; b.fatturaId = m.fatturaId || null; b.ignorata = !!m.ignorata;
+    if(m.importo != null) b.importo = m.importo;
+    if(m.data) b.data = m.data;
+    if(m.descrizione) b.descrizione = m.descrizione;
+    MV[k] = b;
+  });
+  (_anMovCache||[]).forEach(function(m){ var b = MV[String(m.id)]; if(b && !b.descrizione && m.descrizione) b.descrizione = m.descrizione; });
+  return MV;
+}
+// Carta Nexi e PayPal hanno i loro elenchi e le loro regole: qui non si giudicano.
+function _anMovEsterno(mid){ return /^(paypal|carta):/.test(String(mid)); }
+function _anTipoPagamento(m){
+  var d = String((m && m.descrizione) || '').toUpperCase();
+  if(/ASSEGNO/.test(d)) return 'assegno';
+  if(/SDD|ADDEBITO DIRETTO|ADDEBITO SDD/.test(d)) return 'addebito diretto';
+  if(/DISP|BONIFIC/.test(d)) return 'bonifico';
+  return 'pagamento';
+}
+// Quota di una fattura su un pagamento. Due regole verificate sui dati veri:
+// - le NOTE DI CREDITO dentro un pagamento cumulativo lo riducono (Leasys:
+//   5 fatture − 1 NC = il bonifico), quindi contano in negativo;
+// - una fattura non può prendere da un pagamento più di quanto vale lei:
+//   alcuni abbinamenti cumulativi hanno scritto su ogni fattura l'importo
+//   INTERO del pagamento (SIRO: 18,15 + 121,37 + 943,00 = assegno 1.082,52,
+//   ma ognuna riportava 1.082,52 come sua quota).
+function _anImportoPretesa(f, s){
+  var v = Math.abs(Number(s && s.importo) || 0);
+  if(!v) v = Math.abs(typeof nettoFattura==='function' ? nettoFattura(f) : (f.importo||0));
+  var tetto = Math.abs(Number(f.importo) || 0);
+  if(tetto > 0 && v > tetto) v = tetto;
+  var nc = f.tipo === 'nota_credito' || Number(f.importo) < 0;
+  return nc ? -v : v;
+}
+
+function _anControllaPagamenti(F){
+  var out = [];
+  var MV = _anMappaMovimenti();
+  if(!MV) return out; // senza l'elenco dei movimenti non si giudica: meglio nessun avviso che uno falso
+  var byId = {}; (F||[]).forEach(function(f){ byId[String(f.id)] = f; });
+  var movPerFatt = {};
+  Object.keys(MV).forEach(function(k){
+    var m = MV[k];
+    if(m.abbinata && m.fatturaId) (movPerFatt[String(m.fatturaId)] = movPerFatt[String(m.fatturaId)] || []).push(k);
+  });
+  // "Pretese" di ogni fattura: il pagamento attuale (riconciliazione) + i
+  // pagamenti dello storico che il movimento stesso conferma. Le voci di
+  // storico che il movimento NON conferma sono residui di vecchi abbinamenti
+  // spostati altrove: non contano.
+  var pretese = {}, perMov = {};
+  (F||[]).forEach(function(f){
+    if(!f.riconciliata || !f.riconciliazione || !f.riconciliazione.movId) return;
+    var fid = String(f.id), cur = String(f.riconciliazione.movId), p = {};
+    (f.riconciliazioneStorico||[]).forEach(function(s){
+      if(!s || !s.movId) return;
+      var k = String(s.movId);
+      if(k === cur || _anMovEsterno(k)) return;
+      var m = MV[k];
+      if(m && m.abbinata && String(m.fatturaId) === fid) p[k] = _anImportoPretesa(f, s);
+    });
+    if(!_anMovEsterno(cur)) p[cur] = _anImportoPretesa(f, f.riconciliazione);
+    pretese[fid] = p;
+    Object.keys(p).forEach(function(k){ (perMov[k] = perMov[k] || []).push(fid); });
+  });
+
+  var visti = {}, riallinea = [], sparite = [];
+  Object.keys(perMov).forEach(function(mid){
+    var m = MV[mid];
+    if(!m){
+      perMov[mid].forEach(function(fid){
+        var f = byId[fid];
+        if(f && String(f.riconciliazione.movId) === mid) sparite.push({f:f, mid:mid});
+      });
+      return;
+    }
+    // Il movimento conferma già tutti quelli che lo indicano? Nessun dubbio.
+    var owner = (m.abbinata && m.fatturaId) ? String(m.fatturaId) : null;
+    if(owner && perMov[mid].length === 1 && perMov[mid][0] === owner) return;
+    // Gruppo: tutti i movimenti e le fatture legati fra loro, da un lato o dall'altro
+    var Cs = {}, Ms = {}, coda = [['m', mid]], giri = 0;
+    while(coda.length && giri++ < 400){
+      var x = coda.pop();
+      if(x[0] === 'm'){
+        if(Ms[x[1]] || !MV[x[1]]) continue;
+        Ms[x[1]] = 1;
+        (perMov[x[1]]||[]).forEach(function(fid){ coda.push(['f', fid]); });
+        // anche verso la fattura che il movimento indica: così il gruppo è lo
+        // stesso da qualunque punto si parta
+        var mo = MV[x[1]];
+        if(mo.abbinata && mo.fatturaId) coda.push(['f', String(mo.fatturaId)]);
+      } else {
+        if(Cs[x[1]] || !pretese[x[1]]) continue;
+        Cs[x[1]] = 1;
+        (movPerFatt[x[1]]||[]).forEach(function(k){ coda.push(['m', k]); });
+        Object.keys(pretese[x[1]]).forEach(function(k){ coda.push(['m', k]); });
+      }
+    }
+    var Mk = Object.keys(Ms).sort(), Ck = Object.keys(Cs).sort();
+    var chiaveGruppo = Mk.join(',');
+    if(visti[chiaveGruppo]) return;
+    visti[chiaveGruppo] = 1;
+    var importiNoti = Mk.every(function(k){ return MV[k].importo != null; });
+    var totMov = Mk.reduce(function(s,k){ return s + Math.abs(Number(MV[k].importo)||0); }, 0);
+    var quote = {}, totFatt = 0;
+    Ck.forEach(function(fid){
+      var q = 0; Mk.forEach(function(k){ q += (pretese[fid][k] || 0); });
+      quote[fid] = Math.round(q*100)/100; totFatt += q;
+    });
+    totMov = Math.round(totMov*100)/100; totFatt = Math.round(totFatt*100)/100;
+
+    if(importiNoti && totFatt > totMov + 1){
+      out.push(_anVocePagamento('eccesso', Mk, Ck, quote, totMov, totFatt, MV, byId));
+      return;
+    }
+    // Gli importi tornano: resta solo da vedere se i riferimenti sono allineati.
+    var daDecidere = false, fix = [];
+    Mk.forEach(function(k){
+      var cl = perMov[k] || [];
+      if(!cl.length) return; // nessuna fattura lo indica: il movimento del gruppo che l'app registra solo da questo lato, va bene così
+      var mk = MV[k], own = (mk.abbinata && mk.fatturaId) ? String(mk.fatturaId) : null;
+      if(own && cl.indexOf(own) >= 0) return;
+      // Chi lo tiene è di questo stesso gruppo e gli importi tornano: è un
+      // INCROCIO tra addebiti uguali (es. canoni ARVAL mensili da 832,25).
+      // Nessun rischio sui soldi e nessun avviso. Non si "riallinea" in
+      // automatico: sui dati veri il lato giusto era quello della banca
+      // (addebito ~20 giorni dopo la fattura) e quello sbagliato le fatture,
+      // quindi rimettere i movimenti dietro alle fatture spostava l'errore
+      // dall'altra parte (verificato con una simulazione, 23/09).
+      if(own && Cs[own]) return;
+      // Movimento libero (o collegato a una fattura che non esiste più) ma
+      // indicato da una fattura: è il vero collegamento "a metà" — in
+      // Riconciliazione risulta ancora da abbinare e potrebbe essere usato
+      // una seconda volta. Qui la correzione è sicura.
+      if(!own || !byId[own]) fix.push({mid:k, fid:cl[0], ownerVisto:own});
+      else daDecidere = true;
+    });
+    if(daDecidere) out.push(_anVocePagamento('conteso', Mk, Ck, quote, totMov, totFatt, MV, byId));
+    else riallinea = riallinea.concat(fix);
+  });
+
+  if(riallinea.length){
+    window._anRiallinea = riallinea;
+    var fattR = []; riallinea.forEach(function(r){ var f = byId[r.fid]; if(f && fattR.indexOf(f) < 0) fattR.push(f); });
+    out.push({chiave:'riallinea|'+riallinea.map(function(r){ return r.mid+'>'+r.fid; }).sort().join(','), tipo:'riferimenti_disallineati', gravita:'media',
+      titolo: riallinea.length+' pagament'+(riallinea.length===1?'o':'i')+' da segnare come già usat'+(riallinea.length===1?'o':'i'),
+      testo:'Queste fatture risultano pagate da un movimento bancario che però in Riconciliazione compare ancora come «da abbinare» (un salvataggio si è interrotto a metà). Il rischio è abbinarlo una seconda volta a un\'altra fattura. «Segna come usati» collega ogni movimento alla fattura che già lo indica: stato e importi delle fatture non cambiano.',
+      fatture: fattR.slice(0,12), movimenti:[], rischio:0, riallinea: riallinea.length});
+  } else { window._anRiallinea = []; }
+
+  sparite.forEach(function(x){
+    var r = x.f.riconciliazione || {};
+    out.push({chiave:'pagsparito|'+x.f.id+'|'+x.mid, tipo:'pagamento_sparito', gravita:'media',
+      titolo:'Pagamento collegato che non si trova più',
+      testo:'Questa fattura risulta pagata dal movimento del '+_anData(r.data)+' di '+fmt(Math.abs(Number(r.importo)||0))+(r.descrizione?' («'+String(r.descrizione).slice(0,70)+'»)':'')+', che però non c\'è più tra i movimenti della banca — di solito succede quando un estratto conto viene cancellato e reimportato. Se ritrovi quel pagamento in Riconciliazione, abbinalo di nuovo; poi qui tocca «Togli il vecchio collegamento».',
+      fatture:[x.f], movimenti:[], rischio:0, sparito:{fid:String(x.f.id), mid:x.mid}, etichettaOk:'✓ È corretto così'});
+  });
+  return out;
+}
+
+// Costruisce la voce "un pagamento, le sue fatture" con i suggerimenti.
+function _anVocePagamento(tipo, Mk, Ck, quote, totMov, totFatt, MV, byId){
+  var movs = Mk.map(function(k){ return MV[k]; });
+  var fatt = Ck.map(function(fid){ return byId[fid]; }).filter(Boolean);
+  var ultimaData = movs.reduce(function(s,m){ return String(m.data||'') > s ? String(m.data||'') : s; }, '');
+  var righe = fatt.map(function(f){
+    var fid = String(f.id);
+    var mids = Mk.filter(function(k){ return String(MV[k].fatturaId) === fid || (f.riconciliazione && String(f.riconciliazione.movId) === k) || (f.riconciliazioneStorico||[]).some(function(s){ return s && String(s.movId) === k; }); });
+    return {f:f, quota:quote[fid]||0, mid: (f.riconciliazione && Ms_has(Mk, String(f.riconciliazione.movId))) ? String(f.riconciliazione.movId) : (mids[0]||Mk[0]),
+      dopo: !!(ultimaData && f.data && String(f.data) > ultimaData)};
+  });
+  // Quali fatture, insieme, fanno esattamente il pagamento? (fino a 12 fatture)
+  var consigliate = null;
+  if(tipo === 'eccesso' && righe.length <= 12){
+    var sol = [];
+    for(var mask = 1; mask < (1<<righe.length); mask++){
+      var s = 0, dentro = [];
+      for(var i=0;i<righe.length;i++) if(mask & (1<<i)){ s += righe[i].quota; dentro.push(i); }
+      if(Math.abs(s - totMov) <= 0.05) sol.push(dentro);
+    }
+    var senzaDopo = sol.filter(function(d){ return !d.some(function(i){ return righe[i].dopo; }); });
+    if(sol.length === 1) consigliate = sol[0];
+    else if(senzaDopo.length === 1) consigliate = senzaDopo[0];
+    righe.forEach(function(r,i){ r.torna = consigliate ? consigliate.indexOf(i) >= 0 : null; });
+  }
+  // Per chi va probabilmente tolta: c'è un pagamento LIBERO dello stesso importo?
+  righe.forEach(function(r){
+    if(tipo !== 'eccesso' || r.torna === true) return;
+    var dal = r.f.data ? String(r.f.data) : '';
+    var cand = Object.keys(MV).map(function(k){ return MV[k]; }).filter(function(m){
+      return !m.abbinata && !m.ignorata && Number(m.importo) < 0 && Math.abs(Math.abs(Number(m.importo)) - r.quota) <= 0.01 &&
+        (!dal || String(m.data||'') >= dal);
+    }).sort(function(a,b){ return String(a.data).localeCompare(String(b.data)); });
+    if(cand.length) r.libero = cand[0];
+  });
+  // Consiglio in una frase, solo quando i dati lo sostengono
+  var consiglio = '';
+  if(tipo === 'eccesso'){
+    var fuori = righe.filter(function(r){ return r.torna === false; });
+    var nomeF = function(r){ return 'N° '+(r.f.numero||'—')+' del '+_anData(r.f.data); };
+    if(fuori.length === 1){
+      var r0 = fuori[0], perche = [];
+      if(r0.dopo) perche.push('è stata emessa dopo il pagamento');
+      perche.push('le altre, insieme, fanno esattamente l\'importo uscito');
+      consiglio = 'Quella fuori posto è la '+nomeF(r0)+': '+perche.join(' e ')+'. '+
+        (r0.libero ? 'C\'è un pagamento libero dello stesso importo del '+_anData(r0.libero.data)+': tocca «Sposta su quel pagamento» sotto di lei.' : 'Tocca «Non è stata pagata con questo: togli» sotto di lei.');
+    } else if(fuori.length > 1){
+      consiglio = 'Le fatture in arancione sono quelle in più: le altre, insieme, fanno esattamente l\'importo uscito.';
+    } else {
+      consiglio = 'Dai numeri non si capisce quale sia quella in più: apri le fatture (o l\'XML) e controlla quale è stata pagata con questo pagamento.';
+    }
+  }
+  var tipoP = movs.length === 1 ? _anTipoPagamento(movs[0]) : 'pagamento';
+  var art = {assegno:'L\'assegno', 'addebito diretto':'L\'addebito diretto', bonifico:'Il bonifico', pagamento:'Il pagamento'}[tipoP];
+  var descrPag = movs.length === 1
+    ? art+' del '+_anData(movs[0].data)+' da '+fmt(totMov)
+    : 'I '+movs.length+' pagamenti del '+movs.map(function(m){ return _anData(m.data); }).join(', ')+' (in tutto '+fmt(totMov)+')';
+  var testo, titolo, grav;
+  if(tipo === 'eccesso'){
+    titolo = 'Pagamento collegato a più fatture di quanto vale';
+    grav = 'alta';
+    testo = descrPag+' risulta aver saldato '+fatt.length+' fatture per '+fmt(totFatt)+': '+fmt(Math.round((totFatt-totMov)*100)/100)+' in più di quanto è uscito dal conto. Quindi almeno una di queste fatture è segnata «Pagata» ma non può esserlo con questo pagamento.';
+  } else {
+    titolo = 'Pagamento collegato a fatture diverse';
+    grav = 'media';
+    testo = (movs.length === 1 ? descrPag+' in banca è collegato a una fattura, mentre un\'altra dice di essere stata pagata proprio da lui.' : descrPag+' in banca sono collegati a fatture diverse da quelle che dicono di essere state pagate da loro.')+' Gli importi non superano quanto è uscito dal conto, quindi non c\'è rischio di pagare due volte: va solo deciso a quale fattura appartiene ciascun pagamento.';
+  }
+  return {chiave:'pag'+tipo+'|'+Mk.join(',')+'|'+Ck.join(','), tipo:'pagamento_'+tipo, gravita:grav, titolo:titolo, testo:testo,
+    fatture:fatt, movimenti:[], rischio: tipo==='eccesso' ? Math.round((totFatt-totMov)*100)/100 : 0,
+    pag:{movs:movs, righe:righe, totMov:totMov, totFatt:totFatt, consigliate:!!consigliate, consiglio:consiglio}, etichettaOk:'✓ È corretto così, non segnalarlo più'};
+}
+function Ms_has(arr, k){ return arr.indexOf(k) >= 0; }
+
+// ── Azioni ──
+// Toglie la fattura da UN pagamento, su entrambi i lati, e ricalcola il suo
+// stato da ciò che resta registrato. Movimento prima, fattura dopo: se il
+// secondo salvataggio fallisse, l'avviso resta e si può riprovare (l'ordine
+// opposto lascerebbe un collegamento a metà invisibile).
+function _anStatoDopoStacco(f){
+  var st = f.riconciliazioneStorico || [];
+  if(!f.riconciliazione) return {stato:'da_pagare', pagato:0};
+  var netto = Math.abs(typeof nettoFattura==='function' ? nettoFattura(f) : (f.importo||0));
+  var pagato = st.reduce(function(s,x){ return s + Math.abs(Number(x && x.importo)||0); }, 0);
+  if(!st.length) pagato = Math.abs(Number(f.riconciliazione.importo)||0);
+  pagato = Math.round(Math.min(pagato, netto)*100)/100;
+  return {stato: pagato >= netto - 0.5 ? 'pagata' : (pagato > 0 ? 'parziale' : 'da_pagare'), pagato:pagato};
+}
+function _anTogliDaFattura(f, mid){
+  mid = String(mid);
+  f.riconciliazioneStorico = (f.riconciliazioneStorico||[]).filter(function(s){ return !s || String(s.movId) !== mid; });
+  if(f.riconciliazione && String(f.riconciliazione.movId) === mid){
+    var st = f.riconciliazioneStorico;
+    f.riconciliazione = st.length ? Object.assign({}, st[st.length-1]) : null;
+  }
+  var r = _anStatoDopoStacco(f);
+  if(!f.riconciliazione){
+    f.riconciliata = false; f.stato = 'da_pagare'; f.parzPagato = 0; f.dataPagamento = '';
+  } else {
+    f.stato = r.stato; f.parzPagato = r.pagato;
+    f.dataPagamento = r.stato === 'pagata' ? (f.riconciliazione.data || f.dataPagamento) : '';
+  }
+  return f.stato;
+}
+function _anAltreFatturePerMov(mid, esclusaId){
+  mid = String(mid);
+  return (fatture||[]).filter(function(x){
+    if(String(x.id) === String(esclusaId) || !x.riconciliata) return false;
+    return (x.riconciliazione && String(x.riconciliazione.movId) === mid) || (x.riconciliazioneStorico||[]).some(function(s){ return s && String(s.movId) === mid; });
+  });
+}
+async function _anSistemaLatoMovimento(mid, fStaccata){
+  var r = await sbFetch('movimenti_banca?id=eq.'+encodeURIComponent(mid)+'&select=*');
+  if(!r || !r[0]) return 'assente';
+  var m = _bancaNorm(r[0]);
+  if(String(m.fatturaId) !== String(fStaccata.id)) return 'invariato'; // punta già altrove: non si tocca
+  var altre = _anAltreFatturePerMov(mid, fStaccata.id);
+  if(altre.length){
+    m.abbinata = true; m.fatturaId = altre[0].id;
+    m.fatturaLabel = (altre[0].fornitore||'')+' N°'+(altre[0].numero||'')+(altre.length > 1 ? ' (gruppo di '+altre.length+')' : '');
+  } else {
+    m.abbinata = false; m.fatturaId = null; m.fatturaLabel = ''; m.verificataBanca = false;
+  }
+  await salvaMovimentoBanca(m);
+  return altre.length ? 'altre' : 'libero';
+}
+function _anTrovaFattura(fid){ return (fatture||[]).find(function(x){ return String(x.id) === String(fid); }); }
+async function _anDopoAzionePagamento(){
+  _anMovCache = null; window._anMovIndex = null;
+  if(typeof save==='function') try{ save(fatture); }catch(e){}
+  if(typeof renderLista==='function') try{ renderLista(); }catch(e){}
+  await _anAggiornaHome(true);
+  _anRenderFoglio();
+}
+
+async function _anStaccaDaPagamento(fid, mid){
+  var f = _anTrovaFattura(fid);
+  if(!f){ toast('Fattura non trovata'); return; }
+  var prova = JSON.parse(JSON.stringify(f));
+  var statoDopo = _anTogliDaFattura(prova, mid);
+  var altre = _anAltreFatturePerMov(mid, f.id);
+  var nomeStato = {da_pagare:'«Da pagare»', parziale:'«Parziale» (restano gli altri pagamenti registrati)', pagata:'«Pagata» (ha altri pagamenti che la coprono)'}[statoDopo] || statoDopo;
+  var msg = 'Tolgo questa fattura dal pagamento:\n'+(f.fornitore||'')+' N° '+(f.numero||'')+' · '+fmt(Math.abs(f.importo||0))+'\n\n'+
+    'Cosa succede:\n'+
+    '• la fattura diventa '+nomeStato+'\n'+
+    (altre.length ? '• il pagamento resta collegato alle altre '+altre.length+' fattur'+(altre.length===1?'a':'e')+'\n' : '• il pagamento torna libero in Riconciliazione\n')+
+    '• potrai abbinare la fattura al pagamento giusto in Riconciliazione\n\nConfermi?';
+  if(!confirm(msg)) return;
+  try{
+    await _anSistemaLatoMovimento(mid, f);
+    _anTogliDaFattura(f, mid);
+    await dbUpdate(f);
+    toast('✓ Tolta dal pagamento · ora è '+({da_pagare:'da pagare', parziale:'parziale', pagata:'pagata'}[f.stato]||f.stato));
+  }catch(e){
+    toast('❌ Non riuscito, nulla è stato perso: riprova ('+String(e.message||e).slice(0,50)+')');
+    if(typeof _registraErrore==='function') _registraErrore('database','Stacca da pagamento: '+(e.message||e));
+  }
+  await _anDopoAzionePagamento();
+}
+
+async function _anSpostaSuPagamento(fid, midVecchio, midNuovo){
+  var f = _anTrovaFattura(fid);
+  if(!f){ toast('Fattura non trovata'); return; }
+  try{
+    var r = await sbFetch('movimenti_banca?id=eq.'+encodeURIComponent(midNuovo)+'&select=*');
+    if(!r || !r[0]){ toast('Quel movimento non si trova più'); return; }
+    var nuovo = _bancaNorm(r[0]);
+    if(nuovo.abbinata){ toast('Quel movimento nel frattempo è stato abbinato: ricarico'); await _anDopoAzionePagamento(); return; }
+    if(!confirm('Sposto la fattura '+(f.fornitore||'')+' N° '+(f.numero||'')+' sul pagamento libero del '+_anData(nuovo.data)+' ('+fmt(Math.abs(nuovo.importo||0))+').\n\nCosa succede:\n• la fattura resta pagata, ma con questo pagamento\n• il pagamento vecchio resta alle altre fatture che lo usano\n\nConfermi?')) return;
+    var quota = 0;
+    (f.riconciliazioneStorico||[]).concat([f.riconciliazione||{}]).forEach(function(s){ if(s && String(s.movId) === String(midVecchio)) quota = Math.abs(Number(s.importo)||0); });
+    if(!quota) quota = Math.abs(nuovo.importo||0);
+    if(Math.abs(f.importo||0) > 0) quota = Math.min(quota, Math.abs(f.importo));
+    nuovo.abbinata = true; nuovo.fatturaId = f.id; nuovo.fatturaLabel = (f.fornitore||'')+' N°'+(f.numero||'');
+    await salvaMovimentoBanca(nuovo);
+    await _anSistemaLatoMovimento(midVecchio, f);
+    _anTogliDaFattura(f, midVecchio);
+    _impostaDatiRiconciliazione(f, nuovo, false, quota);
+    f.riconciliata = true;
+    var st = _anStatoDopoStacco(f);
+    f.stato = st.stato; f.parzPagato = st.pagato;
+    if(st.stato === 'pagata') f.dataPagamento = nuovo.data;
+    await dbUpdate(f);
+    toast('✓ Spostata sul pagamento del '+_anData(nuovo.data));
+  }catch(e){
+    toast('❌ Non riuscito: riprova ('+String(e.message||e).slice(0,50)+')');
+    if(typeof _registraErrore==='function') _registraErrore('database','Sposta su pagamento: '+(e.message||e));
+  }
+  await _anDopoAzionePagamento();
+}
+
+// Riferimenti incrociati con importi che tornano: rimette ogni movimento
+// sulla fattura che lo indica. Solo se il movimento è ancora come lo si è
+// visto (nessuno l'ha cambiato nel frattempo da un altro dispositivo).
+async function _anRiallineaRiferimenti(){
+  var lista = window._anRiallinea || [];
+  if(!lista.length){ toast('Niente da riallineare'); return; }
+  if(!confirm('Segno '+lista.length+' pagament'+(lista.length===1?'o':'i')+' come già usat'+(lista.length===1?'o':'i')+'?\n\nCosa succede: ogni movimento bancario viene collegato alla fattura che già lo indica e sparisce da «da abbinare» in Riconciliazione. Stato e importi delle fatture non cambiano.')) return;
+  var fatti = 0, saltati = 0;
   for(var i=0;i<lista.length;i++){
     var x = lista[i];
     try{
       var r = await sbFetch('movimenti_banca?id=eq.'+encodeURIComponent(x.mid)+'&select=*');
-      if(!r || !r[0]){ falliti++; continue; }
+      if(!r || !r[0]){ saltati++; continue; }
       var mv = _bancaNorm(r[0]);
-      if(mv.fatturaId && String(mv.fatturaId)!==String(x.f.id)){ falliti++; continue; } // impegnato altrove: non si tocca
-      mv.abbinata = true;
-      mv.fatturaId = x.f.id;
-      mv.fatturaLabel = (x.f.fornitore||'')+' N°'+(x.f.numero||'');
+      var ora = (mv.abbinata && mv.fatturaId) ? String(mv.fatturaId) : null;
+      if(ora !== x.ownerVisto){ saltati++; continue; }
+      var f = _anTrovaFattura(x.fid);
+      if(!f){ saltati++; continue; }
+      mv.abbinata = true; mv.fatturaId = f.id; mv.fatturaLabel = (f.fornitore||'')+' N°'+(f.numero||'');
       await salvaMovimentoBanca(mv);
       fatti++;
-    }catch(e){ falliti++; console.warn('ripara riconciliazione:', e); }
+    }catch(e){ saltati++; console.warn('riallinea:', e); }
   }
-  toast(falliti ? ('✓ '+fatti+' riallineati · '+falliti+' da guardare a mano') : ('✓ '+fatti+' collegamenti riallineati'));
-  _anMovCache=null; window._anMovIndex=null;
-  await _anAggiornaHome(true);
-  _anRenderFoglio();
+  toast(saltati ? ('✓ '+fatti+' riallineati · '+saltati+' cambiati nel frattempo, ricontrolla') : ('✓ '+fatti+' collegamenti riallineati'));
+  await _anDopoAzionePagamento();
+}
+
+async function _anTogliCollegamentoSparito(fid, mid){
+  var f = _anTrovaFattura(fid);
+  if(!f){ toast('Fattura non trovata'); return; }
+  var prova = JSON.parse(JSON.stringify(f));
+  var statoDopo = _anTogliDaFattura(prova, mid);
+  if(!confirm('Tolgo il collegamento al pagamento che non esiste più.\n\nCosa succede: la fattura diventa '+({da_pagare:'«Da pagare»', parziale:'«Parziale»', pagata:'«Pagata» (ha altri pagamenti registrati)'}[statoDopo]||statoDopo)+' e potrai abbinarla al pagamento giusto in Riconciliazione.\n\nConfermi?')) return;
+  try{
+    _anTogliDaFattura(f, mid);
+    await dbUpdate(f);
+    toast('✓ Collegamento tolto');
+  }catch(e){ toast('❌ Non riuscito: riprova ('+String(e.message||e).slice(0,50)+')'); }
+  await _anDopoAzionePagamento();
+}
+
+// ── Disegno della voce "un pagamento e le sue fatture" ──
+function _anHtmlPagamento(a, ignorata){
+  var P = a.pag, h = '';
+  h += '<div class="an-sceltatit">Il pagamento</div>';
+  h += P.movs.map(function(m){
+    return '<div class="an-row an-row-mov"><span class="an-row-ico">🏦</span><span class="an-row-main"><b>'+_anData(m.data)+' · '+fmt(Math.abs(Number(m.importo)||0))+'</b><span>'+esc(String(m.descrizione||'').slice(0,160))+'</span></span></div>';
+  }).join('');
+  if(a.tipo === 'pagamento_eccesso'){
+    h += '<div class="pg-conto"><div><span>Uscito dal conto</span><b>'+fmt(P.totMov)+'</b></div><div><span>Fatture collegate</span><b>'+fmt(P.totFatt)+'</b></div><div class="pg-diff"><span>Di troppo</span><b>'+fmt(Math.round((P.totFatt-P.totMov)*100)/100)+'</b></div></div>';
+  }
+  if(!ignorata){
+    h += '<div class="pg-cosa"><b>Cosa fare</b>'+
+      (P.consiglio ? '<div class="pg-cons">👉 '+esc(P.consiglio)+'</div>' : '')+
+      '<div>'+(a.tipo === 'pagamento_eccesso'
+        ? 'Togli dal pagamento la fattura che non è stata pagata con lui: tornerà «Da pagare» e la ritroverai in Riconciliazione per abbinarla al pagamento giusto. Le altre restano pagate e collegate.'
+        : 'Togli il collegamento dalla fattura che non c\'entra: l\'altra resta collegata.')+
+      '</div><div>Se invece è tutto giusto, tocca «È corretto così» in fondo: l\'avviso sparisce e torna solo se su questo pagamento cambia qualcosa.</div></div>';
+  }
+  h += '<div class="an-sceltatit">Fatture collegate a questo pagamento</div>';
+  h += P.righe.map(function(r){
+    var tags = '';
+    if(r.torna === true) tags += '<i class="t-ok">✓ torna con l\'importo pagato</i>';
+    if(r.torna === false) tags += '<i class="t-no">probabilmente non pagata con questo</i>';
+    if(r.dopo) tags += '<i class="t-no">emessa DOPO il pagamento</i>';
+    var box = '<div class="pg-fatt'+(r.torna===false?' pg-fatt-sosp':'')+'">'+_anRigaFattura(r.f)+
+      '<div class="pg-quota">'+(r.quota < 0 ? 'Nota di credito: scala '+fmt(Math.abs(r.quota))+' da questo pagamento' : 'Quota su questo pagamento: <b>'+fmt(r.quota)+'</b>')+'</div>'+
+      (tags ? '<div class="an-tags">'+tags+'</div>' : '');
+    if(!ignorata){
+      if(r.libero){
+        box += '<div class="pg-sugg">💡 C\'è un pagamento <b>libero</b> dello stesso importo: '+_anData(r.libero.data)+' · '+fmt(Math.abs(Number(r.libero.importo)||0))+(r.libero.descrizione?' · '+esc(String(r.libero.descrizione).slice(0,120)):'')+'</div>'+
+          '<button class="an-tieni" data-f="'+esc(String(r.f.id))+'" data-v="'+esc(String(r.mid))+'" data-n="'+esc(String(r.libero.id))+'" onclick="_anSpostaSuPagamento(this.dataset.f,this.dataset.v,this.dataset.n)">Sposta su quel pagamento</button>';
+      }
+      box += '<button class="pg-togli'+(r.torna===true?' pg-togli-lieve':'')+'" data-f="'+esc(String(r.f.id))+'" data-m="'+esc(String(r.mid))+'" onclick="_anStaccaDaPagamento(this.dataset.f,this.dataset.m)">Non è stata pagata con questo: togli</button>';
+    }
+    return box + '</div>';
+  }).join('');
+  return h;
 }
 
 // ── Anomalie: dati di supporto (movimenti abbinati + "ignorate" condivise) ──
@@ -24931,9 +25303,9 @@ async function _anCaricaMovAbbinati(forza){
     // quelli NON abbinati (è proprio lì che sta l'incoerenza). Poche colonne,
     // stessa cadenza di aggiornamento della cache qui sopra.
     try{
-      var idx = await sbFetchAll('movimenti_banca?select=id,abbinata,fattura_id&order=id');
+      var idx = await sbFetchAll('movimenti_banca?select=id,abbinata,fattura_id,importo,data,ignorata&order=id');
       var mapIdx = {};
-      (idx||[]).forEach(function(r){ mapIdx[String(r.id)] = {abbinata:!!r.abbinata, fatturaId:r.fattura_id||null}; });
+      (idx||[]).forEach(function(r){ mapIdx[String(r.id)] = {abbinata:!!r.abbinata, fatturaId:r.fattura_id||null, importo:r.importo, data:r.data, ignorata:!!r.ignorata}; });
       window._anMovIndex = mapIdx;
     }catch(e){ /* senza indice il controllo salta, non è bloccante */ }
     _anMovCacheTs = Date.now();
@@ -25118,94 +25490,6 @@ async function _anScollegaMov(mid, ignora){
   await _anAggiornaHome(true);
   _anRenderFoglio();
 }
-// ── 23/09: riga di dettaglio per "riconciliazioni scritte solo a metà" ──
-// (Valerio: "non si capiva a quale dei due movimenti collegare la fattura").
-// A differenza di _anRigaFattura, questa mostra il movimento in questione e,
-// per il caso "contesa", chi lo tiene adesso — così la scelta è tra due cose
-// viste entrambe, non una fattura sola con un errore generico sopra.
-function _anRigaIncoer(x, ignorata){
-  var f = x.f;
-  var riga = _anRigaFattura(f);
-  if(ignorata || x.caso==='riparabile') return riga; // riparabile: già coperto dal pulsante unico sopra
-  var movReale = (_anMovimentiCorrenti()||[]).find(function(m){ return String(m.id)===String(x.mid); });
-  if(x.caso==='sparito'){
-    return riga +
-      '<div class="an-row an-row-mov"><span class="an-row-ico">❓</span><span class="an-row-main"><b>Movimento non trovato</b>'+
-      '<span>Il movimento collegato a questa fattura non esiste più in banca (id '+esc(String(x.mid))+') — probabilmente un estratto conto reimportato.</span></span>'+
-      '<button class="an-fix" data-id="'+esc(String(f.id))+'" onclick="_anSeganaDaRiconfermare(this.dataset.id)">Segna "da pagare" e riabbina</button></div>';
-  }
-  // contesa: mostra ESPLICITAMENTE il movimento conteso e chi lo tiene ora,
-  // con due bottoni — uno per ciascuna decisione possibile.
-  var altraFatt = movReale ? (fatture||[]).find(function(y){ return String(y.id)===String(movReale.fatturaId); }) : null;
-  var movTxt = movReale
-    ? (_anData(movReale.data)+' · '+fmt(Math.abs(movReale.importo||0))+' · '+esc(String(movReale.descrizione||'').slice(0,80)))
-    : ('id '+esc(String(x.mid))+' (dettagli non disponibili)');
-  var altraTxt = altraFatt ? (esc(altraFatt.fornitore||'—')+' N° '+esc(altraFatt.numero||'—')) : 'un\'altra fattura';
-  return riga +
-    '<div class="an-row an-row-mov"><span class="an-row-ico">⚖️</span><span class="an-row-main"><b>Movimento conteso</b>'+
-    '<span>'+movTxt+' — oggi risulta collegato a: <b>'+altraTxt+'</b>, non a questa fattura.</span></span></div>'+
-    '<div class="an-mov-btns" style="display:flex;gap:8px;padding:0 2px 10px">'+
-    '<button class="an-fix" style="flex:1" data-id="'+esc(String(f.id))+'" data-mid="'+esc(String(x.mid))+'" onclick="_anRisolviContesa(this.dataset.id,this.dataset.mid,\'quiGiusta\')">È questa fattura: sgancia dall\'altra</button>'+
-    '<button class="an-fix an-fix-w" style="flex:1" data-id="'+esc(String(f.id))+'" data-mid="'+esc(String(x.mid))+'" onclick="_anRisolviContesa(this.dataset.id,this.dataset.mid,\'quiSbagliata\')">Non è questa: segna da pagare</button>'+
-    '</div>';
-}
-// Decide chi ha davvero ricevuto il movimento conteso. 'quiGiusta': questa
-// fattura è quella vera, lo togliamo all'altra. 'quiSbagliata': questa
-// fattura non è stata pagata da quel movimento, torna "da pagare" (a meno
-// che un ALTRO movimento reale non la coinvolga già, nel qual caso si tocca
-// solo il collegamento incoerente, non l'importo).
-async function _anRisolviContesa(fId, mid, scelta){
-  var f = (fatture||[]).find(function(x){ return String(x.id)===String(fId); });
-  if(!f){ toast('Fattura non trovata'); return; }
-  try{
-    if(scelta==='quiGiusta'){
-      var r = await sbFetch('movimenti_banca?id=eq.'+encodeURIComponent(mid)+'&select=*');
-      if(!r || !r[0]){ toast('Movimento non trovato — potrebbe essere stato eliminato'); return; }
-      var m = _bancaNorm(r[0]);
-      var altraId = m.fatturaId;
-      if(!confirm('Confermo che il movimento del '+_anData(m.data)+' ('+fmt(Math.abs(m.importo||0))+') paga davvero:\n'+f.fornitore+' N°'+f.numero+'\n\nVerrà tolto dall\'altra fattura a cui risulta collegato ora.')) return;
-      if(altraId && String(altraId)!==String(f.id)){
-        var altra = (fatture||[]).find(function(x){ return String(x.id)===String(altraId); });
-        if(altra){
-          altra.riconciliata = false;
-          if(altra.stato==='pagata' && altra.dataPagamento===m.data){ altra.stato='da_pagare'; altra.dataPagamento=''; }
-          if(typeof dbUpdate==='function') await dbUpdate(altra);
-        }
-      }
-      m.abbinata = true; m.fatturaId = f.id; m.fatturaLabel = (f.fornitore||'')+' N°'+(f.numero||'');
-      await salvaMovimentoBanca(m);
-      _impostaDatiRiconciliazione(f, m, false);
-      f.riconciliata = true;
-      if(typeof dbUpdate==='function') await dbUpdate(f);
-      toast('✓ Collegato correttamente: '+f.fornitore);
-    } else {
-      if(!confirm('Questa fattura non risulta davvero pagata da quel movimento — la rimetto "da pagare"?\n\n'+f.fornitore+' N°'+f.numero)) return;
-      var altroMovReale = (_anMovimentiCorrenti()||[]).some(function(x){ return x.abbinata && String(x.fatturaId)===String(f.id) && String(x.id)!==String(mid); });
-      f.riconciliata = false; f.riconciliazione = null;
-      if(!altroMovReale){ f.stato = 'da_pagare'; f.parzPagato = 0; f.dataPagamento = ''; }
-      if(typeof dbUpdate==='function') await dbUpdate(f);
-      toast('✓ Segnata "da pagare" — riabbinala in Riconciliazione quando trovi il movimento giusto');
-    }
-  }catch(e){ toast('❌ Non riuscito: '+(e.message||e)); if(typeof _registraErrore==='function') _registraErrore('database','Risolvi contesa: '+(e.message||e)); return; }
-  _anMovCache=null; window._anMovIndex=null;
-  await _anAggiornaHome(true);
-  _anRenderFoglio();
-}
-async function _anSeganaDaRiconfermare(fId){
-  var f = (fatture||[]).find(function(x){ return String(x.id)===String(fId); });
-  if(!f){ toast('Fattura non trovata'); return; }
-  if(!confirm('Tolgo il collegamento a un movimento che non esiste più — la fattura torna "da pagare" e potrai ricercarla in Riconciliazione.\n\n'+f.fornitore+' N°'+f.numero)) return;
-  try{
-    f.riconciliata = false; f.riconciliazione = null;
-    var altroMovReale = (_anMovimentiCorrenti()||[]).some(function(x){ return x.abbinata && String(x.fatturaId)===String(f.id); });
-    if(!altroMovReale){ f.stato = 'da_pagare'; f.parzPagato = 0; f.dataPagamento = ''; }
-    if(typeof dbUpdate==='function') await dbUpdate(f);
-    toast('✓ Segnata "da pagare"');
-  }catch(e){ toast('❌ Non riuscito: '+(e.message||e)); if(typeof _registraErrore==='function') _registraErrore('database','Segna da riconfermare: '+(e.message||e)); return; }
-  _anMovCache=null; window._anMovIndex=null;
-  await _anAggiornaHome(true);
-  _anRenderFoglio();
-}
 function _anHtmlVoce(a, ignorata){
   var cls={alta:'an-g-alta', media:'an-g-media', bassa:'an-g-bassa'}[a.gravita];
   var lab={alta:'Importante', media:'Da verificare', bassa:'Da confermare'}[a.gravita];
@@ -25213,11 +25497,12 @@ function _anHtmlVoce(a, ignorata){
     '<div class="an-item-hd"><span class="an-pill '+cls+'">'+lab+'</span><span class="an-item-t">'+esc(a.titolo)+'</span></div>'+
     '<div class="an-item-txt">'+esc(a.testo)+'</div>'+
     ((a.tipo==='doppione'||a.tipo==='simile') && a.fatture.length===2 && !ignorata ? _anSceltaDoppione(a) :
-      (a.tipo==='riconc_incoerente' && a.casiIncoer && a.casiIncoer.length
-        ? '<div class="an-rows">'+a.casiIncoer.map(function(x){ return _anRigaIncoer(x, ignorata); }).join('')+'</div>'
+      (a.pag
+        ? _anHtmlPagamento(a, ignorata)
         : '<div class="an-rows">'+a.fatture.map(_anRigaFattura).join('')+(a.movimenti||[]).map(function(m){ return _anRigaMovimento(m, a, ignorata); }).join('')+'</div>'))+
     (a.bonifica && !ignorata ? '<button class="an-fix" style="margin-top:10px;width:100%;padding:11px" onclick="_anConRitorno(_bfApri)">Apri la sistemazione guidata</button>' : '')+
-    (a.riparaRiconc && !ignorata ? '<button class="an-fix" style="margin-top:10px;width:100%;padding:11px" onclick="_anRiparaRiconciliazioni()">Riallinea i '+a.riparaRiconc+' collegamenti sicuri</button>' : '')+
+    (a.riallinea && !ignorata ? '<button class="an-fix" style="margin-top:10px;width:100%;padding:11px" onclick="_anRiallineaRiferimenti()">Segna come usat'+(a.riallinea===1?'o':'i')+'</button>' : '')+
+    (a.sparito && !ignorata ? '<button class="an-fix" style="margin-top:10px;width:100%;padding:11px" data-f="'+esc(a.sparito.fid)+'" data-m="'+esc(a.sparito.mid)+'" onclick="_anTogliCollegamentoSparito(this.dataset.f,this.dataset.m)">Togli il vecchio collegamento</button>' : '')+
     (a.ncList && a.ncList.length ? '<div class="an-rows">'+a.ncList.map(function(nc){
       var rif=(window._ncRif && window._ncRif[String(nc.id)]) ? window._ncRif[String(nc.id)].num : '';
       // Il documento della nota di credito va potuto aprire PRIMA di
@@ -25229,7 +25514,7 @@ function _anHtmlVoce(a, ignorata){
     }).join('')+'</div>' : '')+
     (ignorata
       ? '<button class="an-ign" data-k="'+esc(a.chiave)+'" onclick="_anIgnora(this.dataset.k,false)">↺ Ripristina</button>'
-      : '<button class="an-ign" data-k="'+esc(a.chiave)+'" onclick="_anIgnora(this.dataset.k,true)">✓ Non è un problema</button>')+
+      : '<button class="an-ign" data-k="'+esc(a.chiave)+'" onclick="_anIgnora(this.dataset.k,true)">'+esc(a.etichettaOk||'✓ Non è un problema')+'</button>')+
   '</div>';
 }
 function _anRenderFoglio(){
@@ -29852,11 +30137,14 @@ async function _ntfAttiva(){
   try{
     var sub=await r.pushManager.getSubscription();
     if(!sub) sub=await r.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:_ntfB64(_NTF_VAPID)});
-    await sbFetch('push_iscrizioni?on_conflict=endpoint',{method:'POST',
-      headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},
-      body:JSON.stringify({utente:(_authSess&&_authSess.user&&_authSess.user.id)||null, endpoint:sub.endpoint,
-        p256dh:_ntfChiave(sub,'p256dh'), auth:_ntfChiave(sub,'auth'),
-        dispositivo:_ntfDispositivo(), app:'fatture', attiva:true, errori:0})});
+    // 23/09: tramite la funzione del database push_iscrivi (come Presenze):
+    // se questo telefono era iscritto a nome di un'altra persona, passa a
+    // chi è entrato adesso — l'upsert diretto era bloccato dalla regola
+    // "ognuno tocca solo le sue righe" e lasciava le notifiche alla persona
+    // sbagliata.
+    await sbFetch('rpc/push_iscrivi',{method:'POST',
+      body:JSON.stringify({p_endpoint:sub.endpoint, p_p256dh:_ntfChiave(sub,'p256dh'), p_auth:_ntfChiave(sub,'auth'),
+        p_dispositivo:_ntfDispositivo(), p_app:'fatture'})});
     toast('🔔 Notifiche attive su questo ' + _ntfDispositivo().toLowerCase());
     return true;
   }catch(e){ toast('⚠️ Iscrizione non riuscita: '+String(e.message||e).slice(0,50)); return false; }
@@ -30647,6 +30935,20 @@ html[data-theme="dark"] .sf-hint{color:var(--orange)}
 .an-row-mov2{flex-wrap:wrap}
 .an-mov-btns{display:flex;gap:6px;flex-wrap:wrap;width:100%;justify-content:flex-end;margin-top:6px}
 .an-fix-w{background:rgba(255,59,48,.1)!important;color:var(--red)!important;border-color:rgba(255,59,48,.35)!important}
+.pg-conto{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:8px 0 2px}
+.pg-conto>div{background:var(--surface2);border-radius:12px;padding:8px 10px;display:flex;flex-direction:column;gap:2px}
+.pg-conto span{font-size:10.5px;font-weight:700;color:var(--ink3);text-transform:uppercase;letter-spacing:.3px}
+.pg-conto b{font-size:14px;color:var(--ink)}
+.pg-conto .pg-diff b{color:var(--red)}
+.pg-fatt{border:1px solid var(--ds-hair,var(--sep));border-radius:14px;padding:8px;margin-bottom:8px;background:var(--surface)}
+.pg-fatt-sosp{border-color:rgba(255,149,0,.55);background:rgba(255,149,0,.06)}
+.pg-quota{font-size:11.5px;color:var(--ink3);margin:6px 2px 0}
+.pg-sugg{font-size:12px;color:var(--ink2);line-height:1.4;margin:8px 2px 0}
+.pg-cosa{margin:10px 0 2px;padding:10px 12px;border-radius:14px;background:rgba(0,122,255,.07);border:1px solid rgba(0,122,255,.2);font-size:12.5px;line-height:1.45;color:var(--ink2);display:flex;flex-direction:column;gap:6px}
+.pg-cosa>b{font-size:13px;color:var(--ink)}
+.pg-cons{font-weight:700;color:var(--ink)}
+.pg-togli-lieve{background:transparent!important;border-color:var(--ds-hair,var(--sep))!important;color:var(--ink3)!important;font-weight:600!important}
+.pg-togli{width:100%;margin-top:8px;padding:10px;border:1px solid rgba(255,59,48,.35);border-radius:11px;background:rgba(255,59,48,.08);color:var(--red);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer}
 .ec-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;background:var(--surface2);border-radius:12px;padding:3px}
 .ec-tab{border:none;background:none;padding:9px 4px;border-radius:9px;font-family:inherit;font-size:12.5px;font-weight:700;color:var(--ink3);cursor:pointer;line-height:1.2}
 .ec-tab.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 4px rgba(0,0,0,.12)}

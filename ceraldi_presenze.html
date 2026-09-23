@@ -6,6 +6,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Ceraldi Presenze">
+<link rel="manifest" href="manifest-presenze.webmanifest">
+<link rel="apple-touch-icon" href="icon-presenze-192.png">
 <title>Ceraldi Presenze</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
@@ -262,6 +264,13 @@ input[type="email"],input[type="password"],input[type="text"],input[type="time"]
 
 <!-- LOGIN (fuori da #app, schermata full-page) -->
 <!-- ── SHEET: cambio password obbligatorio (primo accesso) ── -->
+<div class="overlay" id="sh-push">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-hdr"><span class="sheet-title">🔔 Notifiche sul telefono</span><button class="sheet-cls" onclick="closeSheet('sh-push')">✕</button></div>
+    <div class="sheet-body" id="push-body"></div>
+  </div>
+</div>
 <div class="overlay" id="sh-cambiaPwd">
   <div class="sheet">
     <div class="sheet-handle"></div>
@@ -1030,12 +1039,13 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div id="app" style="display:none">
 
   <div id="topbar">
-    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.221</span></div>
+    <div id="logo">Ceraldi <em>Presenze</em> <span id="app-version" style="font-size:9px;font-weight:600;color:var(--muted);vertical-align:super">v51.222</span></div>
     <span class="topbar-badge" id="role-badge"></span>
     <button class="btn-topbar" onclick="ricaricaApp()" title="Ricarica la pagina (per essere sicuro di avere l'ultima versione)" style="padding:6px 10px">🔄</button>
     <button id="btn-promemoria" class="btn-topbar" onclick="apriPromemoria()" style="display:none;position:relative;padding:6px 10px">
       🔔<span id="promemoria-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:var(--red);color:#fff;font-size:10px;font-weight:800;min-width:16px;height:16px;line-height:16px;border-radius:8px;text-align:center;padding:0 3px"></span>
     </button>
+    <button id="btn-push" class="btn-topbar" onclick="pushApriFoglio()" title="Notifiche sul telefono" style="display:none;position:relative;padding:6px 10px">📲<span id="push-dot" style="display:none;position:absolute;top:-3px;right:-3px;width:9px;height:9px;border-radius:50%;background:var(--red)"></span></button>
     <button class="btn-topbar" onclick="confLogout()">Esci</button>
   </div>
 
@@ -5316,6 +5326,7 @@ async function bootApp(user) {
 function avviaApp(p) {
   $('app').style.display = 'flex';
   const badge = $('role-badge');
+  setTimeout(pushAllAvvio, 1200); // notifiche push: riconferma/proposta (23/09)
   if (p.ruolo === 'admin') {
     badge.textContent = 'Admin'; badge.className = 'topbar-badge badge-admin';
     buildNav(NAV_ADMIN);
@@ -5601,6 +5612,7 @@ function resetStatoApp() {
 
 async function doLogout() {
   stopScanner(); clearInterval(qrTimer);
+  await pushScollegaDispositivo(); // prima di uscire: dopo non si ha più il permesso di cancellare la riga
   await sb.auth.signOut();
   ME = null;
   resetStatoApp();
@@ -21228,6 +21240,213 @@ async function toggleAvviso(id, attivo) {
   const ok = await DB.safe(() => DB.avvisi.update(id, { attivo }), 'Errore durante il salvataggio');
   if (!ok) return;
   caricaBachecaAdmin();
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   NOTIFICHE PUSH SUL TELEFONO — 23/09/2026
+   Valerio: "voglio che anche Presenze sia push, lato admin e dipendente".
+   Come funziona:
+   - questo telefono si iscrive alle notifiche (service worker sw.js,
+     condiviso con le altre app Ceraldi) e l'iscrizione viene salvata in
+     push_iscrizioni con app='presenze', a nome di chi è entrato;
+   - ogni volta che Presenze manda un messaggio Telegram a qualcuno, la
+     funzione `notifica` sul server prova PRIMA la push ai telefoni di
+     quella persona: se arriva, Telegram non parte (una sola notifica,
+     richiesta di Valerio del 23/09); se la persona non ha le push o il
+     telefono non risponde, parte Telegram come sempre. Nessuna delle
+     chiamate esistenti a Telegram è stata toccata.
+   - su iPhone funziona solo con l'app aggiunta alla schermata Home
+     (regola di Apple, iOS 16.4 o successivo);
+   - il tablet in modalità chiosco non si iscrive mai: è condiviso, gli
+     avvisi di una persona non devono comparire lì;
+   - all'uscita la riga di questo telefono viene tolta, così chi entra
+     dopo sullo stesso telefono non riceve gli avvisi di chi è uscito.
+   La chiave qui sotto è quella PUBBLICA (la stessa di Fatture): quella
+   privata sta solo sul server.
+   ══════════════════════════════════════════════════════════════════ */
+const PUSH_VAPID = 'BLiWcTPjrTHqJWSJU1DB8kWOGRBw5-lhokvvSDpHGPaedNHE1dLKvYwl2VdK8GRHvi9Z8-hQNXq1EbttW28Mvfs';
+let _pushReg = null, _pushAttivaQui = false;
+
+function pushSupportate() { return ('serviceWorker' in navigator) && ('PushManager' in window) && ('Notification' in window); }
+function pushInstallata() { try { return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true; } catch (e) { return false; } }
+function pushIOS() { return /iphone|ipad|ipod/i.test(navigator.userAgent || ''); }
+function pushPermesso() { try { return Notification.permission; } catch (e) { return 'default'; } }
+async function pushRegistra() {
+  if (_pushReg) return _pushReg;
+  if (!('serviceWorker' in navigator)) return null;
+  try { _pushReg = await navigator.serviceWorker.register('sw.js'); return _pushReg; } catch (e) { return null; }
+}
+function pushB64(s) {
+  const p = '='.repeat((4 - s.length % 4) % 4), b = atob((s + p).replace(/-/g, '+').replace(/_/g, '/'));
+  const a = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return a;
+}
+function pushChiave(sub, nome) {
+  const k = sub.getKey(nome); if (!k) return '';
+  return btoa(String.fromCharCode.apply(null, new Uint8Array(k))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function pushDispositivo() {
+  const u = navigator.userAgent || '';
+  if (/iphone/i.test(u)) return 'iPhone'; if (/ipad/i.test(u)) return 'iPad';
+  if (/android/i.test(u)) return 'Android'; if (/mac/i.test(u)) return 'Mac';
+  if (/windows/i.test(u)) return 'PC'; return 'Dispositivo';
+}
+async function pushIscrizioneAttuale() {
+  if (!pushSupportate()) return null;
+  const r = await pushRegistra(); if (!r || !r.pushManager) return null;
+  try { return await r.pushManager.getSubscription(); } catch (e) { return null; }
+}
+// Salva l'iscrizione con la funzione del database push_iscrivi: se questo
+// telefono era iscritto a nome di un'altra persona (entrata prima senza
+// uscire), passa a chi è entrato adesso — l'upsert diretto sulla tabella
+// lo impediva per via della regola "ognuno tocca solo le sue righe".
+async function pushSalva(sub) {
+  if (!ME || !ME.id || !sub) return false;
+  const { error } = await sb.rpc('push_iscrivi', {
+    p_endpoint: sub.endpoint, p_p256dh: pushChiave(sub, 'p256dh'), p_auth: pushChiave(sub, 'auth'),
+    p_dispositivo: pushDispositivo(), p_app: 'presenze'
+  });
+  if (error) { console.warn('[push] salvataggio iscrizione:', error.message); return false; }
+  return true;
+}
+
+// Chiamata all'avvio dell'app (dopo il login): se questo telefono è già
+// iscritto, riconferma l'iscrizione a nome di chi è entrato; altrimenti,
+// una volta ogni tanto, propone di attivarle.
+async function pushAllAvvio() {
+  try {
+    if (!ME) return;
+    if (KIOSK) { await pushScollegaDispositivo(); return; }
+    if (!pushSupportate()) { pushAggiornaUI(); return; }
+    let sub = null;
+    if (pushPermesso() === 'granted') sub = await pushIscrizioneAttuale();
+    _pushAttivaQui = !!(sub && await pushSalva(sub));
+    pushAggiornaUI();
+    if (!_pushAttivaQui) pushProponi();
+  } catch (e) { console.warn('[push] avvio:', e); }
+}
+async function pushAttiva() {
+  if (KIOSK) { toast('Sul tablet condiviso le notifiche non si attivano'); return false; }
+  if (!pushSupportate()) {
+    toast(pushIOS() ? 'Serve iPhone aggiornato (iOS 16.4 o successivo) e l\'app aggiunta alla schermata Home' : 'Questo browser non supporta le notifiche');
+    return false;
+  }
+  if (pushIOS() && !pushInstallata()) { pushApriFoglio(); return false; }
+  let perm = pushPermesso();
+  if (perm !== 'granted') { try { perm = await Notification.requestPermission(); } catch (e) { perm = 'denied'; } }
+  if (perm !== 'granted') { pushRenderFoglio(); toast('Notifiche non consentite su questo telefono'); return false; }
+  const r = await pushRegistra();
+  if (!r) { toast('⚠️ Non riesco ad attivare le notifiche: riprova tra poco'); return false; }
+  try {
+    let sub = await r.pushManager.getSubscription();
+    if (!sub) sub = await r.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: pushB64(PUSH_VAPID) });
+    if (!await pushSalva(sub)) { toast('⚠️ Attivate sul telefono ma non salvate: riprova'); return false; }
+    _pushAttivaQui = true;
+    try { localStorage.removeItem('push_nonora_' + ME.id); } catch (e) {}
+    toast('🔔 Notifiche attive su questo telefono');
+    pushAggiornaUI(); pushRenderFoglio();
+    const inv = document.getElementById('push-invito'); if (inv) inv.remove();
+    return true;
+  } catch (e) {
+    toast('⚠️ Attivazione non riuscita: ' + String(e.message || e).slice(0, 60));
+    return false;
+  }
+}
+async function pushSpegni() {
+  const sub = await pushIscrizioneAttuale();
+  if (sub) {
+    try { await sb.from('push_iscrizioni').delete().eq('endpoint', sub.endpoint); } catch (e) {}
+    try { await sub.unsubscribe(); } catch (e) {}
+  }
+  _pushAttivaQui = false;
+  toast('Notifiche spente su questo telefono: gli avvisi tornano su Telegram');
+  pushAggiornaUI(); pushRenderFoglio();
+}
+// All'uscita: toglie SOLO la riga di questo telefono (l'iscrizione del
+// browser resta, così al prossimo accesso della stessa persona riparte da
+// sola senza richiedere di nuovo il permesso).
+async function pushScollegaDispositivo() {
+  try {
+    if (!pushSupportate() || !ME) return;
+    const sub = await pushIscrizioneAttuale();
+    if (sub) await sb.from('push_iscrizioni').delete().eq('endpoint', sub.endpoint).eq('utente', ME.id);
+  } catch (e) {}
+  _pushAttivaQui = false;
+}
+async function pushProva() {
+  try {
+    const { data } = await sb.auth.getSession();
+    const jwt = data && data.session ? data.session.access_token : SB_KEY;
+    const r = await fetch(SB_URL + '/functions/v1/notifica', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': SB_KEY, 'Authorization': 'Bearer ' + jwt },
+      body: JSON.stringify({ app: 'presenze', tipo: 'prova', a: 'io', titolo: '🔔 Prova notifiche', testo: 'Se leggi questo messaggio, le notifiche di Presenze su questo telefono funzionano.', link: APP_URL })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (j && j.push && j.push.inviate > 0) toast('✓ Notifica di prova inviata: arriva tra pochi secondi');
+    else toast('⚠️ Nessun telefono raggiunto: prova a spegnere e riattivare');
+  } catch (e) { toast('⚠️ Prova non riuscita: controlla la connessione'); }
+}
+
+// ── Interfaccia ──
+function pushAggiornaUI() {
+  const b = document.getElementById('btn-push'), d = document.getElementById('push-dot');
+  if (!b) return;
+  if (KIOSK || !ME) { b.style.display = 'none'; return; }
+  b.style.display = '';
+  if (d) d.style.display = _pushAttivaQui ? 'none' : '';
+}
+function pushProponi() {
+  if (KIOSK || !ME || document.getElementById('push-invito')) return;
+  if (pushPermesso() === 'denied') return; // l'ha già negato: resta il pulsante 📲 con le istruzioni
+  const chiave = 'push_nonora_' + ME.id;
+  try { const t = +localStorage.getItem(chiave) || 0; if (Date.now() - t < 3 * 86400000) return; } catch (e) {}
+  const guidaIOS = pushIOS() && !pushInstallata();
+  if (!pushSupportate() && !guidaIOS) return;
+  const el = document.createElement('div');
+  el.id = 'push-invito';
+  el.style.cssText = 'position:fixed;left:12px;right:12px;bottom:calc(var(--safe-b) + 78px);z-index:900;background:var(--card);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow-md);padding:14px 14px 12px;max-width:480px;margin:0 auto';
+  el.innerHTML =
+    '<div style="font-size:15px;font-weight:800;color:var(--text);margin-bottom:4px">🔔 Avvisi direttamente sul telefono</div>' +
+    '<div style="font-size:13px;color:var(--muted);line-height:1.45;margin-bottom:10px">' +
+      (guidaIOS
+        ? 'Per riceverli su iPhone aggiungi Presenze alla schermata Home: tocca <b>Condividi</b> ⬆️ in basso, poi <b>«Aggiungi alla schermata Home»</b>, e apri l\'app da lì.'
+        : 'Richieste, turni, documenti e comunicazioni ti arrivano come notifica sul telefono, al posto dei messaggi Telegram.') +
+    '</div>' +
+    '<div style="display:flex;gap:8px">' +
+      (guidaIOS ? '' : '<button class="btn-primary" style="flex:1;margin:0;padding:11px" onclick="pushAttiva()">Attiva</button>') +
+      '<button class="btn-sm" style="flex:' + (guidaIOS ? '1' : '0 0 96px') + ';padding:11px" onclick="pushNonOra()">' + (guidaIOS ? 'Ho capito' : 'Non ora') + '</button>' +
+    '</div>';
+  document.body.appendChild(el);
+}
+function pushNonOra() {
+  try { localStorage.setItem('push_nonora_' + ME.id, String(Date.now())); } catch (e) {}
+  const el = document.getElementById('push-invito'); if (el) el.remove();
+}
+function pushApriFoglio() { pushRenderFoglio(); openSheet('sh-push'); }
+function pushRenderFoglio() {
+  const box = document.getElementById('push-body'); if (!box) return;
+  const riga = (ico, tit, txt) => '<div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:12px"><div style="font-size:20px;line-height:1.2">' + ico + '</div><div><div style="font-size:14px;font-weight:700;color:var(--text)">' + tit + '</div><div style="font-size:13px;color:var(--muted);line-height:1.5">' + txt + '</div></div></div>';
+  let h = '';
+  if (KIOSK) {
+    h = riga('🖥️', 'Tablet condiviso', 'Sul chiosco le notifiche non si attivano: arrivano sul telefono personale di ciascuno.');
+  } else if (pushIOS() && !pushInstallata()) {
+    h = riga('📲', 'Prima aggiungi l\'app alla schermata Home', 'Su iPhone le notifiche funzionano solo così (regola di Apple):<br>1. tocca <b>Condividi</b> ⬆️ in basso<br>2. scegli <b>«Aggiungi alla schermata Home»</b><br>3. apri Presenze dall\'icona e torna qui.');
+  } else if (!pushSupportate()) {
+    h = riga('⚠️', 'Non disponibili su questo dispositivo', 'Serve un telefono aggiornato (su iPhone iOS 16.4 o successivo). Gli avvisi continuano ad arrivare su Telegram.');
+  } else if (pushPermesso() === 'denied') {
+    h = riga('🚫', 'Notifiche bloccate per Presenze', pushIOS()
+      ? 'Apri <b>Impostazioni</b> del telefono → <b>Notifiche</b> → <b>Presenze</b> → attiva «Consenti notifiche». Poi torna qui e tocca «Attiva».'
+      : 'Consenti le notifiche per questo sito dalle impostazioni del browser, poi torna qui e tocca «Attiva».') +
+      '<button class="btn-primary" style="margin-top:4px" onclick="pushAttiva()">Attiva</button>';
+  } else if (_pushAttivaQui) {
+    h = riga('✅', 'Attive su questo telefono', 'Gli avvisi di Presenze arrivano qui come notifica, al posto di Telegram. Se questo telefono non si raggiunge (per esempio se togli l\'app), tornano da soli su Telegram.') +
+      '<button class="btn-primary" style="margin-bottom:10px" onclick="pushProva()">Invia una notifica di prova</button>' +
+      '<button class="btn-sm" style="width:100%;padding:11px" onclick="pushSpegni()">Spegni su questo telefono</button>';
+  } else {
+    h = riga('🔕', 'Non attive su questo telefono', 'Attivale per ricevere richieste, turni, documenti e comunicazioni come notifica sul telefono, al posto dei messaggi Telegram.') +
+      '<button class="btn-primary" onclick="pushAttiva()">Attiva le notifiche</button>';
+  }
+  box.innerHTML = h;
 }
 
 /* ── CONFERMA LOGOUT ────────────────────────────────── */
