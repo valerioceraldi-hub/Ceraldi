@@ -4361,13 +4361,27 @@ async function _applicaGruppoRiconciliazione(sel, movimenti, opts){
   // strutturato del movimento bancario; la nota di gruppo sopra, salvata su
   // OGNI fattura coinvolta, resta la fonte di verità leggibile del quadro
   // intero, non solo "il suo pezzo".
-  movimenti.forEach((m,i)=>{
-    const fRif = sel[i % sel.length];
-    m.abbinata = true;
-    m.fatturaId = fRif.id;
-    m.fatturaLabel = (fRif.fornitore||'')+' N°'+(fRif.numero||'') + ' (gruppo di '+sel.length+')';
-    if(typeof salvaMovimentoBanca==='function') salvaMovimentoBanca(m);
-  });
+  // FIX 24/09: stesso difetto corretto il 23/09 in _cfAbbina — il salvataggio
+  // del movimento partiva senza attesa: se falliva (rete, database), le
+  // fatture venivano segnate pagate da un movimento che nel database restava
+  // "da abbinare". Ora si attende, e al primo errore ci si ferma PRIMA di
+  // toccare le fatture, rimettendo liberi i movimenti già salvati.
+  const _salvati = [];
+  try{
+    for(let i=0;i<movimenti.length;i++){
+      const m = movimenti[i], fRif = sel[i % sel.length];
+      m.abbinata = true;
+      m.fatturaId = fRif.id;
+      m.fatturaLabel = (fRif.fornitore||'')+' N°'+(fRif.numero||'') + ' (gruppo di '+sel.length+')';
+      if(typeof salvaMovimentoBanca==='function') await salvaMovimentoBanca(m);
+      _salvati.push(m);
+    }
+  }catch(e){
+    for(const m of movimenti){ m.abbinata = false; m.fatturaId = null; m.fatturaLabel = ''; }
+    for(const m of _salvati){ try{ await salvaMovimentoBanca(m); }catch(e2){} }
+    toast('⚠️ Salvataggio non riuscito, nessuna fattura modificata: riprova ('+String(e.message||e).slice(0,50)+')');
+    return false;
+  }
   const dataUltima = movimenti.reduce((max,m)=>(m.data||'')>max?m.data:max, '');
   for(const f of sel){
     f.stato = 'pagata';
@@ -4399,6 +4413,7 @@ async function _applicaGruppoRiconciliazione(sel, movimenti, opts){
   if(opts.ridisegnaLista && typeof _uscitaSelezione==='function') _uscitaSelezione();
   if(opts.ridisegnaBanca && typeof renderRiconciliazione==='function') renderRiconciliazione();
   toast('✓ '+sel.length+' fatture riconciliate insieme con '+movimenti.length+' movimenti', {forza:true});
+  return true;
 }
 
 // ── Selezione multipla movimenti in Cassa → Banca (23/08, richiesta
@@ -22609,7 +22624,32 @@ function apriRiconciliaDaFattura(fatturaId){
   const f = (fatture||[]).find(function(x){ return String(x.id)===String(fatturaId); });
   if(!f) return;
   const impF = nettoFattura(f);
-  const resto = residuoFattura(f);
+  // FIX 24/09 (Valerio, Kimbo N° 0070017954: "da abbinare € 0,00" e come
+  // «importo identico» proponeva movimenti da € 0,22 e € 0,40). Due cause:
+  // - per una fattura «pagata» il residuo è sempre 0, anche quando nessun
+  //   pagamento vero è collegato (succede con «sempre pagato alla consegna»,
+  //   che la segna pagata appena importata): qui si cerca invece l'uscita
+  //   vera, cioè l'importo al netto delle note di credito;
+  // - quella fattura è annullata per intero da una nota di credito: non c'è
+  //   nessun pagamento da cercare, e va detto chiaramente invece di
+  //   confrontare i movimenti con 0 € (tutto ciò che sta sotto 0,50 € risultava
+  //   "identico").
+  const _rfCollegata = !!((f.riconciliazione && f.riconciliazione.movId) || (f.riconciliazioneStorico||[]).some(function(s){ return s && s.movId; }));
+  const _rfPagataSenzaBanca = f.stato==='pagata' && !_rfCollegata;
+  const resto = _rfPagataSenzaBanca ? Math.max(0, Math.round(Math.abs(impF)*100)/100) : residuoFattura(f);
+  const _rfNote = (fatture||[]).filter(function(nc){ return nc.tipo==='nota_credito' && new RegExp('\\[NC→'+String(f.id)+'·').test(nc.note||''); });
+  const _rfLordo = Math.abs(f.importo||0);
+  const _rfAnnullata = resto < 0.01 && _rfNote.length > 0;
+  // importo di riferimento per ordinare e per dire "identico": mai 0
+  const _rfRif = resto >= 0.01 ? resto : _rfLordo;
+  let _rfAvviso = '';
+  if(_rfAnnullata){
+    _rfAvviso = '<div class="rf-avviso"><b>Non c\'è nessun pagamento da cercare.</b> '+(_rfNote.length===1?'La nota di credito N° '+esc(_rfNote[0].numero||'—')+' del '+_anData(_rfNote[0].data)+' annulla':'Le note di credito agganciate annullano')+' tutta la fattura ('+fmt(_rfLordo)+'): non è uscito nulla. Se invece l\'avevi già pagata per intero, ti spetta un rimborso: cerca qui sotto il pagamento di '+fmt(_rfLordo)+'.</div>';
+  } else if(_rfPagataSenzaBanca){
+    _rfAvviso = '<div class="rf-avviso">Risulta <b>pagata</b>'+(f.pagamento?' ('+esc(f.pagamento)+')':'')+' ma nessun movimento della banca è collegato: cerco un\'uscita di '+fmt(resto)+(Math.abs(resto-_rfLordo)>0.01?' (totale '+fmt(_rfLordo)+' meno le note di credito)':'')+'. Se non la trovi, forse non è ancora stata pagata.</div>';
+  } else if(resto < 0.01){
+    _rfAvviso = '<div class="rf-avviso">Questa fattura risulta già saldata: non resta nulla da pagare. Qui sotto confronto i movimenti con l\'importo pieno ('+fmt(_rfLordo)+').</div>';
+  }
   const tutti = (_bancaMovimenti||[]).filter(function(m){ return !m.abbinata && !m.ignorata && (m.importo||0) < 0; })
     // 20/09: anche le spese con carta di credito Nexi non ancora abbinate
     .concat(((typeof _cartaMovimenti!=='undefined'?_cartaMovimenti:[])||[]).filter(function(c){ return !c.abbinata && !c.ignorata && (parseFloat(c.importo)||0)>0; }).map(function(c){
@@ -22619,7 +22659,7 @@ function apriRiconciliaDaFattura(fatturaId){
     alert('Nessun movimento bancario libero trovato. Importa prima un estratto conto, o controlla che non siano già tutti abbinati.');
     return;
   }
-  window._rfStato = {f:f, impF:impF, resto:resto, tutti:tutti, q:'', ord:'importo', fin:'tutti', fonte:'tutti', mostra:40};
+  window._rfStato = {f:f, impF:impF, resto:resto, rif:_rfRif, annullata:_rfAnnullata, tutti:tutti, q:'', ord:'importo', fin:'tutti', fonte:'tutti', mostra:40};
   const existing = document.getElementById('_riconciliaDaFattOv');
   if(existing) existing.remove();
   const ov = document.createElement('div');
@@ -22627,10 +22667,10 @@ function apriRiconciliaDaFattura(fatturaId){
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:900;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px)';
   ov.innerHTML = '<div style="background:var(--bg);border-radius:20px 20px 0 0;width:100%;max-width:560px;max-height:90vh;overflow-y:auto">'+
     '<div class="edit-sheet-hd" style="background:var(--bg);position:sticky;top:0;z-index:2;flex-direction:column;align-items:stretch;gap:8px">'+
-      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><div style="min-width:0"><h3>Trova il movimento bancario</h3><div style="font-size:12.5px;color:var(--ink3);margin-top:2px">'+esc(f.fornitore||'')+' \u00b7 N\u00b0 '+esc(f.numero||'')+' \u00b7 '+_anData(f.data)+' \u00b7 da abbinare <b>'+fmt(resto)+'</b>'+(Math.abs(resto-Math.abs(f.importo||0))>0.01?' <em>(totale '+fmt(Math.abs(f.importo||0))+(f.parzPagato?', gi\u00e0 pagato '+fmt(f.parzPagato):'')+')</em>':'')+'</div>'+(_haXml(f)?'<div style="margin-top:6px">'+_btnXml(f)+'</div>':'')+'</div>'+'<button onclick="this.closest(\'#_riconciliaDaFattOv\').remove()" style="background:var(--surface2);border:none;width:30px;height:30px;border-radius:50%;font-size:17px;color:var(--ink2);flex:0 0 auto;cursor:pointer">\u00d7</button></div>'+
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><div style="min-width:0"><h3>Trova il movimento bancario</h3><div style="font-size:12.5px;color:var(--ink3);margin-top:2px">'+esc(f.fornitore||'')+' \u00b7 N\u00b0 '+esc(f.numero||'')+' \u00b7 '+_anData(f.data)+' \u00b7 '+(_rfAnnullata?'<b>annullata da nota di credito</b>':'da cercare in banca <b>'+fmt(_rfRif)+'</b>'+(Math.abs(_rfRif-_rfLordo)>0.01?' <em>(totale '+fmt(_rfLordo)+(!_rfPagataSenzaBanca&&f.parzPagato?', gi\u00e0 pagato '+fmt(f.parzPagato):'')+')</em>':''))+'</div>'+(_haXml(f)?'<div style="margin-top:6px">'+_btnXml(f)+'</div>':'')+'</div>'+'<button onclick="this.closest(\'#_riconciliaDaFattOv\').remove()" style="background:var(--surface2);border:none;width:30px;height:30px;border-radius:50%;font-size:17px;color:var(--ink2);flex:0 0 auto;cursor:pointer">\u00d7</button></div>'+
       '<input id="rfQ" type="search" placeholder="Cerca: nome, importo (621,59) o data (21/08)" autocomplete="off" oninput="_rfSet(\'q\',this.value)" style="width:100%;padding:11px 12px;font-size:14px;border-radius:12px">'+
       '<div class="rf-chips" id="rfChips"></div>'+
-    '</div>'+
+    '</div>'+_rfAvviso+
     '<div id="rfLista" style="padding:4px 16px 30px"></div></div>';
   ov.onclick = function(e){ if(e.target===ov) ov.remove(); };
   document.body.appendChild(ov);
@@ -22660,14 +22700,28 @@ function _rfFiltra(){
       L=L.filter(function(m){ var t=String(m.descrizione||'').toLowerCase(); return parole.every(function(w){ return t.indexOf(w)>=0; }); });
     }
   }
-  if(S.ord==='importo') L.sort(function(a,b){ return Math.abs(Math.abs(a.importo)-S.resto)-Math.abs(Math.abs(b.importo)-S.resto); });
+  if(S.ord==='importo'){
+    // 24/09: in cima quelli che tornano al centesimo, poi quelli che pagano
+    // questa fattura insieme ad altre dello stesso fornitore, poi i più vicini
+    var pri=function(m){ var d=Math.abs(Math.abs(m.importo)-S.rif); return d<0.01 ? 0 : (_rfPagateInsieme(S, m) ? 1 : 2); };
+    var P={}; L.forEach(function(m){ P[m.id]=pri(m); });
+    L.sort(function(a,b){ return (P[a.id]-P[b.id]) || (Math.abs(Math.abs(a.importo)-S.rif)-Math.abs(Math.abs(b.importo)-S.rif)); });
+  }
   else if(S.ord==='data') L.sort(function(a,b){ return d0 ? Math.abs(new Date(a.data+'T12:00:00')-d0)-Math.abs(new Date(b.data+'T12:00:00')-d0) : 0; });
   else L.sort(function(a,b){ return String(b.data).localeCompare(String(a.data)); });
   return L;
 }
 function _rfRender(){
   var S=window._rfStato, box=document.getElementById('rfLista'), ch=document.getElementById('rfChips'); if(!S||!box) return;
-  var f=S.f, L=_rfFiltra();
+  var f=S.f;
+  if(S.annullata && !S.cerca){
+    // annullata da nota di credito: niente elenco di movimenti che sembrano
+    // da abbinare; solo se serve (era già stata pagata) si cerca l'uscita
+    if(ch) ch.innerHTML='';
+    box.innerHTML='<button class="an-fix" style="width:100%;padding:12px;margin-top:6px" onclick="_rfSet(\'cerca\',true)">Era già stata pagata? Cerca un\'uscita di '+fmt(S.rif)+'</button>';
+    return;
+  }
+  var L=_rfFiltra();
   var c=function(k,v,l){ return '<button class="chip'+(S[k]===v?' active':'')+'" onclick="_rfSet(\''+k+'\',\''+v+'\')">'+l+'</button>'; };
   if(ch) ch.innerHTML = c('ord','importo','Importo più vicino')+c('ord','data','Data più vicina')+c('ord','recenti','Più recenti')+
     '<span class="rf-sep"></span>'+c('fin','tutti','Tutte le date')+c('fin','60','Entro 60 gg')+c('fin','150','Entro 150 gg')+
@@ -22679,15 +22733,71 @@ function _rfRender(){
   var h='<div class="rf-conta">'+L.length+' moviment'+(L.length===1?'o':'i')+' in uscita non abbinat'+(L.length===1?'o':'i')+(L.length!==S.tutti.length?' su '+S.tutti.length:'')+' · banca e carta Nexi ('+nCarta+' spese con carta)</div>';
   if(!vis.length) h+='<div class="an-vuoto"><span>Nessun movimento con questa ricerca.</span></div>';
   vis.forEach(function(m, idx){
-    var impMov=Math.abs(m.importo||0), combacia=Math.abs(impMov-S.resto)<0.50;
+    // 24/09: "identico" solo se lo è davvero (al centesimo); entro 50
+    // centesimi si dice di quanto differisce. Mai confrontare con 0 €.
+    var impMov=Math.abs(m.importo||0), diffMov=Math.abs(impMov-S.rif), combacia=S.rif>0.009 && diffMov<0.50;
+    var badge = !combacia ? '' : (diffMov<0.01
+      ? '✓ Importo identico'+(S.annullata?' all\'importo pieno della fattura':(Math.abs(S.rif-Math.abs(f.importo||0))>0.01?' (al netto della nota di credito)':''))
+      : '≈ Differenza di '+fmt(diffMov));
+    var insieme = (!combacia && !m._carta) ? _rfPagateInsieme(S, m) : null;
     var dd=Math.round((new Date(m.data+'T12:00:00')-new Date(String(f.data).slice(0,10)+'T12:00:00'))/86400000);
-    h+='<div class="rf-mov'+(combacia?' rf-ok':'')+'"><div class="rf-top"><div style="min-width:0"><div class="rf-dt">'+_anData(m.data)+' <em>'+(isNaN(dd)?'':(dd>=0?dd+' gg dopo la fattura':(-dd)+' gg prima'))+'</em> '+_fonteTag(m)+'</div><div class="rf-ds">'+esc(m.descrizione||'')+'</div>'+(combacia?'<div class="rf-badge">✓ Importo identico al da pagare</div>':'')+'</div><div class="rf-imp">'+fmt(impMov)+'</div></div>'+
+    h+='<div class="rf-mov'+(combacia||insieme?' rf-ok':'')+'"><div class="rf-top"><div style="min-width:0"><div class="rf-dt">'+_anData(m.data)+' <em>'+(isNaN(dd)?'':(dd>=0?dd+' gg dopo la fattura':(-dd)+' gg prima'))+'</em> '+_fonteTag(m)+'</div><div class="rf-ds">'+esc(m.descrizione||'')+'</div>'+(badge?'<div class="rf-badge">'+badge+'</div>':'')+
+      (insieme?'<div class="rf-badge">✓ Paga questa fattura insieme a '+insieme.map(function(g){ return 'N° '+esc(g.f.numero||'—')+' ('+fmt(g.imp)+')'; }).join(' e ')+': la somma è identica</div>':'')+'</div><div class="rf-imp">'+fmt(impMov)+'</div></div>'+
+      (insieme?'<div class="rf-btns"><button class="rf-b rf-b-p" data-f="'+esc([String(f.id)].concat(insieme.map(function(g){ return String(g.f.id); })).join(','))+'" onclick="_rfAbbinaInsieme('+idx+',this.dataset.f)">Abbina insieme ('+(insieme.length+1)+' fatture)</button></div>':'')+
       (m._carta ? '<div class="rf-btns"><button class="rf-b rf-b-p" data-mid="'+esc(String(m.id))+'" onclick="var o=document.getElementById(\'_riconciliaDaFattOv\');if(o)o.remove();_abbinaCarta(this.dataset.mid,\''+fid+'\').then(function(){ if(typeof renderLista===\'function\')renderLista(); });">Abbina alla spesa con carta</button></div></div>' :
-      '<div class="rf-btns"><button class="rf-b rf-b-p" onclick="_cfAbbina('+idx+',\''+fid+'\',false);var o=document.getElementById(\'_riconciliaDaFattOv\');if(o)o.remove();if(typeof renderLista===\'function\')renderLista();">Abbina e salda ('+fmt(S.resto)+')</button>'+
-      (Math.abs(impMov-S.resto)>0.50?'<button class="rf-b" onclick="_cfAbbina('+idx+',\''+fid+'\',true);var o=document.getElementById(\'_riconciliaDaFattOv\');if(o)o.remove();if(typeof renderLista===\'function\')renderLista();">Solo acconto ('+fmt(impMov)+')</button>':'')+'</div></div>');
+      '<div class="rf-btns"><button class="rf-b rf-b-p" onclick="_cfAbbina('+idx+',\''+fid+'\',false);var o=document.getElementById(\'_riconciliaDaFattOv\');if(o)o.remove();if(typeof renderLista===\'function\')renderLista();">Abbina e salda ('+fmt(S.rif)+')</button>'+
+      (Math.abs(impMov-S.rif)>0.50?'<button class="rf-b" onclick="_cfAbbina('+idx+',\''+fid+'\',true);var o=document.getElementById(\'_riconciliaDaFattOv\');if(o)o.remove();if(typeof renderLista===\'function\')renderLista();">Solo acconto ('+fmt(impMov)+')</button>':'')+'</div></div>');
   });
   if(L.length>vis.length) h+='<button class="an-ign" onclick="_rfSet(\'mostra\','+(S.mostra+60)+')">Mostra altri '+Math.min(60,L.length-vis.length)+' ›</button>';
   box.innerHTML=h;
+}
+// 24/09 (Valerio: assegno Kimbo del 23/09 di € 1.496,95 = fatture 0070030530
+// + 0070030531). Un assegno o bonifico spesso paga più fatture dello stesso
+// fornitore: se questo movimento è ESATTAMENTE la fattura aperta più una, due
+// o tre altre dello stesso fornitore non ancora collegate alla banca, lo dice
+// e permette di abbinarle insieme. Solo se la combinazione è una sola.
+function _rfPagateInsieme(S, m){
+  var f=S.f, imp=Math.round(Math.abs(m.importo||0)*100)/100, base=S.rif;
+  if(!(base>0.009) || S.annullata || imp <= base+0.01 || m._carta) return null;
+  var ggF=(new Date(m.data+'T12:00:00')-new Date(String(f.data).slice(0,10)+'T12:00:00'))/86400000;
+  if(!(ggF>=-5 && ggF<=75)) return null;
+  S._insieme = S._insieme || {};
+  if(Object.prototype.hasOwnProperty.call(S._insieme, m.id)) return S._insieme[m.id];
+  return (S._insieme[m.id] = _rfCombinazione(S, m, imp, base));
+}
+function _rfCombinazione(S, m, imp, base){
+  var f=S.f;
+  if(!S._altre){
+    S._altre=(fatture||[]).filter(function(g){
+      if(String(g.id)===String(f.id) || g.tipo!=='fattura' || g.stato==='annullata') return false;
+      if((g.riconciliazione && g.riconciliazione.movId) || (g.riconciliazioneStorico||[]).some(function(s){ return s && s.movId; })) return false;
+      if(typeof _anNomiCompatibili==='function' ? !_anNomiCompatibili(g.fornitore, f.fornitore) : g.fornitore!==f.fornitore) return false;
+      return true;
+    }).map(function(g){
+      var v = g.stato==='pagata' ? Math.abs(nettoFattura(g)) : residuoFattura(g);
+      return {f:g, imp:Math.round(v*100)/100};
+    }).filter(function(x){ return x.imp>0.009; });
+  }
+  var L=S._altre.filter(function(x){ var gg=(new Date(m.data+'T12:00:00')-new Date(String(x.f.data).slice(0,10)+'T12:00:00'))/86400000; return gg>=-5 && gg<=75; }).slice(-12);
+  // combinazioni di 1, 2 o 3 altre fatture (al massimo 298 prove)
+  var trovate=[], n=L.length, ok=function(v){ return Math.abs(Math.round(v*100)/100-imp)<=0.01; };
+  for(var i=0;i<n;i++){
+    if(ok(base+L[i].imp)) trovate.push([L[i]]);
+    for(var j=i+1;j<n;j++){
+      if(ok(base+L[i].imp+L[j].imp)) trovate.push([L[i],L[j]]);
+      for(var k=j+1;k<n;k++) if(ok(base+L[i].imp+L[j].imp+L[k].imp)) trovate.push([L[i],L[j],L[k]]);
+    }
+    if(trovate.length>1) return null; // più combinazioni possibili: non si indovina
+  }
+  return trovate.length===1 ? trovate[0] : null;
+}
+async function _rfAbbinaInsieme(movIdx, fidsCsv){
+  var m=(window._nonAbbinati||[])[movIdx];
+  var sel=String(fidsCsv||'').split(',').map(function(id){ return (fatture||[]).find(function(x){ return String(x.id)===id; }); }).filter(Boolean);
+  if(!m || sel.length<2) return;
+  if(!confirm('Abbino il movimento del '+_anData(m.data)+' ('+fmt(Math.abs(m.importo||0))+') a '+sel.length+' fatture:\n'+sel.map(function(g){ return '• '+(g.fornitore||'')+' N° '+(g.numero||''); }).join('\n')+'\n\nCosa succede: tutte risultano pagate con questo movimento, che sparisce da «da abbinare».\n\nConfermi?')) return;
+  var o=document.getElementById('_riconciliaDaFattOv'); if(o) o.remove();
+  await _applicaGruppoRiconciliazione(sel, [m], {ridisegnaLista:true});
 }
 
 async function _cfAbbina(movIdx, fattId, isParziale){
@@ -24961,6 +25071,9 @@ function _anCalcola(F, movs, entrate){
   //    pagamento: si raccolgono tutti i movimenti e tutte le fatture collegati
   //    fra loro (da un lato o dall'altro) e si confrontano i due totali.
   out = out.concat(_anControllaPagamenti(F));
+  // 9-10) Pagate senza pagamento in banca · crediti delle note di credito (24/09)
+  out = out.concat(_anPagateSenzaBanca(F));
+  out = out.concat(_anCreditiNC(F, entrate));
   var ord={alta:0, media:1, bassa:2};
   out.sort(function(p,q){ return (ord[p.gravita]-ord[q.gravita]) || ((q.rischio||0)-(p.rischio||0)); });
   return out;
@@ -25262,7 +25375,7 @@ async function _anSistemaLatoMovimento(mid, fStaccata){
 }
 function _anTrovaFattura(fid){ return (fatture||[]).find(function(x){ return String(x.id) === String(fid); }); }
 async function _anDopoAzionePagamento(){
-  _anMovCache = null; window._anMovIndex = null;
+  _anMovCache = null; window._anMovIndex = null; window._anMovLiberi = null;
   if(typeof save==='function') try{ save(fatture); }catch(e){}
   if(typeof renderLista==='function') try{ renderLista(); }catch(e){}
   await _anAggiornaHome(true);
@@ -25366,6 +25479,338 @@ async function _anTogliCollegamentoSparito(fid, mid){
   await _anDopoAzionePagamento();
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// PAGATE SENZA PAGAMENTO IN BANCA · CREDITI DELLE NOTE DI CREDITO (24/09)
+// Valerio: "fatture Kimbo riconciliate con assegno ma non trovi il movimento;
+// fatture pagate agganciate a note di credito ma il credito non l'ho mai
+// ricevuto, né scalato su una fattura dopo né con un bonifico in entrata".
+// Causa trovata sui dati veri: per 31 fornitori (Kimbo compreso) è attivo
+// «sempre pagato alla consegna». All'importazione la fattura nasce già
+// «pagata», prima che l'assegno passi dalla banca: se l'assegno non arriva
+// mai, o arriva per più fatture insieme, nessuno se ne accorge. E una nota di
+// credito agganciata a una fattura «pagata» così non dice nulla: la fattura
+// potrebbe non essere mai stata pagata (allora la nota la annulla e basta)
+// oppure essere stata pagata per intero (allora c'è un credito da riavere).
+// Qui si guarda la banca vera e si distinguono i casi. Non cambia mai nulla
+// da solo: propone, e ogni azione chiede conferma spiegando cosa succede.
+// ══════════════════════════════════════════════════════════════════════════
+var _AN_PAG_BANCA = /^(assegno|bonifico|sdd|riba|rid)$/;
+function _anGiorni(a, b){ return Math.round((new Date(String(b).slice(0,10)+'T12:00:00') - new Date(String(a).slice(0,10)+'T12:00:00'))/86400000); }
+function _anPagBanca(f){ return _AN_PAG_BANCA.test(String((f && f.pagamento) || '').toLowerCase().trim()); }
+function _anR2(n){ return Math.round((Number(n)||0)*100)/100; }
+// movimento → fatture che lo indicano (e viceversa), dal solo indice leggero
+function _anIndicePerFattura(){
+  var idx = window._anMovIndex || {}, out = {};
+  Object.keys(idx).forEach(function(k){ var r = idx[k]; if(r && r.abbinata && r.fatturaId) (out[String(r.fatturaId)] = out[String(r.fatturaId)] || []).push(Object.assign({id:k}, r)); });
+  return out;
+}
+// Pagamenti registrati su una fattura (banca, carta, PayPal), senza doppioni.
+function _anPagamentiFattura(f, perFatt){
+  var idx = window._anMovIndex || {}, visti = {}, lordo = Math.abs(Number(f.importo)||0);
+  (f.riconciliazioneStorico||[]).concat(f.riconciliazione ? [f.riconciliazione] : []).forEach(function(s){
+    if(!s || !s.movId) return;
+    var k = String(s.movId), v = Math.abs(Number(s.importo)||0);
+    if(!v && idx[k]) v = Math.abs(Number(idx[k].importo)||0);
+    if(!v) v = lordo;
+    if(lordo && v > lordo) v = lordo;
+    visti[k] = {movId:k, importo:v, data:s.data || (idx[k] && idx[k].data) || ''};
+  });
+  ((perFatt||{})[String(f.id)] || []).forEach(function(m){
+    var k = String(m.id); if(visti[k]) return;
+    var v = Math.abs(Number(m.importo)||0); if(lordo && v > lordo) v = lordo;
+    visti[k] = {movId:k, importo:v, data:m.data||''};
+  });
+  return Object.keys(visti).map(function(k){ return visti[k]; });
+}
+// Note di credito agganciate a ciascuna fattura (marcatore [NC→id·importo·…])
+function _anNcPerFattura(F){
+  var out = {};
+  F.forEach(function(nc){
+    if(nc.tipo !== 'nota_credito') return;
+    var m = String(nc.note||'').match(/\[NC→(\d+)·([\d.]+)·/);
+    if(m) (out[m[1]] = out[m[1]] || []).push({nc:nc, importo:_anR2(parseFloat(m[2])||0)});
+  });
+  return out;
+}
+function _anDescPag(m){ return _anTipoPagamento(m) + ' del ' + _anData(m.data) + ' di ' + fmt(Math.abs(Number(m.importo)||0)); }
+function _anIgnorataChiave(k){ return !!((typeof _anIgnorate!=='undefined' && _anIgnorate) || {})[k]; }
+
+// ── 1) Fatture «pagate» con assegno/bonifico/addebito che in banca non ci sono
+function _anPagateSenzaBanca(F){
+  var idx = window._anMovIndex, liberiTutti = window._anMovLiberi;
+  if(!idx || !Array.isArray(liberiTutti)) return [];
+  var date = Object.keys(idx).map(function(k){ return String(idx[k].data||''); }).filter(Boolean).sort();
+  if(!date.length) return [];
+  var primo = date[0], ultimo = date[date.length-1];
+  var perFatt = _anIndicePerFattura();
+  // movimenti che qualche fattura indica già come suo pagamento: non sono liberi
+  var reclamati = {};
+  F.forEach(function(f){ (f.riconciliazioneStorico||[]).concat(f.riconciliazione ? [f.riconciliazione] : []).forEach(function(s){ if(s && s.movId) reclamati[String(s.movId)] = 1; }); });
+  var fresco = {};
+  (typeof _bancaMovimenti!=='undefined' && Array.isArray(_bancaMovimenti) ? _bancaMovimenti : []).forEach(function(m){ if(m && m.id) fresco[String(m.id)] = m; });
+  var liberi = liberiTutti.filter(function(m){
+    var i = fresco[String(m.id)] || idx[String(m.id)]; // la copia in memoria è la più aggiornata
+    if(i && (i.abbinata || i.ignorata)) return false;
+    return !m.ignorata && (Number(m.importo)||0) < 0 && !reclamati[String(m.id)];
+  });
+  var cand = F.filter(function(f){
+    return f.tipo === 'fattura' && f.stato === 'pagata' && _anPagBanca(f) && Math.abs(Number(f.importo)||0) > 0.009 &&
+      f.data && String(f.data).slice(0,10) >= primo && !_anPagamentiFattura(f, perFatt).length;
+  }).map(function(f){ return {f:f, netto:_anR2(Math.abs(typeof nettoFattura==='function' ? nettoFattura(f) : f.importo))}; })
+    // annullate per intero da una nota di credito: non è uscito nulla, niente da cercare
+    .filter(function(x){ return x.netto > 0.009; })
+    .sort(function(a, b){ return String(a.f.data).localeCompare(String(b.f.data)); });
+  if(!cand.length) return [];
+
+  var assegno = function(m){ return /ASSEGNO/i.test(m.descrizione||''); };
+  var compatibile = function(m, f){
+    if(assegno(m)) return String(f.pagamento||'').toLowerCase() === 'assegno';
+    var ben = _anBeneficiario(m.descrizione);
+    return _anNomiCompatibili(ben || m.descrizione || '', f.fornitore) && (ben ? true : _anTok(m.descrizione).some(function(t){ return _anTok(f.fornitore).some(function(u){ return t === u || (t.length >= 5 && u.indexOf(t) >= 0) || (u.length >= 5 && t.indexOf(u) >= 0); }); }));
+  };
+  var usatiM = {}, usatiF = {}, out = [];
+  // a) stesso importo, un pagamento per una fattura
+  cand.forEach(function(x){
+    var best = null, bestGg = 1e9;
+    liberi.forEach(function(m){
+      if(usatiM[m.id] || Math.abs(Math.abs(Number(m.importo)||0) - x.netto) > 0.01) return;
+      var gg = _anGiorni(x.f.data, m.data); if(gg < -5 || gg > 75) return;
+      if(!compatibile(m, x.f)) return;
+      if(Math.abs(gg) < bestGg){ best = m; bestGg = Math.abs(gg); }
+    });
+    if(best){ usatiM[best.id] = 1; usatiF[x.f.id] = 1; out.push(_anVoceTrovato(best, [x])); }
+  });
+  // b) un pagamento per più fatture dello stesso fornitore (somma esatta al centesimo)
+  var perForn = {};
+  cand.forEach(function(x){ if(!usatiF[x.f.id]){ var k = _anFull(x.f.fornitore); (perForn[k] = perForn[k] || []).push(x); } });
+  liberi.forEach(function(m){
+    if(usatiM[m.id]) return;
+    var imp = _anR2(Math.abs(Number(m.importo)||0)), trovate = [];
+    Object.keys(perForn).forEach(function(k){
+      var L = perForn[k].filter(function(x){ if(usatiF[x.f.id]) return false; var gg = _anGiorni(x.f.data, m.data); return gg >= -5 && gg <= 75 && compatibile(m, x.f); }).slice(-12);
+      if(L.length < 2) return;
+      var n = L.length;
+      for(var mask = 1; mask < (1<<n); mask++){
+        var bits = 0, s = 0, sel = [];
+        for(var i = 0; i < n; i++) if(mask & (1<<i)){ bits++; s += L[i].netto; sel.push(L[i]); }
+        if(bits < 2 || bits > 4) continue;
+        if(Math.abs(_anR2(s) - imp) <= 0.01) trovate.push(sel);
+      }
+    });
+    if(trovate.length !== 1) return; // nessuna, o più combinazioni possibili: non si indovina
+    usatiM[m.id] = 1; trovate[0].forEach(function(x){ usatiF[x.f.id] = 1; });
+    out.push(_anVoceTrovato(m, trovate[0]));
+  });
+  // c) le altre: in banca non c'è nulla che le paghi
+  var limite = new Date(new Date(ultimo+'T12:00:00').getTime() - 20*86400000).toISOString().slice(0,10);
+  var resto = cand.filter(function(x){ return !usatiF[x.f.id] && String(x.f.data).slice(0,10) <= limite && !_anIgnorataChiave('psb1|'+x.f.id); });
+  if(resto.length){
+    var tot = resto.reduce(function(s, x){ return s + x.netto; }, 0);
+    var auto = {};
+    resto.forEach(function(x){ var d = typeof getPagDefault==='function' ? getPagDefault(x.f.fornitore) : null; if(d && d.stato === 'pagata') auto[x.f.fornitore] = 1; });
+    var nomiAuto = Object.keys(auto);
+    out.push({chiave:'psb|'+resto.map(function(x){ return x.f.id; }).sort().join(','), tipo:'pagata_senza_banca', gravita:'media',
+      titolo: resto.length+' fattur'+(resto.length===1?'a «pagata»':'e «pagate»')+' senza pagamento in banca · '+fmt(tot),
+      testo: 'Nel registro risult'+(resto.length===1?'a pagata':'ano pagate')+' con assegno, bonifico o addebito, ma nell\'estratto conto non c\'è nessun movimento che '+(resto.length===1?'la':'le')+' paghi (cercato dal giorno della fattura a 75 giorni dopo, anche sommando più fatture).'+
+        (nomiAuto.length ? ' Per '+nomiAuto.slice(0,3).join(', ')+(nomiAuto.length>3?' e altri':'')+' hai impostato «sempre pagato alla consegna»: l\'app segna la fattura pagata appena la importa, prima che l\'assegno passi dalla banca.' : '')+
+        ' Per ognuna: se l\'hai pagata in un altro modo, dillo; se non l\'hai pagata, rimettila «da pagare» e tornerà tra i debiti.',
+      fatture:[], movimenti:[], rischio:0, senzaBanca:resto.map(function(x){ return {f:x.f, netto:x.netto}; }),
+      etichettaOk:'✓ Sono tutte a posto'});
+  }
+  return out;
+}
+function _anVoceTrovato(m, lista){
+  var fs = lista.map(function(x){ return x.f; });
+  var tot = lista.reduce(function(s, x){ return s + x.netto; }, 0);
+  var nettoDiverso = lista.some(function(x){ return Math.abs(x.netto - Math.abs(Number(x.f.importo)||0)) > 0.01; });
+  var tipoPag = _anTipoPagamento(m);
+  var artPag = /^[aeiou]/.test(tipoPag) ? 'L\'' : 'Il ';
+  var testo = lista.length === 1
+    ? 'Risulta pagata ma non è collegata a nessun movimento. In banca c\'è un '+tipoPag+' del '+_anData(m.data)+' ancora libero, di '+fmt(Math.abs(Number(m.importo)||0))+': lo stesso importo'+(nettoDiverso?' (al netto della nota di credito)':'')+'. Collegala a quel movimento e il pagamento è verificato.'
+    : 'Risultano pagate ma nessuna è collegata a un movimento. '+artPag+tipoPag+' del '+_anData(m.data)+' di '+fmt(Math.abs(Number(m.importo)||0))+' è uguale al centesimo alla loro somma ('+lista.map(function(x){ return fmt(x.netto); }).join(' + ')+'): le hai pagate insieme.';
+  return {chiave:'pagtrov|'+m.id+'|'+fs.map(function(f){ return f.id; }).sort().join(','), tipo:'pagata_trovato', gravita:'media',
+    titolo: lista.length === 1 ? 'Trovato in banca il pagamento di questa fattura' : 'Un solo '+tipoPag+' per '+lista.length+' fatture',
+    testo: testo, fatture: fs, movimenti:[m], rischio:0,
+    trovato:{mid:String(m.id), fids:fs.map(function(f){ return String(f.id); }), tot:_anR2(tot)},
+    etichettaOk:'✓ Non è questo il pagamento'};
+}
+
+// ── 2) Note di credito su fatture già pagate: il credito è tornato?
+function _anCreditiNC(F, entrate){
+  var idx = window._anMovIndex;
+  if(!idx) return [];
+  var perFatt = _anIndicePerFattura(), ncPer = _anNcPerFattura(F), out = [], daVerificare = [];
+  var byId = {}; F.forEach(function(f){ byId[String(f.id)] = f; });
+  // movimento → fatture che lo usano (per riconoscere un pagamento successivo scalato)
+  var fattPerMov = {};
+  F.forEach(function(f){ _anPagamentiFattura(f, perFatt).forEach(function(p){ (fattPerMov[p.movId] = fattPerMov[p.movId] || []).push(f); }); });
+  var entrateUsate = {};
+  Object.keys(ncPer).forEach(function(fid){
+    var f = byId[fid]; if(!f || f.tipo !== 'fattura' || f.stato !== 'pagata') return; // da pagare/parziale: la nota riduce il debito, va bene così
+    var note = ncPer[fid], ncTot = _anR2(note.reduce(function(s, x){ return s + x.importo; }, 0));
+    if(!(ncTot > 0.009)) return;
+    var lordo = Math.abs(Number(f.importo)||0);
+    // la nota fa parte essa stessa di un pagamento (es. Leasys: bonifico = fatture − nota)
+    var ncInBanca = note.filter(function(x){ return _anPagamentiFattura(x.nc, perFatt).length; });
+    if(ncInBanca.length === note.length) return;
+    var pag = _anPagamentiFattura(f, perFatt);
+    var pagato = _anR2(Math.min(lordo, pag.reduce(function(s, p){ return s + p.importo; }, 0)));
+    var dataNc = note.map(function(x){ return String(x.nc.data||''); }).sort();
+    var riga = {f:f, note:note, ncTot:ncTot, pagato:pagato, pag:pag};
+    if(!pag.length){
+      // Nessun pagamento registrato. Se è una fattura da banca, o la nota la
+      // annulla per intero (nulla da riavere) o manca il pagamento del netto
+      // (se ne occupa il controllo qui sopra). In contanti o con carta non
+      // c'è modo di verificarlo: lo chiediamo a te.
+      if(_anPagBanca(f)) return;
+      var key = 'ncok|'+note.map(function(x){ return x.nc.id; }).sort().join(',');
+      if(!_anIgnorataChiave(key)){ riga.chiaveOk = key; daVerificare.push(riga); }
+      return;
+    }
+    var atteso = _anR2(lordo - ncTot);
+    if(pagato <= atteso + 0.5) return; // pagata già al netto della nota
+    var credito = _anR2(Math.min(ncTot, pagato - atteso));
+    // rimborso arrivato in banca?
+    var d0 = new Date(new Date(dataNc[0]+'T12:00:00').getTime() - 20*86400000).toISOString().slice(0,10);
+    var d1 = new Date(new Date(dataNc[dataNc.length-1]+'T12:00:00').getTime() + 150*86400000).toISOString().slice(0,10);
+    var rientrato = 0, rimborsi = [];
+    var importiCercati = [credito].concat(note.map(function(x){ return x.importo; }));
+    (entrate||[]).forEach(function(e){
+      if(entrateUsate[e.id] || !(Number(e.importo) > 0) || rientrato >= credito - 0.5) return;
+      var d = String(e.data||''); if(d < d0 || d > d1) return;
+      if(!importiCercati.some(function(v){ return Math.abs(Number(e.importo) - v) <= 0.5; })) return;
+      var chi = String(e.descrizione||'').replace(/^.*?\bBON\.?\s*DA\s+/i, '').replace(/^.*?\bDA\s+/i, '');
+      if(!(/RIMBORS|STORNO|RESTITU/i.test(e.descrizione||'') || _anNomiCompatibili(chi, f.fornitore))) return;
+      entrateUsate[e.id] = 1; rientrato += Number(e.importo); rimborsi.push(e);
+    });
+    if(rientrato >= credito - 0.5) return;
+    // scalato da un pagamento successivo allo stesso fornitore?
+    var scalato = Object.keys(fattPerMov).some(function(mid){
+      var mv = idx[mid]; if(!mv || !mv.data || String(mv.data) < d0 || String(mv.data) > d1) return false;
+      var fs = fattPerMov[mid].filter(function(g){ return String(g.id) !== String(f.id) && _anNomiCompatibili(g.fornitore, f.fornitore); });
+      if(!fs.length) return false;
+      var somma = fs.reduce(function(s, g){ return s + (g.tipo === 'nota_credito' ? -1 : 1) * Math.abs(Number(g.importo)||0); }, 0);
+      return Math.abs(_anR2(somma - Math.abs(Number(mv.importo)||0)) - credito) <= 0.5;
+    }) || F.some(function(g){
+      // o una fattura successiva lasciata «parziale» proprio per quella cifra
+      if(g === f || g.tipo !== 'fattura' || g.stato !== 'parziale' || !_anNomiCompatibili(g.fornitore, f.fornitore)) return false;
+      var pg = _anPagamentiFattura(g, perFatt); if(!pg.length) return false;
+      var res = Math.abs(Number(g.importo)||0) - pg.reduce(function(s, p){ return s + p.importo; }, 0);
+      return Math.abs(res - credito) <= 0.5;
+    });
+    if(scalato) return;
+    var daAvere = _anR2(credito - rientrato);
+    var pagTxt = pag.map(function(p){ var mv = idx[p.movId] || {}; var mm = Object.assign({data:p.data, importo:p.importo}, mv, {descrizione:(_anDescrizioneMov(p.movId)||'')}); return /^carta:/.test(p.movId) ? 'carta del '+_anData(p.data) : (/^paypal:/.test(p.movId) ? 'PayPal del '+_anData(p.data) : _anDescPag(mm)); }).join(' + ');
+    out.push({chiave:'credito|'+f.id+'|'+note.map(function(x){ return x.nc.id; }).sort().join(','), tipo:'credito_nc', gravita: daAvere >= 50 ? 'alta' : 'media',
+      titolo:'Credito da riavere da '+f.fornitore+': '+fmt(daAvere),
+      testo:'La fattura N° '+(f.numero||'—')+' di '+fmt(lordo)+' è stata pagata per intero ('+pagTxt+'). Poi è arrivata '+(note.length===1?'la nota di credito N° '+(note[0].nc.numero||'—')+' del '+_anData(note[0].nc.data):note.length+' note di credito')+' per '+fmt(ncTot)+'. '+
+        (rientrato > 0 ? 'Ne sono rientrati solo '+fmt(rientrato)+'. ' : 'Quei soldi non risultano rientrati: nessun bonifico in entrata dal fornitore e nessun pagamento successivo più basso di quella cifra. ')+
+        'Chiedi a '+f.fornitore+' il rimborso, oppure di scalarlo dalla prossima fattura.',
+      fatture:[f].concat(note.map(function(x){ return x.nc; })), movimenti:rimborsi, rischio:daAvere,
+      etichettaOk:'✓ Il credito l\'ho già avuto'});
+  });
+  if(daVerificare.length){
+    var totV = daVerificare.reduce(function(s, r){ return s + r.ncTot; }, 0);
+    out.push({chiave:'ncverifica|'+daVerificare.map(function(r){ return r.chiaveOk; }).sort().join(';'), tipo:'nc_da_verificare', gravita:'media',
+      titolo: daVerificare.length+' not'+(daVerificare.length===1?'a':'e')+' di credito su fatture pagate in contanti o con carta · '+fmt(totV),
+      testo:'Queste fatture risultano già pagate, poi è arrivata una nota di credito. Il pagamento non passa dall\'estratto conto, quindi l\'app non può sapere se il credito ti è tornato. Per ognuna: se il fornitore te l\'ha restituito o scalato, tocca «Credito ricevuto»; altrimenti è un credito da chiedere.',
+      fatture:[], movimenti:[], rischio:0, ncVerifica:daVerificare, etichettaOk:'✓ Li ho già avuti tutti'});
+  }
+  return out;
+}
+function _anDescrizioneMov(mid){
+  var k = String(mid), m = (_anMovCache||[]).find(function(x){ return String(x.id) === k; });
+  if(m && m.descrizione) return m.descrizione;
+  m = (window._anMovLiberi||[]).find(function(x){ return String(x.id) === k; });
+  return m ? (m.descrizione||'') : '';
+}
+
+// ── Disegno ──
+function _anHtmlTrovato(a, ignorata){
+  var m = a.movimenti[0];
+  var h = '<div class="an-sceltatit">'+(a.fatture.length === 1 ? 'La fattura' : 'Le fatture')+'</div><div class="an-rows">'+a.fatture.map(_anRigaFattura).join('')+'</div>';
+  h += '<div class="an-sceltatit">Il pagamento libero in banca</div><div class="an-row an-row-mov"><span class="an-row-ico">🏦</span><span class="an-row-main"><b>'+_anData(m.data)+' · '+fmt(Math.abs(Number(m.importo)||0))+'</b><span>'+esc(String(m.descrizione||'').slice(0,160))+'</span></span></div>';
+  if(!ignorata) h += '<button class="an-fix" style="margin-top:10px;width:100%;padding:11px" data-m="'+esc(a.trovato.mid)+'" data-f="'+esc(a.trovato.fids.join(','))+'" onclick="_anCollegaTrovato(this.dataset.m,this.dataset.f)">Collega '+(a.fatture.length === 1 ? 'la fattura' : 'le '+a.fatture.length+' fatture')+' a questo pagamento</button>';
+  return h;
+}
+function _anHtmlSenzaBanca(a, ignorata){
+  return '<div class="an-rows">'+a.senzaBanca.map(function(r){
+    var f = r.f, id = esc(String(f.id));
+    return '<div class="psb-riga">'+_anRigaFattura(f)+
+      '<div class="psb-info">Pagamento registrato: <b>'+esc(f.pagamento||'—')+'</b>'+(Math.abs(r.netto - Math.abs(Number(f.importo)||0)) > 0.01 ? ' · da cercare in banca '+fmt(r.netto)+' (al netto della nota di credito)' : '')+'</div>'+
+      (ignorata ? '' : '<div class="psb-btns">'+
+        '<button class="an-fix" data-id="'+id+'" onclick="_anCercaInBanca(this.dataset.id)">Cerca in banca</button>'+
+        '<button class="an-fix" data-id="'+id+'" onclick="_anSegnaContanti(this.dataset.id)">Pagata in contanti</button>'+
+        '<button class="an-fix an-fix-w" data-id="'+id+'" onclick="_anRimettiDaPagare(this.dataset.id)">Non pagata: rimetti da pagare</button>'+
+        '<button class="an-ign" data-k="psb1|'+id+'" onclick="_anIgnora(this.dataset.k,true)">✓ È a posto</button>'+
+      '</div>')+
+    '</div>';
+  }).join('')+'</div>';
+}
+function _anHtmlNcVerifica(a, ignorata){
+  return '<div class="an-rows">'+a.ncVerifica.map(function(r){
+    var f = r.f;
+    return '<div class="psb-riga">'+_anRigaFattura(f)+r.note.map(function(x){ return _anRigaFattura(x.nc); }).join('')+
+      '<div class="psb-info">Pagata: <b>'+esc(f.pagamento||'—')+'</b> · credito della nota: <b>'+fmt(r.ncTot)+'</b></div>'+
+      (ignorata ? '' : '<div class="psb-btns"><button class="an-ign" data-k="'+esc(r.chiaveOk)+'" onclick="_anIgnora(this.dataset.k,true)">✓ Credito ricevuto</button></div>')+
+    '</div>';
+  }).join('')+'</div>';
+}
+
+// ── Azioni ──
+async function _anCollegaTrovato(mid, fidsCsv){
+  var fs = String(fidsCsv||'').split(',').map(_anTrovaFattura).filter(Boolean);
+  if(!fs.length){ toast('Fattura non trovata'); return; }
+  try{
+    var r = await sbFetch('movimenti_banca?id=eq.'+encodeURIComponent(mid)+'&select=*');
+    if(!r || !r[0]){ toast('Quel movimento non si trova più'); return; }
+    var mv = _bancaNorm(r[0]);
+    if(mv.abbinata){ toast('Quel movimento nel frattempo è stato abbinato: ricarico'); await _anDopoAzionePagamento(); return; }
+    if(!confirm('Collego '+(fs.length === 1 ? 'la fattura '+(fs[0].fornitore||'')+' N° '+(fs[0].numero||'') : 'le '+fs.length+' fatture ('+fs.map(function(f){ return 'N° '+f.numero; }).join(', ')+')')+' al pagamento del '+_anData(mv.data)+' ('+fmt(Math.abs(mv.importo||0))+').\n\nCosa succede:\n• '+(fs.length === 1 ? 'la fattura resta pagata' : 'le fatture restano pagate')+', ora con il pagamento vero collegato\n• il movimento sparisce da «da abbinare» in Riconciliazione\n\nConfermi?')) return;
+    if(fs.length === 1){
+      var f = fs[0];
+      mv.abbinata = true; mv.fatturaId = f.id; mv.fatturaLabel = (f.fornitore||'')+' N°'+(f.numero||'');
+      await salvaMovimentoBanca(mv); // prima la banca: se non riesce, la fattura non si tocca
+      _impostaDatiRiconciliazione(f, mv, false, Math.abs(mv.importo||0));
+      f.riconciliata = true; f.stato = 'pagata'; f.dataPagamento = mv.data;
+      await dbUpdate(f);
+    } else {
+      if(!(await _applicaGruppoRiconciliazione(fs, [mv], {}))){ await _anDopoAzionePagamento(); return; } // l'avviso d'errore l'ha già dato
+    }
+    toast('✓ Collegat'+(fs.length === 1 ? 'a' : 'e')+' al pagamento del '+_anData(mv.data));
+  }catch(e){
+    toast('❌ Non riuscito, nulla è stato perso: riprova ('+String(e.message||e).slice(0,50)+')');
+    if(typeof _registraErrore==='function') _registraErrore('database','Collega pagamento trovato: '+(e.message||e));
+  }
+  await _anDopoAzionePagamento();
+}
+function _anCercaInBanca(fid){ _anConRitorno(function(){ apriRiconciliaDaFattura(String(fid)); }); }
+async function _anSegnaContanti(fid){
+  var f = _anTrovaFattura(fid); if(!f) return;
+  if(!confirm('Segno che '+(f.fornitore||'')+' N° '+(f.numero||'')+' ('+fmt(Math.abs(f.importo||0))+') è stata pagata in contanti.\n\nCosa succede: resta pagata, il metodo diventa «contanti» e non la cercherò più in banca.\n\nConfermi?')) return;
+  try{
+    f.pagamento = 'contanti'; f.pagamentoOrigine = 'manuale'; f.pagamentoImpostatoIl = new Date().toISOString();
+    await dbUpdate(f);
+    toast('✓ Segnata pagata in contanti');
+  }catch(e){ toast('❌ Non riuscito: riprova ('+String(e.message||e).slice(0,50)+')'); }
+  await _anDopoAzionePagamento();
+}
+async function _anRimettiDaPagare(fid){
+  var f = _anTrovaFattura(fid); if(!f) return;
+  var netto = Math.abs(typeof nettoFattura==='function' ? nettoFattura(f) : f.importo);
+  if(!confirm('Rimetto «da pagare» '+(f.fornitore||'')+' N° '+(f.numero||'')+'.\n\nCosa succede:\n• torna tra i debiti per '+fmt(netto)+'\n• quando arriva l\'assegno o il bonifico, Riconciliazione te la propone\n\nConfermi?')) return;
+  try{
+    var ncTot = Math.abs(Number(f.importo)||0) - netto;
+    f.stato = ncTot > 0.009 ? 'parziale' : 'da_pagare';
+    f.parzPagato = ncTot > 0.009 ? _anR2(ncTot) : 0; // la nota di credito già agganciata resta scalata
+    f.dataPagamento = ''; f.riconciliata = false;
+    f.pagamentoOrigine = 'manuale'; f.pagamentoImpostatoIl = new Date().toISOString();
+    await dbUpdate(f);
+    toast('✓ Rimessa da pagare');
+  }catch(e){ toast('❌ Non riuscito: riprova ('+String(e.message||e).slice(0,50)+')'); }
+  await _anDopoAzionePagamento();
+}
+
 // ── Disegno della voce "un pagamento e le sue fatture" ──
 function _anHtmlPagamento(a, ignorata){
   var P = a.pag, h = '';
@@ -25419,7 +25864,9 @@ async function _anCaricaMovAbbinati(forza){
     // Bonifici in entrata / rimborsi (poche righe): servono a riconoscere un
     // pagamento doppio già restituito dal fornitore.
     try{
-      var ent = await sbFetchAll('movimenti_banca?importo=gt.0&or=(descrizione.ilike.*BONIF*,descrizione.ilike.*RIMBORS*,descrizione.ilike.*STORNO*,descrizione.ilike.*RESTITU*)&select=id,data,importo,descrizione&order=id');
+      // 24/09: anche «BON.DA …» (così arrivano i rimborsi Amazon: prima non
+      // venivano visti e un credito già rimborsato sembrava da riavere)
+      var ent = await sbFetchAll('movimenti_banca?importo=gt.0&or=(descrizione.ilike.*BONIF*,descrizione.ilike.*BON.DA*,descrizione.ilike.*RIMBORS*,descrizione.ilike.*STORNO*,descrizione.ilike.*RESTITU*)&select=id,data,importo,descrizione&order=id');
       _anEntrate = (ent||[]).map(function(r){ return {id:r.id, data:r.data, importo:r.importo||0, descrizione:r.descrizione||''}; });
     }catch(e){ if(!_anEntrate) _anEntrate=[]; }
     // Indice leggero di TUTTI i movimenti (id → abbinata/fattura_id): serve al
@@ -25432,6 +25879,12 @@ async function _anCaricaMovAbbinati(forza){
       (idx||[]).forEach(function(r){ mapIdx[String(r.id)] = {abbinata:!!r.abbinata, fatturaId:r.fattura_id||null, importo:r.importo, data:r.data, ignorata:!!r.ignorata}; });
       window._anMovIndex = mapIdx;
     }catch(e){ /* senza indice il controllo salta, non è bloccante */ }
+    // Uscite non ancora abbinate, con la descrizione: servono a proporre il
+    // pagamento giusto per le fatture «pagate» senza movimento (24/09).
+    try{
+      var lib = await sbFetchAll('movimenti_banca?abbinata=eq.false&ignorata=eq.false&importo=lt.0&select=id,data,importo,descrizione&order=id');
+      window._anMovLiberi = (lib||[]).map(function(r){ return {id:r.id, data:r.data, importo:Number(r.importo)||0, descrizione:r.descrizione||'', ignorata:false}; });
+    }catch(e){ window._anMovLiberi = null; }
     _anMovCacheTs = Date.now();
   }catch(e){ if(!_anMovCache) _anMovCache=[]; }
   return _anMovCache;
@@ -25490,7 +25943,7 @@ async function _anAggiornaHome(forza){
       return;
     }
     var nAlte=rilevanti.filter(function(a){ return a.gravita==='alta'; }).length;
-    var soldi=rilevanti.filter(function(a){ return a.tipo==='pagamento_doppio' && !/identici/.test(a.testo); }).reduce(function(s,a){ return s+(a.rischio||0); },0);
+    var soldi=rilevanti.filter(function(a){ return (a.tipo==='pagamento_doppio' && !/identici/.test(a.testo)) || a.tipo==='credito_nc'; }).reduce(function(s,a){ return s+(a.rischio||0); },0);
     var tipi={}; rilevanti.forEach(function(a){ tipi[a.titolo]=(tipi[a.titolo]||0)+1; });
     var sotto=Object.keys(tipi).slice(0,2).map(function(t){ return (tipi[t]>1?tipi[t]+'× ':'')+t.toLowerCase(); }).join(' · ');
     slot.innerHTML =
@@ -25621,6 +26074,9 @@ function _anHtmlVoce(a, ignorata){
     '<div class="an-item-hd"><span class="an-pill '+cls+'">'+lab+'</span><span class="an-item-t">'+esc(a.titolo)+'</span></div>'+
     '<div class="an-item-txt">'+esc(a.testo)+'</div>'+
     ((a.tipo==='doppione'||a.tipo==='simile') && a.fatture.length===2 && !ignorata ? _anSceltaDoppione(a) :
+      a.trovato ? _anHtmlTrovato(a, ignorata) :
+      a.senzaBanca ? _anHtmlSenzaBanca(a, ignorata) :
+      a.ncVerifica ? _anHtmlNcVerifica(a, ignorata) :
       (a.pag
         ? _anHtmlPagamento(a, ignorata)
         : '<div class="an-rows">'+a.fatture.map(_anRigaFattura).join('')+(a.movimenti||[]).map(function(m){ return _anRigaMovimento(m, a, ignorata); }).join('')+'</div>'))+
@@ -25652,7 +26108,7 @@ function _anRenderFoglio(){
   if(!attive.length) html+='<div class="an-vuoto"><div style="font-size:38px">✅</div><b>Nessuna anomalia</b><span>Il registro è in ordine: nessun doppione, nessun pagamento doppio, nessun bonifico collegato alla fattura sbagliata.</span></div>';
   html+=sez('Da controllare subito', alte.length+'', alte);
   html+=sez('Da verificare', medie.length+'', medie);
-  html+=sez('Probabilmente a posto', basse.length+' · stesso giorno e stesso importo', basse);
+  html+=sez('Probabilmente a posto', basse.length+'', basse);
   if(ignorate.length){
     html+='<details class="an-det"><summary>Segnate come "non è un problema" ('+ignorate.length+')</summary>'+ignorate.map(function(a){ return _anHtmlVoce(a,true); }).join('')+'</details>';
   }
@@ -31036,6 +31492,11 @@ html[data-theme="dark"] .sf-hint{color:var(--orange)}
 .rf-dt em{font-style:normal;font-weight:500;font-size:11.5px;color:var(--ink3)}
 .rf-ds{font-size:11.5px;color:var(--ink3);word-break:break-word;margin-top:2px;line-height:1.35}
 .rf-badge{font-size:11px;font-weight:700;color:var(--blue);margin-top:4px}
+.rf-avviso{margin:8px 16px 2px;padding:10px 12px;border-radius:14px;background:rgba(255,149,0,.08);border:1px solid rgba(255,149,0,.35);font-size:12.5px;line-height:1.45;color:var(--ink2)}
+.psb-riga{border:1px solid var(--ds-hair,var(--sep));border-radius:14px;padding:8px;margin-bottom:8px;background:var(--surface)}
+.psb-info{font-size:11.5px;color:var(--ink3);margin:6px 2px 0;line-height:1.4}
+.psb-btns{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.psb-btns .an-ign{margin:0;width:auto;flex:1 1 100%}
 .rf-imp{font-size:15px;font-weight:800;flex-shrink:0}
 .rf-btns{display:flex;gap:6px;margin-top:9px}
 .rf-b{flex:1;padding:8px 6px;border:1px solid var(--ds-hair,var(--sep));border-radius:10px;background:var(--surface2);color:var(--ink);font-family:inherit;font-size:12px;font-weight:700;cursor:pointer}
