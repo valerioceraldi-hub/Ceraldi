@@ -18515,20 +18515,59 @@ async function onBancaCSVSelected(input){
     // "orfano" sul duplicato mai confermato. Prima di salvare, ogni
     // movimento del CSV con stessa data+importo esatto di uno già presente
     // ma id diverso viene messo da parte, MAI salvato in automatico.
+    // FIX 23/09 (Valerio: "non legge tutta la descrizione del movimento, e
+    // spesso gli estremi della fattura e il destinatario sono proprio alla
+    // fine"). Causa vera, trovata sui dati: i movimenti gen-giu 2026 sono
+    // entrati dal PDF dell'estratto conto con la descrizione CORTA (198
+    // bonifici, nessuno con la causale); il CSV "Elenco entrate/uscite" ha
+    // invece il testo completo ("... FAVORE Rosaria Marotta NOTPROVIDE -
+    // fattura FPR 31/26"). Ma reimportando il CSV sullo stesso periodo, ogni
+    // movimento finiva tra i "possibili doppioni" con due sole scelte:
+    // "Tieni entrambi" (doppione vero) o "Ignora" (testo completo buttato).
+    // Ora, se è chiaramente LO STESSO movimento (stessa data, stesso importo
+    // e stesso riferimento bancario: codice MBVT/MB0B del bonifico, numero
+    // assegno, CRA...), la descrizione viene COMPLETATA sulla riga già
+    // presente: stesso id, abbinamento e stato intatti, nessun doppione.
+    // Il confronto si fa con ciò che c'è DAVVERO nel database per quel
+    // periodo, non più con la sola copia locale del dispositivo (che può
+    // essere incompleta e far passare doppioni veri).
+    var _dateCsv = mov.map(function(m){ return m.data; }).sort();
+    var _dalCsv = _dateCsv[0], _alCsv = _dateCsv[_dateCsv.length-1];
+    var _righeDb = null;
+    try{ _righeDb = await sbFetchAll('movimenti_banca?banca=eq.BPM&data=gte.'+_dalCsv+'&data=lte.'+_alCsv+'&select=*'); }catch(_e){ _righeDb = null; }
+    var _baseConfronto = Array.isArray(_righeDb)
+      ? _righeDb.map(function(r){ return {id:r.id, data:r.data, importo:Number(r.importo)||0, descrizione:r.descrizione||'', abbinata:!!r.abbinata, _riga:r}; })
+      : (_bancaMovimenti||[]).filter(function(m){ return (m.banca||'BPM')==='BPM'; });
     var mappaEsistentiPerChiave = {};
-    (_bancaMovimenti||[]).forEach(function(m){
+    _baseConfronto.forEach(function(m){
       var k = m.data+'|'+(m.importo||0).toFixed(2);
       (mappaEsistentiPerChiave[k] = mappaEsistentiPerChiave[k]||[]).push(m);
     });
-    var movSicuri = [], sospetti = [];
-    mov.forEach(function(m){
-      var k = m.data+'|'+m.importo.toFixed(2);
-      var candidati = mappaEsistentiPerChiave[k]||[];
-      var giaIdentico = candidati.some(function(c){ return c.id===m.id; });
-      if(giaIdentico){ movSicuri.push(m); return; } // stesso id: upsert normale, nessun rischio
-      var possibileDoppio = candidati.find(function(c){ return c.id!==m.id; });
-      if(possibileDoppio){ sospetti.push({nuovo:m, vecchio:possibileDoppio}); }
-      else { movSicuri.push(m); }
+    var movSicuri = [], sospetti = [], arricchiti = [], giaCompleti = 0, _usati = {};
+    var _chiave = function(m){ return m.data+'|'+m.importo.toFixed(2); };
+    var _liberi = function(m){ return (mappaEsistentiPerChiave[_chiave(m)]||[]).filter(function(c){ return !_usati[c.id]; }); };
+    // Tre passaggi, così l'esito non dipende dall'ordine delle righe nel file:
+    // 1) stesso id già presente → aggiornamento normale
+    var _resto = mov.filter(function(m){
+      if(_liberi(m).some(function(c){ return c.id===m.id; })){ _usati[m.id] = 1; movSicuri.push(m); return false; }
+      return true;
+    });
+    // 2) stesso movimento riconosciuto dal riferimento bancario → completa la descrizione
+    _resto = _resto.filter(function(m){
+      var stessi = _liberi(m).filter(function(c){ return _descStessoMovimento(c.descrizione, m.descrizione); });
+      if(stessi.length !== 1) return true;
+      var v = stessi[0];
+      _usati[v.id] = 1;
+      if(!_descPiuCompleta(v.descrizione, m.descrizione)) giaCompleti++;
+      else if(v._riga) arricchiti.push({vecchio:v, nuovo:m});
+      else sospetti.push({nuovo:m, vecchio:v}); // senza la riga del database: decide Valerio
+      return false;
+    });
+    // 3) il resto: nessun candidato libero → movimento nuovo; altrimenti da decidere a mano
+    _resto.forEach(function(m){
+      var c = _liberi(m);
+      if(!c.length) movSicuri.push(m);
+      else sospetti.push({nuovo:m, vecchio:c[0]});
     });
 
     var dateOrdinate = mov.map(m=>m.data).sort();
@@ -18545,6 +18584,11 @@ async function onBancaCSVSelected(input){
     if(info) info.textContent = '⏳ Salvataggio ' + movSicuri.length + ' movimenti su Supabase...';
     try{
       if(movSicuri.length) await upsertMovimentiBanca(movSicuri);
+      var _arricchitiOk = 0;
+      if(arricchiti.length){
+        if(info) info.textContent = '⏳ Completo la descrizione di ' + arricchiti.length + ' movimenti già presenti...';
+        _arricchitiOk = await _bancaCompletaDescrizioni(arricchiti);
+      }
 
       // DOPPIO VISTO DI CONFORMITÀ (25/08, richiesto esplicitamente da
       // Valerio: "fai in modo che leggi bene e non salti nessun movimento,
@@ -18587,6 +18631,8 @@ async function onBancaCSVSelected(input){
       var msg = '✓ ' + movSicuri.length + ' movimenti salvati e verificati · periodo ' + dal + ' → ' + al
         + ' · entrate ' + fmt(entrate) + ' · uscite ' + fmt(Math.abs(uscite))
         + ' · righe file: ' + mov._totaleRigheLette + ' = ' + mov.length + ' movimenti + ' + mov._righeVuote + ' vuote + ' + mov._righeScartate + ' scartate + ' + mov._righeRiepilogo + ' riepilogo'
+        + (arricchiti.length ? ' · 📝 ' + _arricchitiOk + ' descrizioni completate su movimenti già presenti (abbinamenti intatti)' + (_arricchitiOk < arricchiti.length ? ' — ⚠️ ' + (arricchiti.length - _arricchitiOk) + ' non confermate dal database, riprova' : '') : '')
+        + (giaCompleti ? ' · ' + giaCompleti + ' già presenti e completi' : '')
         + (sospetti.length ? ' · ⚠️ ' + sospetti.length + ' possibili doppioni in attesa di conferma' : '');
       if(info) info.innerHTML = msg;
       toast('✓ ' + movSicuri.length + ' movimenti CSV salvati e verificati (' + dal + ' → ' + al + ')', {forza:true});
@@ -18610,6 +18656,60 @@ async function onBancaCSVSelected(input){
     toast('❌ ' + (err.message||err));
     console.error('Parser CSV Banco BPM:', err);
   }
+}
+
+// Il numero fattura compare nel testo come numero a sé? "FPR 31/26" trova
+// "fattura FPR 31/26" o "FPR31-26", ma "891" NON trova "MB0B67108917".
+// Gli zeri iniziali sono facoltativi ("000528/26" trova "528/26").
+function _numeroFatturaNelTesto(numero, testo){
+  var parti = String(numero||'').toLowerCase().match(/[a-z0-9]+/g) || [];
+  if(parti.join('').length < 3) return false;
+  var re = new RegExp('(^|[^a-z0-9])' + parti.map(function(p){ return p.replace(/^0+(?=\d)/, '0*'); }).join('[^a-z0-9]{0,3}') + '($|[^a-z0-9])');
+  return re.test(String(testo||'').toLowerCase());
+}
+
+// ── Stesso movimento letto da due fonti? (23/09) ──
+// PDF: "VS.DISP. RIF. MBVT97072750/00867223 FAVORE S. PASSALACQUA S.P.A"
+// CSV: "VOSTRA DISPOSIZIONE - VS.DISP. RIF. MBVT97072750/00867223 FAVORE ...
+//       NOTPROVIDE - saldo fattura 1234"
+// È lo stesso se il testo vecchio sta tutto dentro il nuovo, oppure se
+// hanno in comune un riferimento bancario univoco (codici di almeno 8
+// caratteri con cifre: MBVT..., MB0B..., numero assegno, CRA). Data e
+// importo sono già stati controllati da chi chiama.
+function _descNorm(s){ return String(s||'').toUpperCase().replace(/NOTPROVIDE/g,' ').replace(/[^A-Z0-9]+/g,' ').replace(/\s+/g,' ').trim(); }
+function _descCodici(s){ return (s.match(/\b(?=[A-Z0-9]*\d)[A-Z0-9]{8,}\b/g) || []).filter(function(c){ return !/^20\d{6}$/.test(c); }); }
+function _descStessoMovimento(vecchia, nuova){
+  var a = _descNorm(vecchia), b = _descNorm(nuova);
+  if(!a || !b) return false;
+  if(a === b || b.indexOf(a) >= 0 || a.indexOf(b) >= 0) return true;
+  var cb = _descCodici(b);
+  return _descCodici(a).some(function(c){ return cb.indexOf(c) >= 0; });
+}
+function _descPiuCompleta(vecchia, nuova){ return _descNorm(nuova).length > _descNorm(vecchia).length + 3; }
+
+// Completa la descrizione di movimenti GIÀ presenti riscrivendo la riga
+// così com'è nel database e cambiando SOLO il testo: id, abbinamento,
+// fattura, "ignorato", verifica restano identici. Poi rilegge dal database
+// per confermare davvero quante sono state scritte.
+async function _bancaCompletaDescrizioni(lista){
+  if(!lista || !lista.length) return 0;
+  var ora = new Date().toISOString(), mappa = {};
+  var righe = lista.map(function(x){
+    mappa[x.vecchio.id] = x.nuovo.descrizione;
+    return Object.assign({}, x.vecchio._riga, { descrizione: x.nuovo.descrizione, updated_at: ora });
+  });
+  for(var i = 0; i < righe.length; i += 200){
+    await sbFetch('movimenti_banca', { method:'POST', headers:{'Prefer':'resolution=merge-duplicates,return=minimal'}, body: JSON.stringify(righe.slice(i, i+200)) });
+  }
+  (_bancaMovimenti||[]).forEach(function(m){ if(mappa[m.id]) m.descrizione = mappa[m.id]; });
+  try{ _salvaBancaLocale(); }catch(e){}
+  var ids = Object.keys(mappa), ok = 0;
+  for(var j = 0; j < ids.length; j += 80){
+    var lotto = ids.slice(j, j+80).map(function(x){ return '"' + String(x).replace(/"/g,'') + '"'; }).join(',');
+    var r = await sbFetch('movimenti_banca?select=id,descrizione&id=in.(' + encodeURIComponent(lotto) + ')');
+    (r||[]).forEach(function(row){ if(row.descrizione === mappa[row.id]) ok++; });
+  }
+  return ok;
 }
 
 // Mostra i movimenti sospettati duplicati (stessa data+importo di uno già
@@ -18650,7 +18750,10 @@ function _mostraDuplicatiCSV(sospetti){
     hh += '<div style="font-size:12px;margin-bottom:6px">'+esc(s.vecchio.descrizione)+'</div>';
     hh += '<div style="font-size:11px;color:var(--ink3);margin-bottom:2px">Nel CSV:</div>';
     hh += '<div style="font-size:12px;margin-bottom:8px">'+esc(s.nuovo.descrizione)+'</div>';
-    hh += '<div id="_csvDupAz'+idx+'" style="display:flex;gap:6px">';
+    hh += '<div id="_csvDupAz'+idx+'" style="display:flex;gap:6px;flex-wrap:wrap">';
+    if(_descPiuCompleta(s.vecchio.descrizione, s.nuovo.descrizione)){
+      hh += '<button onclick="_csvDupCompleta('+idx+')" style="flex:1 1 100%;padding:9px;border:none;border-radius:6px;background:var(--blue);color:#fff;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">È lo stesso: completa la descrizione</button>';
+    }
     hh += '<button onclick="_csvDupTieniEntrambi('+idx+')" style="flex:1;padding:8px;border:1px solid var(--sep);border-radius:6px;background:var(--surface);color:var(--ink2);font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">Tieni entrambi</button>';
     hh += '<button onclick="_csvDupIgnoraNuovo('+idx+')" style="flex:1;padding:8px;border:1px solid var(--ink3);border-radius:6px;background:transparent;color:var(--ink2);font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">Ignora questo</button>';
     hh += '</div></div>';
@@ -18696,6 +18799,23 @@ function _csvDupTieniEntrambi(idx){
   }).catch(function(e){
     alert('⚠️ Errore nel salvare "'+s.nuovo.descrizione.slice(0,40)+'": '+(e.message||e));
   });
+}
+
+// "È lo stesso: completa la descrizione" (23/09): tiene il movimento già
+// presente (con il suo eventuale abbinamento) e gli dà il testo completo del
+// CSV. Scrive SOLO la descrizione.
+async function _csvDupCompleta(idx){
+  var s = (window._csvSospetti||[])[idx];
+  if(!s || s._deciso) return;
+  s._deciso = true;
+  _csvDupSegnaDecisa(idx, '📝 Descrizione completata');
+  try{
+    var r = await sbFetch('movimenti_banca?id=eq.'+encodeURIComponent(s.vecchio.id), { method:'PATCH', body: JSON.stringify({ descrizione: s.nuovo.descrizione, updated_at: new Date().toISOString() }) });
+    if(!r || !r.length) throw new Error('0 righe aggiornate');
+    (_bancaMovimenti||[]).forEach(function(m){ if(m.id === s.vecchio.id) m.descrizione = s.nuovo.descrizione; });
+    try{ _salvaBancaLocale(); }catch(e){}
+    window._csvDupQualcheSalvataggio = true;
+  }catch(e){ alert('⚠️ Descrizione non salvata per "'+String(s.vecchio.descrizione).slice(0,40)+'": '+(e.message||e)); }
 }
 
 // "Ignora questo": era davvero lo stesso movimento già presente, letto con
@@ -19765,11 +19885,15 @@ function renderRiconciliazione(){
       }
 
       // Match su numero fattura nella descrizione
-      if(!matchCerto && f.numero){
-        var numF = String(f.numero).replace(/[^a-z0-9]/gi,'').toLowerCase();
-        if(numF.length>=3 && dLow.replace(/[^a-z0-9]/g,'').indexOf(numF)>=0){
-          matchCerto = f; verificato = (f.stato==='pagata'); break;
-        }
+      // FIX 23/09: il numero va trovato come numero A SÉ, non come pezzo di
+      // un codice più lungo. Prima si toglievano tutti i separatori e si
+      // cercava una sottostringa: "155/" di GB FOOD veniva "trovato" dentro
+      // il codice CBILL di un bollettino dell'Agenzia delle Entrate. Verificato
+      // su tutti i movimenti veri: la regola nuova tiene tutte le 12 coppie
+      // giuste e toglie solo le 4 sbagliate (con le descrizioni complete,
+      // piene di codici lunghi, il rischio sarebbe solo cresciuto).
+      if(!matchCerto && f.numero && _numeroFatturaNelTesto(f.numero, dLow)){
+        matchCerto = f; verificato = (f.stato==='pagata'); break;
       }
 
       // ── Auto-match SDD/Bonifico: stesso fornitore (≥5 car) + importo identico ──
