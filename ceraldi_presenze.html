@@ -294,6 +294,11 @@
     var REC = [['Giulia F.', 5, 'Il miglior caffè di via Toledo, sfogliatella calda e personale gentilissimo. Torneremo!', -1], ['Mark T.', 4, 'Great espresso and pastries, a bit crowded in the morning but worth it.', -3], ['Salvatore', 2, 'Servizio lento al tavolo, abbiamo aspettato 20 minuti per due cappuccini.', -4], ['Anna R.', 5, 'Babà spettacolare, locale elegante.', -8], ['Luca', 3, 'Buono ma prezzi al tavolo alti.', -12]];
     DB.recensioni_google = REC.map(function (r, i) { return { id: 'rev' + i, autore: r[0], foto: null, voto: r[1], testo: r[2], testo_originale: null, lingua: i === 1 ? 'en' : 'it', pubblicata_il: addDays(OGGI, r[3]).toISOString(), link: 'https://maps.google.com/?cid=0', prima_vista_il: new Date().toISOString(), notificata_il: new Date().toISOString() }; });
     DB.recensioni_letture = [{ recensione_id: 'rev3', admin_id: ADMIN_ID, letta_il: addDays(OGGI, -7).toISOString() }, { recensione_id: 'rev4', admin_id: ADMIN_ID, letta_il: addDays(OGGI, -11).toISOString() }];
+    // 2.5: un dipendente ha cambiato IBAN (promemoria per l'admin)
+    var dipIban = profili.find(function (p) { return p.ruolo !== 'admin' && p.id !== DIP_ID; }) || profili[1];
+    if (dipIban) { dipIban.iban = 'IT60X0542811101000000123456'; }
+    DB.presenze_iban_cambi = dipIban ? [{ id: 1, dipendente_id: dipIban.id, iban_prima: 'IT02L1234512345123456789012', iban_nuovo: 'IT60X0542811101000000123456', cambiato_il: addDays(OGGI, -3).toISOString(), cambiato_da: 'dipendente', bonifico_aggiornato_il: null }] : [];
+    DB.presenze_verifiche_tel = [];
     DB.ceraldi_stato_condiviso = [{ id: 'recensioni_google_stato', data: { rating: 4.3, totale: 1927, link: 'https://maps.google.com/?cid=0', nome: 'Bar Aurora', aggiornato: new Date().toISOString() } }];
     DB.presenze_turni_extra = DB.presenze_turni_extra || [];
   })();
@@ -597,18 +602,13 @@
     if (!me) return;
     avvisoDemo('Demo: Telegram simulato — il bot risponde tra qualche secondo');
     setTimeout(function () {
-      if (!me.telegram_chat_id && start && start !== 'verifica' && me.tg_link_code === start) {
+      if (!me.telegram_chat_id && start && start !== 'verifica' && (me.tg_link_code === start || /^v/.test(start))) {
         var v = clone(me); me.telegram_chat_id = 'demo-tg-' + me.id.slice(0, 6); me.tg_link_code = null; me.telegram_user_id = '7' + Math.floor(1e8 + rnd() * 8e8);
         var su1 = sessUser; sessUser = null; regTrigger('presenze_profili', 'update', v, me);
         regScrivi({ categoria: 'sistema', azione: 'telegram_collegato', tabella: 'presenze_profili', rif: me.id, dip: me.id, ruolo: 'sistema', dati: { telegram_chat_id: me.telegram_chat_id, telegram_user_id: me.telegram_user_id, bot: 'dip' } }); sessUser = su1;
       }
     }, 2500);
-    setTimeout(function () {
-      if (!me.telegram_chat_id) return;
-      var v = clone(me); me.telefono = '+39 347 555 01' + String(10 + Math.floor(rnd() * 89)); me.telefono_verificato_il = new Date().toISOString(); me.telefono_verifica_metodo = 'telegram';
-      var su = sessUser; sessUser = null; regTrigger('presenze_profili', 'update', v, me); sessUser = su; // lo scrive il bot, non l'app
-      regScrivi({ categoria: 'sistema', azione: 'telefono_verificato_telegram', tabella: 'presenze_profili', rif: me.id, dip: me.id, ruolo: 'sistema', dati: { telefono: me.telefono, telegram_user_id: me.telegram_user_id, metodo: 'Telegram request_contact (contact.user_id = from.id)' } });
-    }, 5500);
+    // 2.5: il numero si certifica solo col codice a 6 cifre (vedi presenze_tel_verifica_*)
   }, true);
 
   /* ── Auth / storage / funzioni / realtime finti ── */
@@ -761,7 +761,19 @@
     }
     if (name === 'presenze_rete_mio_ip') { var ipM = IP_DEMO[adm ? 'admin' : 'dip'], rM = DB.presenze_reti_locale.find(function (r) { return r.attiva && r.ip === ipM; }); return { ip: ipM, rete: rM ? rM.etichetta : null }; }
     if (name === 'presenze_rete_aggiungi') { if (!adm) throw new Error('Non autorizzato'); var ipA = a.p_ip || IP_DEMO.admin; var rA = { id: uid('rt00'), etichetta: a.p_etichetta || 'Wi-Fi del bar', ip: ipA, prefisso: ipA + '/32', attiva: true, creata_il: new Date().toISOString(), ultimo_uso: null }; DB.presenze_reti_locale.push(rA); return rA; }
-    if (name === 'presenze_segreto_presente') return adm;
+    if (name === 'presenze_segreto_presente') return adm && ['gbp_refresh_token', 'gbp_client_secret', 'gbp_location'].indexOf(a.p_chiave) < 0;
+    // 2.5: verifica del numero con Telegram + codice (in demo il codice è 123456)
+    if (name === 'presenze_tel_verifica_avvia') { var mpv = mioProfilo(); window.__demoTel = { stato: 'avviata', ts: Date.now() }; setTimeout(function () { if (window.__demoTel && window.__demoTel.stato === 'avviata') { window.__demoTel.stato = 'codice_inviato'; window.__demoTel.otp = new Date().toISOString(); avvisoDemo('Demo: il bot Telegram ha mandato il codice 123456'); } }, 3500); return { start: 'vdemo' + Date.now().toString(16), collegato: !!(mpv && mpv.telegram_chat_id), ruolo: mpv ? mpv.ruolo : 'dipendente' }; }
+    if (name === 'presenze_tel_verifica_stato') { var mps = mioProfilo() || {}, tv = window.__demoTel || {}; return { verificato: !!mps.telefono_verificato_il, telefono: mps.telefono, collegato: !!mps.telegram_chat_id, stato: tv.stato || null, telefono_nuovo: tv.stato === 'codice_inviato' ? '+39333 ••• 4567' : null, otp_inviato_il: tv.otp || null }; }
+    if (name === 'presenze_tel_verifica_conferma') {
+      var tvc = window.__demoTel || {}; if (tvc.stato !== 'codice_inviato') return { ok: false, errore: 'Nessun codice in attesa: nel bot tocca prima "Condividi il mio numero"' };
+      if (String(a.p_codice || '').replace(/\D/g, '') !== '123456') return { ok: false, errore: 'Codice non corretto (in demo è 123456)' };
+      var mpc = mioProfilo(); mpc.telefono = '+393331234567'; mpc.telefono_verificato_il = new Date().toISOString(); mpc.telefono_verifica_metodo = 'telegram'; tvc.stato = 'confermata';
+      regDaSessione({ categoria: 'sistema', azione: 'telefono_verificato_telegram', tabella: 'presenze_profili', rif: mpc.id, dip: mpc.id, dati: { telefono: mpc.telefono, metodo: 'Telegram + codice' } });
+      return { ok: true, telefono: mpc.telefono };
+    }
+    if (name === 'presenze_iban_bonifico_aggiornato') { if (!adm) throw new Error('Non autorizzato'); var nI = 0; DB.presenze_iban_cambi.forEach(function (c) { if (c.dipendente_id === a.p_dip && !c.bonifico_aggiornato_il) { c.bonifico_aggiornato_il = new Date().toISOString(); nI++; } }); return nI; }
+    if (name === 'presenze_gbp_client_id') return adm ? null : null;
     if (name === 'presenze_imposta_segreto') { if (!adm) throw new Error('Non autorizzato'); return !!a.p_valore; }
     if (name === 'presenze_chiudi_rapporto') {
       if (!adm) throw new Error('Non autorizzato');
@@ -852,6 +864,8 @@
         for (var k = 14; k >= 1; k--) { var g = iso(addDays(new Date(), -k)); if (g <= ieri && fatti.indexOf(g) < 0 && registro.some(function (e) { return giornoRoma(e.creato_il) <= g; })) { var s = regSigilla(g, true); if (s) out.push({ giorno: g, eventi: s.n_eventi, marche: s.marche, sigillo: s.sigillo_sha256 }); } }
         return Promise.resolve({ data: { esito: 'ok', giorni: out }, error: null });
       }
+      if (nome === 'tg-webhook') { setTimeout(function () { if (window.__demoTel && window.__demoTel.stato === 'avviata') { window.__demoTel.stato = 'codice_inviato'; window.__demoTel.otp = new Date().toISOString(); avvisoDemo('Demo: il bot Telegram ha mandato il codice 123456'); } }, 2500); return Promise.resolve({ data: { ok: true, inviato: true }, error: null }); }
+      if (nome === 'google-business') return Promise.resolve({ data: { ok: false, errore: 'Nella demo Google Business non si collega' }, error: null });
       if (['incassi-orari', 'previsione-sync', 'scioperi-sync', 'recensioni-sync'].indexOf(nome) >= 0) return Promise.resolve({ data: { ok: true, giorni: 7, nuove: 0, rating: 4.3, totale: 1927 }, error: null });
       if (nome === 'verifica-pec') {
         var mp = mioProfilo(), bo = (arguments[1] && arguments[1].body) || {};
@@ -2067,6 +2081,78 @@ html[data-theme="dark"] .ch-riep{background:#2C2C2E}
 .rec-lett span.ok{background:var(--green-light);color:var(--green);font-weight:600}
 .rec-passi{padding-left:18px;font-size:13px;line-height:1.5;margin:8px 0 12px}
 
+/* ══════════ 2.5 ══════════ */
+/* verifica numero: Telegram + codice */
+.tv-passi{display:flex;flex-direction:column;gap:8px;margin:4px 0 14px}
+.tv-p{display:flex;gap:12px;align-items:flex-start;opacity:.55;transition:opacity .2s}
+.tv-p.on,.tv-p.ok{opacity:1}
+.tv-p i{width:26px;height:26px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-style:normal;font-weight:800;font-size:13px;background:var(--surface3);color:var(--muted)}
+.tv-p.on i{background:var(--accent);color:#fff;box-shadow:0 0 0 4px rgba(10,132,255,.15)}
+.tv-p.ok i{background:var(--green);color:#fff;font-size:0}
+.tv-p.ok i::after{content:'✓';font-size:14px}
+.tv-p b{display:block;font-size:14px;line-height:1.3}
+.tv-p small{display:block;font-size:12.5px;color:var(--muted);line-height:1.35;margin-top:1px}
+.tv-stato{font-size:13px;line-height:1.45;background:var(--accent-light,rgba(10,132,255,.08));color:var(--text);border-radius:12px;padding:10px 12px;margin:14px 0 10px}
+.tv-inp{letter-spacing:10px;text-align:center;font-size:24px!important;font-weight:700;padding:14px!important}
+.tv-scarica{font-size:12px;color:var(--muted);text-align:center;margin-top:12px}
+.tv-scarica a{color:var(--accent)}
+.tv-gia{font-size:13px;background:var(--green-light);color:var(--green);border-radius:12px;padding:10px 12px;margin-bottom:12px;font-weight:600}
+.tv-fatto{display:flex;flex-direction:column;align-items:center;gap:4px;padding:18px 0 10px;text-align:center}
+.tv-fatto span{width:56px;height:56px;border-radius:50%;background:var(--green);color:#fff;font-size:28px;font-weight:800;display:flex;align-items:center;justify-content:center;animation:tvPop .35s var(--ease-ios,ease) both}
+.tv-fatto b{font-size:17px;margin-top:6px}
+.tv-fatto small{font-size:13px;color:var(--muted)}
+.tv-fatto.grande span{width:72px;height:72px;font-size:36px}
+@keyframes tvPop{from{transform:scale(.5);opacity:0}to{transform:scale(1);opacity:1}}
+/* completa il profilo */
+.cp-riga{width:100%;text-align:left;background:var(--surface);border:none;cursor:pointer;font:inherit;color:inherit}
+.cp-riga:active{background:var(--surface2)}
+.cp-chev{color:var(--ink3,var(--muted));font-size:20px;flex-shrink:0}
+.cp-nav{display:flex;align-items:center;justify-content:space-between;margin:-4px 0 8px}
+.cp-nav .btn-link{margin:0;padding:6px 0;width:auto}
+.cp-nav span{font-size:12px;color:var(--muted);font-weight:600}
+.cp-prog{display:flex;gap:6px;margin-bottom:16px}
+.cp-prog i{flex:1;height:4px;border-radius:4px;background:var(--surface3)}
+.cp-prog i.ok{background:var(--green)}
+.cp-prog i.on{background:var(--accent)}
+.cp-head{display:flex;gap:12px;align-items:flex-start;margin-bottom:16px}
+.cp-ico{width:48px;height:48px;border-radius:14px;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0}
+.cp-head b{display:block;font-size:18px;font-weight:800;letter-spacing:-.2px;line-height:1.25}
+.cp-head small{display:block;font-size:13px;color:var(--muted);line-height:1.45;margin-top:3px}
+.cp-piede{text-align:center;margin-top:6px}
+.cp-istr{font-size:13px;line-height:1.5;background:var(--surface2);border-radius:12px;padding:12px 14px}
+.cp-istr ol{margin:6px 0 0;padding-left:18px}
+.cp-card{display:flex;align-items:center;gap:12px;width:100%;text-align:left;font:inherit;color:inherit;border:1px solid var(--border);border-radius:18px;padding:12px 14px;margin-bottom:14px;background:var(--surface);cursor:pointer}
+.cp-card.da-fare{border-color:rgba(10,132,255,.35);background:linear-gradient(135deg,rgba(10,132,255,.07),rgba(94,92,230,.05)),var(--surface)}
+.cp-card b{display:block;font-size:15px}
+.cp-card small{display:block;font-size:12.5px;color:var(--muted);line-height:1.35}
+.cp-card .su-anello{width:46px;height:46px}
+.cp-card .su-anello span{width:36px;height:36px;font-size:12px}
+.cp-ok{width:40px;height:40px;border-radius:50%;background:var(--green-light);color:var(--green);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:18px;flex-shrink:0}
+.cp-badge{display:inline-flex;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--red);color:#fff;font-size:11px;font-weight:800;align-items:center;justify-content:center;vertical-align:1px}
+/* attestati apribili */
+.att-riga.apribile{cursor:pointer}
+.att-riga.apribile:active{opacity:.7}
+/* recensioni */
+.rec-nuova{display:inline-block;background:var(--accent);color:#fff;border-radius:6px;padding:0 6px;font-size:10.5px;font-weight:700;margin-left:4px;vertical-align:1px}
+.rec-risp{margin-top:10px;padding:10px 12px;border-left:3px solid var(--accent);background:var(--surface2);border-radius:0 10px 10px 0;font-size:13px;line-height:1.45}
+.rec-risp b{display:block;font-size:12px;color:var(--muted);margin-bottom:2px}
+.rec-chi-t{font-size:11.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin:10px 0 2px}
+.rec-chi-t:first-child{margin-top:0}
+.rec-ok{color:var(--green)}
+.rec-no{color:var(--muted);font-weight:500!important}
+.rec-gbp-invito{cursor:pointer;margin-bottom:12px}
+.gbp-uri{margin-top:6px;padding:8px 10px;border-radius:10px;background:var(--surface2);font-family:ui-monospace,Menlo,monospace;font-size:12px;word-break:break-all;cursor:pointer}
+.gbp-uri small{display:block;font-family:inherit;color:var(--accent);font-size:11px;margin-top:2px}
+/* IBAN */
+.iban-box{border-radius:14px;padding:12px 14px;margin:10px 0 0;display:flex;flex-direction:column;gap:4px;position:relative}
+.iban-box small{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}
+.iban-box b{font-family:ui-monospace,Menlo,monospace;font-size:15px;letter-spacing:.5px;word-break:break-all;padding-right:64px}
+.iban-box .btn-sm{position:absolute;right:12px;top:50%;transform:translateY(-50%)}
+.iban-box.nuovo{background:var(--green-light);color:var(--green)}
+.iban-box.nuovo b{color:var(--text)}
+.iban-box.vecchio{background:var(--surface2);color:var(--muted)}
+.iban-box.vecchio b{text-decoration:line-through;color:var(--muted)}
+
 </style>
 </head>
 <body>
@@ -2704,7 +2790,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     <button class="hdr-btn" id="tb-back" style="display:none" aria-label="Indietro"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
     <div class="tb-titles">
       <h1 id="tb-title">Presenze</h1>
-      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v60</span></p>
+      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v61</span></p>
     </div>
     <span class="topbar-badge" id="role-badge"></span>
     <div class="hdr-actions">
@@ -6909,7 +6995,7 @@ function descriviEvento(e) {
     case 'accesso': return 'Ha aperto l\'app';
     case 'notifica': return e.azione === 'consegnata' ? (d.ok ? 'Notifica consegnata' + (d.via === 'push' ? ' sul telefono (push)' : d.via === 'telegram' ? ' su Telegram' : '') + (d.tipo === 'ricevuta' ? ' — ricevuta della conferma' : '') : 'Notifica NON consegnata') : 'Notifica inviata';
     case 'registrazione': return ({ invito_accettato: 'Ha completato la verifica email e accettato l\'invito', firma_dispositivo_attivata: 'Ha attivato la firma dal telefono (' + (d.dispositivo || 'dispositivo') + ')', firma_dispositivo_revocata: 'Firma dal telefono disattivata' }[e.azione] || 'Registrazione: ' + e.azione);
-    case 'sistema': return ({ sigillo_giornaliero: 'Sigillo giornaliero con marche temporali', impronta_documento: 'Impronta digitale del file registrata', avvio_registro: 'Avvio del registro legale', telefono_verificato_telegram: 'Numero di telefono verificato tramite Telegram', telegram_collegato: 'Account Telegram collegato', pec_verificata: 'PEC verificata con codice' + (d.pec ? ' (' + d.pec + ')' : ''), rapporto_chiusura_programmata: 'Chiusura del rapporto programmata (ultimo giorno ' + _regVal(d.ultimo_giorno) + ')', rapporto_chiusura_annullata: 'Chiusura del rapporto annullata', rapporto_chiuso: 'Rapporto chiuso: accesso all\'app disattivato' }[e.azione] || e.azione);
+    case 'sistema': return ({ sigillo_giornaliero: 'Sigillo giornaliero con marche temporali', impronta_documento: 'Impronta digitale del file registrata', avvio_registro: 'Avvio del registro legale', telefono_verificato_telegram: 'Numero di telefono verificato tramite Telegram' + (d.metodo && /codice/.test(d.metodo) ? ' e codice a 6 cifre' : ''), telefono_codice_telegram: 'Codice di verifica del numero inviato su Telegram' + (d.telefono ? ' (' + d.telefono + ')' : ''), iban_cambiato: 'IBAN cambiato dal dipendente' + (d.iban_nuovo ? ' (nuovo: ' + d.iban_nuovo + ')' : ''), iban_bonifico_aggiornato: 'L\'amministratore conferma di pagare sul nuovo IBAN', telegram_collegato: 'Account Telegram collegato', pec_verificata: 'PEC verificata con codice' + (d.pec ? ' (' + d.pec + ')' : ''), rapporto_chiusura_programmata: 'Chiusura del rapporto programmata (ultimo giorno ' + _regVal(d.ultimo_giorno) + ')', rapporto_chiusura_annullata: 'Chiusura del rapporto annullata', rapporto_chiuso: 'Rapporto chiuso: accesso all\'app disattivato' }[e.azione] || e.azione);
     case 'conferma': {
       const dopo = d.dopo || {};
       if (dopo.letto_dip || dopo.letto_il) return 'Ha confermato ' + (cosa === 'documento' ? 'la lettura del documento' : 'il ' + cosa);
@@ -10505,18 +10591,23 @@ let _recFiltro = 'da_leggere';
 async function recApri() {
   const box = $('rec-root'); if (!box) return;
   box.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
-  const [chiave, rR, lR, sR, aR] = await Promise.all([
+  const [chiave, rR, lR, sR, aR, gbpR] = await Promise.all([
     sb.rpc('presenze_segreto_presente', { p_chiave: 'google_places_key' }),
     sb.from('recensioni_google').select('*').order('pubblicata_il', { ascending: false }).limit(200),
     sb.from('recensioni_letture').select('*'),
     sb.from('ceraldi_stato_condiviso').select('data').eq('id', 'recensioni_google_stato').maybeSingle(),
-    sb.from('presenze_profili').select('id,nome,cognome').eq('ruolo', 'admin'),
+    sb.from('presenze_profili').select('id,nome,cognome,ruolo,attivo,eliminato').eq('attivo', true),
+    sb.rpc('presenze_segreto_presente', { p_chiave: 'gbp_refresh_token' }),
   ]);
-  const R = rR.data || [], L = lR.data || [], S = (sR.data && sR.data.data) || null, admins = (aR.data || []);
-  V24.rec = { R, L, admins };
+  // 2.5: "chi l'ha letta" riguarda tutti (admin e dipendenti); Google Business al posto della chiave Places
+  const R = rR.data || [], L = lR.data || [], S = (sR.data && sR.data.data) || null;
+  const admins = (aR.data || []).filter(p => !p.eliminato).sort((a, b) => (a.ruolo === 'admin' ? 0 : 1) - (b.ruolo === 'admin' ? 0 : 1) || String(a.nome).localeCompare(String(b.nome)));
+  const gbp = !!gbpR.data;
+  V24.rec = { R, L, admins, gbp };
   const mia = id => L.some(l => l.recensione_id === id && l.admin_id === ME.id);
   const daLeggere = R.filter(r => !mia(r.id));
-  if (!chiave.data) {
+  if (!chiave.data && !gbp && typeof recCollegaScegli === 'function') { recCollegaScegli(box); return; }
+  if (!chiave.data && !gbp) {
     box.innerHTML = `${_h24('Recensioni Google', 'Ogni nuova recensione ti arriva come avviso, e vedi chi l\'ha letta')}
       <div class="card p24-card"><b>Collega Google (una volta sola)</b>
         <ol class="rec-passi"><li>Vai su <b>console.cloud.google.com</b> e crea un progetto.</li><li>In <b>API e servizi → Libreria</b> abilita <b>"Places API (New)"</b> (serve un metodo di pagamento; con una lettura ogni 2 ore si resta nella quota gratuita).</li><li>In <b>Credenziali</b> crea una <b>chiave API</b> e limitala a "Places API (New)".</li><li>In <b>Places API (New) → Quote</b> metti un tetto di <b>30 richieste al giorno</b>: così non si esce mai dalle 1.000 letture gratuite al mese.</li><li>Incollala qui sotto: resta salvata solo sul server.</li></ol>
@@ -10535,10 +10626,11 @@ async function recApri() {
       return `<div class="rec-card ${mia(r.id) ? '' : 'nuova'} ${(r.voto || 0) <= 3 ? 'bassa' : ''}" onclick="recApriUna('${esc(r.id)}')">
         <div class="rec-h">${r.foto ? `<img src="${esc(r.foto)}" alt="" referrerpolicy="no-referrer">` : `<span class="rec-av">${esc((r.autore || '?')[0])}</span>`}<div><b>${esc(r.autore || '')}</b>${stelle(r.voto)}<small>${r.pubblicata_il ? new Date(r.pubblicata_il).toLocaleDateString('it-IT', { day: 'numeric', month: 'short', year: 'numeric' }) : ''}${r.lingua && r.lingua !== 'it' ? ' · tradotta dal ' + esc(r.lingua) : ''}</small></div>${mia(r.id) ? '' : '<i class="rec-dot"></i>'}</div>
         <div class="rec-t">${esc(r.testo || '(solo voto)')}</div>
-        <div class="rec-lett">${admins.map(a => { const l = lette.find(x => x.admin_id === a.id); return `<span class="${l ? 'ok' : ''}">${l ? '✓✓' : '○'} ${esc(a.nome)}${l ? ' · ' + new Date(l.letta_il).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span>`; }).join('')}</div>
+        <div class="rec-lett"><span class="${lette.length ? 'ok' : ''}">👁 Letta da ${lette.length} su ${admins.length}</span>${admins.some(a => a.ruolo !== 'admin') ? `<span>${admins.filter(a => a.ruolo !== 'admin' && lette.some(l => l.admin_id === a.id)).length}/${admins.filter(a => a.ruolo !== 'admin').length} dipendenti</span>` : ''}${mia(r.id) ? '<span class="ok">✓✓ tu</span>' : ''}</div>
       </div>`; }).join('') : `<div class="empty"><div class="empty-txt">${_recFiltro === 'da_leggere' ? 'Hai letto tutte le recensioni ✓' : 'Nessuna recensione'}</div></div>`}
     ${R.length ? `<button class="btn-sm" style="width:100%;margin-top:6px" onclick="recSegnaTutte()">Segna tutte come lette</button>` : ''}
-    <div class="note-small" style="margin-top:12px">Google fornisce a ogni lettura solo le 5 recensioni che considera "più rilevanti", non per forza le ultime. L'app controlla ogni 2 ore: se il numero di recensioni sale ma la nuova non è tra quelle 5, ti avvisa comunque con il link a Google. Per rispondere usa "Apri su Google".</div>`;
+    <div class="note-small" style="margin-top:12px">${gbp ? 'Collegato a Google Business Profile: arrivano tutte le recensioni, dalla più recente (controllo ogni 2 ore). Puoi rispondere direttamente da qui. I dipendenti le vedono nell\'app e la loro lettura resta segnata qui.' : 'Google fornisce a ogni lettura solo le 5 recensioni che considera "più rilevanti", non per forza le ultime: collega Google Business Profile per averle tutte in ordine di data. I dipendenti vedono le recensioni nell\'app e la loro lettura resta segnata qui.'}</div>`;
+  if (!gbp) { const top = box.querySelector('.rec-top'); if (top) top.insertAdjacentHTML('afterend', `<div class="insight warn rec-gbp-invito" onclick="gbpApri()"><div style="font-size:18px">📅</div><div><b>Vuoi sempre le ULTIME recensioni?</b> Ora Google ne dà solo 5 "più rilevanti". Collega Google Business Profile (gratis): arrivano tutte, dalla più recente, e rispondi dall'app. <u>Collega</u></div></div>`); }
 }
 async function recApriUna(id) {
   const r = (V24.rec.R || []).find(x => x.id === id); if (!r) return;
@@ -10549,9 +10641,13 @@ async function recApriUna(id) {
   body.innerHTML = `<div class="rec-h">${r.foto ? `<img src="${esc(r.foto)}" alt="" referrerpolicy="no-referrer">` : `<span class="rec-av">${esc((r.autore || '?')[0])}</span>`}<div><b>${esc(r.autore || '')}</b><span class="rec-st">${'★'.repeat(r.voto || 0)}<i>${'★'.repeat(5 - (r.voto || 0))}</i></span><small>${r.pubblicata_il ? new Date(r.pubblicata_il).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}</small></div></div>
     <div class="rec-t full">${esc(r.testo || '(solo voto)')}</div>
     ${r.testo_originale && r.testo_originale !== r.testo ? `<details class="note-small"><summary>Testo originale (${esc(r.lingua || '')})</summary>${esc(r.testo_originale)}</details>` : ''}
-    <div class="va-sez">Chi l'ha letta</div>
-    <div class="va-box">${V24.rec.admins.map(a => { const l = lette.find(x => x.admin_id === a.id); return `<div class="va-kv"><span>${esc(a.nome + ' ' + (a.cognome || ''))}</span><b>${l ? '✓✓ ' + new Date(l.letta_il).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : 'non ancora'}</b></div>`; }).join('')}</div>
-    <div class="va-azioni">${r.link ? `<a class="btn-primary" href="${esc(r.link)}" target="_blank" rel="noopener" style="text-align:center;text-decoration:none">Rispondi su Google</a>` : ''}</div>`;
+    ${r.risposta && !r.gbp_nome ? `<div class="rec-risp"><b>Risposta del locale</b>${esc(r.risposta)}</div>` : ''}
+    <div class="va-sez">Chi l'ha letta (${lette.length} su ${V24.rec.admins.length})</div>
+    <div class="va-box">${[['Amministratori', V24.rec.admins.filter(a => a.ruolo === 'admin')], ['Dipendenti', V24.rec.admins.filter(a => a.ruolo !== 'admin')]].map(([tit, lista]) => lista.length ? `<div class="rec-chi-t">${tit}</div>` + lista.map(a => { const l = lette.find(x => x.admin_id === a.id); return `<div class="va-kv"><span>${esc(a.nome + ' ' + (a.cognome || ''))}</span><b class="${l ? 'rec-ok' : 'rec-no'}">${l ? '✓✓ ' + new Date(l.letta_il).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : 'non ancora'}</b></div>`; }).join('') : '').join('')}</div>
+    <div class="va-azioni">${r.gbp_nome ? `<div class="va-sez" style="margin-top:0">${r.risposta ? 'La tua risposta' : 'Rispondi pubblicamente'}</div>
+      <textarea class="field-inp" id="rec-risp" rows="4" placeholder="Grazie per la recensione…">${esc(r.risposta || '')}</textarea>
+      <button class="btn-primary" id="rec-risp-btn" onclick="recRispondi('${esc(id)}')">${r.risposta ? 'Aggiorna la risposta' : 'Pubblica la risposta su Google'}</button>`
+      : (r.link ? `<a class="btn-primary" href="${esc(r.link)}" target="_blank" rel="noopener" style="text-align:center;text-decoration:none">Rispondi su Google</a>` : '')}</div>`;
   openSheet('sh-rec');
   if (!gia) { recApri(); aggiornaNavBadge && aggiornaNavBadge(); }
 }
@@ -10715,6 +10811,634 @@ window.addEventListener('hashchange', () => {
   if (mappa[h]) { location.hash = ''; switchPage(mappa[h]); }
 });
 function deepLink24(h, admin) { return (admin ? { '#recensioni': 'pg-recensioni', '#turni': 'pg-turni-resp', '#attestati': 'pg-attestati', '#previsione': 'pg-previsione' } : { '#profilo': 'pg-profilo-dip', '#turni': 'pg-turni-dip' })[h] || null; }
+
+
+/* ══════════════════════════════════════════════════════════════════
+   PRESENZE 2.5
+   1. Finestre sempre in primo piano (l'ultima aperta sta sopra)
+   2. Completa il profilo: percorso guidato continuo, anche dal menu
+   3. Numero verificato con Telegram + CODICE a 6 cifre scritto nell'app,
+      ritorno da Telegram allo stesso punto
+   4. Attestati: il dipendente li apre dal Profilo e dai Documenti
+   5-6. Recensioni Google: le più recenti (Google Business) e visibili ai
+      dipendenti con la spunta di lettura
+   7-8. Modifiche del profilo e cambio IBAN (gli avvisi partono dal server)
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ── 1. l'ultima finestra aperta sta sempre sopra le altre ──────────── */
+const _chiudi = id => { if ($(id)) closeSheet(id); };
+let _zFinestra = 300;
+if (typeof openSheet === 'function') {
+  const _openSheet25 = openSheet;
+  openSheet = function (id) {
+    const el = $(id);
+    if (el) {
+      const z = parseInt(el.style.zIndex || getComputedStyle(el).zIndex, 10) || 200;
+      if (z < 480) { if (_zFinestra > 470) _zFinestra = 300; el.style.zIndex = String(++_zFinestra); }
+    }
+    return _openSheet25.apply(this, arguments);
+  };
+}
+
+/* ── 3. Verifica del numero: Telegram + codice ────────────────────── */
+const TELV = { t: null, n: 0, box: null, opt: {} };
+function _telBot() { return ME && ME.ruolo === 'admin' ? APP_CONFIG.telegram.admin : APP_CONFIG.telegram.dip; }
+function _telResume(ctx) { try { if (ctx) localStorage.setItem('telv_resume', JSON.stringify({ ctx, ts: Date.now() })); else localStorage.removeItem('telv_resume'); } catch (e) {} }
+function _telResumeLeggi() { try { const r = JSON.parse(localStorage.getItem('telv_resume') || 'null'); return r && Date.now() - r.ts < 25 * 60000 ? r : null; } catch (e) { return null; } }
+async function telUI(box, opt) {
+  if (!box) return;
+  clearInterval(TELV.t);
+  TELV.box = box; TELV.opt = opt || {};
+  box.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  let st = {};
+  try { st = (await sb.rpc('presenze_tel_verifica_stato')).data || {}; } catch (e) {}
+  const attiva = st.stato === 'avviata' || st.stato === 'codice_inviato';
+  box.innerHTML = `<div class="tv">
+    ${st.verificato ? `<div class="tv-gia">✓ Il numero ${esc(st.telefono || '')} è già verificato. Rifai la verifica solo se hai cambiato numero.</div>` : ''}
+    <div class="tv-passi">
+      <div class="tv-p" id="tv-p1"><i>1</i><div><b>Apri Telegram</b><small>${st.collegato ? 'Il bot ti scrive da solo' : 'Nel bot premi <b>Avvia</b>'}</small></div></div>
+      <div class="tv-p" id="tv-p2"><i>2</i><div><b>Tocca «📱 Condividi il mio numero»</b><small>Telegram ci manda il numero del tuo account</small></div></div>
+      <div class="tv-p" id="tv-p3"><i>3</i><div><b>Scrivi qui il codice</b><small>Il bot ti manda un codice a 6 cifre</small></div></div>
+    </div>
+    <button class="${attiva ? 'btn-secondary' : 'btn-primary'}" id="tv-apri" onclick="telApri()">${attiva ? 'Riapri Telegram' : 'Apri Telegram'}</button>
+    <div id="tv-codice" style="display:${attiva ? 'block' : 'none'}">
+      <div class="tv-stato" id="tv-stato"></div>
+      <input class="field-inp tv-inp" id="tv-cod" maxlength="7" inputmode="numeric" autocomplete="one-time-code" placeholder="••••••" oninput="if(this.value.replace(/\\D/g,'').length===6)telConferma()">
+      <button class="btn-primary" id="tv-ok" onclick="telConferma()">Conferma il numero</button>
+    </div>
+    <div class="msg" id="tv-msg"></div>
+    <div class="tv-scarica">Non hai Telegram? <a href="https://apps.apple.com/app/telegram-messenger/id686449807" target="_blank" rel="noopener">iPhone</a> · <a href="https://play.google.com/store/apps/details?id=org.telegram.messenger" target="_blank" rel="noopener">Android</a></div>
+  </div>`;
+  _telMostra(st);
+  if (attiva) telPoll();
+}
+function _telMostra(st) {
+  const set = (n, c) => { const el = $('tv-p' + n); if (el) el.className = 'tv-p ' + c; };
+  const s = $('tv-stato');
+  if (st.stato === 'codice_inviato') {
+    set(1, 'ok'); set(2, 'ok'); set(3, 'on');
+    if (s) s.innerHTML = `✓ Codice inviato su Telegram${st.telefono_nuovo ? ' per il numero <b>' + esc(st.telefono_nuovo) + '</b>' : ''}. Scrivilo qui sotto.`;
+    if ($('tv-codice')) $('tv-codice').style.display = 'block';
+  } else if (st.stato === 'avviata') {
+    set(1, 'ok'); set(2, 'on'); set(3, '');
+    if (s) s.innerHTML = 'In attesa: nel bot tocca <b>«📱 Condividi il mio numero»</b>. Il codice arriva subito dopo.';
+  } else if (st.stato === 'scaduta') {
+    set(1, 'on'); set(2, ''); set(3, '');
+    if (s) s.innerHTML = 'Il tempo è scaduto: tocca di nuovo <b>Apri Telegram</b>.';
+  } else set(1, 'on');
+}
+async function telApri() {
+  const btn = $('tv-apri'); if (btn) { btn.disabled = true; btn.textContent = 'Preparo…'; }
+  hideMsg && $('tv-msg') && hideMsg('tv-msg');
+  const { data, error } = await sb.rpc('presenze_tel_verifica_avvia');
+  if (error || !data) { if (btn) { btn.disabled = false; btn.textContent = 'Apri Telegram'; } showMsg('tv-msg', 'Non riesco a preparare la verifica: ' + ((error && error.message) || 'riprova'), 'err'); return; }
+  let url = 'https://t.me/' + _telBot() + '?start=' + data.start;
+  if (data.collegato) {
+    // Telegram già collegato: il bot scrive per primo (niente "/start" che non fa nulla)
+    try { const r = await sb.functions.invoke('tg-webhook', { body: { azione: 'verifica_tel_invia' } }); if (r && r.data && r.data.inviato) url = 'https://t.me/' + _telBot(); } catch (e) {}
+  }
+  _telResume(TELV.opt.ctx || 'profilo');
+  if ($('tv-codice')) $('tv-codice').style.display = 'block';
+  _telMostra({ stato: 'avviata' });
+  if (btn) { btn.disabled = false; btn.textContent = 'Riapri Telegram'; btn.className = 'btn-secondary'; }
+  apriLinkTelegram(url);
+  telPoll();
+}
+function telPoll() {
+  clearInterval(TELV.t); TELV.n = 0;
+  TELV.t = setInterval(telControlla, 2500);
+}
+async function telControlla() {
+  if (!TELV.box || !document.body.contains(TELV.box) || ++TELV.n > 300) { clearInterval(TELV.t); return; }
+  if (document.hidden) return;
+  try {
+    const { data } = await sb.rpc('presenze_tel_verifica_stato');
+    if (!data) return;
+    if (data.stato === 'confermata' && data.verificato) { clearInterval(TELV.t); return; }
+    const prima = TELV.ultimo; TELV.ultimo = data.stato;
+    _telMostra(data);
+    if (data.stato === 'codice_inviato' && prima !== 'codice_inviato') { const i = $('tv-cod'); if (i) i.focus(); }
+  } catch (e) {}
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && TELV.box && document.body.contains(TELV.box)) telControlla(); });
+async function telConferma() {
+  const i = $('tv-cod'), b = $('tv-ok'); if (!i) return;
+  const cod = (i.value || '').replace(/\D/g, '');
+  if (cod.length !== 6) { showMsg('tv-msg', 'Il codice ha 6 cifre', 'err'); return; }
+  if (b) { b.disabled = true; b.textContent = 'Controllo…'; }
+  const { data, error } = await sb.rpc('presenze_tel_verifica_conferma', { p_codice: cod });
+  if (b) { b.disabled = false; b.textContent = 'Conferma il numero'; }
+  if (error || !data || !data.ok) { showMsg('tv-msg', (data && data.errore) || (error && error.message) || 'Codice non valido', 'err'); i.select && i.select(); return; }
+  clearInterval(TELV.t); _telResume(null);
+  ME.telefono = data.telefono; ME.telefono_verificato_il = new Date().toISOString();
+  try { navigator.vibrate && navigator.vibrate([30, 50, 90]); } catch (e) {}
+  if (TELV.box) TELV.box.innerHTML = `<div class="tv-fatto"><span>✓</span><b>Numero verificato</b><small>${esc(data.telefono || '')}</small></div>`;
+  toast('✓ Numero verificato');
+  if (TELV.opt.onOk) setTimeout(() => TELV.opt.onOk(data), 900);
+}
+// Profilo → "Verifica con Telegram"
+verificaTelefonoProfilo = async function () {
+  await renderVerificheProfilo();
+  const box = $('verifica-box'); if (!box) return;
+  await telUI(box, { ctx: 'profilo', onOk: () => { renderVerificheProfilo(); cpBadge(); } });
+  box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+};
+// Schermata "Il tuo numero di telefono" per chi è già attivo senza numero
+mostraStepCertifica = async function () {
+  const box = $('cert-numero-display');
+  const btn = document.querySelector('#pg-certifica .btn-green-solid');
+  if (btn) btn.style.display = 'none';
+  $('pg-certifica').style.display = 'flex';
+  hideMsg('cert-otp-msg');
+  box.style.textAlign = 'left';
+  await telUI(box, { ctx: 'cert', onOk: () => certificaCompletato() });
+};
+// Registrazione (passo "Verifica il tuo numero")
+if (typeof obPassoTelefono === 'function') {
+  obPassoTelefono = function () {
+    const bot = _ob.ruolo === 'admin' ? APP_CONFIG.telegram.admin : APP_CONFIG.telegram.dip;
+    obRender(`<h2 class="ob-t">Verifica il tuo numero</h2>
+      <p class="ob-s">Usiamo Telegram: ci manda il numero del tuo account (già verificato da Telegram con un SMS) e ti scrive un codice da inserire qui. È gratis. Da qui riceverai anche gli avvisi.</p>
+      <div id="ob-telv"></div>
+      ${APP_CONFIG.telegramObbligatorio ? '' : '<button class="btn-link" onclick="obTelefonoManuale()">Non uso Telegram: scrivo il numero a mano</button>'}
+      <p class="ob-nota" style="text-align:center">Bot: @${esc(bot)}</p>`);
+    clearInterval(_ob.tgPoll);
+    telUI($('ob-telv'), { ctx: 'ob', onOk: () => obVai(_ob.ruolo === 'admin' ? 'fine' : 'firma') });
+  };
+}
+
+/* ── 2. Completa il profilo: percorso guidato ─────────────────────── */
+const CP = { st: null, k: null, saltati: new Set(), vista: 'lista' };
+const CP_TXT = {
+  push: { t: 'Attiva le notifiche', d: 'Turni, pagamenti e documenti ti arrivano subito sul telefono, anche con l\'app chiusa.' },
+  firma: { t: 'Attiva la firma con il telefono', d: 'Con Face ID o impronta le tue conferme (turni, pagamenti, documenti) valgono come firma.' },
+  tel: { t: 'Verifica il numero di telefono', d: 'Con Telegram: il bot ti manda un codice a 6 cifre da scrivere qui.' },
+  email: { t: 'Verifica la tua email', d: 'Ti mandiamo un codice a 6 cifre a ' },
+  pec: { t: 'Aggiungi la PEC', d: 'Facoltativa. Se ce l\'hai la verifichiamo con un codice, come l\'email.' },
+};
+async function cpStato() {
+  const st = await _setupStato();
+  CP.st = st;
+  st.pec = st.facolt.find(v => /PEC/.test(v.t)) ? { k: 'pec', ico: '🏛', t: 'PEC (facoltativa)', ok: false, facolt: true } : { k: 'pec', ico: '🏛', t: 'PEC (facoltativa)', ok: true, facolt: true };
+  return st;
+}
+const _cpMancano = st => st.voci.filter(v => !v.ok);
+async function cpBadge() {
+  if (!ME || ME.ruolo !== 'dipendente') return;
+  try { const st = await cpStato(); const m = _cpMancano(st).length; const el = $('cp-card'); if (el) cpCardRender(el, st); CP.mancano = m; } catch (e) {}
+}
+function _cpTesta(st) {
+  const fatti = st.voci.length - _cpMancano(st).length, tot = st.voci.length;
+  return `<div class="su-top"><div class="su-anello" style="--p:${Math.round(fatti / tot * 100)}"><span>${fatti}/${tot}</span></div>
+    <div><b>${fatti === tot ? 'Profilo completo ✓' : (tot - fatti === 1 ? 'Manca 1 passaggio' : 'Mancano ' + (tot - fatti) + ' passaggi')}</b>
+    <small>${fatti === tot ? 'Notifiche, firma e contatti sono attivi.' : 'Ci vuole un minuto: vai avanti un passaggio alla volta, senza uscire da qui.'}</small></div></div>`;
+}
+async function cpApri(opt) {
+  opt = opt || {};
+  if (!ME) return;
+  const body = _sheetDinamico('sh-completa', 'Completa il profilo');
+  body.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  const sheet = $('sh-completa'); if (sheet) sheet.classList.add('cp-sheet');
+  openSheet('sh-completa');
+  _chiudi('sh-setup23');
+  await cpStato();
+  if (opt.passo) cpPasso(opt.passo); else cpLista();
+}
+function cpLista() {
+  const body = $('sh-completa') && $('sh-completa').querySelector('.sheet-body'); if (!body) return;
+  CP.vista = 'lista'; CP.k = null; clearInterval(TELV.t);
+  const st = CP.st, manc = _cpMancano(st);
+  const riga = v => `<button type="button" class="su-riga cp-riga ${v.ok ? 'ok' : ''}" onclick="cpPasso('${v.k}')">
+      <span class="su-ico">${v.ok ? '✓' : v.ico}</span>
+      <span class="su-txt"><b>${esc(v.t)}</b><small>${esc(v.ok ? 'Fatto' : (v.s || ''))}</small></span>
+      <span class="cp-chev">${v.ok ? '' : '›'}</span></button>`;
+  body.innerHTML = `${_cpTesta(st)}
+    <div class="su-lista">${st.voci.map(riga).join('')}${riga(Object.assign({ s: 'Se ne hai una' }, st.pec))}</div>
+    ${manc.length ? `<button class="btn-primary" style="margin-top:14px" onclick="cpAvanti()">${manc.length === st.voci.length ? 'Inizia' : 'Continua'} · ${esc(CP_TXT[manc[0].k] ? CP_TXT[manc[0].k].t : manc[0].t)}</button>` : ''}
+    <button class="btn-secondary" style="width:100%;margin-top:10px" onclick="closeSheet('sh-completa')">${manc.length ? 'Più tardi' : 'Chiudi'}</button>`;
+}
+function cpAvanti() {
+  const st = CP.st, ordine = st.voci.map(v => v.k);
+  const da = CP.k ? ordine.indexOf(CP.k) + 1 : 0;
+  const giro = ordine.slice(da).concat(ordine.slice(0, da));
+  const prossimo = giro.find(k => { const v = st.voci.find(x => x.k === k); return v && !v.ok && !CP.saltati.has(k); });
+  if (prossimo) cpPasso(prossimo); else cpFine();
+}
+function cpFine() {
+  const body = $('sh-completa') && $('sh-completa').querySelector('.sheet-body'); if (!body) return;
+  CP.vista = 'fine'; CP.k = null;
+  const manc = _cpMancano(CP.st);
+  body.innerHTML = manc.length
+    ? `${_cpTesta(CP.st)}<div class="note-small" style="margin:6px 2px 12px">Hai lasciato qualcosa per dopo: lo trovi quando vuoi nel menu (in alto a destra) → <b>Completa il profilo</b>.</div>
+       <button class="btn-primary" onclick="CP.saltati.clear();cpLista()">Vedi cosa manca</button>
+       <button class="btn-secondary" style="width:100%;margin-top:10px" onclick="closeSheet('sh-completa')">Chiudi</button>`
+    : `<div class="tv-fatto grande"><span>✓</span><b>Profilo completo</b><small>Notifiche, firma, telefono ed email sono a posto.</small></div>
+       ${CP.st.pec.ok ? '' : `<button type="button" class="su-riga cp-riga" style="width:100%;border:1px solid var(--border);border-radius:14px;margin-top:6px" onclick="cpPasso('pec')"><span class="su-ico">🏛</span><span class="su-txt"><b>Hai una PEC?</b><small>Facoltativa: aggiungila se ce l'hai</small></span><span class="cp-chev">›</span></button>`}
+       <button class="btn-primary" style="margin-top:14px" onclick="closeSheet('sh-completa')">Fine</button>`;
+}
+async function cpPasso(k) {
+  const body = $('sh-completa') && $('sh-completa').querySelector('.sheet-body'); if (!body) return;
+  const st = CP.st, v = k === 'pec' ? st.pec : st.voci.find(x => x.k === k);
+  if (!v) return cpLista();
+  CP.vista = 'passo'; CP.k = k;
+  const obbl = st.voci.map(x => x.k), n = obbl.indexOf(k);
+  const txt = CP_TXT[k] || { t: v.t, d: '' };
+  body.innerHTML = `<div class="cp-nav"><button class="btn-link" onclick="cpLista()">‹ Tutti i passaggi</button><span>${n >= 0 ? 'Passo ' + (n + 1) + ' di ' + obbl.length : 'Facoltativo'}</span></div>
+    <div class="cp-prog">${obbl.map(x => { const vv = st.voci.find(y => y.k === x); return `<i class="${vv.ok ? 'ok' : x === k ? 'on' : ''}"></i>`; }).join('')}</div>
+    <div class="cp-head"><span class="cp-ico">${v.ico}</span><div><b>${esc(txt.t)}</b><small>${esc(txt.d)}${k === 'email' ? esc(ME.email || '') : ''}</small></div></div>
+    ${v.ok && k !== 'tel' ? '<div class="tv-gia">✓ Già fatto.</div>' : ''}
+    <div id="cp-azione"></div>
+    <div class="cp-piede"><button class="btn-link" onclick="cpSalta()">${v.ok ? 'Avanti ›' : (k === 'pec' ? 'Non ho una PEC' : 'Salta per ora')}</button></div>`;
+  const box = $('cp-azione');
+  if (k === 'push') {
+    if (pushIOS() && !pushInstallata()) {
+      box.innerHTML = `<div class="cp-istr"><b>Su iPhone serve un passaggio in più (regola di Apple)</b><ol><li>Tocca <b>Condividi</b> ⬆️ in basso in Safari</li><li>Scegli <b>«Aggiungi alla schermata Home»</b></li><li>Apri Presenze dall'icona: questa finestra ricompare e attivi le notifiche con un tocco.</li></ol></div>`;
+    } else {
+      box.innerHTML = `<button class="btn-primary" id="cp-btn" onclick="cpEsegui('push')">🔔 Attiva le notifiche</button>
+        <div class="note-small" style="margin-top:8px">Il telefono ti chiederà il permesso: tocca <b>Consenti</b>.</div>`;
+    }
+  } else if (k === 'firma') {
+    box.innerHTML = `<button class="btn-primary" id="cp-btn" onclick="cpEsegui('firma')">✍️ Attiva la firma</button>
+      <div class="note-small" style="margin-top:8px">Il telefono ti chiederà Face ID, impronta o codice di sblocco: serve solo a confermare che sei tu.</div>`;
+  } else if (k === 'tel') {
+    telUI(box, { ctx: 'cp', onOk: () => cpFatto('tel') });
+  } else if (k === 'email') {
+    box.innerHTML = `<button class="btn-primary" id="cp-btn" onclick="cpEmailInvia()">📧 Mandami il codice</button><div id="cp-email-cod"></div><div class="msg" id="cp-msg"></div>`;
+  } else if (k === 'pec') {
+    pecForm(box, ok => { if (ok) cpFatto('pec'); });
+  }
+}
+async function cpEsegui(k) {
+  const b = $('cp-btn'); if (b) { b.disabled = true; b.textContent = 'Un attimo…'; }
+  let ok = false;
+  try { ok = k === 'push' ? await pushAttiva() : await firmaAttiva(); } catch (e) {}
+  if (ok) return cpFatto(k);
+  if (b) { b.disabled = false; b.textContent = k === 'push' ? '🔔 Riprova' : '✍️ Riprova'; }
+  if (k === 'push' && typeof pushPermesso === 'function' && pushPermesso() === 'denied') {
+    const box = $('cp-azione');
+    if (box) box.insertAdjacentHTML('beforeend', '<div class="cp-istr" style="margin-top:10px">Le notifiche risultano <b>bloccate</b> per questa app: riattivale dalle impostazioni del telefono (Notifiche → Presenze), poi torna qui e tocca Riprova.</div>');
+  }
+}
+async function cpEmailInvia() {
+  const b = $('cp-btn'); if (b) { b.disabled = true; b.textContent = 'Invio…'; }
+  const { error } = await sb.auth.signInWithOtp({ email: ME.email, options: { shouldCreateUser: false } });
+  if (b) { b.disabled = false; b.textContent = 'Rimanda il codice'; b.className = 'btn-secondary'; }
+  if (error) { showMsg('cp-msg', /seconds|rate/i.test(error.message || '') ? 'Aspetta un minuto prima di chiedere un altro codice' : error.message, 'err'); return; }
+  $('cp-email-cod').innerHTML = `<div class="tv-stato">✓ Codice inviato a <b>${esc(ME.email)}</b> (guarda anche nello Spam).</div>
+    <input class="field-inp tv-inp" id="cp-ecod" maxlength="6" inputmode="numeric" autocomplete="one-time-code" placeholder="••••••" oninput="if(this.value.replace(/\\D/g,'').length===6)cpEmailConferma()">
+    <button class="btn-primary" id="cp-eok" onclick="cpEmailConferma()">Conferma l'email</button>`;
+  setTimeout(() => { const i = $('cp-ecod'); if (i) i.focus(); }, 100);
+}
+async function cpEmailConferma() {
+  const token = ($('cp-ecod').value || '').replace(/\D/g, '');
+  if (token.length !== 6) return;
+  const b = $('cp-eok'); if (b) { b.disabled = true; b.textContent = 'Controllo…'; }
+  const { error } = await sb.auth.verifyOtp({ email: ME.email, token, type: 'email' });
+  if (error) { if (b) { b.disabled = false; b.textContent = 'Conferma l\'email'; } showMsg('cp-msg', 'Codice non corretto o scaduto', 'err'); return; }
+  const { error: e2 } = await sb.rpc('presenze_conferma_email');
+  if (e2) { showMsg('cp-msg', 'Verifica non registrata: ' + e2.message, 'err'); return; }
+  cpFatto('email');
+}
+async function cpFatto(k) {
+  CP.saltati.delete(k);
+  const box = $('cp-azione');
+  if (box && k !== 'tel') box.innerHTML = '<div class="tv-fatto"><span>✓</span><b>Fatto</b></div>';
+  await cpStato();
+  cpBadge(); try { renderVerificheProfilo(); } catch (e) {}
+  setTimeout(() => { if (CP.k === k && $('sh-completa') && $('sh-completa').classList.contains('on')) { if (k === 'pec') cpFine(); else cpAvanti(); } }, 800);
+}
+function cpSalta() { if (CP.k) CP.saltati.add(CP.k); if (CP.k === 'pec') return cpFine(); cpAvanti(); }
+
+// all'apertura dell'app: stesse regole di prima (una volta per sessione, dopo le altre finestre)
+setupDipControlla = async function (forza, tentativi) {
+  if (!ME || ME.ruolo !== 'dipendente' || (typeof KIOSK !== 'undefined' && KIOSK)) return;
+  // di ritorno da Telegram (o se l'app si è ricaricata): si riparte dal punto giusto
+  const rs = _telResumeLeggi();
+  if (rs && !ME.telefono_verificato_il) {
+    if (rs.ctx === 'cp') return cpApri({ passo: 'tel' });
+    if (rs.ctx === 'profilo') { switchPage('pg-profilo-dip'); setTimeout(() => verificaTelefonoProfilo(), 900); return; }
+  }
+  try { if (!forza && sessionStorage.getItem('setup23_' + ME.id)) return recDipControlla(); } catch (e) {}
+  const altra = [...document.querySelectorAll('.overlay.on')].some(o => !['sh-setup23', 'sh-completa'].includes(o.id));
+  if (altra && !forza) { if ((tentativi || 0) < 40) setTimeout(() => setupDipControlla(false, (tentativi || 0) + 1), 3000); return; }
+  const st = await cpStato();
+  if (!_cpMancano(st).length && !forza) return recDipControlla();
+  try { sessionStorage.setItem('setup23_' + ME.id, '1'); } catch (e) {}
+  cpApri();
+  setTimeout(() => recDipControlla(), 4000); // le recensioni nuove dopo che ha chiuso questa finestra
+};
+setupEsegui = function (k) { cpApri({ passo: k }); };
+// ritorno all'app mentre la finestra è aperta: si aggiorna lo stato
+document.addEventListener('visibilitychange', async () => {
+  if (document.hidden || !$('sh-completa') || !$('sh-completa').classList.contains('on')) return;
+  try { await cpStato(); if (CP.vista === 'lista') cpLista(); } catch (e) {}
+});
+
+// card "Completa il profilo" in cima al Profilo del dipendente
+function cpCardRender(el, st) {
+  const manc = _cpMancano(st).length, tot = st.voci.length;
+  el.className = 'cp-card ' + (manc ? 'da-fare' : 'ok');
+  el.innerHTML = manc
+    ? `<div class="su-anello" style="--p:${Math.round((tot - manc) / tot * 100)}"><span>${tot - manc}/${tot}</span></div><div style="flex:1;min-width:0"><b>Completa il profilo</b><small>${manc === 1 ? 'Manca 1 passaggio' : 'Mancano ' + manc + ' passaggi'}: notifiche, firma e contatti verificati</small></div><span class="cp-chev">›</span>`
+    : `<span class="cp-ok">✓</span><div style="flex:1;min-width:0"><b>Profilo completo</b><small>Notifiche, firma, telefono ed email verificati</small></div><span class="cp-chev">›</span>`;
+}
+if (typeof caricaProfiloDip === 'function') {
+  const _carProf25 = caricaProfiloDip;
+  caricaProfiloDip = async function () {
+    const r = await _carProf25.apply(this, arguments);
+    try {
+      const wrap = $('profilo-dip-wrap');
+      if (wrap && ME && ME.ruolo === 'dipendente' && !$('cp-card')) {
+        wrap.insertAdjacentHTML('afterbegin', '<button type="button" id="cp-card" class="cp-card" onclick="cpApri()"></button>');
+        cpBadge();
+      }
+    } catch (e) {}
+    return r;
+  };
+}
+// menu (avatar in alto a destra): Completa il profilo e Recensioni Google per i dipendenti
+if (typeof apriAccount === 'function') {
+  const _apriAcc25 = apriAccount;
+  apriAccount = function () {
+    const r = _apriAcc25.apply(this, arguments);
+    try {
+      if (ME && ME.ruolo === 'dipendente') {
+        const g = $('account-body').querySelector('.menu-group');
+        const riga = (icona, tc, t, d, az, badge) => `<button class="menu-row" onclick="${az}"><span class="menu-ic" style="--tc:${tc}">${ic(icona)}</span><span style="flex:1"><div class="menu-t">${t}${badge ? ` <span class="cp-badge">${badge}</span>` : ''}</div><div class="menu-d">${d}</div></span><span class="chev">›</span></button>`;
+        if (g) g.insertAdjacentHTML('afterbegin',
+          riga('user', '10,132,255', 'Completa il profilo', 'Notifiche, firma, telefono ed email', "closeSheet('sh-account');cpApri()", CP.mancano ? CP.mancano : '')
+          + riga('stella', '255,149,0', 'Recensioni Google', 'Cosa scrivono i clienti del locale', "closeSheet('sh-account');recDipApri()", REC25.nonLette ? REC25.nonLette : ''));
+      }
+    } catch (e) {}
+    return r;
+  };
+}
+
+/* ── 4. Attestati: il dipendente li apre (Profilo e Documenti) ───── */
+async function attDipLista(box, compatto) {
+  if (!box || !ME) return;
+  const { data } = await sb.from('presenze_attestati').select('*').eq('dipendente_id', ME.id).order('scade_il');
+  const A = attMarcaSostituiti(data || []);
+  const riga = a => { const s = attStato(a);
+    return `<div class="att-riga ${a.file_path ? 'apribile' : ''}" ${a.file_path ? `onclick="apriDocumento('${esc(a.file_path)}','${esc(attNome(a).replace(/'/g, ''))}${esc(a.file_path.slice(a.file_path.lastIndexOf('.')))}')"` : ''}>
+      <span class="att-ico ${s.k}">${s.ico}</span><div style="flex:1;min-width:0"><b>${esc(attNome(a))}</b><small>${esc(s.txt)}${a.rilasciato_il ? ' · rilasciato il ' + _dmy(a.rilasciato_il) : ''}</small></div>
+      ${a.file_path ? '<span class="btn-sm">Apri</span>' : ''}</div>`; };
+  box.innerHTML = `<div class="card" style="margin-bottom:14px"><div class="sec-title" style="margin-bottom:6px">${compatto ? '📎 Attestati' : 'I miei attestati'}</div>
+    ${A.length ? A.map(riga).join('') : '<div class="note-small">Nessun attestato registrato. HACCP, sicurezza e visita medica sono obbligatori: se li hai, caricali qui.</div>'}
+    <button class="btn-sm" style="margin-top:10px" onclick="attEditor()">📎 Carica un attestato</button></div>`;
+}
+attDipRender = function () { return attDipLista($('profilo-attestati')); };
+if (typeof caricaDocumentiDip === 'function') {
+  const _carDoc25 = caricaDocumentiDip;
+  caricaDocumentiDip = async function () {
+    const r = await _carDoc25.apply(this, arguments);
+    try {
+      const pg = $('pg-docs-dip');
+      if (pg && ME && ME.ruolo === 'dipendente') {
+        let box = $('docs-attestati');
+        if (!box) { box = document.createElement('div'); box.id = 'docs-attestati'; box.style.marginTop = '14px'; pg.appendChild(box); }
+        attDipLista(box, true);
+      }
+    } catch (e) {}
+    return r;
+  };
+}
+
+/* ── 5-6. Recensioni Google per i dipendenti ─────────────────────── */
+const REC25 = { nonLette: 0 };
+const _stelle25 = v => '<span class="rec-st">' + '★'.repeat(v || 0) + '<i>' + '★'.repeat(5 - (v || 0)) + '</i></span>';
+const _recData = r => r.pubblicata_il ? new Date(r.pubblicata_il).toLocaleDateString('it-IT', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+function _recCard(r, letta, extra) {
+  return `<div class="rec-card ${letta ? '' : 'nuova'} ${(r.voto || 0) <= 3 ? 'bassa' : ''}" ${extra || ''}>
+    <div class="rec-h">${r.foto ? `<img src="${esc(r.foto)}" alt="" referrerpolicy="no-referrer">` : `<span class="rec-av">${esc((r.autore || '?')[0])}</span>`}<div><b>${esc(r.autore || '')}</b>${_stelle25(r.voto)}<small>${_recData(r)}${letta ? ' · ✓ letta' : ' <span class="rec-nuova">nuova</span>'}</small></div></div>
+    <div class="rec-t full">${esc(r.testo || '(solo voto, senza commento)')}</div>
+    ${r.risposta ? `<div class="rec-risp"><b>Risposta del locale</b>${esc(r.risposta)}</div>` : ''}
+  </div>`;
+}
+async function _recMieLette() {
+  const { data } = await sb.from('recensioni_letture').select('recensione_id').eq('admin_id', ME.id);
+  return new Set((data || []).map(x => x.recensione_id));
+}
+async function _recSegna(ids) {
+  if (!ids.length) return;
+  await sb.from('recensioni_letture').insert(ids.map(id => ({ recensione_id: id, admin_id: ME.id })));
+}
+async function recDipApri() {
+  const body = _sheetDinamico('sh-rec-dip', 'Recensioni Google');
+  body.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  openSheet('sh-rec-dip');
+  const [rR, lette, sR] = await Promise.all([
+    sb.from('recensioni_google').select('*').order('pubblicata_il', { ascending: false }).limit(60),
+    _recMieLette(),
+    sb.from('ceraldi_stato_condiviso').select('data').eq('id', 'recensioni_google_stato').maybeSingle(),
+  ]);
+  const R = rR.data || [], S = (sR.data && sR.data.data) || null;
+  const non = R.filter(r => !lette.has(r.id));
+  REC25.lista = R;
+  body.innerHTML = `${S && S.rating ? `<div class="rec-top card p24-card"><div class="rec-voto"><b>${String(S.rating).replace('.', ',')}</b>${_stelle25(Math.round(S.rating))}<small>${S.totale ? S.totale.toLocaleString('it-IT') + ' recensioni su Google' : ''}</small></div></div>` : ''}
+    <div class="note-small" style="margin:2px 2px 10px">Quello che scrivono i clienti del locale. Tocca una recensione nuova per segnarla come letta.</div>
+    ${R.length ? R.map(r => _recCard(r, lette.has(r.id), lette.has(r.id) ? '' : `onclick="recDipLetta('${esc(r.id)}', this)"`)).join('') : '<div class="empty"><div class="empty-txt">Ancora nessuna recensione</div></div>'}
+    ${non.length ? `<button class="btn-primary" style="margin-top:8px" onclick="recDipTutte()">✓ Segna tutte come lette (${non.length})</button>` : ''}`;
+}
+async function recDipLetta(id, el) {
+  await _recSegna([id]);
+  if (el) { el.classList.remove('nuova'); el.removeAttribute('onclick'); const s = el.querySelector('.rec-nuova'); if (s) s.outerHTML = '✓ letta'; }
+  REC25.nonLette = Math.max(0, (REC25.nonLette || 1) - 1);
+}
+async function recDipTutte() {
+  const lette = await _recMieLette();
+  await _recSegna((REC25.lista || []).filter(r => !lette.has(r.id)).map(r => r.id));
+  REC25.nonLette = 0; toast('✓ Segnate come lette'); recDipApri();
+}
+// finestra all'apertura: le recensioni nuove (ultime 3 settimane) non ancora lette
+async function recDipControlla(tentativi) {
+  if (!ME || ME.ruolo !== 'dipendente' || (typeof KIOSK !== 'undefined' && KIOSK)) return;
+  const altra = [...document.querySelectorAll('.overlay.on')].length > 0;
+  if (altra) { if ((tentativi || 0) < 60) setTimeout(() => recDipControlla((tentativi || 0) + 1), 3000); return; }
+  try {
+    const dal = new Date(Date.now() - 21 * 86400000).toISOString();
+    const [rR, lette] = await Promise.all([sb.from('recensioni_google').select('*').gte('pubblicata_il', dal).order('pubblicata_il', { ascending: false }).limit(20), _recMieLette()]);
+    const non = (rR.data || []).filter(r => !lette.has(r.id));
+    REC25.nonLette = non.length;
+    if (!non.length) return;
+    const mostra = non.slice(0, 5);
+    const body = _sheetDinamico('sh-rec-nuove', mostra.length === 1 ? 'Nuova recensione di un cliente' : 'Nuove recensioni dei clienti');
+    body.innerHTML = `<div class="note-small" style="margin:0 2px 10px">Ecco cosa hanno scritto su Google del locale. Leggile: aiutano tutti a lavorare meglio.</div>
+      ${mostra.map(r => _recCard(r, false)).join('')}
+      <button class="btn-primary" style="margin-top:6px" onclick="recDipConferma(${JSON.stringify(mostra.map(r => r.id)).replace(/"/g, '&quot;')})">✓ Ho letto${mostra.length > 1 ? ' tutte' : ''}</button>
+      ${non.length > mostra.length ? `<button class="btn-link" onclick="closeSheet('sh-rec-nuove');recDipApri()">Vedi tutte (${non.length})</button>` : ''}`;
+    openSheet('sh-rec-nuove');
+  } catch (e) { console.warn('rec dip', e); }
+}
+async function recDipConferma(ids) {
+  await _recSegna(ids);
+  REC25.nonLette = Math.max(0, (REC25.nonLette || 0) - ids.length);
+  closeSheet('sh-rec-nuove'); toast('✓ Grazie');
+}
+
+/* ── Admin: Google Business (collegamento e risposte) ── */
+function recCollegaScegli(box) {
+  box.innerHTML = `${_h24('Recensioni Google', 'Ogni nuova recensione ti arriva come avviso; vedi chi l\'ha letta, anche tra i dipendenti')}
+    <div class="card p24-card"><b>📅 Consigliato: Google Business Profile</b>
+      <div class="note-small" style="margin:6px 0 10px">Gratis. Arrivano <b>tutte</b> le recensioni, dalla più recente, e puoi rispondere dall'app. Serve essere il proprietario della scheda Google del bar.</div>
+      <button class="btn-primary" onclick="gbpApri()">Collega Google Business</button></div>
+    <div class="card p24-card"><b>In alternativa: chiave Places</b>
+      <div class="note-small" style="margin:6px 0 10px">Più veloce da attivare, ma Google dà solo 5 recensioni "più rilevanti", non per forza le ultime.</div>
+      <button class="btn-secondary" style="width:100%" onclick="recImpostazioni()">Usa la chiave Places</button></div>`;
+}
+async function recRispondi(id) {
+  const t = ($('rec-risp').value || '').trim(); if (!t) { toast('Scrivi la risposta'); return; }
+  const b = $('rec-risp-btn'); b.disabled = true; b.textContent = 'Pubblico…';
+  const { data, error } = await sb.functions.invoke('google-business', { body: { azione: 'rispondi', id, testo: t } });
+  b.disabled = false; b.textContent = 'Pubblica la risposta su Google';
+  if (error || !data || !data.ok) { toast('Non pubblicata: ' + ((data && data.errore) || (error && error.message) || '')); return; }
+  const r = (V24.rec.R || []).find(x => x.id === id); if (r) { r.risposta = t; r.risposta_il = new Date().toISOString(); }
+  toast('✓ Risposta pubblicata su Google');
+}
+// Collegamento a Google Business Profile
+const _gbpRedirect = () => location.origin + location.pathname;
+async function gbpApri() {
+  const body = _sheetDinamico('sh-gbp', 'Collega Google Business');
+  const cid = (await sb.rpc('presenze_gbp_client_id')).data || '';
+  const sec = !!(await sb.rpc('presenze_segreto_presente', { p_chiave: 'gbp_client_secret' })).data;
+  body.innerHTML = `<div class="note-small" style="margin-bottom:10px">Si fa una volta sola, dal computer è più comodo. Serve l'account Google che gestisce la scheda del bar.</div>
+    <ol class="rec-passi">
+      <li>Chiedi l'accesso alle API di Google Business Profile con il modulo di Google (<a href="https://developers.google.com/my-business/content/prereqs" target="_blank" rel="noopener">pagina dei requisiti</a>): arriva in qualche giorno.</li>
+      <li>Nello stesso progetto di <b>console.cloud.google.com</b> abilita: <b>My Business Account Management API</b>, <b>My Business Business Information API</b> e <b>Google My Business API</b>.</li>
+      <li><b>API e servizi → Schermata consenso OAuth</b>: tipo <b>Esterno</b>, aggiungi il tuo indirizzo, poi <b>Pubblica l'app</b> ("In produzione").</li>
+      <li><b>Credenziali → Crea credenziali → ID client OAuth</b> → tipo <b>Applicazione web</b> → in "URI di reindirizzamento autorizzati" incolla:<div class="gbp-uri" onclick="navigator.clipboard&&navigator.clipboard.writeText('${esc(_gbpRedirect())}');toast('Copiato')">${esc(_gbpRedirect())} <small>tocca per copiare</small></div></li>
+      <li>Incolla qui sotto <b>ID client</b> e <b>Client secret</b>, poi tocca <b>Accedi con Google</b>.</li>
+    </ol>
+    <div class="field-lbl">ID client</div><input class="field-inp" id="gbp-cid" value="${esc(cid)}" placeholder="…apps.googleusercontent.com" autocomplete="off">
+    <div class="field-lbl">Client secret ${sec ? '<small style="font-weight:500">(già salvato: lascia vuoto per non cambiarlo)</small>' : ''}</div><input class="field-inp" id="gbp-sec" placeholder="${sec ? '••••••••' : 'GOCSPX-…'}" autocomplete="off">
+    <button class="btn-primary" onclick="gbpAccedi()">Accedi con Google</button>
+    <div class="note-small" style="margin-top:8px">Google mostrerà l'avviso "app non verificata": è la tua app, tocca <b>Avanzate → Vai a…</b> e consenti la gestione della scheda.</div>
+    ${V24.rec && V24.rec.gbp ? '<button class="btn-link" style="color:var(--red)" onclick="gbpScollega()">Scollega Google Business</button>' : ''}`;
+  openSheet('sh-gbp');
+}
+async function gbpAccedi() {
+  const cid = ($('gbp-cid').value || '').trim(), sec = ($('gbp-sec').value || '').trim();
+  if (!/\.apps\.googleusercontent\.com$/.test(cid)) { toast('L\'ID client finisce con ".apps.googleusercontent.com"'); return; }
+  const r1 = await sb.rpc('presenze_imposta_segreto', { p_chiave: 'gbp_client_id', p_valore: cid });
+  if (r1.error) { toast('Non salvato: ' + r1.error.message); return; }
+  if (sec) { const r2 = await sb.rpc('presenze_imposta_segreto', { p_chiave: 'gbp_client_secret', p_valore: sec }); if (r2.error) { toast('Non salvato: ' + r2.error.message); return; } }
+  else if (!(await sb.rpc('presenze_segreto_presente', { p_chiave: 'gbp_client_secret' })).data) { toast('Incolla anche il Client secret'); return; }
+  const stato = 'gbp' + Math.random().toString(36).slice(2, 10);
+  try { sessionStorage.setItem('gbp_stato', stato); } catch (e) {}
+  const q = new URLSearchParams({ client_id: cid, redirect_uri: _gbpRedirect(), response_type: 'code', scope: 'https://www.googleapis.com/auth/business.manage', access_type: 'offline', prompt: 'consent', state: stato });
+  location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + q.toString();
+}
+async function gbpRitorno() {
+  const p = new URLSearchParams(location.search);
+  const code = p.get('code'), stato = p.get('state') || '', err = p.get('error');
+  if (!/^gbp/.test(stato)) return false;
+  history.replaceState(null, '', location.pathname + location.hash);
+  let atteso = ''; try { atteso = sessionStorage.getItem('gbp_stato') || ''; sessionStorage.removeItem('gbp_stato'); } catch (e) {}
+  if (err || !code) { toast('Collegamento a Google annullato'); return true; }
+  if (atteso && atteso !== stato) { toast('Collegamento non valido: riprova'); return true; }
+  toast('Collego Google Business…');
+  const { data, error } = await sb.functions.invoke('google-business', { body: { azione: 'collega', code, redirect_uri: _gbpRedirect() } });
+  if (error || !data || !data.ok) { alert('Collegamento non riuscito: ' + ((data && data.errore) || (error && error.message) || '')); return true; }
+  toast('✓ Collegato: ' + (data.scheda || 'scheda Google'));
+  switchPage('pg-recensioni');
+  await sb.functions.invoke('recensioni-sync', { body: {} }).catch(() => null);
+  if (typeof recApri === 'function') recApri();
+  return true;
+}
+async function gbpScollega() {
+  if (!confirm('Scollegare Google Business? Le recensioni già salvate restano.')) return;
+  for (const k of ['gbp_refresh_token', 'gbp_location']) await sb.rpc('presenze_imposta_segreto', { p_chiave: k, p_valore: '' });
+  closeSheet('sh-gbp'); recApri();
+}
+
+/* ── 8. IBAN cambiato: promemoria in "Richieste in attesa" ──────── */
+if (typeof calcolaPromemoria === 'function') {
+  const _calcProm25 = calcolaPromemoria;
+  calcolaPromemoria = async function () {
+    const pr = await _calcProm25.apply(this, arguments);
+    if (!ME || ME.ruolo !== 'admin') return pr;
+    try {
+      const [cR, pR] = await Promise.all([
+        sb.from('presenze_iban_cambi').select('*').is('bonifico_aggiornato_il', null).order('cambiato_il', { ascending: false }),
+        sb.from('presenze_profili').select('id,nome,cognome,attivo,eliminato'),
+      ]);
+      const nomi = {}; (pR.data || []).forEach(p => { if (p.attivo && !p.eliminato) nomi[p.id] = p.nome + (p.cognome ? ' ' + p.cognome : ''); });
+      const visti = new Set();
+      (cR.data || []).forEach(c => {
+        if (!nomi[c.dipendente_id] || visti.has(c.dipendente_id)) return; visti.add(c.dipendente_id);
+        pr.unshift({ tipo: 'iban', urgenza: 'alta', icona: '🏦', id: c.id, dipId: c.dipendente_id, titolo: 'IBAN cambiato: paga sul nuovo',
+          testo: nomi[c.dipendente_id] + ' — nuovo IBAN dal ' + new Date(c.cambiato_il).toLocaleDateString('it-IT'), azione: 'Segna che hai aggiornato il bonifico' });
+      });
+    } catch (e) { console.warn('iban', e); }
+    return pr;
+  };
+}
+if (typeof apriVoceAttesa === 'function') {
+  const _apriVoce25 = apriVoceAttesa;
+  apriVoceAttesa = async function (i) {
+    const v = _vociAttesa[i];
+    if (v && v.ptipo === 'iban' && v.dipId) return ibanApri(v.dipId);
+    return _apriVoce25.apply(this, arguments);
+  };
+}
+const _ibanBello = s => s ? String(s).toUpperCase().replace(/(.{4})/g, '$1 ').trim() : '(nessuno)';
+const _ibanMask = s => s ? (s.length > 8 ? s.slice(0, 4) + ' •••• ' + s.slice(-4) : s) : '(nessuno)';
+async function ibanApri(dipId) {
+  const [cR, pR] = await Promise.all([
+    sb.from('presenze_iban_cambi').select('*').eq('dipendente_id', dipId).order('cambiato_il', { ascending: false }).limit(5),
+    sb.from('presenze_profili').select('nome,cognome,iban').eq('id', dipId).maybeSingle(),
+  ]);
+  const C = cR.data || [], p = pR.data || {}, c = C[0];
+  const body = _sheetDinamico('sh-iban', 'IBAN cambiato');
+  body.innerHTML = `<div class="va-head"><span class="va-ico big">🏦</span><div><b>${esc((p.nome || '') + ' ' + (p.cognome || ''))}</b><small>${c ? 'ha cambiato IBAN il ' + new Date(c.cambiato_il).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}</small></div></div>
+    <div class="iban-box nuovo"><small>NUOVO IBAN — usa questo per lo stipendio</small><b>${esc(_ibanBello(p.iban))}</b><button class="btn-sm" onclick="navigator.clipboard&&navigator.clipboard.writeText('${esc(p.iban || '')}');toast('IBAN copiato')">Copia</button></div>
+    ${c ? `<div class="iban-box vecchio"><small>Vecchio IBAN — non usarlo più</small><b>${esc(_ibanMask(c.iban_prima))}</b></div>` : ''}
+    <div class="note-small" style="margin:8px 2px 14px">Finché non lo segni, l'ultimo giorno di ogni mese ti arriva un promemoria prima di pagare gli stipendi.</div>
+    ${c && !c.bonifico_aggiornato_il ? `<button class="btn-primary" onclick="ibanAggiornato('${dipId}')">✓ Ho aggiornato il bonifico sul nuovo IBAN</button>` : '<div class="tv-gia">✓ Bonifico già aggiornato</div>'}
+    <button class="btn-secondary" style="width:100%;margin-top:10px" onclick="closeSheet('sh-iban');openAnagrafica('${dipId}')">👤 Scheda del dipendente</button>`;
+  openSheet('sh-iban');
+}
+async function ibanAggiornato(dipId) {
+  const { error } = await sb.rpc('presenze_iban_bonifico_aggiornato', { p_dip: dipId });
+  if (error) { toast('Non salvato: ' + error.message); return; }
+  _chiudi('sh-iban'); _chiudi('sh-voce-attesa'); _chiudi('sh-statDettaglio');
+  toast('✓ Segnato: niente più promemoria per questo IBAN');
+  try { aggiornaNavBadge && aggiornaNavBadge(); } catch (e) {}
+}
+// scheda dipendente: avviso se ha cambiato IBAN e il bonifico non è ancora aggiornato
+if (typeof openAnagrafica === 'function') {
+  const _openAna25 = openAnagrafica;
+  openAnagrafica = async function (id) {
+    const r = await _openAna25.apply(this, arguments);
+    try {
+      const { data } = await sb.from('presenze_iban_cambi').select('id,cambiato_il').eq('dipendente_id', id).is('bonifico_aggiornato_il', null).order('cambiato_il', { ascending: false }).limit(1);
+      const box = $('ana-extra24');
+      if (data && data.length && box && !box.querySelector('.iban-avviso')) box.insertAdjacentHTML('afterbegin', `<div class="insight warn iban-avviso" onclick="ibanApri('${id}')" style="margin-top:14px"><div style="font-size:18px">🏦</div><div><b>IBAN cambiato il ${new Date(data[0].cambiato_il).toLocaleDateString('it-IT')}</b> — paga lo stipendio sul nuovo IBAN. <u>Dettagli</u></div></div>`);
+    } catch (e) {}
+    return r;
+  };
+}
+
+/* ── collegamenti dalle notifiche e avvio ─────────────────────────── */
+function deepLink25(h) {
+  if (!ME || !h) return false;
+  if (ME.ruolo === 'admin') {
+    const m = h.match(/^#ana-([0-9a-f-]{36})$/);
+    if (m) { switchPage('pg-team'); setTimeout(() => openAnagrafica(m[1]), 500); return true; }
+    if (h === '#iban') { switchPage('pg-scan'); setTimeout(() => apriDettaglioStat('attesa'), 700); return true; }
+  } else {
+    if (h === '#recensioni') { setTimeout(() => recDipApri(), 400); return true; }
+    if (h === '#attestati') { switchPage('pg-profilo-dip'); setTimeout(() => { const b = $('profilo-attestati'); if (b) b.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 1200); return true; }
+  }
+  return false;
+}
+window.addEventListener('hashchange', () => { if (deepLink25(location.hash)) history.replaceState(null, '', location.pathname + location.search); });
+async function avvio25(admin) {
+  try {
+    if (admin && await gbpRitorno()) return;
+    if (deepLink25(location.hash)) history.replaceState(null, '', location.pathname + location.search);
+  } catch (e) { console.warn('avvio 2.5', e); }
+}
 
 
 /* ── DB ────────────────────────────────────────────────
@@ -11136,6 +11860,7 @@ function avviaApp(p) {
     badge.textContent = 'Admin'; badge.className = 'topbar-badge badge-admin';
     buildNav(NAV_ADMIN);
     const startPage = window.location.hash === '#richieste' ? 'pg-assenze-admin' : (deepLink24(window.location.hash, true) || 'pg-scan');
+    setTimeout(() => { try { avvio25(true); } catch (e) {} }, 1200); // 2.5: ritorno da Google, #ana-…, #iban
     if (window.location.hash) window.location.hash = '';
     switchPage(startPage);
     initAdmin();
@@ -11574,6 +12299,7 @@ async function initDipendente(deepHash) {
   caricaStoricoStipendi();
   caricaSospesiDip(); // banner "cose in sospeso" in home
   setTimeout(() => setupDipControlla(), 2500); // 2.3: notifiche, firma, telefono, email
+  setTimeout(() => { try { avvio25(false); } catch (e) {} }, 1500); // 2.5: #recensioni, #attestati
 }
 
 async function controllaTimbraturaOggi() {
@@ -27174,6 +27900,7 @@ async function salvaDatiProfiloDip() {
   const iban         = $('mdd-iban').value.trim().replace(/\s/g,'').toUpperCase();
 
   if (iban && iban.length < 15) { showMsg('mdd-msg','IBAN non valido','err'); return; }
+  if ((iban || '') !== (p.iban || '') && !confirm('Stai cambiando l\'IBAN su cui ricevi lo stipendio.\n\nL\'amministratore riceverà subito un avviso e userà il nuovo IBAN dal prossimo pagamento. Confermi?')) return;
 
   const telefonoCambiato = telefono !== (p.telefono || '');
   const aggiornamento = {
@@ -27190,8 +27917,7 @@ async function salvaDatiProfiloDip() {
 
   showMsg('mdd-msg', '✓ Dati aggiornati con successo', 'ok');
 
-  const nomeDip = ME.nome + (ME.cognome ? ' '+ME.cognome : '');
-  inviaNotificaTelegram('📝 <b>Ceraldi Presenze — Profilo aggiornato</b>\n'+escTG(nomeDip)+' ha aggiornato la sua scheda profilo.');
+  // 2.5: l'avviso "ha modificato il proprio profilo" (con i dati cambiati e l'IBAN) lo manda il server
 
   setTimeout(() => { closeSheet('sh-modificaDatiDip'); caricaProfiloDip(); }, 1200);
 }
