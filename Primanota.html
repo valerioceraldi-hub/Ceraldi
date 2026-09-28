@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.9.3</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.9.4</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -30274,6 +30274,16 @@ async function _authEntra(){
   // della banca senza completare) apre comunque quella sezione senza tentare
   // nessuno scambio.
   setTimeout(async function(){
+    // 28/09 — collegamento da Ceraldi Presenze: ?mov=<id> apre il movimento
+    // bancario usato per una riconciliazione stipendio (sola lettura).
+    try{
+      var _qsMov = new URLSearchParams(window.location.search).get('mov');
+      if(_qsMov){
+        try{ var _u = new URL(window.location.href); _u.searchParams.delete('mov'); window.history.replaceState(null, '', _u.pathname + (_u.search||'') + (_u.hash||'')); }catch(e){}
+        _movSchedaApri(_qsMov);
+        return;
+      }
+    }catch(e){}
     var gestito = false;
     try{ gestito = !!(await _ebGestisciRitornoBanca()); }catch(e){}
     if(!gestito){
@@ -30287,6 +30297,54 @@ async function _authEntra(){
       try{ localStorage.removeItem('ceraldi_eb_tornando'); }catch(e){}
     }
   }, 400);
+}
+// 28/09 — Scheda di un movimento bancario (sola lettura), aperta dal link
+// "Apri in Ceraldi Fatture" di Ceraldi Presenze: mostra esattamente il
+// movimento originale della banca e a cosa è collegato (fattura o stipendio).
+async function _movSchedaApri(movId){
+  var vecchio = document.getElementById('movSchedaMo'); if(vecchio) vecchio.remove();
+  var mo = document.createElement('div');
+  mo.id = 'movSchedaMo';
+  mo.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:950;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px)';
+  mo.onclick = function(e){ if(e.target===mo) mo.remove(); };
+  var sh = document.createElement('div');
+  sh.style.cssText = 'background:var(--bg);border-radius:20px 20px 0 0;width:100%;max-width:500px;max-height:85vh;overflow:auto;padding:16px 20px calc(20px + env(safe-area-inset-bottom));animation:slideUp .3s cubic-bezier(.32,.72,0,1)';
+  sh.innerHTML = '<div style="font-size:15px;color:var(--ink3);padding:30px 0;text-align:center">⏳ Carico il movimento…</div>';
+  mo.appendChild(sh); document.body.appendChild(mo);
+  var m = null, stip = [], dip = {};
+  try{
+    var rows = await sbFetch('movimenti_banca?id=eq.'+encodeURIComponent(movId)+'&select=*');
+    if(rows && rows.length) m = _bancaNorm(rows[0]);
+  }catch(e){ sh.innerHTML = '<div style="padding:20px 0;color:var(--red)">Errore nel caricare il movimento: '+esc(e.message||e)+'</div>'; return; }
+  if(!m){ sh.innerHTML = '<div style="font-size:17px;font-weight:700;margin-bottom:8px">Movimento non trovato</div><div style="font-size:14px;color:var(--ink3);line-height:1.45">Il movimento <b>'+esc(movId)+'</b> non esiste più nei movimenti bancari (forse l\'estratto conto è stato ricaricato). In Ceraldi Presenze annulla il collegamento e ricollega il movimento giusto.</div><button onclick="document.getElementById(\'movSchedaMo\').remove()" style="margin-top:16px;width:100%;padding:13px;border:none;border-radius:12px;background:var(--sep);font-weight:700;font-size:15px">Chiudi</button>'; return; }
+  try{
+    stip = await sbFetch('presenze_bonifici_stipendio?movimento_banca_id=eq.'+encodeURIComponent(movId)+'&select=*') || [];
+    if(stip.length){ var ps = await sbFetch('presenze_profili?select=id,nome,cognome&id=in.('+stip.map(function(r){return r.dipendente_id;}).join(',')+')') || []; ps.forEach(function(p){ dip[p.id] = p.nome+(p.cognome?' '+p.cognome:''); }); }
+  }catch(e){}
+  var MESI = ['','gennaio','febbraio','marzo','aprile','maggio','giugno','luglio','agosto','settembre','ottobre','novembre','dicembre'];
+  var dIt = function(g){ return g ? g.slice(8,10)+'/'+g.slice(5,7)+'/'+g.slice(0,4) : '—'; };
+  var colB = m.banca==='SumUp' ? '#0066cc' : (m.banca==='Nexi' ? '#7b2ff7' : 'var(--red)');
+  var riga = function(l, v){ return '<div style="display:flex;gap:12px;padding:9px 0;border-bottom:1px solid var(--sep);font-size:14px"><div style="width:96px;flex-shrink:0;color:var(--ink3)">'+l+'</div><div style="flex:1;min-width:0;word-break:break-word">'+v+'</div></div>'; };
+  var f = m.fatturaId ? (fatture||[]).find(function(x){ return String(x.id)===String(m.fatturaId); }) : null;
+  var coll = '';
+  if(stip.length){
+    coll = stip.map(function(r){ return '<div style="background:rgba(52,199,89,.12);border-radius:12px;padding:10px 12px;margin-top:8px;font-size:14px;line-height:1.4">👥 <b>Stipendio di '+esc(dip[r.dipendente_id]||'dipendente')+'</b> — '+MESI[r.mese_riferimento]+' '+r.anno_riferimento+'<br><span style="font-size:12.5px;color:var(--ink3)">'+fmt(+r.importo||0)+' collegati in Ceraldi Presenze il '+dIt(String(r.creato_il||'').slice(0,10))+(r.fonte_copertura==='portafoglio'?' · dal portafoglio del dipendente':'')+'</span></div>'; }).join('');
+  } else if(m.abbinata && (f || m.fatturaLabel)){
+    coll = '<div style="background:rgba(0,122,255,.10);border-radius:12px;padding:10px 12px;margin-top:8px;font-size:14px">🧾 Abbinato a <b>'+esc(f ? ((f.fornitore||'')+(f.numero?' n. '+f.numero:'')) : m.fatturaLabel)+'</b>'+(f?'<br><button onclick="document.getElementById(\'movSchedaMo\').remove();openEdit(\''+esc(f.id)+'\')" style="margin-top:8px;border:none;background:none;color:var(--blue,#007aff);font-weight:700;font-size:14px;padding:0">Apri la fattura ›</button>':'')+'</div>';
+  } else {
+    coll = '<div style="background:var(--sep);border-radius:12px;padding:10px 12px;margin-top:8px;font-size:14px;color:var(--ink3)">Non collegato a nessuna fattura o stipendio.</div>';
+  }
+  sh.innerHTML = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px"><div style="font-size:17px;font-weight:700">🏦 Movimento bancario</div><button onclick="document.getElementById(\'movSchedaMo\').remove()" style="border:none;background:var(--sep);width:30px;height:30px;border-radius:50%;font-size:15px">✕</button></div>'
+    + '<div style="font-size:12px;color:var(--ink3);margin-bottom:10px">Dati originali dell\'estratto conto, così come li riporta la banca.</div>'
+    + '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px"><div style="font-size:15px">'+dIt(m.data)+' <span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:99px;background:'+colB+';color:#fff;margin-left:4px">'+esc(m.banca||'BPM')+'</span></div><div style="font-size:24px;font-weight:800;color:'+(m.importo<0?'var(--red)':'var(--green,#34c759)')+'">'+(m.importo<0?'−':'+')+fmt(Math.abs(m.importo))+'</div></div>'
+    + riga('Descrizione', esc(m.descrizione||'—'))
+    + riga('Tipo', esc((m.tipo||'')+(m.sottotipo?' · '+m.sottotipo:'')||'—'))
+    + (m.note ? riga('Note', esc(m.note)) : '')
+    + riga('Codice', '<span style="font-size:12px;color:var(--ink3)">'+esc(m.id)+'</span>')
+    + '<div style="font-size:13px;font-weight:700;color:var(--ink3);margin-top:14px;text-transform:uppercase;letter-spacing:.3px">Collegato a</div>' + coll
+    + (!stip.length ? '<button id="movSchedaAbb" style="margin-top:14px;width:100%;padding:13px;border:none;border-radius:12px;background:var(--sep);font-weight:700;font-size:15px">✏️ Gestisci abbinamento fattura</button>' : '');
+  var b = document.getElementById('movSchedaAbb');
+  if(b) b.onclick = function(){ mo.remove(); if(!(_bancaMovimenti||[]).some(function(x){ return x.id===m.id; })) _bancaMovimenti = (_bancaMovimenti||[]).concat([m]); apriCambioAbbinamentoMov(m.id); };
 }
 async function _authEsci(silenzioso){
   if(!silenzioso && !confirm('Uscire da Fatture su questo dispositivo?')) return;

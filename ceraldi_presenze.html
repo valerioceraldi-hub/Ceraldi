@@ -222,6 +222,42 @@
     chiusure.push({ id: 1000 + c, data: iso(gc), totale_corrispettivi: tot, incassato: tot, cassa: Math.round(tot * 0.42), pos: Math.round(tot * 0.58), deleted_at: null });
   }
 
+  /* ── 2.8 RICONCILIAZIONE: cedolini dei mesi passati e bonifici in banca ──
+     Casi voluti: tutto pagato, pagato in parte, pagato in più, distinta
+     "beneficiari vari", cedolino mancante, cedolino doppio, bonifico non
+     collegato, mese ancora da pagare. */
+  var movBanca = [], bonStip = [], ricIdN = 0;
+  var pad2 = function (n) { return String(n).padStart(2, '0'); };
+  var ibans = ['IT60X0542811101000000123456', 'IT28W8000000292100645211208', 'IT02L1234512345123456789012', 'IT40S0542811101000000654321', 'IT75R0306909606100000012345', 'IT12A0200802435000104567890', 'IT33C0306903487100000006597', 'IT91P0503439980000000008672'];
+  dip.forEach(function (d, k) { d.iban = ibans[k % ibans.length]; });
+  for (var back = 5; back >= 1; back--) {
+    var mc = new Date(OGGI.getFullYear(), OGGI.getMonth() - back, 1), mm = mc.getMonth() + 1, aa = mc.getFullYear();
+    var pag = new Date(OGGI.getFullYear(), OGGI.getMonth() - back + 1, 1);
+    dip.forEach(function (d, k) {
+      var netto = 1180 + k * 35 + (back % 2) * 20;
+      if (back > 1) {
+        if (!(k === 2 && back === 2)) documenti.push({ id: uid('dc00'), dipendente_id: d.id, categoria: 'busta_paga', nome_file: 'Busta_' + d.cognome + '_' + pad2(mm) + '.pdf', url: 'demo/busta_' + k + '.pdf', anno: aa, mese: mm, creato_il: new Date(pag.getFullYear(), pag.getMonth(), 5).toISOString(), caricato_da: ADMIN_ID, letto_dip: true, lordo: netto * 1.3, netto_busta: netto, inviato_dip: true });
+        if (k === 3 && back === 3) documenti.push({ id: uid('dc00'), dipendente_id: d.id, categoria: 'busta_paga', nome_file: 'Busta_' + d.cognome + '_' + pad2(mm) + '_bis.pdf', url: 'demo/busta_' + k + '.pdf', anno: aa, mese: mm, creato_il: new Date(pag.getFullYear(), pag.getMonth(), 9).toISOString(), caricato_da: ADMIN_ID, letto_dip: true, netto_busta: netto, inviato_dip: true });
+      } else netto = 1280 + k * 30; // il mese scorso: cedolino già creato sopra
+      if (back === 1 && k === 5) return; // stipendio del mese scorso non ancora pagato
+      var imp = netto;
+      if (k === 1 && back === 3) imp = netto - 200;   // pagato in parte
+      if (k === 4 && back === 4) imp = netto + 150;   // pagato in più
+      var gp = new Date(pag.getFullYear(), pag.getMonth(), 6 + (k % 4)), dIso = gp.getFullYear() + '-' + pad2(gp.getMonth() + 1) + '-' + pad2(gp.getDate());
+      ricIdN++;
+      var distinta = (k === 0 && back === 2);
+      var desc = back === 1 && k % 2 === 0
+        ? d.nome.toUpperCase() + ' ' + d.cognome.toUpperCase() + ' ' + d.iban + ' — Stipendio ' + ['gennaio','febbraio','marzo','aprile','maggio','giugno','luglio','agosto','settembre','ottobre','novembre','dicembre'][mm - 1]
+        : 'VS.DISP. RIF. MB0B' + (70000000 + ricIdN) + '/9' + (1000000 + ricIdN) + ' FAVORE ' + (distinta ? 'BENEFICIARI VARI DISTINTA' : d.cognome.toUpperCase() + ' ' + d.nome.toUpperCase()) + ' - ADD.TOT';
+      var mid = dIso + '_-' + imp.toFixed(2) + '_VSDISP_RIF_' + ricIdN;
+      movBanca.push({ id: mid, data: dIso, importo: -imp, descrizione: desc, tipo: 'uscita', sottotipo: 'Bonifico', banca: back === 1 && k % 2 === 0 ? 'SumUp' : 'BPM', abbinata: false });
+      movBanca.push({ id: mid + '_c', data: dIso, importo: -1.1, descrizione: 'VS.DISP. RIF. MB0B' + (70000000 + ricIdN) + ' FAVORE ' + d.cognome.toUpperCase() + ' ' + d.nome.toUpperCase() + ' - ADD.SPE', tipo: 'uscita', sottotipo: 'Bonifico', banca: 'BPM' });
+      if (back >= 3) bonStip.push({ id: 1 + bonStip.length, dipendente_id: d.id, movimento_banca_id: mid, mese_riferimento: mm, anno_riferimento: aa, importo: imp, confermato: true, fonte_copertura: 'bonifico', descrizione_movimento: desc, data_movimento: dIso, creato_il: new Date(gp.getTime() + 5 * 86400000).toISOString() });
+    });
+  }
+  // un bonifico a nome di un dipendente che non è uno stipendio (rimborso)
+  movBanca.push({ id: 'demo_rimborso', data: iso(addDays(OGGI, -20)), importo: -85, descrizione: 'VS.DISP. RIF. MB0B79999999/99999 FAVORE ' + dip[1].cognome.toUpperCase() + ' ' + dip[1].nome.toUpperCase() + ' - ADD.TOT - rimborso spese', tipo: 'uscita', sottotipo: 'Bonifico', banca: 'BPM' });
+
   var DB = {
     presenze_profili: profili, presenze: presenze, presenze_turni: turni, presenze_assenze: assenze,
     presenze_acconti: acconti, presenze_liquidazioni: liquidazioni, presenze_documenti: documenti,
@@ -229,7 +265,7 @@
     presenze_turni_impostazioni: [{ id: 1, vincolo_riposo: true, vincolo_sera_no_mattina: true, vincolo_spezzato_no_mattina: false, vincolo_no_spezzati_consecutivi: true, vincolo_no_chiusure_consecutive: true, vincolo_equita_weekend: true, decontribuzione_sud_attiva: false }],
     presenze_contratto_template: [{ id: 1, testo: 'Contratto di esempio (demo).', versione: '1', aggiornato_il: '2026-01-01T00:00:00Z' }],
     presenze_storico_paga: [], presenze_restituzioni: [], presenze_cambi_turno: [], presenze_assenze_allegati: [],
-    presenze_bonifici_stipendio: [], presenze_portafoglio_movimenti: [], prima_nota_movimenti: [], movimenti_banca: [],
+    presenze_bonifici_stipendio: bonStip, presenze_portafoglio_movimenti: [], prima_nota_movimenti: [], movimenti_banca: movBanca, presenze_riconciliazione_eccezioni: [],
     presenze_prospetti_paghe: [], presenze_certificazioni: [], presenze_inviti: [], presenze_otp: [], presenze_correzioni: [],
     presenze_promemoria_log: [], presenze_turni_requisiti: [], presenze_turni_note: [], presenze_riconciliazione_note: [], push_iscrizioni: []
   };
@@ -296,8 +332,8 @@
     DB.recensioni_letture = [{ recensione_id: 'rev3', admin_id: ADMIN_ID, letta_il: addDays(OGGI, -7).toISOString() }, { recensione_id: 'rev4', admin_id: ADMIN_ID, letta_il: addDays(OGGI, -11).toISOString() }];
     // 2.5: un dipendente ha cambiato IBAN (promemoria per l'admin)
     var dipIban = profili.find(function (p) { return p.ruolo !== 'admin' && p.id !== DIP_ID; }) || profili[1];
-    if (dipIban) { dipIban.iban = 'IT60X0542811101000000123456'; }
-    DB.presenze_iban_cambi = dipIban ? [{ id: 1, dipendente_id: dipIban.id, iban_prima: 'IT02L1234512345123456789012', iban_nuovo: 'IT60X0542811101000000123456', cambiato_il: addDays(OGGI, -3).toISOString(), cambiato_da: 'dipendente', bonifico_aggiornato_il: null }] : [];
+    if (dipIban) { dipIban.iban = 'IT47K0306909606100000099881'; }
+    DB.presenze_iban_cambi = dipIban ? [{ id: 1, dipendente_id: dipIban.id, iban_prima: 'IT02L1234512345123456789012', iban_nuovo: 'IT47K0306909606100000099881', cambiato_il: addDays(OGGI, -3).toISOString(), cambiato_da: 'dipendente', bonifico_aggiornato_il: null }] : [];
     DB.presenze_verifiche_tel = [];
     DB.ceraldi_stato_condiviso = [{ id: 'recensioni_google_stato', data: { rating: 4.3, totale: 1927, link: 'https://maps.google.com/?cid=0', nome: 'Bar Aurora', aggiornato: new Date().toISOString() } }];
     DB.presenze_turni_extra = DB.presenze_turni_extra || [];
@@ -305,7 +341,7 @@
 
   // Chiavi univoche (come i vincoli reali del database)
   var UNICI = { presenze: [['dipendente_id', 'data']], presenze_promemoria_log: [['data', 'tipo']], presenze_liquidazioni: [['dipendente_id', 'anno', 'mese', 'causale']] };
-  var ID_NUMERICO = { presenze_bonifici_stipendio: 1, presenze_portafoglio_movimenti: 1, prima_nota_movimenti: 1, presenze_riconciliazione_note: 1, chiusure_giornaliere: 1, push_iscrizioni: 1, presenze_contratto_template: 1, presenze_turni_impostazioni: 1 };
+  var ID_NUMERICO = { presenze_bonifici_stipendio: 1, presenze_riconciliazione_eccezioni: 1, presenze_portafoglio_movimenti: 1, prima_nota_movimenti: 1, presenze_riconciliazione_note: 1, chiusure_giornaliere: 1, push_iscrizioni: 1, presenze_contratto_template: 1, presenze_turni_impostazioni: 1 };
   var nextNum = 50000;
 
   /* ── Motore di query in stile PostgREST (sottoinsieme usato dall'app) ── */
@@ -2311,6 +2347,228 @@ html[data-theme="dark"] .ch-riep{background:#2C2C2E}
 .pv-studio li>span{font-size:18px;width:24px;text-align:center}
 .pv-studio small{display:block;color:var(--muted);font-size:11.5px;line-height:1.4}
 
+/* ══════════════ PRESENZE 2.8 — riconciliazione (stesso linguaggio della Home) ══════════════
+   Toni: ok = verde · warn = arancio · ko = rosso · info = blu · nd = grigio.
+   Cedolino = viola, banca = blu. Tutto su token: chiaro e scuro coerenti. */
+:root{--ric-ok:var(--green);--ric-ok-bg:var(--green-light);--ric-warn:var(--yellow);--ric-warn-bg:var(--orange-light);
+  --ric-ko:var(--red);--ric-ko-bg:var(--red-light);--ric-info:var(--accent);--ric-info-bg:var(--accent-light);--ric-nd:var(--muted);--ric-nd-bg:var(--surface2)}
+.ric-carica{display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;color:var(--muted);padding:34px 18px;font-size:13px}
+.ric-errore{color:var(--red);padding:14px;font-size:13px}
+.ric-vuoto{display:flex;flex-direction:column;align-items:center;gap:3px;text-align:center;color:var(--muted);padding:22px 16px;font-size:13px;background:var(--surface2);border-radius:18px;margin:8px 0}
+.ric-vuoto>span{width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:800;background:var(--surface);margin-bottom:6px}
+.ric-vuoto.ok>span{background:var(--ric-ok-bg);color:var(--ric-ok)}
+.ric-vuoto b{color:var(--text);font-size:14.5px}.ric-vuoto small{font-size:12px}
+/* intestazioni e note */
+.ric-intro{display:flex;gap:11px;background:linear-gradient(135deg,rgba(10,132,255,.08),rgba(94,92,230,.08));border:.5px solid rgba(94,92,230,.18);border-radius:18px;padding:12px 13px;font-size:12.5px;line-height:1.5;color:var(--muted);margin-bottom:14px}
+.ric-intro b{display:block;color:var(--text);font-size:14px;letter-spacing:-.2px;margin-bottom:2px}
+.ric-intro-ico{width:34px;height:34px;border-radius:11px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:var(--ds-grad);color:#fff;box-shadow:var(--ds-grad-shadow)}
+.ric-intro-ico svg{width:18px;height:18px}
+.ric-intro-meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.ric-intro-meta span{font-size:11.5px;padding:3px 9px;border-radius:99px;background:var(--surface);border:.5px solid var(--ds-hair);color:var(--muted)}
+.ric-intro-meta b{display:inline;font-size:11.5px;margin:0}
+.ric-nota{font-size:11.5px;color:var(--muted);line-height:1.45;margin:4px 2px 10px}
+.ric-avviso{background:var(--ric-warn-bg);color:var(--ric-warn);border-radius:14px;padding:10px 12px;font-size:12.5px;font-weight:600;margin:8px 0}
+.ric-sez{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:700;color:var(--text);letter-spacing:-.1px;margin:20px 2px 9px}
+.ric-sez::before{content:'';width:3px;height:13px;border-radius:2px;background:linear-gradient(180deg,#0A84FF,#5E5CE6);flex-shrink:0}
+.ric-sez>small{margin-left:auto;font-size:11px;font-weight:500;color:var(--ink3)}
+.ric-cnt{font-size:11px;font-weight:700;min-width:20px;height:20px;padding:0 6px;border-radius:99px;display:inline-flex;align-items:center;justify-content:center;background:var(--surface2);color:var(--muted)}
+.ric-sez-az{margin-left:auto;display:flex;gap:6px}
+.ric-sez-az button{border:none;background:var(--surface2);color:var(--accent);font:inherit;font-size:12px;font-weight:700;padding:4px 10px;border-radius:99px;cursor:pointer}
+.ric-gruppo{font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--ink3);margin:16px 4px 6px}
+/* chip di stato */
+.ric-chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;padding:3px 9px 3px 4px;border-radius:99px;white-space:nowrap;flex-shrink:0;background:var(--ric-nd-bg);color:var(--ric-nd)}
+.ric-chip i{font-style:normal;width:15px;height:15px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:900;color:#fff!important;background:var(--ink3)}
+.ric-chip.ok i{background:var(--ric-ok)}.ric-chip.warn i{background:var(--ric-warn)}.ric-chip.ko i{background:var(--ric-ko)}.ric-chip.info i{background:var(--ric-info)}
+.ric-chip.ok{background:var(--ric-ok-bg);color:var(--ric-ok)}.ric-chip.warn{background:var(--ric-warn-bg);color:var(--ric-warn)}
+.ric-chip.ko{background:var(--ric-ko-bg);color:var(--ric-ko)}.ric-chip.info{background:var(--ric-info-bg);color:var(--ric-info)}
+.ric-chips{display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:9px}
+.ric-chev{margin-left:auto;color:var(--ink3);font-size:18px;font-weight:600;line-height:1}
+/* avatar */
+.ric-av{width:38px;height:38px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:#fff;letter-spacing:-.3px;background:var(--ds-grad);box-shadow:0 4px 10px -5px rgba(40,50,120,.5),inset 0 1px 0 rgba(255,255,255,.25)}
+.ric-av.lg{width:46px;height:46px;font-size:16px;border:2px solid rgba(255,255,255,.18)}
+.ric-av.sm{width:32px;height:32px;font-size:11.5px}
+.ric-av.xs{width:22px;height:22px;font-size:8.5px;box-shadow:none}
+/* schede */
+.ric-card,.ric-st,.ric-dcard,.ric-mcard{background:var(--surface);border:.5px solid var(--ds-hair);border-radius:20px;padding:13px;margin-bottom:12px;box-shadow:var(--ds-shadow)}
+.ric-card.sm{padding:11px}
+.ric-card-h{display:flex;align-items:center;gap:10px;margin-bottom:11px}
+.ric-card-n{flex:1;min-width:0}.ric-card-n b{display:block;font-size:15px;font-weight:750;letter-spacing:-.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ric-card-n small{display:block;font-size:12px;color:var(--muted);margin-top:1px}
+/* cedolino → bonifico */
+.ric-flow{position:relative}
+.ric-flow-link{position:relative;height:30px;display:flex;align-items:center;justify-content:center}
+.ric-flow-link::before{content:'';position:absolute;left:50%;top:0;bottom:0;border-left:2px dashed var(--surface3)}
+.ric-flow-link span{position:relative;font-size:10.5px;font-weight:700;letter-spacing:.3px;color:var(--muted);background:var(--surface);padding:2px 10px;border-radius:99px;border:.5px solid var(--ds-hair)}
+.ric-box{position:relative;background:var(--surface2);border-radius:16px;padding:11px 12px;font-size:12.5px}
+.ric-box.ced{background:linear-gradient(135deg,var(--purple-light),var(--surface2) 70%)}
+.ric-box.mov{background:linear-gradient(135deg,var(--accent-light),var(--surface2) 70%)}
+.ric-box.vuoto{background:var(--ric-ko-bg)}
+.ric-box.port{background:var(--ric-warn-bg);margin-top:10px}
+.ric-box small{display:block;color:var(--muted);font-size:11.5px;margin-top:2px}
+.ric-box-h{display:flex;align-items:center;gap:10px}
+.ric-box-t{flex:1;min-width:0}.ric-box-t b{display:block;font-size:14.5px;font-weight:700;letter-spacing:-.2px}
+.ric-box-s{font-size:11.5px;color:var(--muted);margin-top:7px}
+.ric-imp{text-align:right;font-size:18px;font-weight:800;letter-spacing:-.5px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.ric-imp small{font-size:10px;font-weight:600;letter-spacing:0;color:var(--ink3);margin-top:0}
+.ric-ico{width:34px;height:34px;border-radius:11px;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:#fff}
+.ric-ico svg{width:18px;height:18px}
+.ric-ico.ced{background:linear-gradient(145deg,#8E6CF7,#5E5CE6);box-shadow:0 4px 10px -5px rgba(94,92,230,.7)}
+.ric-ico.mov{background:linear-gradient(145deg,#3B8BFF,#0A6CFF);box-shadow:0 4px 10px -5px rgba(10,108,255,.7)}
+.ric-ico.port{background:linear-gradient(145deg,#FFB340,#FF9500);font-size:11px}
+.ric-ico.xs{width:20px;height:20px;border-radius:6px;box-shadow:none}.ric-ico.xs svg{width:12px;height:12px}
+.ric-lbl{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:1px}
+.ric-dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:10px 0 0;padding-top:9px;border-top:.5px solid var(--ds-hair);font-size:12.5px}
+.ric-dl dt{color:var(--muted)}.ric-dl dd{margin:0;word-break:break-word;font-weight:550}
+.ric-mono{font-family:ui-monospace,Menlo,monospace;font-size:11.5px!important}
+.ric-ok{color:var(--ric-ok);font-weight:700;font-size:11.5px}.ric-ko{color:var(--ric-ko);font-weight:700;font-size:11.5px}
+.ric-orig{font-size:11.5px;color:var(--muted);margin-top:8px}
+.ric-orig summary{cursor:pointer;font-weight:600;list-style:none}.ric-orig summary::before{content:'▸ '}.ric-orig[open] summary::before{content:'▾ '}
+.ric-orig div{margin-top:5px;padding:8px 10px;border-radius:10px;background:var(--surface);font-family:ui-monospace,Menlo,monospace;font-size:11px;word-break:break-word;line-height:1.45}
+.ric-link{display:inline-flex;align-items:center;margin-top:9px;background:none;border:none;padding:0;color:var(--accent);font-weight:700;font-size:12.5px;cursor:pointer;text-decoration:none;font-family:inherit}
+.ric-warn{color:var(--ric-warn)!important;font-weight:600}
+/* perché è proposto */
+.ric-perche{margin-top:8px;padding:10px 12px;border-radius:14px;background:var(--surface);border:1px dashed var(--surface3)}
+.ric-motivi{list-style:none;margin:4px 0 0;padding:0;font-size:12.5px;line-height:1.4}
+.ric-motivi li{display:flex;gap:8px;align-items:flex-start;padding:3px 0}
+.ric-motivi li i{font-style:normal;width:17px;height:17px;border-radius:50%;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:900;color:#fff!important;margin-top:1px}
+.ric-motivi li.ok i{background:var(--ric-ok)}.ric-motivi li.ko i{background:var(--ric-warn)}.ric-motivi li.nd i{background:var(--ink3)}
+.ric-motivi li.ko span{color:var(--ric-warn)}
+/* esito */
+.ric-esito{display:flex;align-items:center;gap:11px;margin-top:12px;border-radius:16px;padding:11px 13px;background:var(--ric-nd-bg);color:var(--ric-nd)}
+.ric-esito b{display:block;font-size:14.5px;font-weight:800;letter-spacing:-.3px}
+.ric-esito small{display:block;font-weight:500;font-size:11.5px;margin-top:1px;opacity:.85}
+.ric-esito-ico{width:30px;height:30px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:14px;color:#fff!important;background:var(--ink3)}
+.ric-esito.ok .ric-esito-ico{background:var(--ric-ok)}.ric-esito.warn .ric-esito-ico{background:var(--ric-warn)}.ric-esito.info .ric-esito-ico{background:var(--ric-info)}.ric-esito.ko .ric-esito-ico{background:var(--ric-ko)}
+.ric-esito.ok{background:var(--ric-ok-bg);color:var(--ric-ok)}.ric-esito.warn{background:var(--ric-warn-bg);color:var(--ric-warn)}
+.ric-esito.info{background:var(--ric-info-bg);color:var(--ric-info)}.ric-esito.ko{background:var(--ric-ko-bg);color:var(--ric-ko)}
+/* azioni */
+.ric-az-mov{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}.ric-az-mov:empty{display:none}
+.ric-az-mov .btn-sm{width:auto;padding:8px 13px;font-size:12.5px}
+.ric-cta{margin-top:14px!important;width:100%}
+.ric-del{color:var(--red)!important}
+.ric-ecc{margin-top:12px;padding:12px;border-radius:16px;background:var(--surface2)}
+.ric-ecc-t{font-size:13.5px;font-weight:750;margin-bottom:8px}
+/* conferma di gruppo */
+.ric-bulk{background:linear-gradient(135deg,var(--green-light),var(--surface) 80%);border:.5px solid rgba(52,199,89,.35);border-radius:20px;padding:13px;margin-bottom:14px;box-shadow:var(--ds-shadow)}
+.ric-bulk-h{display:flex;gap:11px;align-items:center}
+.ric-bulk-n{width:42px;height:42px;border-radius:13px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:19px;font-weight:800;color:#fff;background:linear-gradient(135deg,#34C759,#1F9A4B);box-shadow:0 6px 14px -6px rgba(31,154,75,.6)}
+.ric-bulk b{display:block;font-size:15px;letter-spacing:-.3px}.ric-bulk small{display:block;font-size:12px;color:var(--muted);margin-top:1px}
+.ric-bulk-l{display:flex;flex-wrap:wrap;gap:5px;margin:11px 0 12px}
+.ric-bulk-l span{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;padding:2px 9px 2px 2px;border-radius:99px;background:var(--surface);border:.5px solid var(--ds-hair);text-transform:capitalize}
+.ric-bulk-l span:not(:has(.ric-av)){padding-left:9px}
+/* hero */
+.ric-hero{margin-bottom:6px}
+.ric-hero-big{font-size:36px!important}
+.ric-hero-who{display:flex;align-items:center;gap:11px;margin:-2px 0 14px}
+.ric-hero-who b{display:block;font-size:18px;font-weight:800;letter-spacing:-.5px;color:#fff}
+.ric-hero-who small{display:block;font-size:12px;color:rgba(255,255,255,.5);margin-top:1px}
+.ric-hero-esito{display:inline-flex;align-items:center;gap:6px;margin-top:9px;font-size:12px;font-weight:650;padding:4px 11px 4px 5px;border-radius:99px;background:rgba(255,255,255,.08);border:.5px solid rgba(255,255,255,.12);color:rgba(255,255,255,.88);line-height:1.3}
+.ric-hero-esito i{font-style:normal;width:17px;height:17px;border-radius:50%;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:900;color:#0E1240;background:#fff}
+.ric-hero-esito.ok i{background:#30D158}.ric-hero-esito.warn i{background:#FF9F0A}.ric-hero-esito.info i{background:#64D2FF}.ric-hero-esito.ko i{background:#FF453A}
+.ric-hs{font-size:16px!important;letter-spacing:-.4px!important}
+.ric-hs small{font-size:12px;opacity:.55}
+.ric-hero .hero-stat{cursor:default}
+/* elenco dipendenti */
+.ric-dcard{display:block;width:100%;text-align:left;font:inherit;color:var(--text);cursor:pointer;transition:transform .18s var(--ease-ios)}
+.ric-dcard:active{transform:scale(.98)}
+.ric-dcard .ric-card-h{margin-bottom:10px}
+.ric-dsaldo{text-align:right;font-size:16px;font-weight:800;letter-spacing:-.4px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.ric-dsaldo small{display:block;font-size:10.5px;font-weight:600;letter-spacing:0;color:var(--ink3)}
+.ric-dsaldo.ok{color:var(--ric-ok)}.ric-dsaldo.warn{color:var(--ric-warn)}.ric-dsaldo.info{color:var(--ric-info)}
+.ric-bar{height:6px;border-radius:99px;background:var(--surface2);overflow:hidden}
+.ric-bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#0A84FF,#5E5CE6)}
+.ric-bar i.ok{background:linear-gradient(90deg,#34C759,#1F9A4B)}.ric-bar i.warn{background:linear-gradient(90deg,#FFB340,#FF9500)}
+.ric-bar-l{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:5px;font-variant-numeric:tabular-nums}
+/* quadro: info, striscia dei mesi, anomalie, mesi */
+.ric-info{display:flex;gap:10px;align-items:flex-start;border-radius:16px;padding:11px 12px;font-size:12.5px;line-height:1.45;margin:12px 0 0;background:var(--ric-nd-bg);color:var(--muted)}
+.ric-info>span{width:22px;height:22px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:12px;color:#fff!important;background:var(--ink3)}
+.ric-info.ko{background:var(--ric-ko-bg);color:var(--text)}.ric-info.ko>span{background:var(--ric-ko)}
+.ric-info b{color:var(--ric-ko)}
+.ric-strip{display:flex;gap:6px;overflow-x:auto;padding:2px 2px 6px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.ric-strip::-webkit-scrollbar{display:none}
+.ric-strip-m{flex:1 0 50px;max-width:74px;border:none;border-radius:14px;padding:8px 4px 7px;display:flex;flex-direction:column;align-items:center;gap:3px;font:inherit;cursor:pointer;background:var(--ric-nd-bg);color:var(--ric-nd);transition:transform .18s var(--ease-spring)}
+.ric-strip-m:active{transform:scale(.92)}
+.ric-strip-m small{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px}
+.ric-strip-m b{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:#fff!important;background:var(--ink3)}
+.ric-strip-m.ok b{background:var(--ric-ok)}.ric-strip-m.warn b{background:var(--ric-warn)}.ric-strip-m.ko b{background:var(--ric-ko)}.ric-strip-m.info b{background:var(--ric-info)}
+.ric-strip-m span{font-size:9.5px;font-weight:600;opacity:.7}
+.ric-strip-m.ok{background:var(--ric-ok-bg);color:var(--ric-ok)}.ric-strip-m.warn{background:var(--ric-warn-bg);color:var(--ric-warn)}
+.ric-strip-m.ko{background:var(--ric-ko-bg);color:var(--ric-ko)}.ric-strip-m.info{background:var(--ric-info-bg);color:var(--ric-info)}
+.ric-legenda{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:10.5px;font-weight:600;margin:2px 4px 0}
+.ric-legenda .ok{color:var(--ric-ok)}.ric-legenda .warn{color:var(--ric-warn)}.ric-legenda .ko{color:var(--ric-ko)}.ric-legenda .nd{color:var(--ric-nd)}
+.ric-anom{display:flex;gap:11px;background:var(--surface);border:.5px solid var(--ds-hair);border-radius:18px;padding:12px;margin-bottom:8px;box-shadow:var(--ds-shadow)}
+.ric-anom-ico{width:28px;height:28px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:13px;color:#fff!important;background:var(--ink3)}
+.ric-anom.err .ric-anom-ico{background:var(--ric-ko)}.ric-anom.warn .ric-anom-ico{background:var(--ric-warn)}.ric-anom.info .ric-anom-ico{background:var(--ric-info)}
+.ric-anom b{display:block;font-size:13.5px;font-weight:750;letter-spacing:-.2px}
+.ric-anom.err b{color:var(--ric-ko)}
+.ric-anom p{margin:3px 0 0;font-size:12.5px;line-height:1.45;color:var(--text)}
+.ric-anom-fare{margin-top:8px;padding:8px 10px;border-radius:11px;background:var(--surface2);font-size:12px;line-height:1.4;color:var(--muted)}
+.ric-anom-fare span{display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--accent);margin-bottom:1px}
+.ric-mcard{position:relative;overflow:hidden;padding-left:17px;scroll-margin-top:12px}
+.ric-mcard::before{content:'';position:absolute;left:0;top:0;bottom:0;width:5px;background:var(--surface3)}
+.ric-mcard.ok::before{background:var(--ric-ok)}.ric-mcard.warn::before{background:var(--ric-warn)}.ric-mcard.ko::before{background:var(--ric-ko)}.ric-mcard.info::before{background:var(--ric-info)}
+.ric-mcard-h{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.ric-mcard-h b{font-size:15.5px;font-weight:750;letter-spacing:-.3px}
+.ric-mcard-t{font-size:12px;color:var(--muted);line-height:1.4;margin-top:5px}
+.ric-mcard-f{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:10px;font-size:11.5px;color:var(--muted)}
+.ric-mcard-f b{color:var(--text);font-variant-numeric:tabular-nums}
+.ric-cmp{display:grid;grid-template-columns:1fr 20px 1fr;gap:4px;align-items:stretch;margin-top:10px}
+.ric-cmp-c{background:var(--surface2);border-radius:14px;padding:9px 10px;min-width:0}
+.ric-cmp-c b{display:block;font-size:15.5px;font-weight:800;letter-spacing:-.4px;margin-top:4px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.ric-cmp-c small{display:block;font-size:11px;color:var(--muted)}
+.ric-cmp-c .ric-link{margin-top:4px;font-size:12px}
+.ric-cmp-l{display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ric-cmp-ar{align-self:center;text-align:center;color:var(--ink3);font-weight:800}
+.ric-mvl{display:flex;align-items:center;gap:10px;font-size:12px;padding:7px 2px 0;margin-top:7px;border-top:.5px solid var(--ds-hair);font-variant-numeric:tabular-nums}
+.ric-mvl span{color:var(--muted)}.ric-mvl b{flex:1}
+.ric-mvl a{color:var(--accent);font-weight:700;text-decoration:none}
+.ric-mvl button{border:none;background:none;font:inherit;font-weight:700;color:var(--red);cursor:pointer;padding:0}
+.ric-diff{font-weight:800;font-size:11.5px;padding:3px 9px;border-radius:99px;font-variant-numeric:tabular-nums}
+.ric-diff.warn{background:var(--ric-warn-bg);color:var(--ric-warn)}.ric-diff.info{background:var(--ric-info-bg);color:var(--ric-info)}.ric-diff.ok{background:var(--ric-ok-bg);color:var(--ric-ok);font-weight:700}
+.ric-probabile{font-size:12px;color:var(--muted);margin:-1px 2px 8px}.ric-probabile b{color:var(--text)}
+/* storico */
+.ric-filtri{display:flex;flex-direction:column;gap:8px;margin-bottom:6px}
+.ric-cerca{display:flex;align-items:center;gap:8px;background:var(--ds-field);border:.5px solid var(--ds-hair);border-radius:12px;padding:0 12px;color:var(--ink3)}
+.ric-cerca svg{width:16px;height:16px;flex-shrink:0}
+.ric-cerca input{flex:1;border:none;background:none;outline:none;font:inherit;font-size:15px;color:var(--text);padding:11px 0}
+.ric-somma{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;color:var(--muted);margin:12px 4px 0}
+.ric-somma b{font-size:14px;color:var(--text);font-variant-numeric:tabular-nums}
+.ric-st .ric-card-h{margin-bottom:2px}
+.ric-st-det{font-size:11.5px;color:var(--muted);margin-top:8px;line-height:1.45;word-break:break-word}
+.ric-st-piede{display:flex;align-items:center;gap:14px;margin-top:10px;padding-top:9px;border-top:.5px solid var(--ds-hair);font-size:11.5px;color:var(--muted)}
+.ric-st-piede span{flex:1}.ric-st-piede button{border:none;background:none;font:inherit;font-weight:700;color:var(--accent);cursor:pointer;padding:2px 0}
+.ric-st-piede button.ric-del{color:var(--red)}
+/* export */
+.ric-xl-fogli{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:-4px 0 4px}
+.ric-xl-fogli span{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:10.5px;font-weight:650;color:var(--muted);background:var(--surface2);border-radius:13px;padding:9px 2px}
+.ric-xl-fogli i{font-style:normal;width:22px;height:22px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#fff;background:linear-gradient(145deg,#34C759,#1F7A3E)}
+.ric-sel{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.ric-tog{display:flex;align-items:center;gap:7px;padding:7px 9px 7px 7px;border-radius:14px;background:var(--surface2);border:1.5px solid transparent;font-size:12.5px;font-weight:600;cursor:pointer;min-width:0;transition:background .15s,border-color .15s}
+.ric-tog input{position:absolute;opacity:0;pointer-events:none}
+.ric-tog span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ric-tog-ck{font-style:normal;width:18px;height:18px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:900;color:transparent;border:1.5px solid var(--surface3)}
+.ric-tog:has(input:checked){background:var(--accent-light);border-color:rgba(10,132,255,.45)}
+.ric-tog:has(input:checked) .ric-tog-ck{background:var(--ds-grad);border-color:transparent;color:#fff}
+.ric-verdetto{display:flex;gap:11px;align-items:center;border-radius:18px;padding:12px 13px;background:var(--ric-ok-bg);color:var(--ric-ok)}
+.ric-verdetto>span{width:34px;height:34px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:15px;color:#fff!important;background:var(--ric-ok)}
+.ric-verdetto.ko>span{background:var(--ric-ko)}.ric-verdetto.warn>span{background:var(--ric-warn)}
+.ric-verdetto b{display:block;font-size:14.5px;font-weight:800;letter-spacing:-.3px}
+.ric-verdetto small{display:block;font-size:12px;opacity:.85;margin-top:1px;line-height:1.35}
+.ric-verdetto.ko{background:var(--ric-ko-bg);color:var(--ric-ko)}.ric-verdetto.warn{background:var(--ric-warn-bg);color:var(--ric-warn)}
+.ric-grp-l{margin-top:8px;border-radius:16px;background:var(--surface2);overflow:hidden}
+.ric-grp{border-bottom:.5px solid var(--ds-hair)}.ric-grp:last-child{border-bottom:none}
+.ric-grp summary{display:flex;align-items:center;gap:8px;cursor:pointer;padding:10px 12px;font-size:12.5px;font-weight:600;list-style:none}
+.ric-grp summary::-webkit-details-marker{display:none}
+.ric-grp summary i{width:8px;height:8px;border-radius:50%;background:var(--ink3);flex-shrink:0}
+.ric-grp.err summary i{background:var(--ric-ko)}.ric-grp.warn summary i{background:var(--ric-warn)}.ric-grp.info summary i{background:var(--ric-info)}
+.ric-grp summary b{margin-left:auto;font-size:11.5px;min-width:22px;text-align:center;padding:1px 7px;border-radius:99px;background:var(--surface)}
+.ric-grp div{font-size:11.5px;color:var(--muted);padding:0 12px 8px 28px;line-height:1.4}
+.ric-grp div b{color:var(--text)}
+/* area dipendente */
+.ric-dip-pag{display:inline-block;font-size:11px;font-weight:700;color:var(--ric-ok);background:var(--ric-ok-bg);padding:3px 8px;border-radius:8px;margin-top:4px;line-height:1.35}
+.ric-dip-pag.parz{color:var(--ric-warn);background:var(--ric-warn-bg)}
+@media (prefers-reduced-motion:reduce){.ric-dcard,.ric-strip-m{transition:none}}
+
 </style>
 </head>
 <body>
@@ -2948,7 +3206,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     <button class="hdr-btn" id="tb-back" style="display:none" aria-label="Indietro"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
     <div class="tb-titles">
       <h1 id="tb-title">Presenze</h1>
-      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v65</span></p>
+      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v66</span></p>
     </div>
     <span class="topbar-badge" id="role-badge"></span>
     <div class="hdr-actions">
@@ -3322,12 +3580,20 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 
       <div class="card" style="padding:6px 16px">
         <div class="sec-title" style="margin-top:12px;margin-bottom:2px">🏦 Riconciliazione bonifici</div>
-        <div style="font-size:12px;color:var(--muted);margin-bottom:4px">Confronta ogni bonifico in banca con il cedolino corrispondente, per essere pronto in caso di controllo.</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:4px">Ogni cedolino confrontato con i bonifici davvero partiti dalla banca: cosa è pagato, cosa manca, il saldo di ognuno.</div>
+        <div class="cont-row" onclick="ricPanoramica()">
+          <div class="cont-row-icon" style="background:rgba(10,132,255,.12);color:var(--accent)">👥</div>
+          <div class="cont-row-body">
+            <div class="cont-row-title">Situazione per dipendente</div>
+            <div class="cont-row-desc">Saldo ad oggi, cedolini mancanti, differenze e anomalie di ognuno</div>
+          </div>
+          <div class="cont-row-chev">›</div>
+        </div>
         <div class="cont-row" onclick="apriRiconciliazioneBonifici()">
           <div class="cont-row-icon">🏦</div>
           <div class="cont-row-body">
             <div class="cont-row-title">Riconciliazione</div>
-            <div class="cont-row-desc">Abbina bonifici e cedolini</div>
+            <div class="cont-row-desc">Bonifici trovati in banca da confermare, con il perché della proposta</div>
           </div>
           <div class="cont-row-chev">›</div>
         </div>
@@ -3343,7 +3609,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
           <div class="cont-row-icon">🗂</div>
           <div class="cont-row-body">
             <div class="cont-row-title">Storico</div>
-            <div class="cont-row-desc">Tutto ciò che è già confermato, con possibilità di annullare</div>
+            <div class="cont-row-desc">Ogni collegamento fatto: cedolino, bonifico, quando. Si può annullare</div>
           </div>
           <div class="cont-row-chev">›</div>
         </div>
@@ -3351,7 +3617,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
           <div class="cont-row-icon" style="background:rgba(47,138,92,.12);color:var(--green)">⬇</div>
           <div class="cont-row-body">
             <div class="cont-row-title">Esporta</div>
-            <div class="cont-row-desc">Partitario dare/avere in Excel, per uno o più dipendenti</div>
+            <div class="cont-row-desc">Partitario in Excel con controllo automatico prima dello scarico</div>
           </div>
           <div class="cont-row-chev">›</div>
         </div>
@@ -12711,6 +12977,970 @@ prevDettaglio = async function (P, G) {
     ${f.navi && f.navi.length ? `<details class="pv-navi"><summary>🚢 Navi in porto (${f.navi.length})</summary>${f.navi.map(n => `<div>${esc(n.chiave)} <small>${n._paxIgnoti ? 'passeggeri non noti' : Math.round(n.valore).toLocaleString('it-IT') + ' posti'}${n.dettaglio && n.dettaglio.orari ? ' · ' + esc(n.dettaglio.orari) : ''}</small></div>`).join('')}<div class="note-small" style="border:none">Sono i posti della nave (capienza), non quanti scendono davvero in città.</div></details>` : ''}
   </div>`;
 };
+
+
+/* ══════════════════════════════════════════════════════════════════
+   PRESENZE 2.8 — RICONCILIAZIONE CEDOLINI ↔ BONIFICI (revisione completa)
+   ──────────────────────────────────────────────────────────────────
+   Un unico modello dei dati (RIC) usato da TUTTE le schermate e dall'Excel,
+   così app e file dicono sempre la stessa cosa:
+   • per ogni dipendente e ogni mese: cedolino (netto) ↔ bonifici collegati
+   • stato del mese scritto per esteso (pagato, in parte, in più, mancante…)
+   • saldo alla data = bonifici ricevuti − netti dei cedolini
+   • controlli automatici (cedolini mancanti o doppi, pagamenti senza
+     cedolino, movimenti usati due volte, importi diversi dalla banca,
+     bonifici a nome del dipendente non collegati…)
+   Ogni cedolino si apre (PDF) e ogni movimento si apre in Ceraldi Fatture.
+   Regole di calcolo (le stesse di prima, rese esplicite):
+   • lo stipendio del mese M si paga dal 1° al 25 del mese M+1
+   • un bonifico conta nel saldo una sola volta (vincolo anche sul database)
+   • i prelievi dal "portafoglio" del dipendente NON sono soldi nuovi: il
+     bonifico che li ha generati è già contato per intero
+   ══════════════════════════════════════════════════════════════════ */
+const RIC_FATTURE_URL = 'https://valerioceraldi-hub.github.io/Ceraldi/Primanota.html';
+const RIC_MESI = ['', 'gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
+const _rE = v => '€ ' + (Math.round((parseFloat(v) || 0) * 100) / 100).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const _rD = g => g ? g.slice(8, 10) + '/' + g.slice(5, 7) + '/' + g.slice(0, 4) : '—';
+const _rP = (m, a) => RIC_MESI[m] + ' ' + a;
+const _rPc = (m, a) => RIC_MESI[m].charAt(0).toUpperCase() + RIC_MESI[m].slice(1) + ' ' + a;
+const _rK = (m, a) => a * 100 + m;
+const _rr2 = v => Math.round((v || 0) * 100) / 100;
+const _rS = v => (v > 0.005 ? '+' : v < -0.005 ? '−' : '') + _rE(Math.abs(v || 0)); // saldo con segno davanti: +€ 10,00 / −€ 10,00
+function ricMovLink(id) { return RIC_FATTURE_URL + '?mov=' + encodeURIComponent(id); }
+
+// Legge dalla descrizione della banca: beneficiario, IBAN, riferimento, causale
+function ricParse(desc) {
+  const s = String(desc || '').replace(/\s+/g, ' ').trim();
+  const out = { beneficiario: '', iban: '', rif: '', causale: '', distinta: /beneficiari\s+vari/i.test(s) };
+  const ib = s.match(/\b(IT\d{2}[A-Z]\d{10}[0-9A-Z]{12})\b/i); if (ib) out.iban = ib[1].toUpperCase();
+  const rif = s.match(/RIF\.?\s*([A-Z0-9]{6,}(?:\/\d+)?)/i); if (rif) out.rif = rif[1];
+  let m = s.match(/FAVORE\s+(.+?)\s+-\s+ADD\.\w+(?:\s+-\s+(.*))?$/i);
+  if (m) { out.beneficiario = m[1].trim(); out.causale = (m[2] || '').trim(); }
+  else if ((m = s.match(/^(.+?)\s+IT\d{2}[A-Z]\d{10}[0-9A-Z]{12}\s+[—-]\s+(.*)$/i))) { out.beneficiario = m[1].trim(); out.causale = m[2].trim(); }
+  if (out.distinta) out.beneficiario = 'Beneficiari vari (distinta cumulativa)';
+  return out;
+}
+// Causale che dichiara un pagamento diverso dallo stipendio (rimborso, finanziamento…): mai proposto in automatico
+const RIC_NON_STIP = /rimbors|finanziam|prestit|restituz|fattur|nota spese|anticip[io] spese|caparra|deposito/i;
+function ricECausaleNonStipendio(desc) { const p = ricParse(desc); return RIC_NON_STIP.test(p.causale || '') || (!p.causale && RIC_NON_STIP.test(String(desc || '').replace(/FAVORE.*$/i, ''))); }
+// Tra i bonifici trovati tiene quelli plausibili: se uno solo corrisponde esattamente a quanto manca, solo quello
+function ricScegliTrovati(lista, mancante) {
+  const l = lista.filter(mv => !ricECausaleNonStipendio(mv.descrizione));
+  const esatto = l.filter(mv => Math.abs(Math.abs(+mv.importo) - mancante) <= 0.5);
+  return esatto.length === 1 ? esatto : l;
+}
+const _ibanNorm = s => String(s || '').replace(/\s+/g, '').toUpperCase();
+const _ibanB28 = s => _ibanNorm(s).replace(/(.{4})(?=.)/g, '$1 ');
+
+// Periodo in cui si paga lo stipendio di un mese: dal 1° al 25 del mese dopo
+function ricFinestra(m, a) { const f = _rsbFinestraMese(m, a); return f; }
+
+/* ── CARICAMENTO: una sola lettura per tutte le viste ── */
+async function _ricTutte(mk) { const out = []; for (let da = 0; da < 20000; da += 1000) { const { data, error } = await mk().range(da, da + 999); if (error) throw error; out.push(...(data || [])); if (!data || data.length < 1000) break; } return out; }
+async function ricCarica() {
+  const [prof, ced, bon, port, ecc, acc] = await Promise.all([
+    _ricTutte(() => sb.from('presenze_profili').select('id,nome,cognome,ruolo,attivo,eliminato,percepisce_stipendio,iban,codice_fiscale,data_assunzione,data_fine_rapporto').order('id')),
+    _ricTutte(() => sb.from('presenze_documenti').select('id,dipendente_id,mese,anno,netto_busta,url,nome_file,creato_il').eq('categoria', 'busta_paga').order('id')),
+    _ricTutte(() => sb.from('presenze_bonifici_stipendio').select('*').order('id')),
+    _ricTutte(() => sb.from('presenze_portafoglio_movimenti').select('*').order('id')),
+    sb.from('presenze_riconciliazione_eccezioni').select('*').then(r => r.data || [], () => []),
+    _ricTutte(() => sb.from('presenze_acconti').select('id,dipendente_id,importo,data,documento_id,modalita').not('documento_id', 'is', null).order('id')),
+  ]);
+  // movimenti bancari collegati (per mostrare sempre i dati originali della banca)
+  const ids = [...new Set(bon.map(b => b.movimento_banca_id).filter(Boolean))];
+  const movById = {};
+  for (let i = 0; i < ids.length; i += 150) {
+    const { data } = await sb.from('movimenti_banca').select('id,data,importo,descrizione,banca,sottotipo,note').in('id', ids.slice(i, i + 150));
+    (data || []).forEach(m => movById[m.id] = m);
+  }
+  // fin dove arriva l'estratto conto caricato (per non dire "non pagato" se manca solo l'estratto)
+  const { data: ult } = await sb.from('movimenti_banca').select('data').eq('tipo', 'uscita').order('data', { ascending: false }).limit(1);
+  const bancaFinoAl = ult && ult[0] ? ult[0].data : null;
+  // bonifici a nome dei dipendenti non collegati a nessun cedolino (possibili stipendi dimenticati)
+  const primo = ced.length ? ced.reduce((m, c) => Math.min(m, _rK(c.mese, c.anno)), 999999) : null;
+  let liberi = [];
+  if (primo) {
+    const a0 = Math.floor(primo / 100), m0 = primo % 100, f0 = _rsbFinestraMese(m0, a0).dal;
+    liberi = await _ricTutte(() => sb.from('movimenti_banca').select('id,data,importo,descrizione,banca,sottotipo').eq('tipo', 'uscita').eq('sottotipo', 'Bonifico').gte('data', f0).order('id'));
+    const usati = new Set(bon.map(b => b.movimento_banca_id).filter(Boolean));
+    liberi = liberi.filter(m => !usati.has(m.id) && !_rsbECommissione(m.descrizione));
+  }
+  const D = { prof, ced, bon, port, ecc, acc, movById, bancaFinoAl, liberi, generato: new Date() };
+  RIC.D = D;
+  return D;
+}
+const RIC = { D: null };
+
+// Chi riceve uno stipendio (e quindi ha un partitario)
+function ricDipendenti(D) {
+  const conCed = new Set(D.ced.map(c => c.dipendente_id));
+  return D.prof.filter(p => !p.eliminato && (p.ruolo === 'dipendente' || p.percepisce_stipendio || conCed.has(p.id)) && (p.attivo || conCed.has(p.id)))
+    .sort((a, b) => ((a.cognome || '') + a.nome).localeCompare((b.cognome || '') + b.nome));
+}
+const ricNome = p => p ? _tc27(p.nome) + (p.cognome ? ' ' + _tc27(p.cognome) : '') : '—';
+
+/* ── PARTITARIO di un dipendente: mese per mese, con stato, saldo e anomalie ── */
+function ricPartitario(dip, D) {
+  D = D || RIC.D;
+  const oggi = todayISO(), ym = oggi.slice(0, 7), ay = +oggi.slice(0, 4), my = +oggi.slice(5, 7), gg = +oggi.slice(8, 10);
+  const ced = D.ced.filter(c => c.dipendente_id === dip.id);
+  const bon = D.bon.filter(b => b.dipendente_id === dip.id);
+  const ecc = D.ecc.filter(e => e.dipendente_id === dip.id);
+  const noCed = new Set(ecc.filter(e => e.tipo === 'nessun_cedolino').map(e => _rK(e.mese, e.anno)));
+  const nonStip = new Set(D.ecc.filter(e => e.tipo === 'non_stipendio').map(e => e.movimento_banca_id));
+  const port = D.port.filter(p => p.dipendente_id === dip.id);
+  const anomalie = [];
+  const add = (liv, tipo, testo, cosaFare, mese, anno) => anomalie.push({ liv, tipo, testo, cosaFare, mese, anno, dip: ricNome(dip) });
+  // periodo analizzato: dal primo cedolino (o primo pagamento collegato) al mese scorso
+  const chiavi = ced.map(c => _rK(c.mese, c.anno)).concat(bon.map(b => _rK(b.mese_riferimento, b.anno_riferimento)));
+  if (!chiavi.length) return { dip, righe: [], anomalie, tot: { dovuto: 0, ricevuto: 0, saldo: 0 }, periodo: null, definitivo: true, portafoglio: 0 };
+  let k0 = Math.min(...chiavi);
+  const ultimoAtteso = my === 1 ? _rK(12, ay - 1) : _rK(my - 1, ay); // il mese scorso
+  let k1 = Math.max(Math.max(...chiavi), ultimoAtteso);
+  if (dip.data_fine_rapporto) k1 = Math.min(k1, _rK(+dip.data_fine_rapporto.slice(5, 7), +dip.data_fine_rapporto.slice(0, 4)));
+  if (!dip.attivo && !dip.data_fine_rapporto) k1 = Math.max(...chiavi);
+  if (k1 > _rK(my, ay)) k1 = _rK(my, ay);
+  // mai escludere un mese che ha dati (es. acconto collegato a un mese futuro o dopo la fine del rapporto)
+  k1 = Math.max(k1, Math.max(...chiavi));
+  const nomeCompleto = dip.nome + ' ' + (dip.cognome || '');
+  const primoGiorno = _rsbFinestraMese(k0 % 100, Math.floor(k0 / 100)).dal;
+  // IBAN condiviso con un altro dipendente: non si può usare per riconoscere i bonifici
+  const gemelli = dip.iban ? D.prof.filter(p => p.id !== dip.id && !p.eliminato && p.iban && _ibanNorm(p.iban) === _ibanNorm(dip.iban)) : [];
+  if (gemelli.length) add('err', 'IBAN uguale a un altro dipendente', 'In anagrafica ha lo stesso IBAN di ' + gemelli.map(ricNome).join(', ') + ': i bonifici non si possono distinguere dall\'IBAN.', 'Correggi l\'IBAN in Dipendenti → scheda del dipendente.', null, null);
+  const ibanOk = dip.iban && !gemelli.length;
+  const liberi = D.liberi.filter(mv => mv.data >= primoGiorno && !nonStip.has(mv.id) && (_rsbNomeMatchaDescrizione(mv.descrizione, nomeCompleto) || (ibanOk && _ibanNorm(ricParse(mv.descrizione).iban) === _ibanNorm(dip.iban))));
+  const liberiUsati = new Set();
+  const righe = [];
+  for (let k = k0; k <= k1; ) {
+    const m = k % 100, a = Math.floor(k / 100);
+    const cedM = ced.filter(c => c.mese === m && c.anno === a).sort((x, y) => (y.creato_il || '').localeCompare(x.creato_il || ''));
+    const bonM = bon.filter(b => b.mese_riferimento === m && b.anno_riferimento === a);
+    const reali = bonM.filter(b => b.fonte_copertura !== 'portafoglio');
+    const daPort = bonM.filter(b => b.fonte_copertura === 'portafoglio');
+    const c = cedM[0] || null;
+    const netto = c && c.netto_busta != null ? parseFloat(c.netto_busta) : null;
+    const ricevuto = _rr2(reali.reduce((s, b) => s + (parseFloat(b.importo) || 0), 0));
+    const coperturaPort = _rr2(daPort.reduce((s, b) => s + (parseFloat(b.importo) || 0), 0));
+    const fin = _rsbFinestraMese(m, a);
+    const diff = netto != null ? _rr2(ricevuto + coperturaPort - netto) : null;
+    let stato, statoTxt;
+    const finestraAperta = oggi <= fin.al;
+    const estrattoCorto = D.bancaFinoAl && D.bancaFinoAl < fin.al;
+    if (!c) {
+      if (noCed.has(k)) { stato = 'escluso'; statoTxt = 'Nessun cedolino previsto (indicato da te)'; }
+      else if (k === ultimoAtteso && gg < 16 && !ricevuto) { stato = 'in_arrivo'; statoTxt = 'Cedolino in arrivo'; }
+      else if (k > ultimoAtteso) { stato = 'in_arrivo'; statoTxt = ricevuto > 0 ? 'Pagato in anticipo: il cedolino non è ancora stato emesso' : 'Mese in corso'; }
+      else if (ricevuto > 0) { stato = 'senza_cedolino'; statoTxt = 'Pagato, ma manca il cedolino'; }
+      else { stato = 'manca_cedolino'; statoTxt = 'Cedolino mancante'; }
+    } else if (netto == null) { stato = 'senza_netto'; statoTxt = 'Cedolino senza importo netto'; }
+    else if (Math.abs(diff) <= 0.5) { stato = 'pagato'; statoTxt = 'Pagato'; }
+    else if (diff > 0.5) { stato = 'in_piu'; statoTxt = 'Pagato ' + _rE(diff) + ' in più'; }
+    else if (ricevuto + coperturaPort > 0) { stato = finestraAperta ? 'in_corso' : 'parziale'; statoTxt = (finestraAperta ? 'Pagato in parte (c\'è tempo fino al ' + _rD(fin.al) + ')' : 'Pagato in parte') + ' · manca ' + _rE(-diff); }
+    else if (finestraAperta) { stato = 'in_attesa'; statoTxt = 'Da pagare entro il ' + _rD(fin.al); }
+    else if (estrattoCorto) { stato = 'attesa_estratto'; statoTxt = 'Estratto conto caricato solo fino al ' + _rD(D.bancaFinoAl); }
+    else { stato = 'non_pagato'; statoTxt = 'Nessun bonifico trovato'; }
+    // bonifici a suo nome trovati in banca nel periodo di pagamento, non ancora confermati
+    const cerca = (c && netto != null && diff < -0.5) || stato === 'manca_cedolino';
+    const trovati = cerca ? ricScegliTrovati(liberi.filter(mv => !liberiUsati.has(mv.id) && mv.data >= fin.dal && mv.data <= fin.al), netto != null ? -diff : 0) : [];
+    const trovatiTxt = trovati.map(mv => _rE(Math.abs(mv.importo)) + ' del ' + _rD(mv.data)).join(', ');
+    if (trovati.length) {
+      trovati.forEach(mv => liberiUsati.add(mv.id));
+      if (stato === 'manca_cedolino') statoTxt += ' · in banca c\'è ' + (trovati.length === 1 ? 'un bonifico' : trovati.length + ' bonifici') + ' a suo nome (' + trovatiTxt + ')';
+      else { stato = 'da_confermare'; statoTxt = (trovati.length === 1 ? 'Bonifico trovato' : trovati.length + ' bonifici trovati') + ' in banca (' + trovatiTxt + '): da confermare'; }
+    }
+    const mov = reali.map(b => {
+      const mb = b.movimento_banca_id ? D.movById[b.movimento_banca_id] : null;
+      return { id: b.id, movId: b.movimento_banca_id, data: b.data_movimento || (mb && mb.data), importo: parseFloat(b.importo) || 0, descrizione: (mb && mb.descrizione) || b.descrizione_movimento || '', banca: mb ? mb.banca : '', trovato: !!mb || !b.movimento_banca_id, importoBanca: mb ? Math.abs(parseFloat(mb.importo)) : null, riconciliatoIl: b.creato_il, p: ricParse((mb && mb.descrizione) || b.descrizione_movimento) };
+    });
+    righe.push({ k, mese: m, anno: a, cedolino: c, cedDoppi: cedM.slice(1), netto, ricevuto, coperturaPort, diff, stato, statoTxt, mov, finestra: fin, trovati });
+    // ── controlli ──
+    const P = _rPc(m, a);
+    if (stato === 'manca_cedolino') add('err', 'Cedolino mancante', P + ': non c\'è il cedolino.' + (trovati.length ? ' In banca però c\'è un pagamento a suo nome nel periodo di stipendio (' + trovatiTxt + ').' : ''), 'Caricalo da Documenti → Cedolini, oppure segna "nessun cedolino previsto" se quel mese non era in forza.', m, a);
+    if (stato === 'senza_cedolino') add('err', 'Pagamento senza cedolino', P + ': risultano bonifici per ' + _rE(ricevuto) + ' ma nessun cedolino.', 'Carica il cedolino di quel mese oppure sposta il bonifico sul mese giusto.', m, a);
+    if (cedM.length > 1) add('err', 'Cedolino doppio', P + ': ci sono ' + cedM.length + ' cedolini (' + cedM.map(x => _rE(x.netto_busta)).join(', ') + '). Nel saldo conta solo il più recente.', 'Elimina da Documenti quello caricato per errore.', m, a);
+    if (stato === 'senza_netto') add('err', 'Cedolino senza netto', P + ': il cedolino non ha l\'importo netto, quindi non si può confrontare.', 'Apri il cedolino in Documenti → ✏️ Modifica e scrivi il netto.', m, a);
+    if (stato === 'parziale') add('warn', 'Pagato in parte', P + ': netto ' + _rE(netto) + ', bonifici ' + _rE(ricevuto) + ' · manca ' + _rE(-diff) + '.', 'Cerca il bonifico mancante (Riconciliazione → cerca manualmente) oppure verifica se è stato pagato in contanti.', m, a);
+    if (stato === 'in_piu') add('warn', 'Pagato in più', P + ': netto ' + _rE(netto) + ', bonifici ' + _rE(ricevuto + coperturaPort) + ' · ' + _rE(diff) + ' in più.', 'Può essere un anticipo sul mese dopo, 13ª/14ª o ferie pagate insieme: verifica sul cedolino.', m, a);
+    if (stato === 'da_confermare') add('warn', 'Bonifico da confermare', P + ': in banca ' + (trovati.length === 1 ? 'c\'è un bonifico' : 'ci sono ' + trovati.length + ' bonifici') + ' a suo nome nel periodo di pagamento (' + trovatiTxt + '), non ancora ' + (trovati.length === 1 ? 'collegato' : 'collegati') + ' al cedolino.', 'Contabilità → Riconciliazione: controlla e conferma.', m, a);
+    if (stato === 'non_pagato') add('warn', 'Nessun bonifico', P + ': netto ' + _rE(netto) + ' e nessun bonifico collegato (finestra ' + _rD(fin.dal) + ' – ' + _rD(fin.al) + ').', 'Riconciliazione → "Non trovi un bonifico? Cercalo manualmente", oppure è stato pagato in contanti.', m, a);
+    if (reali.length > 1) add('info', 'Più bonifici per un cedolino', P + ': pagato con ' + reali.length + ' bonifici (' + reali.map(b => _rE(b.importo)).join(' + ') + ').', 'Nessuna azione se è voluto (es. acconto + saldo).', m, a);
+    mov.forEach(x => {
+      if (x.movId && !x.trovato) add('err', 'Movimento non più in banca', P + ': il bonifico del ' + _rD(x.data) + ' (' + _rE(x.importo) + ') non esiste più nei movimenti bancari (estratto ricaricato?).', 'Annulla questo collegamento e ricollega il movimento giusto.', m, a);
+      if (x.importoBanca != null && Math.abs(x.importoBanca - x.importo) > 0.01) add('err', 'Importo diverso dalla banca', P + ': registrato ' + _rE(x.importo) + ', in banca ' + _rE(x.importoBanca) + '.', 'Annulla e ricollega il movimento.', m, a);
+      if (x.data && x.data < a + '-' + String(m).padStart(2, '0') + '-01') add('warn', 'Bonifico prima del mese', P + ': bonifico del ' + _rD(x.data) + ', prima dell\'inizio del mese di competenza.', 'Controlla che sia collegato al mese giusto.', m, a);
+      if (x.p.iban && dip.iban && _ibanNorm(x.p.iban) !== _ibanNorm(dip.iban)) add('warn', 'IBAN diverso', P + ': il bonifico è andato su ' + _ibanB28(x.p.iban) + ', in anagrafica c\'è ' + _ibanB28(dip.iban) + '.', 'Verifica l\'IBAN del dipendente.', m, a);
+    });
+    const km = m === 12 ? _rK(1, a + 1) : k + 1; k = km;
+  }
+  // bonifici collegati a mesi fuori periodo non possono esserci (il periodo li include); movimenti usati due volte:
+  const usi = {}; D.bon.forEach(b => { if (b.movimento_banca_id) (usi[b.movimento_banca_id] = usi[b.movimento_banca_id] || []).push(b); });
+  bon.forEach(b => { if (b.movimento_banca_id && usi[b.movimento_banca_id].length > 1) add('err', 'Movimento usato due volte', 'Il bonifico del ' + _rD(b.data_movimento) + ' (' + _rE(b.importo) + ') è collegato a ' + usi[b.movimento_banca_id].length + ' cedolini.', 'Lascialo su un solo cedolino (Storico → annulla).', b.mese_riferimento, b.anno_riferimento); });
+  // bonifici a nome del dipendente mai collegati (dal primo mese analizzato)
+  liberi.filter(mv => !liberiUsati.has(mv.id)).forEach(mv => add('warn', 'Bonifico non collegato', 'Il ' + _rD(mv.data) + ' c\'è un bonifico di ' + _rE(Math.abs(mv.importo)) + ' a suo nome che non è collegato a nessun cedolino.', 'Collegalo al mese giusto oppure segnalo come "non è uno stipendio".', null, null));
+  const tot = { dovuto: 0, ricevuto: 0 };
+  righe.forEach(r => { if (r.netto != null) tot.dovuto += r.netto; tot.ricevuto += r.ricevuto; });
+  tot.dovuto = _rr2(tot.dovuto); tot.ricevuto = _rr2(tot.ricevuto); tot.saldo = _rr2(tot.ricevuto - tot.dovuto);
+  // la copertura dal portafoglio conta come pagato nel mese, ma non è denaro nuovo
+  const coperturePort = _rr2(righe.reduce((s, r) => s + r.coperturaPort, 0));
+  const saldoPort = _rr2(port.reduce((s, p) => s + (parseFloat(p.importo) || 0), 0));
+  let saldoProg = 0; righe.forEach(r => { saldoProg = _rr2(saldoProg + r.ricevuto - (r.netto || 0)); r.saldoProg = saldoProg; });
+  const definitivo = !anomalie.some(x => x.liv === 'err');
+  const daConfermare = _rr2(righe.filter(r => r.stato === 'da_confermare').reduce((s, r) => s + r.trovati.reduce((t, mv) => t + Math.abs(mv.importo), 0), 0));
+  // quanto del saldo negativo non è ancora "in ritardo": stipendi il cui periodo di pagamento è ancora aperto
+  tot.nonScaduto = _rr2(righe.filter(r => ['in_attesa', 'in_corso'].includes(r.stato)).reduce((s, r) => s - (r.diff || 0), 0));
+  tot.attesaEstratto = _rr2(righe.filter(r => r.stato === 'attesa_estratto').reduce((s, r) => s - (r.diff || 0), 0));
+  tot.daConfermare = daConfermare;
+  return { dip, righe, anomalie, tot, coperturePort, saldoPort, liberi, daConfermare, periodo: { dal: _rP(k0 % 100, Math.floor(k0 / 100)), al: _rP(k1 % 100, Math.floor(k1 / 100)), k0, k1 }, definitivo, ultimoAtteso };
+}
+function ricEsito(t, plurale) {
+  // nota: spiega da cosa è fatto il saldo, così nessuno lo legge come "debito" quando non lo è
+  const note = [];
+  if (t.saldo < -0.5) {
+    if (t.nonScaduto > 0.5) note.push(_rE(t.nonScaduto) + ' sono stipendi non ancora scaduti (si pagano entro il 25 del mese dopo)');
+    if (t.attesaEstratto > 0.5) note.push(_rE(t.attesaEstratto) + ' riguardano giorni non ancora coperti dall\'estratto conto caricato');
+  }
+  if (t.daConfermare > 0.5) note.push('in banca ci sono ' + _rE(t.daConfermare) + ' di bonifici ' + (plurale ? 'ai loro nomi' : 'a suo nome') + ' ancora da confermare: confermandoli il saldo diventa ' + _rS(_rr2(t.saldo + t.daConfermare)));
+  const nota = note.length ? (note.length === 1 ? note[0] : note.join('; ')) : '';
+  const br = [];
+  if (t.daConfermare > 0.5) br.push(_rE(t.daConfermare) + ' trovati in banca, da confermare');
+  if (t.saldo < -0.5 && t.nonScaduto > 0.5) br.push(_rE(t.nonScaduto) + ' non ancora scaduti');
+  if (t.saldo < -0.5 && t.attesaEstratto > 0.5) br.push(_rE(t.attesaEstratto) + ' oltre l\'estratto conto caricato');
+  const breve = br.join(' · ');
+  const N = nota ? nota.charAt(0).toUpperCase() + nota.slice(1) + '.' : '';
+  if (Math.abs(t.saldo) <= 0.5) return { cls: 'ok', txt: 'Ha ricevuto esattamente quanto risulta dai cedolini', nota: N, breve };
+  if (t.saldo < 0) return { cls: 'meno', txt: 'Ha ricevuto ' + _rE(-t.saldo) + ' in meno di quanto risulta dai cedolini', nota: N, breve };
+  return { cls: 'piu', txt: 'Ha ricevuto ' + _rE(t.saldo) + ' in più di quanto risulta dai cedolini', nota: N, breve };
+}
+
+/* ══════════════ PEZZI DI INTERFACCIA RIUSATI OVUNQUE ══════════════ */
+// Stesso linguaggio visivo della Home: scheda scura "hero", avatar a gradiente,
+// chip di stato con icona, box con icona colorata per cedolino (viola) e banca (blu).
+const _rEk = v => (v < -0.005 ? '−' : '') + '€ ' + Math.round(Math.abs(v || 0)).toLocaleString('it-IT'); // cifra tonda per i riquadri
+const RIC_TONO = { pagato: 'ok', in_piu: 'info', parziale: 'warn', da_confermare: 'warn', in_corso: 'nd', in_attesa: 'nd', attesa_estratto: 'nd', in_arrivo: 'nd', escluso: 'nd', non_pagato: 'ko', manca_cedolino: 'ko', senza_cedolino: 'ko', senza_netto: 'ko' };
+const RIC_ICO_T = { ok: '✓', info: '+', warn: '!', ko: '✕', nd: '…' };
+const ricTono = st => RIC_TONO[st] || 'nd';
+const ricTonoSaldo = v => Math.abs(v) <= 0.5 ? 'ok' : v < 0 ? 'warn' : 'info';
+const ricChip = (tono, txt) => `<span class="ric-chip ${tono}"><i>${RIC_ICO_T[tono] || '•'}</i>${esc(txt)}</span>`;
+const ricAv = (dip, cls) => dip ? _avatar(dip.id, _tc27(dip.nome || '?'), _tc27(dip.cognome || ''), 'ric-av' + (cls ? ' ' + cls : '')) : '<div class="ric-av"></div>';
+const ricPct = (a, b) => b > 0 ? Math.max(0, Math.min(100, Math.round(a / b * 100))) : 100;
+function ricHero(o) {
+  return `<div class="hero-card ric-hero"><div class="hero-orb o1"></div><div class="hero-orb o2"></div>
+    <div class="hero-eyebrow"><div class="hero-eyebrow-l">${esc(o.eyebrow)}</div>${o.pill ? `<span class="hero-pill">${esc(o.pill)}</span>` : ''}</div>
+    ${o.top || ''}
+    <div class="hero-lbl">${esc(o.lbl)}</div>
+    <div class="hero-big ric-hero-big">${o.big}</div>
+    ${o.esito ? `<div class="ric-hero-esito ${o.esito.tono}"><i>${RIC_ICO_T[o.esito.tono] || '•'}</i>${esc(o.esito.txt)}</div>` : ''}
+    ${o.prog ? `<div class="hero-prog"><div class="hero-prog-track"><div class="hero-prog-fill" style="width:${o.prog.pct}%"></div></div><div class="hero-prog-lbl"><span>${esc(o.prog.l)}</span><span>${esc(o.prog.r)}</span></div></div>` : ''}
+    ${o.stats ? `<div class="hero-stats">${o.stats.map(s => `<div class="hero-stat"${s.on ? ` onclick="${s.on}"` : ''}><div class="hero-stat-lbl"><i style="background:${s.dot}"></i>${esc(s.lbl)}</div><div class="hero-stat-num ric-hs">${s.val}</div></div>`).join('')}</div>` : ''}
+    ${o.inn ? `<div class="hero-in" onclick="${o.inn.on}"><div class="hero-in-ico">${ic(o.inn.ic || 'banca')}</div><div style="flex:1;min-width:0"><div class="hero-in-t">${esc(o.inn.t)}</div><div class="hero-in-s">${esc(o.inn.s)}</div></div><div class="hero-in-v">${o.inn.v}</div></div>` : ''}
+  </div>`;
+}
+const ricIntro = (html, icona) => `<div class="ric-intro"><span class="ric-intro-ico">${ic(icona || 'check')}</span><div>${html}</div></div>`;
+const ricSez = (t, n, extra) => `<div class="ric-sez"><span>${esc(t)}</span>${n != null ? `<span class="ric-cnt">${n}</span>` : ''}${extra || ''}</div>`;
+// Cedolino: sempre con dipendente, periodo, netto, data di caricamento e tasto per aprirlo
+function ricCedHtml(dipNome, c, m, a, extra) {
+  const testa = (sub, imp) => `<div class="ric-box-h"><span class="ric-ico ced">${ic('doc')}</span><div class="ric-box-t"><div class="ric-lbl">${sub}</div><b>${_rPc(m, a)}</b></div>${imp || ''}</div>`;
+  if (!c) return `<div class="ric-box ced vuoto">${testa('Cedolino')}<div class="ric-box-s ric-warn">Nessun cedolino caricato per questo mese</div></div>`;
+  return `<div class="ric-box ced">${testa('Cedolino' + (dipNome ? ' · ' + esc(dipNome) : ''), `<div class="ric-imp">${c.netto_busta != null ? _rE(c.netto_busta) : '—'}<small>netto in busta</small></div>`)}
+    <div class="ric-box-s">Caricato il ${_rD((c.creato_il || '').slice(0, 10))}${extra ? ' · ' + extra : ''}</div>
+    ${c.url ? `<button class="ric-link" onclick="event.stopPropagation();apriDocumento('${esc(c.url)}','${esc((c.nome_file || 'cedolino.pdf').replace(/'/g, ''))}')">Apri il cedolino ›</button>` : '<div class="ric-box-s ric-warn">PDF non disponibile</div>'}</div>`;
+}
+// Movimento bancario: data, importo, beneficiario, IBAN, causale, riferimento, banca, link a Fatture
+function ricMovHtml(mv, opt) {
+  opt = opt || {};
+  const p = ricParse(mv.descrizione);
+  const imp = Math.abs(parseFloat(mv.importo) || 0);
+  return `<div class="ric-box mov ${opt.cls || ''}"><div class="ric-box-h"><span class="ric-ico mov">${ic('banca')}</span><div class="ric-box-t"><div class="ric-lbl">Bonifico${mv.banca ? ' · ' + esc(mv.banca) : ''}</div><b>${_rD(mv.data)}</b></div><div class="ric-imp">${_rE(imp)}<small>uscito dal conto</small></div></div>
+    <dl class="ric-dl">
+      ${p.beneficiario ? `<dt>A favore di</dt><dd>${esc(p.beneficiario)}</dd>` : ''}
+      ${p.iban ? `<dt>IBAN</dt><dd>${esc(_ibanB28(p.iban))}${opt.ibanDip ? (_ibanNorm(p.iban) === _ibanNorm(opt.ibanDip) ? ' <span class="ric-ok">✓ è il suo</span>' : ' <span class="ric-ko">≠ anagrafica</span>') : ''}</dd>` : ''}
+      ${p.causale ? `<dt>Causale</dt><dd>${esc(p.causale)}</dd>` : ''}
+      ${p.rif ? `<dt>Riferimento</dt><dd class="ric-mono">${esc(p.rif)}</dd>` : ''}
+      ${opt.riconciliatoIl ? `<dt>Collegato il</dt><dd>${_rD(String(opt.riconciliatoIl).slice(0, 10))}</dd>` : ''}
+    </dl>
+    <details class="ric-orig"><summary>Testo originale della banca</summary><div>${esc(mv.descrizione || '')}</div></details>
+    ${mv.id && !String(mv.id).startsWith('portafoglio') ? `<a class="ric-link" href="${ricMovLink(mv.id)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Apri in Ceraldi Fatture ›</a>` : ''}</div>`;
+}
+// Perché il sistema propone quel movimento (mai una scatola nera)
+function ricMotivi(mv, dip, m, a, netto, fonte, segnalato) {
+  const p = ricParse(mv.descrizione), out = [];
+  const nome = dip ? dip.nome + ' ' + (dip.cognome || '') : '';
+  const fin = _rsbFinestraMese(m, a), imp = Math.abs(parseFloat(mv.importo) || 0);
+  if (fonte === 'segnalato') out.push({ ok: true, t: 'Importo e data coincidono con il pagamento che hai registrato con "Salda cedolino"' + (segnalato ? ' (' + _rE(segnalato.importo) + ' del ' + _rD(segnalato.data) + ')' : '') });
+  if (dip && _rsbNomeMatchaDescrizione(mv.descrizione, nome)) out.push({ ok: true, t: 'Il nome "' + ricNome(dip) + '" è scritto nel bonifico' });
+  else if (p.distinta) out.push({ ok: false, t: 'Distinta cumulativa "beneficiari vari": il nome non c\'è, proposto solo per l\'importo' });
+  else out.push({ ok: false, t: 'Il nome del dipendente non è scritto nel bonifico' });
+  if (p.iban && dip && dip.iban) out.push(_ibanNorm(p.iban) === _ibanNorm(dip.iban) ? { ok: true, t: 'L\'IBAN è quello del dipendente' } : { ok: false, t: 'L\'IBAN è diverso da quello in anagrafica' });
+  out.push(mv.data >= fin.dal && mv.data <= fin.al ? { ok: true, t: 'Data dentro il periodo di pagamento (' + _rD(fin.dal) + ' – ' + _rD(fin.al) + ')' } : { ok: false, t: 'Data fuori dal periodo di pagamento (' + _rD(fin.dal) + ' – ' + _rD(fin.al) + ')' });
+  if (netto != null) out.push(Math.abs(imp - netto) <= 0.5 ? { ok: true, t: 'Importo uguale al netto del cedolino' } : { ok: null, t: 'Importo diverso dal netto (' + (imp > netto ? '+' : '−') + _rE(Math.abs(imp - netto)) + ')' });
+  return `<ul class="ric-motivi">${out.map(x => `<li class="${x.ok === true ? 'ok' : x.ok === false ? 'ko' : 'nd'}"><i>${x.ok === true ? '✓' : x.ok === false ? '!' : '≈'}</i><span>${esc(x.t)}</span></li>`).join('')}</ul>`;
+}
+// Esito del confronto cedolino ↔ bonifici
+function ricEsitoHtml(netto, pagato, extra) {
+  const riga = (t, ico, tit, sub) => `<div class="ric-esito ${t}"><span class="ric-esito-ico">${ico}</span><div><b>${tit}</b>${sub ? `<small>${sub}</small>` : ''}</div></div>`;
+  if (netto == null) return riga('nd', '?', 'Non si può confrontare', 'Il cedolino non ha l\'importo netto');
+  const d = _rr2(pagato - netto), sub = 'netto ' + _rE(netto) + ' · bonifici ' + _rE(pagato) + (extra ? ' · ' + extra : '');
+  if (Math.abs(d) <= 0.5) return riga('ok', '✓', 'Gli importi coincidono', _rE(netto) + (extra ? ' · ' + extra : ''));
+  if (d < 0) return riga('warn', '!', 'Mancano ' + _rE(-d), sub);
+  return riga('info', '+', _rE(d) + ' in più', sub);
+}
+const RIC_STATI_BREVE = { da_confermare: 'Bonifico da confermare', pagato: 'Pagato', in_piu: 'Pagato in più', parziale: 'Pagato in parte', in_corso: 'In pagamento', in_attesa: 'Da pagare', attesa_estratto: 'Attesa estratto', non_pagato: 'Non pagato', manca_cedolino: 'Cedolino mancante', senza_cedolino: 'Senza cedolino', senza_netto: 'Netto mancante', in_arrivo: 'In arrivo', escluso: 'Non previsto' };
+const RIC_STATI = { da_confermare: ['warn', '?'], pagato: ['ok', '✓'], in_piu: ['piu', '+'], parziale: ['meno', '!'], in_corso: ['nd', '…'], in_attesa: ['nd', '…'], attesa_estratto: ['nd', '…'], non_pagato: ['ko', '✕'], manca_cedolino: ['ko', '?'], senza_cedolino: ['ko', '?'], senza_netto: ['ko', '?'], in_arrivo: ['nd', '…'], escluso: ['nd', '—'] };
+
+/* ══════════════ 1. RICONCILIAZIONE: proposte spiegate, confronto immediato ══════════════ */
+if (typeof apriRiconciliazioneBonifici === 'function') {
+  apriRiconciliazioneBonifici = async function () {
+    openSheet('sh-riconcBonifici');
+    $('rb-lista').innerHTML = '<div class="ric-carica"><div class="spinner"></div>Confronto estratto conto e cedolini…</div>';
+    try {
+      const [calc] = await Promise.all([presenzeCalcolaRiconciliazioneBonifici(), ricCarica()]);
+      _rbRisultati = calc.risultati; _rbNonAssociati = calc.nonAssociati;
+      await rbRenderLista();
+    } catch (e) { $('rb-lista').innerHTML = '<div class="ric-errore">Errore nel caricamento: ' + esc(e.message || e) + '</div>'; }
+  };
+}
+rbRenderLista = async function () {
+  const el = $('rb-lista'); if (!el) return;
+  const D = await ricCarica(); // sempre dati freschi: dopo ogni conferma lo stato cambia
+  const dipById = {}; D.prof.forEach(p => dipById[p.id] = p);
+  const cedDi = (id, m, a) => D.ced.filter(c => c.dipendente_id === id && c.mese === m && c.anno === a).sort((x, y) => (y.creato_il || '').localeCompare(x.creato_il || ''))[0] || null;
+  _rbRisultati.sort((a, b) => a.nome.localeCompare(b.nome) || (a.anno * 100 + a.mese) - (b.anno * 100 + b.mese));
+  { const visti = new Set(), mvVisti = new Set();
+    _rbRisultati = _rbRisultati.filter(r => { const k = r.dipId + '|' + r.mese + '|' + r.anno; if (visti.has(k)) return false; visti.add(k);
+      r.movimenti = r.movimenti.filter(m => !mvVisti.has(m.id));
+      // mai sommare a uno stipendio un rimborso o un finanziamento; se un bonifico basta da solo, propone solo quello
+      if (r.movimenti.length > 1) { const sc = ricScegliTrovati(r.movimenti, r.netto); if (sc.length) r.movimenti = sc; }
+      else r.movimenti = r.movimenti.filter(m => !ricECausaleNonStipendio(m.descrizione));
+      r.somma = _rr2(r.movimenti.reduce((s, m) => s + Math.abs(m.importo), 0)); r.diff = _rr2(r.somma - r.netto); r.stato = Math.abs(r.diff) <= 0.5 ? 'saldato' : r.diff < 0 ? 'aperto' : 'eccedenza';
+      r.movimenti.forEach(m => mvVisti.add(m.id)); return r.movimenti.length > 0; }); }
+  const intro = ricIntro(`<b>Come funziona</b>Per ogni cedolino l'app cerca nell'estratto conto i bonifici fatti dal 1° al 25 del mese dopo e ti dice perché li propone. Tu confermi: niente viene collegato da solo.
+    <div class="ric-intro-meta"><span>🏦 Estratto conto fino al <b>${_rD(D.bancaFinoAl)}</b></span><span>📄 <b>${_rbRisultati.length}</b> ${_rbRisultati.length === 1 ? 'proposta' : 'proposte'}</span></div>`, 'banca');
+  const card = (r, idx) => {
+    const dip = dipById[r.dipId], c = cedDi(r.dipId, r.mese, r.anno);
+    const segn = D.acc.filter(x => c && x.documento_id === c.id);
+    const tuttiCerti = r.movimenti.every(m => m.certo);
+    const movHtml = r.movimenti.map((m, mi) => `<div class="ric-prop ${m.certo ? 'certo' : 'debole'}">
+        ${ricMovHtml(m, { ibanDip: dip && dip.iban })}
+        <div class="ric-perche"><div class="ric-lbl">Perché è proposto</div>${ricMotivi(m, dip, r.mese, r.anno, r.movimenti.length === 1 ? r.netto : null, m.fonte, segn[0])}</div>
+        <div class="ric-az-mov">${m.certo ? '' : `<button class="btn-sm primary" onclick="rbConfermaSingolo(${idx},${mi})">✓ È questo, collegalo</button>`}<button class="btn-sm" onclick="ricScarta(${idx},${mi})">✕ Non è questo</button></div>
+      </div>`).join('<div class="ric-flow-link piu"><span>+ un altro bonifico</span></div>');
+    let azione = '';
+    if (!tuttiCerti) azione = `<div class="ric-nota">⚠️ Il bonifico non riporta il nome: conferma tu che è quello giusto con "È questo, collegalo".</div>`;
+    else if (r.stato === 'eccedenza') {
+      const mS = r.mese === 12 ? 1 : r.mese + 1, aS = r.mese === 12 ? r.anno + 1 : r.anno;
+      azione = `<div class="ric-ecc"><div class="ric-ecc-t">Dove va la differenza di ${_rE(r.diff)}?</div>
+        <select id="rb-causale-${idx}" class="field-inp" onchange="rbToggleMeseRif(${idx})">
+          ${Object.keys(CAUSALI).filter(k => k !== 'stipendio').map(k => `<option value="${k}">${CAUSALI[k]}</option>`).join('')}
+          <option value="__portafoglio__">🐷 Portafoglio del dipendente (da usare in futuro)</option></select>
+        <div id="rb-meserif-wrap-${idx}"><div class="field-lbl">Mese a cui si riferisce</div><select id="rb-meserif-${idx}" class="field-inp">${_opzioniMese(24, 24, aS + '-' + String(mS).padStart(2, '0'))}</select></div>
+        <div class="ric-nota">Il bonifico si collega comunque per intero a ${_rP(r.mese, r.anno)}: la differenza è solo annotata, non cambia gli stipendi calcolati in app.</div>
+        <button class="btn-primary" onclick="rbConfermaEccedenza(${idx})">✓ Conferma il collegamento</button></div>`;
+    } else azione = `<button class="btn-primary ric-cta" onclick="rbConfermaTutto(${idx},false)">✓ Conferma il collegamento</button>`;
+    const tipo = r.stato === 'saldato' ? ['ok', 'Importo esatto'] : r.stato === 'aperto' ? ['warn', 'Importo inferiore'] : ['info', 'Importo superiore'];
+    return `<div class="ric-card">
+      <div class="ric-card-h">${ricAv(dip)}<div class="ric-card-n"><b>${esc(ricNome(dip) || r.nome)}</b><small>Stipendio di ${_rP(r.mese, r.anno)}</small></div>${ricChip(tipo[0], tipo[1])}</div>
+      <div class="ric-flow">
+        ${ricCedHtml('', c, r.mese, r.anno)}
+        <div class="ric-flow-link"><span>pagato con</span></div>
+        ${movHtml}
+      </div>
+      ${ricEsitoHtml(r.netto, r.somma)}
+      ${azione}
+    </div>`;
+  };
+  // bonifici a nome di un dipendente, mai collegati a un cedolino
+  const nonStip = new Set(D.ecc.filter(e => e.tipo === 'non_stipendio').map(e => e.movimento_banca_id));
+  const giaProposti = new Set(_rbRisultati.flatMap(r => r.movimenti.map(m => m.id)));
+  const liberi = [];
+  ricDipendenti(D).forEach(dip => ricPartitario(dip, D).liberi.forEach(mv => { if (!giaProposti.has(mv.id) && !nonStip.has(mv.id)) liberi.push({ mv, dip }); }));
+  liberi.sort((a, b) => b.mv.data.localeCompare(a.mv.data));
+  RIC.liberi = liberi;
+  const liberiHtml = liberi.length ? `${ricSez('Bonifici a nome di un dipendente, non collegati', liberi.length)}
+    <div class="ric-nota">Possono essere stipendi da collegare, oppure altro (rimborsi, finanziamenti). Decidi tu: così non restano in sospeso.</div>
+    ${liberi.slice(0, 40).map((x, i) => `<div class="ric-card sm"><div class="ric-card-h">${ricAv(x.dip, 'sm')}<div class="ric-card-n"><b>${esc(ricNome(x.dip))}</b><small>Non collegato a nessun cedolino</small></div></div>${ricMovHtml(x.mv, { ibanDip: x.dip.iban })}
+      <div class="ric-az-mov"><button class="btn-sm primary" onclick="ricCollegaLibero(${i})">Collega a un cedolino</button><button class="btn-sm" onclick="ricNonStipendio(${i})">Non è uno stipendio</button></div></div>`).join('')}` : '';
+  const distinte = (_rbNonAssociati || []).filter(m => !nonStip.has(m.id));
+  const distinteHtml = distinte.length ? `${ricSez('Distinte "beneficiari vari" senza corrispondenza', distinte.length)}
+    <div class="ric-nota">Il bonifico non riporta il nome e l'importo non corrisponde a nessun cedolino aperto. Se è uno stipendio, collegalo a mano.</div>
+    ${distinte.slice(0, 20).map(m => `<div class="ric-card sm">${ricMovHtml(m)}<div class="ric-az-mov"><button class="btn-sm" onclick="apriAgganciaManuale()">Collega a mano</button></div></div>`).join('')}` : '';
+  // abbinamenti esatti (nome nel bonifico + importo identico al netto): si confermano tutti con un tocco
+  const esatti = _rbRisultati.map((r, i) => ({ r, i })).filter(({ r }) => r.movimenti.length === 1 && r.movimenti[0].certo && r.movimenti[0].fonte !== 'segnalato' && Math.abs(r.somma - r.netto) <= 0.5 && _rsbNomeMatchaDescrizione(r.movimenti[0].descrizione, (dipById[r.dipId] ? dipById[r.dipId].nome + ' ' + (dipById[r.dipId].cognome || '') : r.nome)) && r.movimenti[0].data >= _rsbFinestraMese(r.mese, r.anno).dal && r.movimenti[0].data <= _rsbFinestraMese(r.mese, r.anno).al);
+  RIC.esatti = esatti.map(x => x.r);
+  const bulk = esatti.length > 1 ? `<div class="ric-bulk"><div class="ric-bulk-h"><span class="ric-bulk-n">${esatti.length}</span><div><b>Abbinamenti esatti</b><small>Nome nel bonifico, importo identico al netto, data nel periodo di pagamento.</small></div></div>
+    <div class="ric-bulk-l">${RIC.esatti.slice(0, 8).map(r => { const d = dipById[r.dipId]; return `<span>${ricAv(d, 'xs')}${esc(d ? _tc27(d.nome) : r.nome)} · ${RIC_MESI[r.mese].slice(0, 3)}</span>`; }).join('')}${esatti.length > 8 ? `<span>+${esatti.length - 8}</span>` : ''}</div>
+    <button class="btn-primary" onclick="ricConfermaEsatti()">✓ Conferma tutti e ${esatti.length}</button></div>` : '';
+  el.innerHTML = intro + bulk + (_rbRisultati.length ? (bulk ? ricSez('Una per una', _rbRisultati.length) : '') + _rbRisultati.map(card).join('') : '<div class="ric-vuoto ok"><span>✓</span><b>Nessun nuovo bonifico da collegare</b><small>Tutto ciò che l\'app ha trovato è già confermato.</small></div>') + liberiHtml + distinteHtml;
+};
+async function ricConfermaEsatti() {
+  const L = RIC.esatti || []; if (!L.length) return;
+  if (!confirm('Confermo ' + L.length + ' collegamenti esatti?\n\n' + L.map(r => '• ' + r.nome.trim() + ' — ' + _rP(r.mese, r.anno) + ': ' + _rE(r.netto)).join('\n'))) return;
+  let ok = 0, ko = 0;
+  for (const r of L) { try { await presenzeConfermaMatchStipendio(r, r.movimenti); ok++; } catch (e) { ko++; } }
+  toast('✓ ' + ok + ' collegamenti confermati' + (ko ? ' · ' + ko + ' non collegati (già usati)' : ''));
+  _rbRisultati = _rbRisultati.filter(r => !L.includes(r));
+  await rbRenderLista();
+}
+function ricScarta(idx, mi) {
+  const r = _rbRisultati[idx]; if (!r) return;
+  r.movimenti.splice(mi, 1);
+  if (!r.movimenti.length) _rbRisultati.splice(idx, 1);
+  else { r.somma = _rr2(r.movimenti.reduce((s, m) => s + m.importo, 0)); r.diff = _rr2(r.somma - r.netto); r.stato = Math.abs(r.diff) <= 0.5 ? 'saldato' : r.diff < 0 ? 'aperto' : 'eccedenza'; }
+  rbRenderLista();
+}
+// Mai due volte lo stesso movimento: controllo prima di scrivere (e vincolo sul database)
+if (typeof presenzeConfermaMatchStipendio === 'function') {
+  const _conf28 = presenzeConfermaMatchStipendio;
+  presenzeConfermaMatchStipendio = async function (risultato, movimenti, opts) {
+    const ids = (movimenti || []).map(m => m.id).filter(Boolean);
+    if (ids.length) {
+      const { data: gia } = await sb.from('presenze_bonifici_stipendio').select('movimento_banca_id,mese_riferimento,anno_riferimento').in('movimento_banca_id', ids);
+      if (gia && gia.length) { toast('⚠️ Questo bonifico è già collegato a ' + _rP(gia[0].mese_riferimento, gia[0].anno_riferimento) + ': non lo collego due volte'); throw new Error('già collegato'); }
+    }
+    return _conf28.apply(this, arguments);
+  };
+}
+async function ricNonStipendio(i) {
+  const x = (RIC.liberi || [])[i]; if (!x) return;
+  const motivo = prompt('Che cos\'è questo bonifico di ' + _rE(Math.abs(x.mv.importo)) + ' a ' + ricNome(x.dip) + '? (es. rimborso, finanziamento soci)', '');
+  if (motivo === null) return;
+  const { error } = await sb.from('presenze_riconciliazione_eccezioni').insert({ dipendente_id: x.dip.id, tipo: 'non_stipendio', movimento_banca_id: x.mv.id, motivo: motivo.trim() || null });
+  if (error) { toast('Non salvato: ' + error.message); return; }
+  toast('✓ Segnato: non è uno stipendio'); await ricCarica(); rbRenderLista();
+}
+function ricCollegaLibero(i) {
+  const x = (RIC.liberi || [])[i]; if (!x) return;
+  // mese proposto: quello prima della data del bonifico (lo stipendio di M si paga in M+1)
+  const d = new Date(x.mv.data + 'T12:00:00'); d.setDate(1); d.setMonth(d.getMonth() - 1);
+  ricCollegaApri(x.dip.id, d.getMonth() + 1, d.getFullYear(), x.mv);
+}
+// Collegamento guidato di UN movimento a UN cedolino, con confronto e controlli
+async function ricCollegaApri(dipId, m, a, mv) {
+  const D = RIC.D || await ricCarica();
+  const dip = D.prof.find(p => p.id === dipId);
+  const body = _sheetDinamico('sh-ric-collega', 'Collega bonifico e cedolino');
+  const mesiOpt = _opzioniMese(24, 1, a + '-' + String(m).padStart(2, '0'));
+  const render = () => {
+    const [aa, mm] = ($('ric-cl-mese') ? $('ric-cl-mese').value : a + '-' + String(m).padStart(2, '0')).split('-').map(Number);
+    const c = D.ced.filter(x => x.dipendente_id === dipId && x.mese === mm && x.anno === aa)[0] || null;
+    const gia = _rr2(D.bon.filter(b => b.dipendente_id === dipId && b.mese_riferimento === mm && b.anno_riferimento === aa && b.fonte_copertura !== 'portafoglio').reduce((s, b) => s + (+b.importo || 0), 0));
+    $('ric-cl-conf').innerHTML = '<div class="ric-flow">' + ricCedHtml(ricNome(dip), c, mm, aa, gia ? 'già collegati ' + _rE(gia) : '') + '<div class="ric-flow-link"><span>pagato con</span></div>' + ricMovHtml(mv, { ibanDip: dip && dip.iban }) + '</div>'
+      + `<div class="ric-perche"><div class="ric-lbl">Controlli</div>${ricMotivi(mv, dip, mm, aa, c ? parseFloat(c.netto_busta) - gia : null)}</div>`
+      + ricEsitoHtml(c && c.netto_busta != null ? parseFloat(c.netto_busta) : null, gia + Math.abs(+mv.importo))
+      + (!c ? '<div class="ric-avviso">Per questo mese non c\'è un cedolino: il bonifico risulterà "pagamento senza cedolino" finché non lo carichi.</div>' : '');
+  };
+  body.innerHTML = `<div class="ric-card-h">${ricAv(dip)}<div class="ric-card-n"><b>${esc(ricNome(dip))}</b><small>Scegli il mese e controlla il confronto</small></div></div>
+    <div class="field-lbl">Stipendio di quale mese</div><select class="field-inp" id="ric-cl-mese" onchange="RIC._clRender()">${mesiOpt}</select><div id="ric-cl-conf"></div>
+    <button class="btn-primary ric-cta" onclick="ricCollegaSalva('${dipId}')">✓ Collega</button>`;
+  RIC._clRender = render; RIC._clMov = mv;
+  openSheet('sh-ric-collega'); render();
+}
+async function ricCollegaSalva(dipId) {
+  const mv = RIC._clMov; const [a, m] = $('ric-cl-mese').value.split('-').map(Number);
+  const { data: gia } = await sb.from('presenze_bonifici_stipendio').select('mese_riferimento,anno_riferimento,dipendente_id').eq('movimento_banca_id', mv.id);
+  if (gia && gia.length) { toast('⚠️ Questo bonifico è già collegato a ' + _rP(gia[0].mese_riferimento, gia[0].anno_riferimento) + ': non lo collego due volte'); return; }
+  const { error } = await sb.from('presenze_bonifici_stipendio').insert({ dipendente_id: dipId, movimento_banca_id: mv.id, mese_riferimento: m, anno_riferimento: a, importo: Math.abs(+mv.importo), confermato: true, fonte_copertura: 'bonifico', descrizione_movimento: mv.descrizione, data_movimento: mv.data });
+  if (error) { toast(/duplicate|unique/i.test(error.message) ? '⚠️ Questo bonifico è già collegato a un altro cedolino' : 'Non collegato: ' + error.message); return; }
+  ['sh-ric-collega', 'sh-ric-cand'].forEach(id => { if ($(id)) closeSheet(id); }); toast('✓ Collegato a ' + _rP(m, a));
+  await ricCarica();
+  if ($('sh-cedoliniNR') && $('sh-cedoliniNR').classList.contains('on')) { _cnrRisultati = await presenzeCedoliniNonRiconciliati(); await cnrRenderLista(); }
+  if ($('sh-riconcBonifici') && $('sh-riconcBonifici').classList.contains('on')) rbRenderLista();
+  if ($('sh-ric-quadro') && $('sh-ric-quadro').classList.contains('on')) ricQuadro(dipId);
+}
+// Aggancio manuale (ricerca libera): stessa scheda guidata con confronto e controlli
+if (typeof amCercaMovimenti === 'function') {
+  amCercaMovimenti = async function () {
+    const dipId = $('am-dip').value, meseVal = $('am-mese').value;
+    if (!dipId || !meseVal) { $('am-lista').innerHTML = '<div class="ric-vuoto">Scegli dipendente e mese per iniziare.</div>'; return; }
+    $('am-lista').innerHTML = '<div class="ric-carica"><div class="spinner"></div>Ricerca in corso…</div>';
+    const [a, m] = meseVal.split('-').map(Number);
+    const fin = _rsbFinestraMese(m, a), dal = aggiungiGiorni(fin.dal, -40), al = aggiungiGiorni(fin.al, 20);
+    const testo = ($('am-testo').value || '').trim().toLowerCase();
+    const [{ data: movs }, { data: gia }, D] = await Promise.all([
+      sb.from('movimenti_banca').select('id,data,importo,descrizione,tipo,sottotipo,banca').eq('tipo', 'uscita').eq('sottotipo', 'Bonifico').gte('data', dal).lte('data', al),
+      sb.from('presenze_bonifici_stipendio').select('movimento_banca_id'), RIC.D ? Promise.resolve(RIC.D) : ricCarica()]);
+    const usati = new Set((gia || []).map(r => r.movimento_banca_id));
+    const dip = D.prof.find(p => p.id === dipId), nome = dip ? dip.nome + ' ' + (dip.cognome || '') : '';
+    let c = (movs || []).filter(x => !usati.has(x.id) && !_rsbECommissione(x.descrizione));
+    if (testo) c = c.filter(x => (x.descrizione || '').toLowerCase().includes(testo));
+    const punti = x => (_rsbNomeMatchaDescrizione(x.descrizione, nome) ? 4 : 0) + (dip && dip.iban && _ibanNorm(ricParse(x.descrizione).iban) === _ibanNorm(dip.iban) ? 4 : 0) + (x.data >= fin.dal && x.data <= fin.al ? 1 : 0);
+    c.sort((x, y) => punti(y) - punti(x) || y.data.localeCompare(x.data));
+    RIC._am = c;
+    $('am-lista').innerHTML = c.length ? `<div class="ric-nota">In alto i bonifici con il suo nome o il suo IBAN. Tocca "Scegli" per vedere il confronto prima di collegare.</div>` + c.slice(0, 60).map((x, i) => `<div class="ric-card sm">${ricMovHtml(x, { ibanDip: dip && dip.iban })}<div class="ric-az-mov"><button class="btn-sm primary" onclick="ricCollegaApri('${dipId}',${m},${a},RIC._am[${i}])">Scegli</button></div></div>`).join('')
+      : '<div class="ric-vuoto">Nessun bonifico libero in questo periodo.</div>';
+  };
+}
+// fix: il prelievo dal portafoglio non restava collegato alla sua copertura (insert senza select)
+if (typeof presenzePortafoglioPreleva === 'function') {
+  presenzePortafoglioPreleva = async function (dipId, importo, mese, anno) {
+    const { data: ins } = await sb.from('presenze_portafoglio_movimenti').insert({ dipendente_id: dipId, importo: -Math.abs(importo), data: todayISO(), causale: 'utilizzo_stipendio_' + String(mese).padStart(2, '0') + '_' + anno, registrato_da: ME ? ME.id : null }).select('id').single();
+    await sb.from('presenze_bonifici_stipendio').insert({ dipendente_id: dipId, movimento_banca_id: null, mese_riferimento: mese, anno_riferimento: anno, importo: Math.abs(importo), confermato: true, fonte_copertura: 'portafoglio', portafoglio_movimento_id: ins ? ins.id : null, descrizione_movimento: 'Prelievo dal portafoglio dipendente', data_movimento: todayISO() });
+  };
+}
+
+/* ══════════════ 2. STORICO: ogni collegamento con cedolino e bonifico originali ══════════════ */
+apriStoricoRiconciliazioni = async function (dipSel) {
+  const body = _sheetDinamico('sh-ric-storico', 'Storico riconciliazioni');
+  body.innerHTML = '<div class="ric-carica"><div class="spinner"></div>Caricamento…</div>';
+  openSheet('sh-ric-storico');
+  const D = await ricCarica();
+  const dips = ricDipendenti(D);
+  RIC.stDip = dipSel || RIC.stDip || '';
+  body.innerHTML = ricIntro('<b>Cosa è stato collegato, e quando</b>Ogni riga è un bonifico abbinato a un cedolino: chi, quale mese, quanto, quando è uscito dalla banca e quando l\'hai collegato. I link aprono il cedolino e il movimento originale.', 'storico') + `
+    <div class="ric-filtri"><select class="field-inp" id="ric-st-dip" onchange="RIC.stDip=this.value;ricStoricoRender()"><option value="">Tutti i dipendenti</option>${dips.map(d => `<option value="${d.id}" ${d.id === RIC.stDip ? 'selected' : ''}>${esc(ricNome(d))}</option>`).join('')}</select>
+    <div class="ric-cerca">${ic('cerca')}<input id="ric-st-q" placeholder="Mese, importo, causale…" oninput="ricStoricoRender()"></div></div>
+    <div id="ric-st-lista"></div>`;
+  ricStoricoRender();
+};
+function ricStoricoRender() {
+  const D = RIC.D, box = $('ric-st-lista'); if (!D || !box) return;
+  const dipById = {}; D.prof.forEach(p => dipById[p.id] = p);
+  const part = {}; const statoMese = (dipId, m, a) => { if (!part[dipId]) part[dipId] = ricPartitario(dipById[dipId], D); return part[dipId].righe.find(r => r.mese === m && r.anno === a); };
+  let bon = D.bon.slice(); if (RIC.stDip) bon = bon.filter(b => b.dipendente_id === RIC.stDip);
+  const q = ($('ric-st-q') && $('ric-st-q').value || '').trim().toLowerCase();
+  if (q) bon = bon.filter(b => { const mb = D.movById[b.movimento_banca_id]; const dip = dipById[b.dipendente_id]; return [ricNome(dip), _rP(b.mese_riferimento, b.anno_riferimento), _rE(b.importo), String(b.importo), _rD(b.data_movimento), (mb && mb.descrizione) || b.descrizione_movimento || ''].join(' ').toLowerCase().includes(q); });
+  const tot = _rr2(bon.reduce((s, b) => s + (+b.importo || 0), 0));
+  bon.sort((x, y) => (y.creato_il || '').localeCompare(x.creato_il || ''));
+  if (!bon.length) { box.innerHTML = '<div class="ric-vuoto"><span>🗂</span><b>Nessun collegamento</b><small>' + (q || RIC.stDip ? 'Prova a cambiare il filtro.' : 'Quando confermi un bonifico in Riconciliazione, compare qui.') + '</small></div>'; return; }
+  let gruppo = '';
+  box.innerHTML = `<div class="ric-somma"><span>${bon.length} ${bon.length === 1 ? 'collegamento' : 'collegamenti'}</span><b>${_rE(tot)}</b></div>` + bon.slice(0, 200).map(b => {
+    const dip = dipById[b.dipendente_id], r = statoMese(b.dipendente_id, b.mese_riferimento, b.anno_riferimento);
+    const mb = b.movimento_banca_id ? D.movById[b.movimento_banca_id] : null;
+    const mv = { id: b.movimento_banca_id, data: b.data_movimento || (mb && mb.data), importo: b.importo, descrizione: (mb && mb.descrizione) || b.descrizione_movimento, banca: mb && mb.banca };
+    const port = b.fonte_copertura === 'portafoglio', c = r && r.cedolino, p = ricParse(mv.descrizione);
+    const perso = b.movimento_banca_id && !mb;
+    const g = (b.creato_il || '').slice(0, 7), gTxt = g ? _rPc(+g.slice(5, 7), +g.slice(0, 4)) : '—';
+    const testa = g !== gruppo ? (gruppo = g, `<div class="ric-gruppo">Collegati a ${gTxt}</div>`) : '';
+    return testa + `<div class="ric-st">
+      <div class="ric-card-h">${ricAv(dip, 'sm')}<div class="ric-card-n"><b>${esc(ricNome(dip))}</b><small>Stipendio di ${_rP(b.mese_riferimento, b.anno_riferimento)}</small></div>${r ? ricChip(ricTono(r.stato), RIC_STATI_BREVE[r.stato] || '') : ''}</div>
+      <div class="ric-cmp">
+        <div class="ric-cmp-c"><div class="ric-cmp-l"><span class="ric-ico ced xs">${ic('doc')}</span>Cedolino</div><b>${c && c.netto_busta != null ? _rE(c.netto_busta) : '—'}</b>${c && c.url ? `<button class="ric-link" onclick="apriDocumento('${esc(c.url)}','${esc((c.nome_file || 'cedolino.pdf').replace(/'/g, ''))}')">Apri ›</button>` : `<small class="ric-warn">${c ? 'PDF non disponibile' : 'cedolino mancante'}</small>`}</div>
+        <div class="ric-cmp-ar">→</div>
+        <div class="ric-cmp-c"><div class="ric-cmp-l"><span class="ric-ico ${port ? 'port' : 'mov'} xs">${port ? '🐷' : ic('banca')}</span>${port ? 'Portafoglio' : 'Bonifico'}</div><b>${_rE(b.importo)}</b><small>${port ? 'eccedenze già versate' : 'del ' + _rD(mv.data)}</small>${port ? '' : `<a class="ric-link" href="${ricMovLink(b.movimento_banca_id)}" target="_blank" rel="noopener">Apri in Fatture ›</a>`}</div>
+      </div>
+      ${port ? '' : `<div class="ric-st-det">${esc(p.beneficiario || '')}${p.iban ? ' · ' + esc(_ibanB28(p.iban)) : ''}${p.causale ? ' · «' + esc(p.causale) + '»' : ''}${mv.banca ? ' · ' + esc(mv.banca) : ''}${p.rif ? ' · rif. ' + esc(p.rif) : ''}</div>`}
+      ${perso ? '<div class="ric-avviso">Il movimento non è più presente nei movimenti bancari: annulla e ricollega quello giusto.</div>' : ''}
+      <div class="ric-st-piede"><span>🔗 Collegato il ${_rD((b.creato_il || '').slice(0, 10))}</span><button onclick="ricStoricoApriQuadro('${b.dipendente_id}')">Situazione ›</button><button class="ric-del" onclick="ricAnnullaCollegamento(${b.id})">Annulla</button></div>
+    </div>`;
+  }).join('') + (bon.length > 200 ? '<div class="ric-nota">Mostrati i 200 più recenti: filtra per dipendente per vedere tutto.</div>' : '');
+}
+function ricStoricoApriQuadro(id) { ricQuadro(id); }
+async function ricAnnullaCollegamento(id) {
+  const b = RIC.D.bon.find(x => x.id === id); if (!b) return;
+  if (!confirm('Annullare il collegamento di ' + _rE(b.importo) + ' (bonifico del ' + _rD(b.data_movimento) + ') con il cedolino di ' + _rP(b.mese_riferimento, b.anno_riferimento) + '?\nIl bonifico torna "da collegare"; resta traccia nel registro legale.')) return;
+  const { error } = await sb.from('presenze_bonifici_stipendio').delete().eq('id', id);
+  if (error) { toast('Non annullato: ' + error.message); return; }
+  if (b.portafoglio_movimento_id) await sb.from('presenze_portafoglio_movimenti').delete().eq('id', b.portafoglio_movimento_id);
+  toast('✓ Collegamento annullato');
+  await ricCarica();
+  if ($('sh-ric-storico') && $('sh-ric-storico').classList.contains('on')) ricStoricoRender();
+  if ($('sh-ric-quadro') && $('sh-ric-quadro').classList.contains('on')) ricQuadro(b.dipendente_id);
+}
+
+/* ══════════════ 3. SITUAZIONE DEI DIPENDENTI e QUADRO DEL SINGOLO ══════════════ */
+async function ricPanoramica() {
+  const body = _sheetDinamico('sh-ric-pan', 'Situazione stipendi');
+  body.innerHTML = '<div class="ric-carica"><div class="spinner"></div>Calcolo la situazione…</div>';
+  openSheet('sh-ric-pan');
+  const D = await ricCarica();
+  const P = ricDipendenti(D).map(d => ricPartitario(d, D)).filter(p => p.righe.length);
+  const T = P.reduce((t, p) => ({ dovuto: t.dovuto + p.tot.dovuto, ricevuto: t.ricevuto + p.tot.ricevuto, conf: t.conf + (p.tot.daConfermare || 0) }), { dovuto: 0, ricevuto: 0, conf: 0 });
+  const saldo = _rr2(T.ricevuto - T.dovuto), tS = ricTonoSaldo(saldo);
+  const nAn = P.reduce((s, p) => s + p.anomalie.filter(a => a.liv !== 'info').length, 0);
+  const k0 = P.length ? Math.min(...P.map(p => p.periodo.k0)) : 0, k1 = P.length ? Math.max(...P.map(p => p.periodo.k1)) : 0;
+  const pct = ricPct(T.ricevuto, T.dovuto);
+  const hero = ricHero({
+    eyebrow: 'Stipendi · saldo al ' + _rD(todayISO()), pill: P.length + ' dipendenti',
+    lbl: 'Saldo complessivo', big: _rS(saldo),
+    esito: { tono: tS, txt: tS === 'ok' ? 'Tutti hanno ricevuto quanto risulta dai cedolini' : saldo < 0 ? 'Ai dipendenti spettano ancora ' + _rE(-saldo) : 'Pagati ' + _rE(saldo) + ' in più dei cedolini' },
+    prog: { pct, l: 'Coperto dai bonifici ' + pct + '%', r: P.length ? _rP(k0 % 100, Math.floor(k0 / 100)) + ' → ' + _rP(k1 % 100, Math.floor(k1 / 100)) : '' },
+    stats: [{ lbl: 'Netto', val: _rEk(T.dovuto), dot: '#64D2FF' }, { lbl: 'Bonifici', val: _rEk(T.ricevuto), dot: '#30D158' }, { lbl: 'Da sistemare', val: nAn, dot: nAn ? '#FF9F0A' : '#30D158' }],
+    inn: T.conf > 0.5 ? { on: 'apriRiconciliazioneBonifici()', t: 'Trovati in banca, da confermare', s: 'Tocca per collegarli ai cedolini', v: _rEk(T.conf) } : null,
+  });
+  const card = p => {
+    const tono = ricTonoSaldo(p.tot.saldo), nA = p.anomalie.filter(a => a.liv !== 'info').length, err = !p.definitivo;
+    const chips = [];
+    if (p.tot.daConfermare > 0.5) chips.push(ricChip('warn', _rEk(p.tot.daConfermare) + ' da confermare'));
+    if (err) chips.push(ricChip('ko', 'saldo provvisorio'));
+    if (nA) chips.push(ricChip(err ? 'ko' : 'warn', nA + (nA === 1 ? ' cosa da sistemare' : ' cose da sistemare')));
+    if (!chips.length) chips.push(ricChip('ok', 'tutto in ordine'));
+    return `<button class="ric-dcard" onclick="ricQuadro('${p.dip.id}')">
+      <div class="ric-card-h">${ricAv(p.dip)}<div class="ric-card-n"><b>${esc(ricNome(p.dip))}</b><small>${esc(p.periodo.dal)} → ${esc(p.periodo.al)}</small></div>
+        <div class="ric-dsaldo ${tono}">${_rS(p.tot.saldo)}<small>${tono === 'ok' ? 'in pari' : p.tot.saldo < 0 ? 'gli spetta' : 'ricevuto in più'}</small></div></div>
+      <div class="ric-bar"><i class="${tono}" style="width:${ricPct(p.tot.ricevuto, p.tot.dovuto)}%"></i></div>
+      <div class="ric-bar-l"><span>${_rEk(p.tot.ricevuto)} ricevuti</span><span>su ${_rEk(p.tot.dovuto)} di netto</span></div>
+      <div class="ric-chips">${chips.join('')}<span class="ric-chev">›</span></div>
+    </button>`;
+  };
+  body.innerHTML = hero + ricSez('Dipendenti', P.length, '<small>tocca per il dettaglio</small>') + P.map(card).join('')
+    + `<button class="btn-primary ric-cta" onclick="ricEsportaApri()">⬇ Scarica il partitario (Excel)</button>`;
+}
+apriQuadroCompleto = function (dipId) { return ricQuadro(dipId); };
+async function ricQuadro(dipId) {
+  const body = _sheetDinamico('sh-ric-quadro', 'Situazione stipendi');
+  body.innerHTML = '<div class="ric-carica"><div class="spinner"></div>Calcolo…</div>';
+  openSheet('sh-ric-quadro');
+  const D = RIC.D || await ricCarica();
+  const dip = D.prof.find(p => p.id === dipId); if (!dip) { body.innerHTML = '<div class="ric-vuoto">Dipendente non trovato</div>'; return; }
+  const P = ricPartitario(dip, D); RIC.qc = P;
+  window._qcDipId = dipId; window._qcNome = ricNome(dip);
+  const e = ricEsito(P.tot), tS = ricTonoSaldo(P.tot.saldo), attesi = P.righe.filter(r => !['in_arrivo', 'escluso'].includes(r.stato)), conCed = attesi.filter(r => r.cedolino);
+  const pct = ricPct(P.tot.ricevuto, P.tot.dovuto);
+  const hero = ricHero({
+    eyebrow: 'Situazione stipendi', pill: 'al ' + _rD(todayISO()),
+    top: `<div class="ric-hero-who">${ricAv(dip, 'lg')}<div><b>${esc(ricNome(dip))}</b><small>${P.periodo ? esc(P.periodo.dal + ' → ' + P.periodo.al) : 'Nessun cedolino'}</small></div></div>`,
+    lbl: 'Saldo alla data', big: _rS(P.tot.saldo), esito: { tono: tS, txt: e.txt },
+    prog: { pct, l: 'Coperto dai bonifici ' + pct + '%', r: _rEk(P.tot.ricevuto) + ' su ' + _rEk(P.tot.dovuto) },
+    stats: [{ lbl: 'Netto', val: _rEk(P.tot.dovuto), dot: '#64D2FF' }, { lbl: 'Bonifici', val: _rEk(P.tot.ricevuto), dot: '#30D158' }, { lbl: 'Cedolini', val: conCed.length + '<small>/' + attesi.length + '</small>', dot: conCed.length < attesi.length ? '#FF453A' : '#30D158' }],
+  });
+  const nota = (!P.definitivo ? '<b>Saldo provvisorio.</b> Prima sistema i punti in rosso qui sotto. ' : '') + esc(e.nota || '');
+  const info = nota ? `<div class="ric-info ${!P.definitivo ? 'ko' : 'nd'}"><span>${!P.definitivo ? '!' : 'i'}</span><div>${nota}</div></div>` : '';
+  const strip = `<div class="ric-strip">${P.righe.map(r => { const t = ricTono(r.stato); return `<button class="ric-strip-m ${t}" onclick="document.getElementById('ric-m-${r.k}').scrollIntoView({behavior:'smooth',block:'start'})"><small>${RIC_MESI[r.mese].slice(0, 3)}</small><b>${RIC_ICO_T[t]}</b><span>${String(r.anno).slice(2)}</span></button>`; }).join('')}</div>
+    <div class="ric-legenda"><span class="ok">✓ pagato</span><span class="warn">! da verificare</span><span class="ko">✕ manca</span><span class="nd">… in attesa</span></div>`;
+  const livIco = { err: '✕', warn: '!', info: 'i' };
+  const anom = P.anomalie.length ? ricSez('Da sistemare', P.anomalie.length) + P.anomalie.map(a => `<div class="ric-anom ${a.liv}"><span class="ric-anom-ico">${livIco[a.liv]}</span><div><b>${esc(a.tipo)}</b><p>${esc(a.testo)}</p><div class="ric-anom-fare"><span>Cosa fare</span>${esc(a.cosaFare)}</div></div></div>`).join('')
+    : '<div class="ric-vuoto ok"><span>✓</span><b>Nessuna anomalia</b><small>Cedolini completi e bonifici coerenti.</small></div>';
+  const mese = r => {
+    const t = ricTono(r.stato), breve = RIC_STATI_BREVE[r.stato] || '';
+    return `<div class="ric-mcard ${t}" id="ric-m-${r.k}">
+      <div class="ric-mcard-h"><b>${_rPc(r.mese, r.anno)}</b>${ricChip(t, breve)}</div>
+      ${r.statoTxt && r.statoTxt !== breve ? `<div class="ric-mcard-t">${esc(r.statoTxt)}</div>` : ''}
+      <div class="ric-cmp">
+        <div class="ric-cmp-c"><div class="ric-cmp-l"><span class="ric-ico ced xs">${ic('doc')}</span>Cedolino</div><b>${r.cedolino ? (r.netto != null ? _rE(r.netto) : 'senza netto') : '—'}</b>${r.cedolino && r.cedolino.url ? `<button class="ric-link" onclick="apriDocumento('${esc(r.cedolino.url)}','${esc((r.cedolino.nome_file || 'cedolino.pdf').replace(/'/g, ''))}')">Apri ›</button>` : ''}</div>
+        <div class="ric-cmp-ar">→</div>
+        <div class="ric-cmp-c"><div class="ric-cmp-l"><span class="ric-ico mov xs">${ic('banca')}</span>Bonifici</div><b>${_rE(r.ricevuto)}</b>${r.coperturaPort ? `<small>+ ${_rE(r.coperturaPort)} dal portafoglio</small>` : ''}</div>
+      </div>
+      ${r.mov.map(x => `<div class="ric-mvl"><span>${_rD(x.data)}</span><b>${_rE(x.importo)}</b>${x.movId ? `<a href="${ricMovLink(x.movId)}" target="_blank" rel="noopener">Fatture ›</a>` : ''}<button onclick="ricAnnullaCollegamento(${x.id})">Annulla</button></div>`).join('')}
+      <div class="ric-mcard-f">${r.diff != null && Math.abs(r.diff) > 0.5 ? `<span class="ric-diff ${r.diff < 0 ? 'warn' : 'info'}">${r.diff > 0 ? '+' : '−'}${_rE(Math.abs(r.diff))}</span>` : r.diff != null ? '<span class="ric-diff ok">differenza 0</span>' : '<span></span>'}<span>Saldo progressivo <b>${_rS(r.saldoProg)}</b></span></div>
+      <div class="ric-az-mov">
+        ${r.stato === 'da_confermare' ? r.trovati.map(mv => `<button class="btn-sm primary" onclick="ricConfermaTrovato('${mv.id}',${r.mese},${r.anno})">Controlla e collega ${_rE(Math.abs(mv.importo))} del ${_rD(mv.data)}</button>`).join('') : ''}
+        ${['parziale', 'non_pagato', 'in_attesa', 'in_corso', 'attesa_estratto'].includes(r.stato) ? `<button class="btn-sm primary" onclick="ricCercaPerMese('${dip.id}',${r.mese},${r.anno})">🔍 Cerca il bonifico</button>` : ''}
+        ${r.stato === 'manca_cedolino' ? `<button class="btn-sm" onclick="ricNessunCedolino('${dip.id}',${r.mese},${r.anno})">Nessun cedolino previsto</button>` : ''}
+        ${r.stato === 'escluso' ? `<button class="btn-sm" onclick="ricTogliEccezione('${dip.id}',${r.mese},${r.anno})">Annulla "nessun cedolino"</button>` : ''}
+      </div></div>`;
+  };
+  const liberi = P.liberi.length ? ricSez('Bonifici a suo nome non collegati', P.liberi.length) + '<div class="ric-nota">Non sono contati nel saldo finché non li colleghi a un cedolino. Se non sono stipendi (rimborsi, finanziamenti…) segnalo: così non restano in sospeso.</div>'
+    + P.liberi.map((mv, i) => { const rr = P.righe.find(x => x.trovati.includes(mv)); return `<div class="ric-card sm">${rr ? `<div class="ric-probabile">Probabilmente stipendio di <b>${_rP(rr.mese, rr.anno)}</b>${rr.cedolino ? '' : ' · cedolino mancante'}</div>` : ''}${ricMovHtml(mv, { ibanDip: dip.iban })}<div class="ric-az-mov"><button class="btn-sm primary" onclick="ricCollegaDaQuadro(${i})">Collega a un cedolino</button><button class="btn-sm" onclick="ricNonStipendioDaQuadro(${i})">Non è uno stipendio</button></div></div>`; }).join('') : '';
+  body.innerHTML = hero + info + ricSez('I mesi a colpo d\'occhio') + strip + anom + ricSez('Mese per mese', P.righe.length) + P.righe.slice().reverse().map(mese).join('') + liberi
+    + `<button class="btn-primary ric-cta" onclick="ricEsportaApri(['${dip.id}'])">⬇ Scarica il suo partitario (Excel)</button>`;
+}
+function ricCollegaDaQuadro(i) { const mv = RIC.qc.liberi[i]; const rr = RIC.qc.righe.find(x => x.trovati.includes(mv)); if (rr) return ricCollegaApri(RIC.qc.dip.id, rr.mese, rr.anno, mv); const d = new Date(mv.data + 'T12:00:00'); d.setDate(1); d.setMonth(d.getMonth() - 1); ricCollegaApri(RIC.qc.dip.id, d.getMonth() + 1, d.getFullYear(), mv); }
+function ricConfermaTrovato(movId, m, a) { const mv = RIC.qc.liberi.find(x => String(x.id) === String(movId)); if (mv) ricCollegaApri(RIC.qc.dip.id, m, a, mv); }
+async function ricNonStipendioDaQuadro(i) { RIC.liberi = RIC.qc.liberi.map(mv => ({ mv, dip: RIC.qc.dip })); const motivo = prompt('Che cos\'è questo bonifico? (es. rimborso, finanziamento soci)', ''); if (motivo === null) return; const mv = RIC.qc.liberi[i];
+  const { error } = await sb.from('presenze_riconciliazione_eccezioni').insert({ dipendente_id: RIC.qc.dip.id, tipo: 'non_stipendio', movimento_banca_id: mv.id, motivo: motivo.trim() || null });
+  if (error) { toast('Non salvato: ' + error.message); return; } toast('✓ Segnato: non è uno stipendio'); await ricCarica(); ricQuadro(RIC.qc.dip.id); }
+async function ricCercaPerMese(dipId, m, a) {
+  const r = RIC.qc.righe.find(x => x.mese === m && x.anno === a);
+  await apriCnrCandidatiDaQuadro(dipId, ricNome(RIC.qc.dip), m, a, r.netto || 0, r.ricevuto + r.coperturaPort);
+}
+async function ricNessunCedolino(dipId, m, a) {
+  const motivo = prompt('Perché per ' + _rP(m, a) + ' non c\'è un cedolino? (es. non era ancora assunto, aspettativa)', '');
+  if (motivo === null) return;
+  const { error } = await sb.from('presenze_riconciliazione_eccezioni').insert({ dipendente_id: dipId, tipo: 'nessun_cedolino', mese: m, anno: a, motivo: motivo.trim() || null });
+  if (error) { toast('Non salvato: ' + error.message); return; }
+  await ricCarica(); ricQuadro(dipId);
+}
+async function ricTogliEccezione(dipId, m, a) {
+  await sb.from('presenze_riconciliazione_eccezioni').delete().eq('dipendente_id', dipId).eq('tipo', 'nessun_cedolino').eq('mese', m).eq('anno', a);
+  await ricCarica(); ricQuadro(dipId);
+}
+
+/* ══════════════ 4. PARTITARIO EXCEL: controllo prima, documento autonomo dopo ══════════════ */
+async function ricEsportaApri(pre) {
+  const body = _sheetDinamico('sh-ric-export', 'Partitario stipendi (Excel)');
+  body.innerHTML = '<div class="ric-carica"><div class="spinner"></div>Preparo il controllo…</div>';
+  openSheet('sh-ric-export');
+  const D = await ricCarica();
+  const dips = ricDipendenti(D).filter(d => D.ced.some(c => c.dipendente_id === d.id) || D.bon.some(b => b.dipendente_id === d.id));
+  RIC.exSel = new Set(pre && pre.length ? pre : dips.map(d => d.id));
+  RIC.exTutti = dips.map(d => d.id);
+  body.innerHTML = ricIntro('<b>Un file pronto da inviare</b>A dipendente, consulente del lavoro o commercialista, così com\'è: riepilogo con il saldo di oggi, partitario mese per mese, bonifici collegati e anomalie. Prima di scaricarlo l\'app controlla che non manchi niente.', 'doc')
+    + `<div class="ric-xl-fogli"><span><i>1</i>Riepilogo</span><span><i>2</i>Partitario</span><span><i>3</i>Riconciliazioni</span><span><i>4</i>Anomalie</span></div>`
+    + ricSez('Per chi', null, `<span class="ric-sez-az"><button onclick="RIC.exSel=new Set(RIC.exTutti);ricEsportaCheck()">Tutti</button><button onclick="RIC.exSel=new Set();ricEsportaCheck()">Nessuno</button></span>`)
+    + `<div class="ric-sel">${dips.map(d => `<label class="ric-tog"><input type="checkbox" value="${d.id}" ${RIC.exSel.has(d.id) ? 'checked' : ''} onchange="this.checked?RIC.exSel.add(this.value):RIC.exSel.delete(this.value);ricEsportaCheck()">${ricAv(d, 'xs')}<span>${esc(ricNome(d))}</span><i class="ric-tog-ck">✓</i></label>`).join('')}</div>
+    <div id="ric-ex-check"></div>
+    <button class="btn-primary ric-cta" id="ric-ex-btn" onclick="ricExcel([...RIC.exSel])">⬇ Scarica il partitario</button>`;
+  ricEsportaCheck();
+}
+function ricEsportaCheck() {
+  document.querySelectorAll('#sh-ric-export .ric-sel input').forEach(i => i.checked = RIC.exSel.has(i.value));
+  const D = RIC.D, box = $('ric-ex-check'); if (!box) return;
+  const P = [...RIC.exSel].map(id => ricPartitario(D.prof.find(p => p.id === id), D));
+  const A = P.flatMap(p => p.anomalie);
+  const n = l => A.filter(a => a.liv === l).length;
+  const grp = {}; A.forEach(a => { (grp[a.tipo] = grp[a.tipo] || { n: 0, liv: a.liv }).n++; });
+  const t = n('err') ? 'ko' : n('warn') ? 'warn' : 'ok';
+  box.innerHTML = !P.length ? '<div class="ric-avviso">Scegli almeno un dipendente.</div>' : ricSez('Controllo prima dell\'export') + `
+    <div class="ric-verdetto ${t}"><span>${RIC_ICO_T[t]}</span><div><b>${n('err') ? n('err') + (n('err') === 1 ? ' problema bloccante' : ' problemi bloccanti') : 'Nessun problema bloccante'}</b>
+      <small>${n('err') ? 'Nel file il saldo sarà indicato come PROVVISORIO.' : 'Nel file il saldo è definitivo.'}${n('warn') ? ' ' + n('warn') + (n('warn') === 1 ? ' differenza da verificare.' : ' differenze da verificare.') : ''}</small></div></div>
+    ${Object.keys(grp).length ? `<div class="ric-grp-l">${Object.keys(grp).map(k => `<details class="ric-grp ${grp[k].liv}"><summary><i></i>${esc(k)}<b>${grp[k].n}</b></summary>${A.filter(a => a.tipo === k).map(a => `<div><b>${esc(a.dip)}</b> — ${esc(a.testo)}</div>`).join('')}</details>`).join('')}</div>` : ''}
+    <div class="ric-nota">Controllati: cedolini mancanti o doppi, senza netto, senza pagamento; pagamenti senza cedolino; stesso bonifico su più cedolini; importi diversi dalla banca; più bonifici sullo stesso cedolino; bonifici a suo nome non collegati; IBAN diversi o condivisi. Tutto è riportato anche nel foglio "Anomalie".</div>`;
+  const b = $('ric-ex-btn'); if (b) { b.disabled = !P.length; b.textContent = '⬇ Scarica il partitario' + (P.length ? ' (' + (P.length === 1 ? '1 dipendente' : P.length + ' dipendenti') + ')' : ''); }
+}
+async function ricExcel(ids) {
+  if (typeof XLSX === 'undefined') { toast('Libreria Excel non caricata, riprova'); return; }
+  if (!ids || !ids.length) { toast('Scegli almeno un dipendente'); return; }
+  const D = RIC.D || await ricCarica();
+  const P = ids.map(id => ricPartitario(D.prof.find(p => p.id === id), D)).filter(p => p.dip).sort((a, b) => ricNome(a.dip).localeCompare(ricNome(b.dip)));
+  const ora = new Date(), oraTxt = ora.toLocaleDateString('it-IT') + ' ore ' + ora.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+  const AZ = window.DEMO_MODE ? 'Bar Aurora (dati di esempio)' : 'Ceraldi Group S.r.l. — Caffetteria Ceraldi';
+  const EUR = '"€" #,##0.00;[Red]-"€" #,##0.00';
+  const B = { style: 'thin', color: { rgb: 'D8DCE3' } }, BC = { top: B, bottom: B, left: B, right: B };
+  const S = {
+    tit: { font: { bold: true, sz: 15, color: { rgb: '2B4ACB' } } },
+    sub: { font: { sz: 10, color: { rgb: '6B7280' } }, alignment: { wrapText: true, vertical: 'top' } },
+    h: { font: { bold: true, sz: 10, color: { rgb: 'FFFFFF' } }, fill: { fgColor: { rgb: '2B4ACB' } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border: BC },
+    t: { font: { sz: 10 }, alignment: { vertical: 'top', wrapText: true }, border: BC },
+    n: { font: { sz: 10 }, alignment: { vertical: 'top', horizontal: 'right' }, numFmt: EUR, border: BC },
+    i: { font: { sz: 10 }, alignment: { vertical: 'top', horizontal: 'center' }, border: BC },
+    tot: { font: { bold: true, sz: 10 }, fill: { fgColor: { rgb: 'EBEEFB' } }, alignment: { vertical: 'top', wrapText: true }, border: BC },
+    totN: { font: { bold: true, sz: 10 }, fill: { fgColor: { rgb: 'EBEEFB' } }, alignment: { horizontal: 'right' }, numFmt: EUR, border: BC },
+    big: c => ({ font: { bold: true, sz: 12, color: { rgb: c } }, alignment: { horizontal: 'right' }, numFmt: EUR, border: BC }),
+    stato: c => ({ font: { bold: true, sz: 10, color: { rgb: c } }, alignment: { vertical: 'top', wrapText: true }, border: BC }),
+  };
+  const colStato = { da_confermare: 'C27400', pagato: '2F8A5C', in_piu: '2B4ACB', parziale: 'C27400', in_corso: '6B7280', in_attesa: '6B7280', attesa_estratto: '6B7280', non_pagato: 'C0392B', manca_cedolino: 'C0392B', senza_cedolino: 'C0392B', senza_netto: 'C0392B', in_arrivo: '6B7280', escluso: '6B7280' };
+  const foglio = (righe, larghezze, stili, merges) => {
+    const ws = XLSX.utils.aoa_to_sheet(righe);
+    ws['!cols'] = larghezze.map(w => ({ wch: w }));
+    stili.forEach(([r, c, s]) => { const ref = XLSX.utils.encode_cell({ r, c }); if (!ws[ref]) ws[ref] = { t: 's', v: '' }; ws[ref].s = s; });
+    if (merges) ws['!merges'] = merges;
+    ws['!margins'] = { left: 0.3, right: 0.3, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 };
+    return ws;
+  };
+  const wb = XLSX.utils.book_new();
+  // ── 1. Riepilogo ──
+  let R = [], st = [], mg = [];
+  const nCol = 10;
+  R.push(['PARTITARIO STIPENDI — cedolini e bonifici']); st.push([0, 0, S.tit]); mg.push({ s: { r: 0, c: 0 }, e: { r: 0, c: nCol - 1 } });
+  R.push([AZ + ' · situazione al ' + oraTxt + ' · estratto conto caricato fino al ' + _rD(D.bancaFinoAl)]); st.push([1, 0, S.sub]); mg.push({ s: { r: 1, c: 0 }, e: { r: 1, c: nCol - 1 } });
+  R.push(['Come si legge: per ogni dipendente si confronta il NETTO scritto nei cedolini con i BONIFICI effettivamente ricevuti. Saldo = bonifici riconciliati (ricevuti e collegati al cedolino) − netto dei cedolini: zero = ha ricevuto esattamente il dovuto; negativo = gli spetta ancora quella cifra; positivo = ha ricevuto di più. Lo stipendio di un mese si paga dal 1° al 25 del mese successivo. Se c\'è anche solo un cedolino mancante o doppio il saldo è PROVVISORIO (vedi foglio "Anomalie").']); st.push([2, 0, S.sub]); mg.push({ s: { r: 2, c: 0 }, e: { r: 2, c: nCol - 1 } });
+  R.push([]);
+  // ── in sintesi: il saldo dare/avere alla data, in evidenza ──
+  const TT = P.reduce((t, p) => ({ dovuto: t.dovuto + p.tot.dovuto, ricevuto: t.ricevuto + p.tot.ricevuto, nonScaduto: t.nonScaduto + (p.tot.nonScaduto || 0), attesaEstratto: t.attesaEstratto + (p.tot.attesaEstratto || 0), daConfermare: t.daConfermare + (p.tot.daConfermare || 0) }), { dovuto: 0, ricevuto: 0, nonScaduto: 0, attesaEstratto: 0, daConfermare: 0 });
+  TT.dovuto = _rr2(TT.dovuto); TT.ricevuto = _rr2(TT.ricevuto); TT.saldo = _rr2(TT.ricevuto - TT.dovuto);
+  const eT = ricEsito(TT, P.length > 1), provv = P.some(p => !p.definitivo);
+  const sintesi = [
+    ['Totale netto risultante dai cedolini', TT.dovuto, 'somma dei netti in busta di tutti i mesi del periodo'],
+    ['Totale bonifici effettivamente riconciliati', TT.ricevuto, 'bonifici usciti dal conto e collegati a un cedolino'],
+    ['SALDO DARE/AVERE AL ' + _rD(todayISO()), TT.saldo, (P.length === 1 ? eT.txt : (Math.abs(TT.saldo) <= 0.5 ? 'In totale i dipendenti hanno ricevuto esattamente il dovuto' : TT.saldo < 0 ? 'In totale i dipendenti hanno ricevuto ' + _rE(-TT.saldo) + ' in meno' : 'In totale i dipendenti hanno ricevuto ' + _rE(TT.saldo) + ' in più')) + (eT.nota ? '. ' + eT.nota : '') + (provv ? ' — SALDO PROVVISORIO: ci sono anomalie bloccanti (foglio "Anomalie").' : '')],
+  ];
+  sintesi.forEach(([l, v, t], i) => {
+    const r = R.length, big = i === 2;
+    R.push([l, '', '', '', v, t]);
+    st.push([r, 0, big ? { ...S.tot, font: { bold: true, sz: 12 } } : S.tot]); for (let c = 1; c < 4; c++) st.push([r, c, S.tot]);
+    st.push([r, 4, big ? S.big(Math.abs(v) <= 0.5 ? '2F8A5C' : v < 0 ? 'C0392B' : '2B4ACB') : S.n]);
+    for (let c = 5; c < nCol; c++) st.push([r, c, big ? S.stato(provv ? 'C0392B' : '3C3C43') : S.t]);
+    mg.push({ s: { r, c: 0 }, e: { r, c: 3 } }, { s: { r, c: 5 }, e: { r, c: nCol - 1 } });
+  });
+  R.push([]);
+  const hRow = R.length;
+  R.push(['Dipendente', 'Codice fiscale', 'IBAN in anagrafica', 'Periodo analizzato', 'Cedolini presenti / mesi attesi', 'Netto dai cedolini', 'Bonifici riconciliati', 'Saldo alla data', 'Esito', 'Saldo definitivo?']);
+  for (let c = 0; c < nCol; c++) st.push([hRow, c, S.h]);
+  let tD = 0, tR = 0;
+  P.forEach(p => {
+    const r = R.length, e = ricEsito(p.tot), att = p.righe.filter(x => !['in_arrivo', 'escluso'].includes(x.stato));
+    R.push([ricNome(p.dip), p.dip.codice_fiscale || '', p.dip.iban ? _ibanB28(p.dip.iban) : '— non indicato', p.periodo ? p.periodo.dal + ' → ' + p.periodo.al : '—', att.filter(x => x.cedolino).length + ' su ' + att.length, p.tot.dovuto, p.tot.ricevuto, p.tot.saldo, e.txt + (e.nota ? '. ' + e.nota : ''), p.definitivo ? 'Sì' : 'No: ' + p.anomalie.filter(a => a.liv === 'err').length + ' anomalie bloccanti']);
+    [0, 1, 2, 3, 8].forEach(c => st.push([r, c, S.t])); st.push([r, 4, S.i]); st.push([r, 5, S.n]); st.push([r, 6, S.n]);
+    st.push([r, 7, S.big(Math.abs(p.tot.saldo) <= 0.5 ? '2F8A5C' : p.tot.saldo < 0 ? 'C0392B' : '2B4ACB')]); st.push([r, 9, S.stato(p.definitivo ? '2F8A5C' : 'C0392B')]);
+    tD += p.tot.dovuto; tR += p.tot.ricevuto;
+  });
+  if (P.length > 1) { const r = R.length; R.push(['TOTALE', '', '', '', '', _rr2(tD), _rr2(tR), _rr2(tR - tD), '', '']); for (let c = 0; c < nCol; c++) st.push([r, c, [5, 6, 7].includes(c) ? S.totN : S.tot]); }
+  const wsR = foglio(R, [24, 18, 31, 24, 14, 15, 15, 15, 52, 22], st, mg);
+  wsR['!rows'] = [{ hpt: 22 }, { hpt: 16 }, { hpt: 58 }, { hpt: 6 }, { hpt: 18 }, { hpt: 18 }, { hpt: 44 }, { hpt: 8 }, { hpt: 30 }];
+  XLSX.utils.book_append_sheet(wb, wsR, 'Riepilogo');
+  // ── 2. Partitario mese per mese ──
+  R = []; st = []; mg = [];
+  R.push(['PARTITARIO MESE PER MESE — ' + oraTxt]); st.push([0, 0, S.tit]);
+  R.push([]);
+  const conPort = P.some(p => p.coperturePort > 0);
+  const hP = ['Dipendente', 'Periodo', 'Cedolino', 'Netto cedolino', 'Bonifici (n.)', 'Data pagamento', 'Importo bonifici'].concat(conPort ? ['Coperto da eccedenze già versate'] : []).concat(['Differenza', 'Saldo progressivo', 'Stato']);
+  const nP = hP.length, cD = nP - 3;
+  R.push(hP); hP.forEach((_, c) => st.push([2, c, S.h]));
+  P.forEach(p => {
+    p.righe.forEach(x => {
+      const r = R.length;
+      R.push([ricNome(p.dip), _rPc(x.mese, x.anno), x.cedolino ? 'Presente · caricato il ' + _rD((x.cedolino.creato_il || '').slice(0, 10)) + (x.cedDoppi.length ? ' (+' + x.cedDoppi.length + ' doppio!)' : '') : (x.stato === 'escluso' ? 'Non previsto' : 'MANCANTE'),
+        x.netto != null ? x.netto : '', x.mov.length, x.mov.map(m => _rD(m.data)).join(', ') || '—', x.ricevuto].concat(conPort ? [x.coperturaPort || ''] : []).concat([x.diff != null ? x.diff : '', x.saldoProg, x.statoTxt]));
+      [0, 1, 5].forEach(c => st.push([r, c, S.t])); st.push([r, 2, x.cedolino && !x.cedDoppi.length ? S.t : S.stato(x.stato === 'escluso' ? '6B7280' : 'C0392B')]); st.push([r, 4, S.i]);
+      [3, 6].concat(conPort ? [7] : []).concat([cD, cD + 1]).forEach(c => st.push([r, c, S.n])); st.push([r, nP - 1, S.stato(colStato[x.stato] || '3C3C43')]);
+    });
+    const r = R.length;
+    R.push(['Totale ' + ricNome(p.dip), '', '', p.tot.dovuto, '', '', p.tot.ricevuto].concat(conPort ? [p.coperturePort || ''] : []).concat(['', p.tot.saldo, ricEsito(p.tot).txt]));
+    for (let c = 0; c < nP; c++) st.push([r, c, [3, 6, cD + 1].concat(conPort ? [7] : []).includes(c) ? S.totN : S.tot]);
+    R.push([]);
+  });
+  if (conPort) { R.push(['"Coperto da eccedenze già versate": parte dello stipendio pagata con soldi dati in più nei mesi precedenti (già contati nel mese in cui sono stati versati, quindi non si sommano di nuovo al saldo).']); st.push([R.length - 1, 0, S.sub]); }
+  R.push(['Differenza = importo pagato per quel mese − netto del cedolino. Saldo progressivo = bonifici − netti, sommati dall\'inizio del periodo fino a quel mese.']); st.push([R.length - 1, 0, S.sub]);
+  const wsP = foglio(R, [24, 16, 26, 14, 10, 22, 15].concat(conPort ? [16] : []).concat([13, 16, 40]), st, [{ s: { r: 0, c: 0 }, e: { r: 0, c: nP - 1 } }, { s: { r: R.length - 1, c: 0 }, e: { r: R.length - 1, c: nP - 1 } }].concat(conPort ? [{ s: { r: R.length - 2, c: 0 }, e: { r: R.length - 2, c: nP - 1 } }] : []));
+  XLSX.utils.book_append_sheet(wb, wsP, 'Partitario');
+  // ── 3. Bonifici (ogni movimento con i dati della banca) ──
+  R = []; st = [];
+  R.push(['RICONCILIAZIONI — quale bonifico paga quale cedolino']); st.push([0, 0, S.tit]);
+  R.push(['Ogni riga è un movimento reale dell\'estratto conto, con i dati come li riporta la banca, e il cedolino a cui è stato collegato. "Collegato il" è il giorno in cui è stato abbinato. In fondo: i bonifici a nome del dipendente trovati in banca ma non ancora collegati.']); st.push([1, 0, S.sub]);
+  const hB = ['Dipendente', 'Stipendio di', 'Netto cedolino', 'Data bonifico', 'Importo', 'A favore di', 'IBAN', 'Causale', 'Riferimento banca', 'Banca', 'Collegato il'];
+  R.push(hB); hB.forEach((_, c) => st.push([2, c, S.h]));
+  let nBon = 0;
+  P.forEach(p => p.righe.forEach(x => {
+    x.mov.forEach(m => {
+      const r = R.length; nBon++;
+      R.push([ricNome(p.dip), _rPc(x.mese, x.anno), x.netto != null ? x.netto : '', _rD(m.data), m.importo, m.p.beneficiario || '', m.p.iban ? _ibanB28(m.p.iban) : '', m.p.causale || '', m.p.rif || '', m.banca || '', _rD(String(m.riconciliatoIl || '').slice(0, 10))]);
+      for (let c = 0; c < 11; c++) st.push([r, c, c === 2 || c === 4 ? S.n : S.t]);
+    });
+    if (x.coperturaPort) { const r = R.length; R.push([ricNome(p.dip), _rPc(x.mese, x.anno), x.netto != null ? x.netto : '', '—', x.coperturaPort, 'Eccedenze già versate in precedenza (nessun nuovo bonifico)', '', '', '', '', '']); for (let c = 0; c < 11; c++) st.push([r, c, c === 2 || c === 4 ? S.n : S.t]); }
+  }));
+  if (!nBon) R.push(['Nessun bonifico collegato']);
+  const nonColl = P.flatMap(p => p.righe.flatMap(x => x.trovati.map(mv => ({ p, x, mv }))).concat(p.liberi.filter(mv => !p.righe.some(x => x.trovati.includes(mv))).map(mv => ({ p, x: null, mv }))));
+  const mgB = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 10 } }, { s: { r: 1, c: 0 }, e: { r: 1, c: 10 } }];
+  if (nonColl.length) {
+    R.push([]); const r0 = R.length; mgB.push({ s: { r: r0, c: 0 }, e: { r: r0, c: 10 } }); R.push(['BONIFICI A SUO NOME NON ANCORA COLLEGATI (non contati nel saldo)']); st.push([r0, 0, S.stato('C27400')]);
+    nonColl.forEach(({ p, x, mv }) => { const q = ricParse(mv.descrizione), r = R.length;
+      R.push([ricNome(p.dip), x ? 'probabilmente ' + _rP(x.mese, x.anno) : 'da stabilire', x && x.netto != null ? x.netto : '', _rD(mv.data), Math.abs(+mv.importo), q.beneficiario || '', q.iban ? _ibanB28(q.iban) : '', q.causale || '', q.rif || '', mv.banca || '', 'NON COLLEGATO']);
+      for (let c = 0; c < 11; c++) st.push([r, c, c === 2 || c === 4 ? S.n : c === 10 ? S.stato('C27400') : S.t]); });
+  }
+  const wsB = foglio(R, [24, 16, 13, 12, 13, 30, 31, 32, 24, 10, 14], st, mgB);
+  wsB['!rows'] = [{ hpt: 22 }, { hpt: 32 }];
+  XLSX.utils.book_append_sheet(wb, wsB, 'Riconciliazioni');
+  // ── 4. Anomalie ──
+  R = []; st = [];
+  const A = P.flatMap(p => p.anomalie);
+  R.push(['CONTROLLI E ANOMALIE']); st.push([0, 0, S.tit]);
+  R.push(['Controlli eseguiti il ' + oraTxt + ': cedolini mancanti o doppi, cedolini senza netto, cedolini senza pagamento, pagamenti senza cedolino, stesso bonifico su più cedolini, importo diverso dalla banca, più bonifici sullo stesso cedolino, bonifici a nome del dipendente non collegati, IBAN diverso da quello in anagrafica.']); st.push([1, 0, S.sub]);
+  const hA = ['Gravità', 'Dipendente', 'Mese', 'Problema', 'Descrizione', 'Cosa fare'];
+  R.push(hA); hA.forEach((_, c) => st.push([2, c, S.h]));
+  const gl = { err: ['Bloccante', 'C0392B'], warn: ['Da verificare', 'C27400'], info: ['Informazione', '6B7280'] };
+  A.sort((a, b) => ['err', 'warn', 'info'].indexOf(a.liv) - ['err', 'warn', 'info'].indexOf(b.liv)).forEach(a => {
+    const r = R.length;
+    R.push([gl[a.liv][0], a.dip, a.mese ? _rPc(a.mese, a.anno) : '—', a.tipo, a.testo, a.cosaFare]);
+    st.push([r, 0, S.stato(gl[a.liv][1])]); for (let c = 1; c < 6; c++) st.push([r, c, S.t]);
+  });
+  if (!A.length) { R.push(['✓ Nessuna anomalia: tutti i controlli sono stati superati.']); st.push([3, 0, S.stato('2F8A5C')]); }
+  const wsA = foglio(R, [14, 22, 16, 24, 60, 50], st, [{ s: { r: 0, c: 0 }, e: { r: 0, c: 5 } }, { s: { r: 1, c: 0 }, e: { r: 1, c: 5 } }]);
+  wsA['!rows'] = [{ hpt: 22 }, { hpt: 44 }];
+  XLSX.utils.book_append_sheet(wb, wsA, 'Anomalie');
+  const nome = P.length === 1 ? 'Partitario_' + ricNome(P[0].dip).replace(/\s+/g, '_') : 'Partitario_stipendi';
+  await ricSalvaXlsx(wb, nome + '_al_' + todayISO() + '.xlsx', {
+    Riepilogo: {}, Partitario: { x: 2, y: 3, titoli: 3 }, Riconciliazioni: { x: 1, y: 3, titoli: 3 }, Anomalie: { y: 3, titoli: 3 } }, AZ);
+  toast('✓ Partitario scaricato');
+}
+// Stampa pulita: orizzontale, adattata alla larghezza del foglio, intestazioni
+// ripetute su ogni pagina, righe d'intestazione bloccate e numero di pagina.
+// (La libreria Excel non scrive queste impostazioni: si aggiungono nel file.)
+async function ricSalvaXlsx(wb, nomeFile, cfg, piede) {
+  try {
+    const JSZip = await _caricaJSZip();
+    const zip = await JSZip.loadAsync(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }));
+    const escX = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const nomi = [];
+    for (let i = 0; i < wb.SheetNames.length; i++) {
+      const sn = wb.SheetNames[i], c = cfg[sn] || {}, path = 'xl/worksheets/sheet' + (i + 1) + '.xml';
+      let x = await zip.file(path).async('string');
+      if (!/<sheetPr/.test(x)) x = x.replace(/(<worksheet[^>]*>)/, '$1<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>');
+      if (c.x || c.y) {
+        const cell = XLSX.utils.encode_cell({ r: c.y || 0, c: c.x || 0 });
+        const pane = `<pane${c.x ? ` xSplit="${c.x}"` : ''}${c.y ? ` ySplit="${c.y}"` : ''} topLeftCell="${cell}" activePane="${c.x && c.y ? 'bottomRight' : c.y ? 'bottomLeft' : 'topRight'}" state="frozen"/>`;
+        x = x.replace(/<sheetView([^>]*)\/>/, `<sheetView$1>${pane}</sheetView>`);
+      }
+      const setup = '<pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/>'
+        + `<headerFooter><oddFooter>&amp;L${escX(piede + ' · ' + sn)}&amp;RPagina &amp;P di &amp;N</oddFooter></headerFooter>`;
+      x = /<pageMargins[^>]*\/>/.test(x) ? x.replace(/(<pageMargins[^>]*\/>)/, '$1' + setup) : x.replace('</worksheet>', setup + '</worksheet>');
+      zip.file(path, x);
+      if (c.titoli) nomi.push(`<definedName name="_xlnm.Print_Titles" localSheetId="${i}">'${sn}'!$${c.titoli}:$${c.titoli}</definedName>`);
+    }
+    if (nomi.length) {
+      let w = await zip.file('xl/workbook.xml').async('string');
+      w = /<definedNames>/.test(w) ? w.replace('<definedNames>', '<definedNames>' + nomi.join('')) : w.replace('</sheets>', '</sheets><definedNames>' + nomi.join('') + '</definedNames>');
+      zip.file('xl/workbook.xml', w);
+    }
+    const blob = await zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', compression: 'DEFLATE' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nomeFile; document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+  } catch (e) {
+    console.warn('impostazioni di stampa non applicate', e);
+    XLSX.writeFile(wb, nomeFile);
+  }
+}
+// i vecchi ingressi portano ai nuovi
+apriEsportaRiconciliazione = function () { return ricEsportaApri(); };
+qcScaricaExcel = function () { return window._qcDipId ? ricExcel([window._qcDipId]) : ricEsportaApri(); };
+if (typeof apriCnrCandidati === 'function') {
+  apriCnrCandidati = async function (idx) {
+    const r = _cnrRisultati[idx]; if (!r) return;
+    const D = RIC.D || await ricCarica();
+    const dip = D.prof.find(p => p.id === r.dipId);
+    const c = D.ced.filter(x => x.dipendente_id === r.dipId && x.mese === r.mese && x.anno === r.anno)[0] || null;
+    const body = _sheetDinamico('sh-ric-cand', 'Cerca il bonifico');
+    body.innerHTML = ricCedHtml(ricNome(dip), c, r.mese, r.anno, r.coperto ? 'già collegati ' + _rE(r.coperto) : '') + `<div class="ric-esito warn"><span class="ric-esito-ico">!</span><div><b>Mancano ${_rE(r.mancante)}</b><small>Scegli il bonifico che paga questo cedolino</small></div></div><div id="ric-cand-l"><div class="ric-carica"><div class="spinner"></div>Cerco nell'estratto conto…</div></div>`
+      + (r.saldoPortafoglio > 0.5 ? `<div class="ric-box port"><div class="ric-lbl">🐷 Portafoglio del dipendente</div><small>Ha ${_rE(r.saldoPortafoglio)} di eccedenze già versate: puoi usarne fino a ${_rE(Math.min(r.saldoPortafoglio, r.mancante))} per coprire questo mese.</small><button class="btn-sm" style="margin-top:6px" onclick="cnrUsaPortafoglio(${idx})">Usa il portafoglio</button></div>` : '');
+    openSheet('sh-ric-cand');
+    const cand = await presenzeCercaCandidatiCedolino(r.dipId, r.mese, r.anno, r.mancante);
+    RIC._cand = cand;
+    $('ric-cand-l').innerHTML = cand.length ? '<div class="ric-nota">Bonifici dal 1° del mese dopo, per 30 giorni: prima quelli con il suo nome, poi quelli con importo uguale a quanto manca.</div>' + cand.map((x, i) => `<div class="ric-card sm">${ricMovHtml(x, { ibanDip: dip && dip.iban })}<div class="ric-az-mov"><button class="btn-sm primary" onclick="ricCollegaApri('${r.dipId}',${r.mese},${r.anno},RIC._cand[${i}])">Scegli</button></div></div>`).join('')
+      : '<div class="ric-vuoto">Nessun bonifico trovato in quel periodo. Usa "Cerca manualmente" in Riconciliazione per allargare la ricerca, oppure è stato pagato in contanti.</div>';
+  };
+}
+
+/* ══════════════ 5. PROMEMORIA IN DASHBOARD: stipendi da sistemare ══════════════ */
+// Un'unica voce che riassume cosa manca (cedolini mancanti o doppi, bonifici da
+// confermare, stipendi non pagati) e porta alla situazione per dipendente.
+if (typeof calcolaPromemoria === 'function') {
+  const _calcProm28 = calcolaPromemoria;
+  calcolaPromemoria = async function () {
+    const pr = await _calcProm28.apply(this, arguments);
+    if (!ME || ME.ruolo !== 'admin') return pr;
+    try {
+      const D = RIC.D && (Date.now() - RIC.D.generato.getTime()) < 10 * 60000 ? RIC.D : await ricCarica();
+      const A = ricDipendenti(D).flatMap(d => ricPartitario(d, D).anomalie).filter(a => a.liv !== 'info');
+      if (A.length) {
+        const g = {}; A.forEach(a => { g[a.tipo] = (g[a.tipo] || 0) + 1; });
+        const err = A.some(a => a.liv === 'err');
+        pr.push({ tipo: 'stipendi_ric', urgenza: err ? 'alta' : 'media', icona: '💶', titolo: 'Stipendi: ' + A.length + (A.length === 1 ? ' cosa da sistemare' : ' cose da sistemare'),
+          testo: Object.keys(g).map(k => g[k] + ' × ' + k.toLowerCase()).join(' · '), azione: 'Apri la situazione' });
+      }
+    } catch (e) { console.warn('promemoria stipendi', e); }
+    return pr;
+  };
+}
+if (typeof apriVoceAttesa === 'function') {
+  const _apriVoce28 = apriVoceAttesa;
+  apriVoceAttesa = async function (i) {
+    const v = (typeof _vociAttesa !== 'undefined' ? _vociAttesa : [])[i];
+    if (v && v.ptipo === 'stipendi_ric') return ricPanoramica();
+    return _apriVoce28.apply(this, arguments);
+  };
+}
+if (typeof dashApriVoce === 'function') {
+  const _dashVoce28 = dashApriVoce;
+  dashApriVoce = function (i) { const v = _todoVoci[i]; if (v && v.tipo === 'stipendi_ric') return ricPanoramica(); return _dashVoce28(i); };
+}
+
+/* ══════════════ 6. AREA DIPENDENTE: sul cedolino si vede quanto è stato pagato ══════════════ */
+// Solo informazioni certe (bonifici già collegati dall'amministrazione): nessun
+// "non pagato" mostrato al dipendente finché la riconciliazione non è fatta.
+if (typeof caricaDocumentiDip === 'function') {
+  const _carDoc28 = caricaDocumentiDip;
+  caricaDocumentiDip = async function () {
+    const r = await _carDoc28.apply(this, arguments);
+    try {
+      if (!ME || ME.ruolo === 'admin') return r;
+      const [{ data: ced }, { data: bon }] = await Promise.all([
+        sb.from('presenze_documenti').select('id,mese,anno,netto_busta').eq('dipendente_id', ME.id).eq('categoria', 'busta_paga'),
+        sb.from('presenze_bonifici_stipendio').select('mese_riferimento,anno_riferimento,importo,data_movimento,fonte_copertura').eq('dipendente_id', ME.id)]);
+      (ced || []).forEach(c => {
+        const b = (bon || []).filter(x => x.mese_riferimento === c.mese && x.anno_riferimento === c.anno);
+        if (!b.length) return;
+        const btn = document.querySelector(`#docs-dip-list button[onclick*="clickDocumento('${c.id}'"]`);
+        const info = btn && btn.closest('.card') && btn.closest('.card').querySelector('div[style*="flex:1"]');
+        if (!info || info.querySelector('.ric-dip-pag')) return;
+        const tot = _rr2(b.reduce((s, x) => s + (+x.importo || 0), 0)), netto = c.netto_busta != null ? +c.netto_busta : null;
+        const date = b.filter(x => x.fonte_copertura !== 'portafoglio').map(x => _rD(x.data_movimento)).join(', ');
+        const pieno = netto == null || tot >= netto - 0.5;
+        const el = document.createElement('div'); el.className = 'ric-dip-pag' + (pieno ? '' : ' parz');
+        el.textContent = (pieno ? '💶 Pagato ' + _rE(tot) : '💶 Pagati ' + _rE(tot) + ' su ' + _rE(netto)) + (date ? ' il ' + date : '');
+        info.appendChild(el);
+      });
+    } catch (e) { console.warn('pagamenti cedolini', e); }
+    return r;
+  };
+}
 
 
 /* ── DB ────────────────────────────────────────────────
