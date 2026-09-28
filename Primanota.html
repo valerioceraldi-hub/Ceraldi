@@ -9423,6 +9423,48 @@ function renderPagDefault(){
 // alla prima — perché con tante fatture piccole possono esistere più
 // combinazioni diverse che sommano allo stesso importo per puro caso, e
 // scegliere quella sbagliata senza avvisare è un errore reale già successo.
+// Somme-esatte con backtracking + potatura, isolato dal resto della
+// funzione perché ora va rilanciato UNA VOLTA PER FORNITORE (vedi sotto) —
+// stesso identico algoritmo di prima, solo estratto per essere riusabile.
+function _sottoinsiemeEsatto(cents, targetCents, budget, maxSoluzioni){
+  const n = cents.length;
+  const suffixReach = new Array(n+1);
+  suffixReach[n] = new Set([0]);
+  for(let i=n-1;i>=0;i--){
+    const prev = suffixReach[i+1];
+    const cur = new Set(prev);
+    for(const s of prev) cur.add(s+cents[i]);
+    suffixReach[i] = cur;
+  }
+  if(!suffixReach[0].has(targetCents)) return {soluzioni:[], passi:0, incompleta:false};
+  const soluzioni = [];
+  let passi = 0;
+  function backtrack(idx, rimanente, scelti){
+    passi++;
+    if(passi > budget || soluzioni.length >= maxSoluzioni) return;
+    if(rimanente === 0 && scelti.length > 0){ soluzioni.push(scelti.slice()); return; }
+    if(idx >= n) return;
+    if(!suffixReach[idx].has(rimanente)) return; // potatura: da qui non si arriva più al target
+    scelti.push(idx);
+    backtrack(idx+1, rimanente-cents[idx], scelti);
+    scelti.pop();
+    backtrack(idx+1, rimanente, scelti);
+  }
+  backtrack(0, targetCents, []);
+  return {soluzioni:soluzioni, passi:passi, incompleta:passi>budget};
+}
+
+// FIX 28/09 (Valerio: "quando clicco Trova combinazione questa deve trovare
+// la combinazione di più fatture ma dello STESSO fornitore" — prima, per un
+// assegno, "fornitori ammessi" poteva contenere anche 30 fornitori diversi
+// (tutti quelli con pagamento predefinito "assegno") e la somma esatta
+// veniva cercata mischiandoli TUTTI in un unico mucchio: una combinazione
+// poteva benissimo unire una fattura Kimbo e una Domori solo perché la
+// somma tornava per caso — un abbinamento senza senso, anche se il totale
+// era esatto). Ora si cerca un fornitore alla volta: ogni combinazione
+// restituita appartiene SEMPRE a un solo fornitore, mai un mix. Un budget di
+// passi condiviso fra tutti i fornitori evita che uno solo, con troppe
+// fatture aperte, blocchi la ricerca per tutti gli altri.
 function _trovaCombinazioniEsatte(imp, fornitoriAmmessi, dataMovimento){
   const targetCents = Math.round(imp*100);
   const dataLimite = dataMovimento ? new Date(new Date(dataMovimento+'T12:00:00').getTime()+5*86400000) : null;
@@ -9445,72 +9487,53 @@ function _trovaCombinazioniEsatte(imp, fornitoriAmmessi, dataMovimento){
     const impF = nettoFattura(f);
     const resto = residuoFattura(f);
     return {f:f, resto:resto};
-  }).filter(function(x){ return Math.abs(x.resto)>0.01; });
+  }).filter(function(x){ return Math.abs(x.resto)>0.01 && Math.round(x.resto*100)<=targetCents+2; });
 
   if(outstanding.length < 2) return {combinazioni:[], troppiCandidati:false, candidatiUsati:outstanding.length};
-  // 20/09 (Valerio: "il tastino dice sempre che ci sono troppe fatture"):
-  // prima, sopra le 35 fatture aperte, la ricerca si arrendeva. Ora scarta
-  // quelle più grandi del movimento (non possono farne parte) e, se restano
-  // ancora troppe, tiene le 32 più vicine per data: una risposta utile invece
-  // di un messaggio di errore.
-  var _ridotto = false;
-  outstanding = outstanding.filter(function(x){ return Math.round(x.resto*100) <= targetCents + 2; });
-  if(outstanding.length > 32){
-    var _rif = dataMovimento ? new Date(dataMovimento+'T12:00:00').getTime() : Date.now();
-    outstanding = outstanding.slice().sort(function(a,b){
-      var da = Math.abs(new Date((a.f.data||'2000-01-01')+'T12:00:00').getTime()-_rif);
-      var db = Math.abs(new Date((b.f.data||'2000-01-01')+'T12:00:00').getTime()-_rif);
-      return da-db;
-    }).slice(0,32);
-    _ridotto = true;
-  }
-  if(outstanding.length < 2) return {combinazioni:[], troppiCandidati:false, candidatiUsati:outstanding.length, ridotto:_ridotto};
 
-  const cents = outstanding.map(function(x){ return Math.round(x.resto*100); });
-  const n = cents.length;
-
-  // Suffissi raggiungibili: suffixReach[i] = Set di tutte le somme ottenibili
-  // usando SOLO gli elementi da i in poi. Calcolato una volta con DP (veloce,
-  // anche per n=35), poi usato per tagliare i rami del backtracking che non
-  // potranno mai raggiungere il target — senza questo, con più di ~20 fatture
-  // il backtracking ingenuo rischia di non fare in tempo a esplorare tutto.
-  const suffixReach = new Array(n+1);
-  suffixReach[n] = new Set([0]);
-  for(let i=n-1;i>=0;i--){
-    const prev = suffixReach[i+1];
-    const cur = new Set(prev);
-    for(const s of prev) cur.add(s+cents[i]);
-    suffixReach[i] = cur;
-  }
-  if(!suffixReach[0].has(targetCents)){
-    return {combinazioni:[], troppiCandidati:false, candidatiUsati:outstanding.length};
-  }
-
-  const soluzioni = [];
-  const MAX_SOLUZIONI = 5;
-  let passi = 0;
-  const MAX_PASSI = 2000000;
-
-  function backtrack(idx, rimanente, scelti){
-    passi++;
-    if(passi > MAX_PASSI || soluzioni.length >= MAX_SOLUZIONI) return;
-    if(rimanente === 0 && scelti.length > 0){ soluzioni.push(scelti.slice()); return; }
-    if(idx >= n) return;
-    if(!suffixReach[idx].has(rimanente)) return; // potatura: da qui non si arriva più al target
-    scelti.push(idx);
-    backtrack(idx+1, rimanente-cents[idx], scelti);
-    scelti.pop();
-    backtrack(idx+1, rimanente, scelti);
-  }
-  backtrack(0, targetCents, []);
-
-  const combinazioni = soluzioni.map(function(sol){
-    return {
-      fatture: sol.map(function(i){ return outstanding[i].f; }),
-      somma: sol.reduce(function(s,i){ return s+outstanding[i].resto; }, 0)
-    };
+  // Raggruppa per fornitore (stesso testo esatto già salvato in anagrafica —
+  // le fatture di uno stesso fornitore condividono sempre la stessa dicitura,
+  // essendo lette dallo stesso campo XML/anagrafica).
+  const gruppi = {};
+  outstanding.forEach(function(x){
+    const k = (x.f.fornitore||'').trim();
+    (gruppi[k] = gruppi[k] || []).push(x);
   });
-  return {combinazioni:combinazioni, troppiCandidati:false, candidatiUsati:outstanding.length, ridotto:_ridotto, incompleta: passi>=MAX_PASSI};
+  const nomiGruppi = Object.keys(gruppi).filter(function(k){ return gruppi[k].length>=2; });
+
+  var _ridotto = false;
+  const BUDGET_TOTALE = 2000000;
+  var passiUsati = 0;
+  const combinazioni = [];
+  const MAX_SOLUZIONI = 5;
+  for(var g=0; g<nomiGruppi.length && combinazioni.length<MAX_SOLUZIONI && passiUsati<BUDGET_TOTALE; g++){
+    var items = gruppi[nomiGruppi[g]];
+    // Stesso limite di prima (32), ma per-fornitore: un fornitore con
+    // tantissime fatture aperte non deve impedire di cercare negli altri.
+    if(items.length > 32){
+      var _rif = dataMovimento ? new Date(dataMovimento+'T12:00:00').getTime() : Date.now();
+      items = items.slice().sort(function(a,b){
+        var da = Math.abs(new Date((a.f.data||'2000-01-01')+'T12:00:00').getTime()-_rif);
+        var db = Math.abs(new Date((b.f.data||'2000-01-01')+'T12:00:00').getTime()-_rif);
+        return da-db;
+      }).slice(0,32);
+      _ridotto = true;
+    }
+    var cents = items.map(function(x){ return Math.round(x.resto*100); });
+    var budgetRimasto = Math.max(10000, BUDGET_TOTALE - passiUsati);
+    var esito = _sottoinsiemeEsatto(cents, targetCents, budgetRimasto, MAX_SOLUZIONI-combinazioni.length);
+    passiUsati += esito.passi;
+    if(esito.incompleta) _ridotto = true;
+    esito.soluzioni.forEach(function(sol){
+      combinazioni.push({
+        fatture: sol.map(function(i){ return items[i].f; }),
+        somma: sol.reduce(function(s,i){ return s+items[i].resto; }, 0),
+        fornitore: nomiGruppi[g]
+      });
+    });
+  }
+
+  return {combinazioni:combinazioni, troppiCandidati:false, candidatiUsati:outstanding.length, ridotto:_ridotto, incompleta:passiUsati>=BUDGET_TOTALE};
 }
 
 // Ricerca CORRETTA (23/08, richiesta esplicita di Valerio — la vecchia
@@ -12305,6 +12328,15 @@ async function aprifatturaAllegata(docId){
   title.textContent = `📎 ${tipoLabel} — ${f.fornitore||''}`;
   sub.textContent = f.fatturaAllegataName || f.xmlGithubPath || '';
   body.innerHTML = `<div style="padding:40px;text-align:center;color:rgba(255,255,255,.5);font-size:14px">⏳ Caricamento...</div>`;
+  // FIX 28/09 (Valerio: "quando si preme vedi xml questa si nasconde in
+  // secondo piano, costringendomi ad uscire dalla schermata e perderla").
+  // Il visualizzatore ha sempre avuto z-index 19500 nel CSS, pensato per
+  // aprirsi sopra la pagina normale — ma i fogli di riconciliazione (Abbina
+  // a una fattura, Più fatture, Trova combinazione) arrivano fino a 99999,
+  // quindi "Vedi XML" apriva il visualizzatore SOTTO il foglio che lo aveva
+  // chiamato, invisibile. Qui lo si porta sempre sopra qualunque cosa sia
+  // aperta in quel momento; chiudiFattMo() lo rimette al suo livello normale.
+  mo.style.zIndex='100000';
   mo.style.display='flex';
 
   // Priorità: xmlGithubPath > fatturaAllegata > cerca su GitHub per fatture PEC
@@ -12388,6 +12420,7 @@ function _mostraFatturaDataUrl(dataUrl, f, body){
 function chiudiFattMo(){
   const mo=document.getElementById('fattMo');
   mo.style.display='none';
+  mo.style.zIndex='';
   const body=document.getElementById('fattMoBody');
   body.innerHTML='';
   _fattMoDdtId=null;
@@ -18882,6 +18915,7 @@ function apriEstrattoSalvato(dataUrl, fileName, titolo){
   title.textContent = titolo||'📄 Estratto';
   sub.textContent = fileName||'';
   body.innerHTML = '';
+  mo.style.zIndex='100000'; // stesso motivo del fix in aprifatturaAllegata
   mo.style.display = 'flex';
   _mostraFatturaDataUrl(dataUrl, {fatturaAllegataName: fileName}, body);
 }
@@ -21736,11 +21770,82 @@ function _numeriFatturaPrefissoTroncato(a, b){
   return (lungo.length-corto.length)<=2 && lungo.indexOf(corto)===0;
 }
 
+// FIX 28/09 (Valerio: "il codice deve essere talmente intelligente da capire
+// quel movimento a cosa si riferisce, se a una fattura, se a più fatture
+// ecc." e "trova combinazione così come più fatture deve trovare la
+// combinazione ma dello stesso fornitore"). Prima OGNI punto d'ingresso di
+// questo foglio (_cfRender per capire il numero fattura, _cfCercaCombinazioni
+// per gli assegni/bonifici, _cfMultiplo che non tentava affatto di
+// indovinare) si faceva la stessa domanda — "a quale fornitore si riferisce
+// questo movimento?" — ciascuno con una logica leggermente diversa, quindi
+// con risultati non sempre coerenti fra loro (es. "Trova combinazione"
+// poteva restringere a un fornitore diverso da quello che "Abbina a una
+// fattura" aveva appena mostrato come più probabile). Ora la "comprensione"
+// del movimento è UNA sola funzione, chiamata ovunque: stesso fornitore
+// indovinato, stessa sicurezza, in ogni schermata — e ogni combinazione
+// proposta da _trovaCombinazioniEsatte appartiene sempre a un solo
+// fornitore (vedi il fix lì), quindi restringere qui a UN fornitore alla
+// volta non fa mai perdere un caso reale multi-fattura.
+// Livelli di sicurezza, dal più al meno certo:
+//  1) numero fattura scritto per esteso nella descrizione del movimento
+//  2) numeri "nudi" (senza la parola "fattura" davanti, es. canoni Leasys)
+//     che combaciano con fatture di un fornitore già riconosciuto nel testo
+//  3) nome del fornitore scritto per esteso nella descrizione (bonifici/SDD)
+//  4) assegni: nessun beneficiario scritto — restano solo i fornitori con
+//     pagamento predefinito "assegno" come lista di candidati, mai un
+//     fornitore unico deciso alla cieca
+function _cfIndovinaFornitore(m){
+  var descLow = (m.descrizione||'').toLowerCase();
+  var attive = fatture.filter(function(f){ return f.tipo!=='ddt' && f.stato!=='annullata'; });
+
+  var numEstratto = _estraiNumeroFatturaDaDescrizione(m.descrizione);
+  if(numEstratto){
+    var perNumero = attive.filter(function(f){
+      return f.numero && _normalizzaNumeroFattura(f.numero)===_normalizzaNumeroFattura(numEstratto);
+    });
+    if(perNumero.length) return {fornitore:perNumero[0].fornitore, confidenza:'alta', motivo:'numero fattura "'+numEstratto+'" trovato nella descrizione', fatture:perNumero, fornitoriCandidati:null};
+  }
+
+  var numeriNudi = _estraiNumeriNudiDaDescrizione(m.descrizione);
+  var conFornRiconosciuto = attive.filter(function(f){
+    var forn=(f.fornitore||'').toLowerCase();
+    if(!forn) return false;
+    var parole=forn.split(/\s+/).filter(function(p){return p.length>3;});
+    return parole.some(function(p){return descLow.indexOf(p)>=0;});
+  });
+  if(numeriNudi.length){
+    var perNudi = conFornRiconosciuto.filter(function(f){
+      if(!f.numero) return false;
+      return numeriNudi.some(function(n){ return _numeriFatturaCombaciano(n,f.numero) || _numeriFatturaPrefissoTroncato(n,f.numero); });
+    });
+    if(perNudi.length) return {fornitore:perNudi[0].fornitore, confidenza:'alta', motivo:numeriNudi.length+' numero/i fattura riconosciuti nella descrizione', fatture:perNudi, fornitoriCandidati:null};
+  }
+
+  if(conFornRiconosciuto.length) return {fornitore:conFornRiconosciuto[0].fornitore, confidenza:'media', motivo:'nome del fornitore trovato nella descrizione', fatture:conFornRiconosciuto, fornitoriCandidati:null};
+
+  var eAssegno = /assegno/i.test(m.sottotipo||'') || /assegno/i.test(m.tipo||'');
+  if(eAssegno){
+    var db = cacheGet(KDP, {});
+    var fornAssegno = Object.keys(db).filter(function(k){
+      var v=db[k]; var pag = typeof v==='string'?v:(v&&v.pagamento); return pag==='assegno';
+    });
+    if(fornAssegno.length) return {fornitore:null, confidenza:null, motivo:'assegno: nessun beneficiario scritto sul movimento, '+fornAssegno.length+' fornitori con pagamento assegno predefinito', fatture:[], fornitoriCandidati:fornAssegno};
+  }
+
+  return {fornitore:null, confidenza:null, motivo:'nessun indizio chiaro nella descrizione del movimento', fatture:[], fornitoriCandidati:null};
+}
+
 function _cfRender(mostraTutte, filtro){
   var idx=window._cfaIdx, imp=window._cfaImp, m=window._cfaMov;
   var ov=document.getElementById('_cfOv');
   if(!ov) return;
   filtro = (filtro||'').toLowerCase().trim();
+
+  // Comprensione automatica del movimento (28/09) — calcolata una volta
+  // sola per apertura, condivisa con "Trova combinazione" e "Più fatture"
+  // così tutto il foglio ragiona sullo stesso fornitore indovinato.
+  var _guess = _cfIndovinaFornitore(m);
+  window._cfaGuess = _guess;
 
   // ── Calcola la lista ──
   // Estrae parole significative dalla descrizione movimento per matchare il fornitore
@@ -21980,6 +22085,21 @@ function _cfRender(mostraTutte, filtro){
     }
     hh+='</div>';
   }
+  // Comprensione automatica (28/09) — mostrata solo quando NON è già stato
+  // trovato un numero fattura o dei numeri nudi (quei casi hanno già una
+  // sezione verde ben più precisa sopra): qui si spiega comunque perché la
+  // lista sottostante e "Trova combinazione"/"Più fatture" partono già
+  // ristretti a un fornitore, così non sembra "magia" ma un ragionamento
+  // che l'utente può verificare.
+  if(!mostraTutte && !matchNumero.length && !matchNudi.length){
+    if(_guess.confidenza==='media'){
+      hh+='<div class="cf-guess cf-guess-blu">📍 Sembra <b>'+esc(_guess.fornitore)+'</b> — '+esc(_guess.motivo)+'. Lista e ricerca combinazioni ristrette a questo fornitore; usa "Apri tutto il registro" per cercare altrove.</div>';
+    } else if(_guess.fornitoriCandidati && _guess.fornitoriCandidati.length){
+      hh+='<div class="cf-guess cf-guess-ambra">🧾 '+esc(_guess.motivo)+' — "Trova combinazione" proverà questi fornitori uno alla volta, mai mischiati.</div>';
+    } else if(!_guess.fornitore){
+      hh+='<div class="cf-guess cf-guess-neutro">❓ '+esc(_guess.motivo)+' — scegli a mano dalla lista o usa "Apri tutto il registro".</div>';
+    }
+  }
   hh+='<div style="display:flex;gap:8px;margin-bottom:8px">';
   if(!mostraTutte){
     hh+='<button id="_cfBtnToggle" onclick="_cfRender(true,\'\')" style="flex:1;padding:8px;border:1.5px solid var(--blue);border-radius:8px;background:var(--blue-light);color:var(--blue);font-family:inherit;font-size:12px;font-weight:600;cursor:pointer">Apri tutto il registro</button>';
@@ -22057,37 +22177,28 @@ function _cfCercaCombinazioni(){
   var imp=window._cfaImp, m=window._cfaMov;
   if(!m) return;
 
-  var eAssegno = /assegno/i.test(m.sottotipo||'') || /assegno/i.test(m.tipo||'');
-  var fornitoriPrioritari = null;
-
-  if(eAssegno){
-    // Gli assegni non hanno un beneficiario scritto nel movimento. FIX
-    // (23/08, richiesta esplicita di Valerio): prima questa lista era un
-    // FILTRO ESCLUSIVO — se un fornitore non aveva "assegno" come pagamento
-    // predefinito, non veniva mai controllato, punto. Ora è solo un ORDINE
-    // DI PRIORITÀ: si prova prima con questi (più sicuro, meno fatture da
-    // combinare = meno rischio di un incrocio casuale), e se non si trova
-    // nulla si allarga a TUTTI i fornitori con fatture aperte, avvisando
-    // che il risultato è meno sicuro — non si esclude più nessuno a priori.
-    var db = cacheGet(KDP, {});
-    fornitoriPrioritari = Object.keys(db).filter(function(k){
-      var v = db[k];
-      var pag = typeof v==='string' ? v : (v&&v.pagamento);
-      return pag==='assegno';
-    });
-  } else {
-    // Bonifico/SDD: il beneficiario è scritto nella descrizione del
-    // movimento — si prova prima a restringere a quel fornitore (più
-    // sicuro), poi si allarga se non basta.
-    var descLow=(m.descrizione||'').toLowerCase();
-    var candidatiForn = fatture.filter(function(f){
-      var forn=(f.fornitore||'').toLowerCase();
-      if(!forn) return false;
-      var parole=forn.split(/\s+/).filter(function(p){return p.length>3;});
-      return parole.some(function(p){return descLow.indexOf(p)>=0;});
-    });
-    var fornitoreGuess = candidatiForn.length ? candidatiForn[0].fornitore : null;
-    fornitoriPrioritari = fornitoreGuess ? [fornitoreGuess] : [];
+  // FIX 28/09: usa la STESSA comprensione del movimento già mostrata in
+  // "Abbina a una fattura" (_cfIndovinaFornitore), invece di una logica
+  // separata che poteva restringere a un fornitore diverso da quello già
+  // indicato all'utente sullo schermo precedente. Se il foglio non è stato
+  // ancora aperto in questa sessione (chiamata diretta, caso raro), la
+  // ricalcola al volo.
+  var guess = window._cfaGuess || _cfIndovinaFornitore(m);
+  var fornitoriPrioritari = guess.fornitoriCandidati || (guess.fornitore ? [guess.fornitore] : []);
+  // Fallback prudente se la comprensione non ha trovato nulla di preciso
+  // (livello 4, assegno senza beneficiario, gestito sopra come lista di
+  // candidati; qui è il caso "nessun indizio proprio"): come prima,
+  // riprova con tutti i fornitori assegno se il movimento è un assegno.
+  if(!fornitoriPrioritari.length){
+    var eAssegno = /assegno/i.test(m.sottotipo||'') || /assegno/i.test(m.tipo||'');
+    if(eAssegno){
+      var db = cacheGet(KDP, {});
+      fornitoriPrioritari = Object.keys(db).filter(function(k){
+        var v = db[k];
+        var pag = typeof v==='string' ? v : (v&&v.pagamento);
+        return pag==='assegno';
+      });
+    }
   }
 
   toast('🧮 Ricerca combinazioni in corso…', 2000);
@@ -22313,6 +22424,18 @@ function _cfMultiplo(){
   var selezionate=[];
   var filtro='';
 
+  // FIX 28/09 (Valerio: "trova combinazione così come più fatture deve
+  // trovare la combinazione ma dello stesso fornitore") — riusa la STESSA
+  // comprensione del movimento già calcolata in _cfRender (o la ricalcola
+  // se questo picker viene aperto direttamente). Di default la lista
+  // mostra SOLO le fatture del fornitore indovinato, non tutto il
+  // registro insieme: meno rischio di selezionare per sbaglio una fattura
+  // di un altro fornitore solo perché l'importo somiglia. Un pulsante
+  // resta sempre disponibile per allargare a tutti i fornitori.
+  var _guessMulti = window._cfaGuess || _cfIndovinaFornitore(m);
+  var fornitoreDefault = _guessMulti.fornitore || null;
+  var soloFornitore = !!fornitoreDefault;
+
   // FIX 25/08 (Valerio: "se voglio aggiungere io una fattura a quelle che tu
   // hai abbinato non posso farlo ma devo partire da 0") — se l'app aveva già
   // trovato in automatico un gruppo di fatture per QUESTO STESSO movimento
@@ -22330,17 +22453,28 @@ function _cfMultiplo(){
   window._cfMatchNudiCorrente = null;
   window._cfMovCorrente = null;
 
+  window._cfMultiToggleFornitore = function(){
+    soloFornitore = !soloFornitore;
+    var btn = document.getElementById('_cfMultiToggleForn');
+    if(btn) btn.textContent = soloFornitore ? ('📍 Solo '+fornitoreDefault+' — mostra tutti i fornitori') : ('👁 Tutti i fornitori — torna a solo '+fornitoreDefault);
+    var ld=document.getElementById('_cfMultiLista');
+    if(ld) ld.innerHTML=_buildFattureLista();
+  };
+
   function _buildFattureLista(){
+    var restrittoAlFornitore = soloFornitore && fornitoreDefault && !filtro;
     var lista = fatture.filter(function(f){
       if(f.tipo==='ddt') return false;
       if(selezionate.find(function(x){return x.fatt.id===f.id;})) return false;
+      if(restrittoAlFornitore) return (f.fornitore||'').trim()===fornitoreDefault;
       if(!filtro) return true;
       var q=filtro.toLowerCase();
       return (f.fornitore||'').toLowerCase().indexOf(q)>=0
           || (f.numero||'').toLowerCase().indexOf(q)>=0
           || (f.data||'').indexOf(q)>=0;
     }).sort(function(a,b){return (b.data||'').localeCompare(a.data||'');});
-    var lh='<div style="font-size:11px;color:var(--ink3);font-weight:600;margin-bottom:6px">TUTTE LE FATTURE ('+lista.length+')</div>';
+    var titoloLista = restrittoAlFornitore ? (esc(fornitoreDefault).toUpperCase()+' ('+lista.length+')') : ('TUTTE LE FATTURE ('+lista.length+')');
+    var lh='<div style="font-size:11px;color:var(--ink3);font-weight:600;margin-bottom:6px">'+titoloLista+'</div>';
     if(!lista.length){ lh+='<div style="text-align:center;padding:16px;color:var(--ink3);font-size:13px">Nessuna fattura trovata</div>'; }
     else {
       lista.forEach(function(f){
@@ -22447,6 +22581,12 @@ function _cfMultiplo(){
     hh+='<div id="_cfMultiSel"></div>';
     // Bottone conferma
     hh+='<button id="_cfMultiBtn" onclick="_cfMultiConferma()" style="display:none;width:100%;padding:11px;border:none;border-radius:8px;background:var(--orange);color:#fff;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;margin-bottom:10px"></button>';
+    // FIX 28/09: pulsante per allargare/restringere la lista al fornitore
+    // indovinato — presente solo quando ne è stato individuato uno.
+    if(fornitoreDefault){
+      hh+='<div class="cf-guess cf-guess-blu">📍 '+esc(_guessMulti.motivo)+'</div>';
+      hh+='<button id="_cfMultiToggleForn" class="cf-toggle-forn" onclick="_cfMultiToggleFornitore()">'+(soloFornitore?('📍 Solo '+esc(fornitoreDefault)+' — mostra tutti i fornitori'):('👁 Tutti i fornitori — torna a solo '+esc(fornitoreDefault)))+'</button>';
+    }
     // Campo ricerca — NON ricostruito ad ogni update
     hh+='<input id="_cfMultiSearch" type="text" placeholder="Cerca fornitore, numero, data..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid var(--sep);border-radius:8px;font-family:inherit;font-size:13px;margin-bottom:10px;outline:none">';
     // Lista fatture — aggiornata dinamicamente
@@ -31493,6 +31633,15 @@ html[data-theme="dark"] .sf-hint{color:var(--orange)}
 .rf-ds{font-size:11.5px;color:var(--ink3);word-break:break-word;margin-top:2px;line-height:1.35}
 .rf-badge{font-size:11px;font-weight:700;color:var(--blue);margin-top:4px}
 .rf-avviso{margin:8px 16px 2px;padding:10px 12px;border-radius:14px;background:rgba(255,149,0,.08);border:1px solid rgba(255,149,0,.35);font-size:12.5px;line-height:1.45;color:var(--ink2)}
+/* FIX 28/09: banner "comprensione automatica" nel foglio "Abbina a una
+   fattura" — stessa forma arrotondata e stesso linguaggio visivo di
+   .rf-avviso (coerenza con "Trova il movimento bancario"), tre varianti di
+   colore per il livello di sicurezza della deduzione, mai testo nudo. */
+.cf-guess{border-radius:14px;padding:9px 12px;margin-bottom:10px;font-size:11.5px;line-height:1.4}
+.cf-guess-blu{background:var(--blue-light);border:1px solid var(--blue);color:var(--blue)}
+.cf-guess-ambra{background:rgba(255,149,0,.08);border:1px solid rgba(255,149,0,.35);color:#b36a00}
+.cf-guess-neutro{background:var(--surface2);border:1px solid var(--ds-hair,var(--sep));color:var(--ink3)}
+.cf-toggle-forn{width:100%;padding:8px;margin-bottom:10px;border:1.5px solid var(--blue);border-radius:10px;background:var(--blue-light);color:var(--blue);font-family:inherit;font-size:11.5px;font-weight:600;cursor:pointer}
 .psb-riga{border:1px solid var(--ds-hair,var(--sep));border-radius:14px;padding:8px;margin-bottom:8px;background:var(--surface)}
 .psb-info{font-size:11.5px;color:var(--ink3);margin:6px 2px 0;line-height:1.4}
 .psb-btns{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
