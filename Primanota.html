@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.9.5</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.9.6</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -9121,14 +9121,14 @@ async function importaMassivoXml(input){
         fattNum: '', numDdt: numDdt,
         data: data || '',
         importo,
-        pagamento: _pagDaXmlOSuggerito,
-        pagamentoOrigine: 'xml',
+        pagamento: (_regolaNuovaFattura(fornitore, numero, data)||{}).pagamento || _pagDaXmlOSuggerito,
+        pagamentoOrigine: (_regolaNuovaFattura(fornitore, numero, data) ? 'regola' : 'xml'),
         bonIban: iban || '',
         bonCaus: '', bonData: '', bonRif: '',
         assegno: '', assInt: '', assBanca: '',
         note: '',
-        stato: defForn.stato || 'da_pagare',
-        scadenza: scadRaw || '',
+        stato: (_regolaNuovaFattura(fornitore, numero, data) ? 'da_pagare' : (defForn.stato || 'da_pagare')),
+        scadenza: scadRaw || (_regolaNuovaFattura(fornitore, numero, data)||{}).scadenza || '',
         foto: null, parzPagato: 0,
         fatturaAllegata: xmlTesto,
         fatturaAllegataName: file.name,
@@ -12192,10 +12192,10 @@ async function _verificaParziale(coppie, idx){
           tipo: pec.tipo||'fattura', fornitore: pec.fornitore||'--',
           numero: pec.numero||'', fattNum: '', numDdt: pec.numDdt||'',
           data: pec.data||'', importo: parseFloat(pec.importo)||0,
-          pagamento: (getPagDefault(pec.fornitore||'')||{}).pagamento || pec.pagamento||'',
+          pagamento: (_regolaNuovaFattura(pec.fornitore, pec.numero, pec.data)||{}).pagamento || (getPagDefault(pec.fornitore||'')||{}).pagamento || pec.pagamento||'',
           bonIban: pec.bonIban||'', bonCaus: '', bonData: '', bonRif: '', assegno: '', assInt: '', assBanca: '',
-          note: pec.note||'', rate: [], stato: (getPagDefault(pec.fornitore||'')||{}).stato||'da_pagare',
-          scadenza: pec.scadenza||'', foto: null, parzPagato: 0, incompleta: [],
+          note: pec.note||'', rate: [], stato: _regolaNuovaFattura(pec.fornitore, pec.numero, pec.data) ? 'da_pagare' : ((getPagDefault(pec.fornitore||'')||{}).stato||'da_pagare'),
+          scadenza: pec.scadenza || (_regolaNuovaFattura(pec.fornitore, pec.numero, pec.data)||{}).scadenza || '', foto: null, parzPagato: 0, incompleta: [],
           xmlGithubPath: pec.xmlGithubPath||'', source: 'pec', pecId: pec.id,
           importedAt: pec.importedAt||new Date().toISOString(), ts: Date.now()
         };
@@ -19348,6 +19348,43 @@ function _riconSezHeader(key, iconaTitolo, colore){
     + '<span style="font-size:12px;color:var(--ink3);flex-shrink:0">'+(chiusa?'▶ mostra':'▼ nascondi')+'</span>'
     + '</button>';
 }
+// ══════════ REGOLE DI ADDEBITO DIRETTO (28/09) ══════════
+// Fornitori che addebitano SEMPRE con SDD in una data prevedibile: l'app la sa,
+// quindi collega l'addebito alla fattura giusta da sola (anche più fatture in
+// un unico addebito) e alle nuove fatture assegna subito metodo SDD e scadenza.
+// Verificato sui movimenti veri di banca (28/09/2026):
+//  • Ayvens / ALD Automotive: addebito il 1°-4° giorno lavorativo del SECONDO
+//    mese dopo l'emissione (fattura 12/08 → addebito 01/10). Vale per canoni
+//    (INR), noleggi (RLR) e altre voci (FIR): un solo addebito somma quelli dello stesso mese.
+//  • Arval: le fatture FC (canone) come sopra, +2 mesi; le FT (spese) il mese
+//    dopo (+1), e lo stesso addebito le somma (es. FC di gennaio + FT di febbraio = 995,81 il 2 marzo).
+//  • Leasys: +2 mesi (quattro fatture di ottobre 2025 = un addebito di 2.038,56 il 1/12).
+//    Da dicembre 2025 Leasys è pagata con bonifici, non più con SDD: la regola vale solo per gli addebiti SDD.
+var _REGOLE_ADDEBITO = [
+  {k:'ald',    nome:'Ayvens (ALD Automotive)', re:/ald\s+automotive|ayvens/i, mesi:2, ecc:[]},
+  {k:'arval',  nome:'Arval',                   re:/arval/i,                   mesi:2, ecc:[{re:/^FT/i, mesi:1}]},
+  {k:'leasys', nome:'Leasys',                  re:/leasys/i,                  mesi:2, ecc:[]}
+];
+function _regolaAddebito(testo){ var t=String(testo||''); for(var i=0;i<_REGOLE_ADDEBITO.length;i++) if(_REGOLE_ADDEBITO[i].re.test(t)) return _REGOLE_ADDEBITO[i]; return null; }
+function _mesiAddebito(r, numero){ for(var i=0;i<(r.ecc||[]).length;i++) if(r.ecc[i].re.test(String(numero||'').trim())) return r.ecc[i].mesi; return r.mesi; }
+// Data attesa dell'addebito: primo giorno lavorativo del mese "emissione + N mesi"
+function _dataAddebitoAttesa(fornitore, numero, dataFattura){
+  var r=_regolaAddebito(fornitore); if(!r || !dataFattura) return '';
+  var d=new Date(String(dataFattura).slice(0,10)+'T12:00:00'); if(isNaN(d)) return '';
+  var t=new Date(d.getFullYear(), d.getMonth()+_mesiAddebito(r, numero), 1, 12);
+  return _ceIso(_fsLavorativo(t));
+}
+// L'addebito del giorno dataMov è quello previsto per questa fattura? (tolleranza: 6 giorni)
+function _addebitoCoerente(fornitore, numero, dataFattura, dataMov){
+  var att=_dataAddebitoAttesa(fornitore, numero, dataFattura); if(!att || !dataMov) return true;
+  return Math.abs(new Date(att+'T12:00:00')-new Date(String(dataMov).slice(0,10)+'T12:00:00'))/86400000 <= 6;
+}
+// Alla registrazione di una nuova fattura di questi fornitori: metodo SDD, da pagare, scadenza attesa
+function _regolaNuovaFattura(fornitore, numero, dataFattura){
+  var r=_regolaAddebito(fornitore); if(!r || r.k==='leasys') return null; // Leasys oggi paga con bonifico
+  var sc=_dataAddebitoAttesa(fornitore, numero, dataFattura); return sc ? {pagamento:'sdd', stato:'da_pagare', scadenza:sc} : null;
+}
+
 function renderRiconciliazione(){
   var _rcMandatiMappa = null; try{ _rcMandatiMappa = (typeof _rcMappaMandati==='function') ? _rcMappaMandati() : null; }catch(e){}
   window._rcMMcache = _rcMandatiMappa;
@@ -19848,6 +19885,28 @@ function renderRiconciliazione(){
     var isBonifico = /vs\.disp\.|favore/i.test(m.descrizione) || m.sottotipo==='Bonifico';
     var isSDD      = /sdd\s+core|sdd\s+b2b/i.test(m.descrizione);
     var isPaypal   = /paypal/i.test(m.descrizione);
+    // REGOLA DI ADDEBITO (28/09, Valerio: "ayvens viene addebitata il secondo mese
+    // successivo l'emissione"): per Ayvens/ALD, Arval e Leasys l'addebito SDD paga
+    // le fatture del mese previsto. Se la somma di quelle fatture aperte torna
+    // col movimento (una o più), l'abbinamento è deciso dalla regola, non
+    // dall'importo: prima l'"importo unico entro 35 giorni" collegava la fattura di
+    // agosto all'addebito del 1° settembre (che era di luglio).
+    if(isSDD){
+      var _rgM=_regolaAddebito(m.descrizione);
+      if(_rgM){
+        var _setR=fattCandidatiMov.filter(function(x){ return !fattIdUsate.has(x.id) && x.tipo!=='nota_credito' && _regolaAddebito(x.fornitore)===_rgM && _addebitoCoerente(x.fornitore,x.numero,x.data,m.data); });
+        var _sommaR=Math.round(_setR.reduce(function(t,x){ return t+nettoFattura(x); },0)*100)/100;
+        if(_setR.length && Math.abs(_sommaR-imp)<=0.02){
+          if(_setR.length===1){ matchCerto=_setR[0]; verificato=false; }
+          else {
+            _setR.forEach(function(x){ fattIdUsate.add(x.id); });
+            daConfermare.push({mov:m, fatt:null, fatture:_setR, score:95, isCombo:true, isAssegno:false, isBonifico:false, numAssStr:'',
+              avviso:'📅 Regola di addebito '+_rgM.nome+': '+_setR.length+' fatture dei mesi previsti, somma esatta '+fmt(_sommaR)+' — '+_setR.map(function(x){ return 'N°'+(x.numero||'')+' ('+fmt(x.importo||0)+')'; }).join(', ')});
+            return;
+          }
+        }
+      }
+    }
     var numAssStr  = '';
     var mAssNum    = m.descrizione.match(/assegno\s+n\.?\s*(\d+)/i);
     if(mAssNum) numAssStr = mAssNum[1];
@@ -19893,6 +19952,7 @@ function renderRiconciliazione(){
         // come Fastweb) poteva scegliere come "unico candidato" una fattura
         // emessa DOPO il pagamento, illogico per un addebito diretto.
         if(isSDD && new Date(x.data+'T12:00:00') > new Date(m.data+'T12:00:00')) return false;
+        if(isSDD && _regolaAddebito(x.fornitore) && !_addebitoCoerente(x.fornitore,x.numero,x.data,m.data)) return false; // regola di addebito
         var dF = new Date(x.data+'T12:00:00'), dM = new Date(m.data+'T12:00:00');
         // Finestra allargata per SDD (35gg invece di 20): un addebito diretto
         // ricorrente (es. Fastweb) arriva tipicamente ~24-26gg DOPO la data della
@@ -19932,17 +19992,8 @@ function renderRiconciliazione(){
       // non ha senso abbinare in automatico una fattura non ancora emessa.
       if(isSDD && new Date(f.data+'T12:00:00') > new Date(m.data+'T12:00:00')) continue;
 
-      // REGOLA SPECIALE ALD Automotive / Arval: gli addebiti mensili (canone
-      // leasing, sempre stesso importo) si riferiscono sempre alla fattura di
-      // ESATTAMENTE due mesi prima — senza questo vincolo sarebbero ambigui,
-      // dato che più fatture consecutive hanno lo stesso importo.
-      if(isSDD && /ald automotive|arval/i.test(f.fornitore||'')){
-        var dMovv = new Date(m.data+'T12:00:00');
-        var meseTarget = dMovv.getMonth() - 2, annoTarget = dMovv.getFullYear();
-        if(meseTarget < 0){ meseTarget += 12; annoTarget -= 1; }
-        var dFatt = new Date(f.data+'T12:00:00');
-        if(!(dFatt.getFullYear()===annoTarget && dFatt.getMonth()===meseTarget)) continue;
-      }
+      // REGOLE DI ADDEBITO (Ayvens/ALD, Arval, Leasys): vedi _REGOLE_ADDEBITO
+      if(isSDD && _regolaAddebito(f.fornitore) && !_addebitoCoerente(f.fornitore, f.numero, f.data, m.data)) continue;
 
       // Match su numero assegno
       if(isAssegno && numAssStr && f.assegno){
@@ -28670,6 +28721,7 @@ function _ecCostruisci(o){
       var tp=_ecR2(St.reduce(function(t,x){ return t+Math.abs(+x.importo||0); },0)), tot=Math.abs(+f.importo||0), et=(f.fornitore||'')+' n. '+(f.numero||'—')+' del '+_ecGg(f.data);
       var prima=St.filter(function(x){ return String(x.data).slice(0,10)<String(f.data).slice(0,10); });
       if(prima.length) avvisi.push({liv:1, tipo:'Pagamento prima della fattura', testo:et+': collegato un pagamento del '+prima.map(function(x){ return _ecGg(x.data)+' ('+fmt(Math.abs(+x.importo||0))+')'; }).join(', ')+', precedente alla fattura: probabilmente è il pagamento di un\'altra fattura. Controlla il collegamento.'});
+      if(_regolaAddebito(f.fornitore)) St.forEach(function(x){ if(/sdd|addebito diretto/i.test(String(x.descrizione||''))&&!_addebitoCoerente(f.fornitore,f.numero,f.data,x.data)) avvisi.push({liv:1, tipo:'Addebito fuori dalla regola', testo:et+': addebito SDD del '+_ecGg(x.data)+', la regola del fornitore lo prevede il '+_ecGg(_dataAddebitoAttesa(f.fornitore,f.numero,f.data))+': probabile collegamento alla fattura sbagliata.'}); });
       if(f.stato==='pagata' && Math.abs(tp-tot)>0.02) avvisi.push({liv:1, tipo:'Pagamenti diversi dal totale', testo:et+': risulta pagata ma i pagamenti collegati sommano '+fmt(tp)+' su '+fmt(tot)+'. Nel giornale conto i pagamenti reali: sistema il collegamento o lo stato.'});
       if(f.stato!=='pagata' && tp>tot+0.02) avvisi.push({liv:1, tipo:'Pagato più del totale', testo:et+': pagamenti collegati '+fmt(tp)+' su '+fmt(tot)+'.'});
     });
