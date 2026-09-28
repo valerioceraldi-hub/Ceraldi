@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.9.4</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.9.5</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -15419,6 +15419,24 @@ async function _esportaXlsxPeriodo(fatt, chMese, versMese, meseLbl, filename, so
   const ivaImponibileVendite = totCorr/1.10;
   const ivaDebito = totCorr - ivaImponibileVendite;
   const ivaSaldo = ivaDebito - ivaCreditoNetta;
+  // 28/09 — il saldo del mese da solo non dice se si versa: conta il credito
+  // riportato dai mesi prima. Stesso calcolo dell'export "Per il commercialista".
+  let _liqM=null;
+  try{
+    if(_meseRifXls && typeof _ecLiquidazione==='function'){
+      if(typeof _ecCaricaFiscale==='function') await Promise.all([_ecCaricaFiscale(), window._ecCredIni?Promise.resolve():_ecCaricaCredIni()]);
+      const _a=+_meseRifXls.slice(0,4), _m=+_meseRifXls.slice(5,7);
+      const _L=_ecLiquidazione(_ecCostruisci({dal:_meseRifXls+'-01', al:_meseRifXls+'-'+String(new Date(_a,_m,0).getDate()).padStart(2,'0'), fatture:true, pagamenti:true, corrispettivi:true, banca:false}));
+      _liqM=_L[0]||null;
+    }
+  }catch(e){ _liqM=null; }
+  const _righeLiq = _liqM ? [
+    ['Riporto dal mese prima (− credito, + debito)', '', _ecR2(_liqM.rDeb-_liqM.rCred)],
+    ['SALDO PROGRESSIVO (con il riporto)', '', _liqM.prog],
+    [_liqM.versare ? 'IVA DA VERSARE F24 (cod. tributo '+_liqM.codice+') entro il '+_ecGg(_liqM.scad) : _liqM.credOut ? 'IVA A CREDITO da riportare al mese dopo' : _liqM.esito, '', _liqM.versare || _liqM.credOut || _liqM.debOut || 0],
+    ['Stato del dato: '+_liqM.stato],
+    ['Credito IVA dell\'anno precedente: '+(((window._ecCredIni||{})[_meseRifXls.slice(0,4)]!=null)?'incluso nel riporto':'NON inserito nell\'app (se c\'è, va aggiunto)')]
+  ] : [['Saldo con il riporto dei mesi precedenti: vedi Esporta → Per il commercialista → Liquidazione IVA']];
 
   if(typeof XLSX === 'undefined'){
     toast('⚠️ Libreria XLSX non disponibile');
@@ -15467,8 +15485,8 @@ async function _esportaXlsxPeriodo(fatt, chMese, versMese, meseLbl, filename, so
     ['IVA a credito (acquisti)', '', totIvaAcq],
     ['  - Note di credito', '', -totNcIva],
     ['IVA a credito netta', '', ivaCreditoNetta],
-    ['SALDO IVA MENSILE', '', ivaSaldo],
-    [ivaSaldo>=0?'IVA da versare F24'+(_meseRifXls?' (cod. tributo 60'+_meseRifXls.slice(5)+')':''):'IVA a credito da riportare', '', Math.abs(ivaSaldo)],
+    ['SALDO IVA DEL MESE (debito − credito)', '', ivaSaldo],
+    ..._righeLiq,
     [],
     ['SALDO CASSA STIMATO'],
     ['Contanti incassati', '', totCassaInc],
@@ -15575,7 +15593,8 @@ async function _esportaXlsxPeriodo(fatt, chMese, versMese, meseLbl, filename, so
   sheet6.push(['SALDO']);
   sheet6.push(['IVA a debito', '', ivaDebito]);
   sheet6.push(['IVA a credito netta', '', -ivaCreditoNetta]);
-  sheet6.push([ivaSaldo>=0?'IVA DA VERSARE':'IVA A CREDITO','', Math.abs(ivaSaldo)]);
+  sheet6.push(['Saldo del mese (debito − credito)','', ivaSaldo]);
+  _righeLiq.forEach(r=>sheet6.push(r));
   if(fattNormali.length-fattConXml.length > 0){
     sheet6.push([]);
     sheet6.push(['ATTENZIONE: '+(fattNormali.length-fattConXml.length)+' fatture senza XML escluse dal calcolo IVA']);
@@ -28160,6 +28179,7 @@ async function _fsPacchettoCrea(btn){
     var meseLbl=new Date(C.mk+'-15').toLocaleDateString('it-IT',{month:'long',year:'numeric'});
     // 1. Excel (stessa funzione di Chiusura mese)
     lbl('Creo il file Excel…');
+    await Promise.all([_ecCaricaFiscale(true), _ecCaricaCredIni()]);
     var versMese=(typeof versamenti!=='undefined'?versamenti:[]).filter(function(v){ return v.data && v.data.indexOf(C.mk)===0; });
     var xlsx=await _esportaXlsxPeriodo(C.fatt, C.ch, versMese, meseLbl, 'commercialista_'+C.mk+'.xlsx', true);
     if(xlsx) zip.file('Ceraldi_'+C.mk+'.xlsx', xlsx);
@@ -28167,6 +28187,7 @@ async function _fsPacchettoCrea(btn){
     try{
       lbl('Preparo la partita doppia…');
       await _ecCaricaCodici(); if(typeof _ceCarica==='function') await _ceCarica();
+      await Promise.all([_ecCaricaFiscale(true), _ecCaricaCredIni()]);
       var _a=+C.mk.slice(0,4), _m=+C.mk.slice(5,7);
       var G=_ecCostruisci({dal:C.mk+'-01', al:C.mk+'-'+String(new Date(_a,_m,0).getDate()).padStart(2,'0'), fatture:true, pagamenti:true, corrispettivi:true, banca:true});
       zip.file('Contabilita_partita_doppia_'+C.mk+'.xlsx', _ecXlsx(G));
@@ -28254,6 +28275,7 @@ var _EC_CONTI = [
   {k:'sumup',      c:'1825', d:'Conto SumUp'},
   {k:'pos',        c:'1540', d:'Crediti v/POS da incassare'},
   {k:'ivacred',    c:'1560', d:'IVA a credito (acquisti)'},
+  {k:'ivacredD',   c:'1561', d:'IVA a credito differita (fornitori in IVA per cassa)'},
   {k:'sospusc',    c:'1990', d:'Uscite da classificare'},
   {k:'fornitori',  c:'2400', d:'Debiti v/fornitori'},
   {k:'dipendenti', c:'2500', d:'Debiti v/dipendenti (retribuzioni)'},
@@ -28265,6 +28287,7 @@ var _EC_CONTI = [
   {k:'mutuo',      c:'2700', d:'Mutui passivi'},
   {k:'carta',      c:'2810', d:'Carta di credito Nexi c/addebiti'},
   {k:'sospent',    c:'2990', d:'Entrate da classificare'},
+  {k:'apertura',   c:'9990', d:'Saldi di apertura (debiti v/fornitori al giorno prima del periodo)'},
   // Conto economico
   {k:'c_caffe',    c:'6011', d:'Acquisti caffè'},
   {k:'c_pasticceria',c:'6012', d:'Acquisti pasticceria, forno e gelato'},
@@ -28290,7 +28313,8 @@ var _EC_CONTI = [
   {k:'c_banca',    c:'6810', d:'Oneri e commissioni bancarie'},
   {k:'c_diffcassa',c:'6830', d:'Differenze di cassa'},
   {k:'r_corr',     c:'7010', d:'Ricavi da corrispettivi'},
-  {k:'r_abbuoni',  c:'7090', d:'Abbuoni e arrotondamenti attivi'}
+  {k:'r_abbuoni',  c:'7090', d:'Abbuoni e arrotondamenti attivi'},
+  {k:'r_sconti',   c:'7095', d:'Sconti e omaggi ricevuti in fattura'}
 ];
 window._ecCodici = window._ecCodici || null;
 function _ecConto(k){
@@ -28303,6 +28327,29 @@ async function _ecCaricaCodici(){
   try{ var r=await sbFetch('ceraldi_stato_condiviso?id=eq.fatture_piano_conti&select=data'); window._ecCodici=(r&&r[0]&&r[0].data&&r[0].data.codici)||{}; }catch(e){ window._ecCodici={}; }
 }
 function _ecR2(n){ return Math.round((+n||0)*100)/100; }
+// 28/09 — dati fiscali letti dall'XML di ogni fattura (vista fatture_fiscale sul
+// database: pochi byte a fattura invece dell'XML intero) e credito IVA
+// dell'anno precedente, inserito a mano dalla dichiarazione IVA.
+window._ecFisc = window._ecFisc || null;
+async function _ecCaricaFiscale(forza){
+  if(window._ecFisc && !forza) return;
+  try{
+    var r=await sbFetchAll('fatture_fiscale?select=id,td,totale_documento,numero_xml,ced_paese,ced_piva,ced_cf,ced_nome,ritenuta,ritenuta_tipo,ritenuta_causale,cassa_previdenza,bollo,riepilogo&deleted_at=is.null&order=id.asc');
+    var m={}; (r||[]).forEach(function(x){ m[String(x.id)]=x; }); window._ecFisc=m; window._ecFiscErr='';
+  }catch(e){ window._ecFisc={}; window._ecFiscErr=String(e.message||e).slice(0,80); }
+}
+async function _ecCaricaCredIni(){
+  try{ var r=await sbFetch('ceraldi_stato_condiviso?id=eq.iva_credito_iniziale&select=data'); window._ecCredIni=(r&&r[0]&&r[0].data&&r[0].data.anni)||{}; }
+  catch(e){ window._ecCredIni=window._ecCredIni||{}; }
+}
+async function _ecSalvaCredIni(anno, testo){
+  var v=String(testo||'').trim(); var n=v===''?null:_ecR2(parseFloat(v.replace(/\./g,'').replace(',','.')));
+  if(v!=='' && isNaN(n)){ toast('Importo non valido'); return; }
+  window._ecCredIni=window._ecCredIni||{}; if(n===null) delete window._ecCredIni[anno]; else window._ecCredIni[anno]=n;
+  try{ await sbFetch('ceraldi_stato_condiviso?on_conflict=id',{method:'POST',headers:{'Prefer':'resolution=merge-duplicates,return=minimal'}, body:JSON.stringify({id:'iva_credito_iniziale', data:{anni:window._ecCredIni}, updated_at:new Date().toISOString()})}); toast('✓ Credito IVA '+anno+' salvato'); }
+  catch(e){ toast('⚠️ Salvato solo su questo dispositivo'); }
+  _ecRender();
+}
 function _ecAliq(k){ var n=parseFloat(String(k).replace(',','.')); return isNaN(n)?String(k):String(Math.round(n*100)/100); }
 function _ecContoCosto(f){
   var cat = (typeof _ceCatDi==='function') ? _ceCatDi(f.fornitore) : null;
@@ -28338,7 +28385,9 @@ function _ecCostruisci(o){
   var reg=[], avvisi=[], nReg=0;
   var inP=function(d){ d=String(d||'').slice(0,10); return d && d>=o.dal && d<=o.al; };
   var add=function(r){ // r: {data, causale, doc:{data,num}, controparte, piva, descr, righe:[{k,dare,avere,nota}] , rif}
-    var d=0,a=0; r.righe.forEach(function(x){ x.dare=_ecR2(x.dare); x.avere=_ecR2(x.avere); d+=x.dare; a+=x.avere; });
+    var d=0,a=0; r.righe.forEach(function(x){ x.dare=_ecR2(x.dare); x.avere=_ecR2(x.avere);
+      if(x.dare<0){ x.avere=_ecR2(x.avere-x.dare); x.dare=0; } if(x.avere<0){ x.dare=_ecR2(x.dare-x.avere); x.avere=0; } // es. resi vuoti che superano la merce
+      d+=x.dare; a+=x.avere; });
     var sb=_ecR2(d-a);
     if(Math.abs(sb)>=0.01){ // quadratura di sicurezza: mai un giornale sbilanciato
       if(sb>0) r.righe.push({k:'r_abbuoni', dare:0, avere:sb, nota:'quadratura'}); else r.righe.push({k:'c_bolli', dare:-sb, avere:0, nota:'quadratura'});
@@ -28351,40 +28400,113 @@ function _ecCostruisci(o){
   var F=(typeof fatture!=='undefined'?fatture:[]).filter(function(f){ return _ecFiltroFattura(f,o); });
 
   // 1. Fatture e note di credito (registro IVA acquisti)
-  var regIva=[];
+  // 28/09 — Valerio: nei Controlli risultavano "ritenute d'acconto" su fatture
+  // di S.r.l. (Top Spina, Any Lamp, Anatrella, Gelinova, GSM…). Due errori:
+  //  • i riepiloghi IVA erano presi in valore assoluto: un reso vuoti di
+  //    −15,50 € diventava +15,50 € e il documento sembrava più alto del dovuto;
+  //  • qualunque differenza "totale − da pagare" veniva chiamata ritenuta.
+  // Ora i dati fiscali si leggono dall'XML FatturaPA (vista fatture_fiscale):
+  // riepiloghi con il loro segno, Natura, esigibilità (IVA per cassa), bollo,
+  // e la ritenuta SOLO se è scritta in <DatiRitenuta>. Il resto è spiegato:
+  // omaggi/sconti, bollo, arrotondamenti, oppure segnalato come da verificare.
+  var regIva=[], ivaCassa=[], integrazioni=[];
+  var FX=window._ecFisc||{};
+  var NAT={'N1':'escluse art. 15','N2.1':'non soggette art. 7','N2.2':'non soggette','N3.1':'non imp. esportazioni','N3.2':'non imp. cessioni UE','N3.3':'non imp. San Marino','N3.4':'non imp. assimilate','N3.5':'non imp. dich. d\'intento','N3.6':'non imponibili altre','N4':'esenti','N5':'regime del margine','N6.1':'rev. charge rottami','N6.2':'rev. charge oro','N6.3':'rev. charge subappalto edile','N6.4':'rev. charge fabbricati','N6.5':'rev. charge cellulari','N6.6':'rev. charge elettronica','N6.7':'rev. charge edile','N6.8':'rev. charge energia','N6.9':'rev. charge altri','N7':'IVA assolta in altro Stato UE'};
+  var _ivaDi=function(f){ // IVA per cassa (esigibilità D) e netto da pagare di una fattura, dall'XML
+    var X=FX[String(f.id)]; if(!X||!Array.isArray(X.riepilogo)) return null;
+    var d=0; X.riepilogo.forEach(function(r){ if(r.es==='D') d+=Math.abs(+r.iva||0); });
+    return d>0.005 ? {ivaD:_ecR2(d), dovuto:_ecR2(Math.abs(+X.totale_documento||0)-Math.abs(+X.ritenuta||0))} : null;
+  };
+  var _pagDi=function(f){ // ultima data di pagamento nota
+    var St=Array.isArray(f.riconciliazioneStorico)?f.riconciliazioneStorico:[];
+    var d=St.length?St.reduce(function(m,s){ return s&&s.data&&s.data>m?s.data:m; },''):'';
+    if(!d && (f.stato==='pagata'||f.stato==='parziale')) d=f.dataPagamento||(f.riconciliazione&&f.riconciliazione.data)||'';
+    return String(d||'').slice(0,10);
+  };
   if(o.fatture){
     F.filter(function(f){ return inP(f.data); }).sort(function(a,b){ return String(a.data).localeCompare(String(b.data)); }).forEach(function(f){
-      var nc=f.tipo==='nota_credito', tot=Math.abs(+f.importo||0);
-      var costo=_ecContoCosto(f), righe=[], imp=0, iva=0, perAl={};
-      var B=f.ivaBreakdown && Object.keys(f.ivaBreakdown).length ? f.ivaBreakdown : null;
-      if(B){
-        Object.keys(B).forEach(function(k){ var v=B[k]||{}; var a=_ecAliq(k); var i1=Math.abs(+v.imponibile||0), i2=Math.abs(+v.imposta||0);
-          perAl[a]=perAl[a]||{imp:0,iva:0}; perAl[a].imp+=i1; perAl[a].iva+=i2; imp+=i1; iva+=i2; });
+      var X=FX[String(f.id)]||null, rie=(X&&Array.isArray(X.riepilogo)&&X.riepilogo.length)?X.riepilogo:null;
+      var nc=f.tipo==='nota_credito';
+      var costo=_ecContoCosto(f), righe=[], imp=0, iva=0, ivaD=0, perAl={}, fonte, tot, rit=0, bollo=0;
+      var somma=function(k, al, nat, i1, i2, es){ var p=perAl[k]=perAl[k]||{imp:0,iva:0,ivaD:0,al:al,nat:nat||''}; p.imp+=i1; p.iva+=i2; imp+=i1; iva+=i2; if(es==='D'){ p.ivaD+=i2; ivaD+=i2; } };
+      if(rie){
+        fonte='xml';
+        var s0=rie.reduce(function(t,r){ return t+(+r.imp||0)+(+r.iva||0); },0), sgn=(nc && (s0<0 || (+X.totale_documento||0)<0)) ? -1 : 1; // NC scritte in negativo da alcuni fornitori
+        rie.forEach(function(r){ var al=+r.al||0; somma(r.nat ? r.nat : _ecAliq(al), al, r.nat, sgn*(+r.imp||0), sgn*(+r.iva||0), r.es); });
+        tot=Math.abs(+X.totale_documento||0); rit=Math.abs(+X.ritenuta||0); bollo=Math.abs(+X.bollo||0);
+        if(!tot) tot=_ecR2(imp+iva);
+      } else if(f.ivaBreakdown && Object.keys(f.ivaBreakdown).length){
+        fonte='app';
+        var B=f.ivaBreakdown, s1=0; Object.keys(B).forEach(function(k){ var v=B[k]||{}; s1+=(+v.imponibile||0)+(+v.imposta||0); });
+        var sg=(nc && s1<0)?-1:1;
+        Object.keys(B).forEach(function(k){ var v=B[k]||{}; var a=_ecAliq(k); somma(a, parseFloat(a)||0, '', sg*(+v.imponibile||0), sg*(+v.imposta||0), 'I'); });
+        tot=Math.abs(+f.importo||0);
       } else {
-        imp=tot; perAl['?']={imp:tot, iva:0};
-        avvisi.push({tipo:'Senza XML', testo:(f.fornitore||'')+' n. '+(f.numero||'—')+' del '+_ecGg(f.data)+': IVA non disponibile, registrato tutto a costo ('+fmt(tot)+')'});
+        fonte='no'; tot=Math.abs(+f.importo||0); imp=tot; perAl['?']={imp:tot, iva:0, ivaD:0, al:0, nat:''};
       }
-      var diff=_ecR2(tot-imp-iva);
-      if(costo==='c_nc') avvisi.push({tipo:'Categoria', testo:(f.fornitore||'')+': fornitore senza categoria di spesa (conto '+_ecConto('c_nc').c+')', chiave:'cat|'+f.fornitore});
+      imp=_ecR2(imp); iva=_ecR2(iva); ivaD=_ecR2(ivaD);
+      var num=(X&&X.numero_xml)||f.numero||'';
+      var etich=(f.fornitore||'')+' n. '+(num||'—')+' del '+_ecGg(f.data);
+      if(fonte==='no') avvisi.push({liv:1, tipo:'Senza XML', testo:etich+': manca l\'XML della fattura, IVA non disponibile: registrato tutto a costo ('+fmt(tot)+'). Carica l\'XML per detrarre l\'IVA.'});
+      if(fonte==='app') avvisi.push({liv:2, tipo:'XML non leggibile', testo:etich+': l\'XML non è salvato nell\'app, uso l\'IVA registrata a mano ('+fmt(iva)+'). Verifica sul documento.'});
+      if(costo==='c_nc') avvisi.push({liv:2, tipo:'Categoria', testo:(f.fornitore||'')+': fornitore senza categoria di spesa (conto '+_ecConto('c_nc').c+')', chiave:'cat|'+f.fornitore});
+      var dovuto=_ecR2(tot-rit), lordo=_ecR2(imp+iva), diff=_ecR2(tot-lordo);
+      // l'importo registrato in app deve essere il netto da pagare dell'XML
+      if(fonte==='xml'){
+        if(Math.abs(Math.abs(+f.importo||0)-dovuto)>0.02) avvisi.push({liv:1, tipo:'Importo diverso dall\'XML', testo:etich+': in app '+fmt(Math.abs(+f.importo||0))+', nell\'XML da pagare '+fmt(dovuto)+(rit?' ('+fmt(tot)+' − ritenuta '+fmt(rit)+')':'')+'. Nel giornale uso l\'XML: correggi l\'importo della fattura nell\'app.'});
+        if(f.ivaBreakdown && Object.keys(f.ivaBreakdown).length){ var ivaApp=0; Object.keys(f.ivaBreakdown).forEach(function(k){ ivaApp+=(+((f.ivaBreakdown[k]||{}).imposta)||0); });
+          if(Math.abs(Math.abs(ivaApp)-Math.abs(iva))>0.02) avvisi.push({liv:1, tipo:'IVA diversa dall\'XML', testo:etich+': IVA in app '+fmt(Math.abs(ivaApp))+', nell\'XML '+fmt(Math.abs(iva))+'. Nel registro uso l\'XML: correggi la fattura nell\'app.'}); }
+      }
+      // cosa c'è nella differenza tra totale documento e riepiloghi IVA
+      var cBollo=0, cArr=0, sconto=0, nonSpieg=0;
+      if(Math.abs(diff)<1) cArr=diff;
+      else if(bollo && Math.abs(diff-bollo)<0.02) cBollo=diff;
+      else if(diff<0 && !nc){ sconto=-diff; avvisi.push({liv:3, tipo:'Omaggio o sconto in fattura', testo:etich+': totale documento '+fmt(tot)+', riepiloghi IVA '+fmt(lordo)+' → '+fmt(sconto)+' di merce in omaggio o sconto (l\'IVA è addebitata e si detrae). Registrato come sconto ricevuto (conto '+_ecConto('r_sconti').c+').'}); }
+      else { nonSpieg=Math.abs(diff); avvisi.push({liv:1, tipo:'Totale diverso dai riepiloghi IVA', testo:etich+': totale documento '+fmt(tot)+', riepiloghi IVA '+fmt(lordo)+': '+fmt(nonSpieg)+' di differenza non spiegata dall\'XML. Registrata in "Bolli e altre voci": verificare il documento.'}); }
+      // bollo addebitato come riga "N1 escluse art. 15": è un bollo, non merce
+      var bolloInRie=(bollo && !cBollo && perAl['N1'] && perAl['N1'].imp>=bollo-0.001) ? bollo : 0;
+      // ritenuta d'acconto: SOLO se dichiarata nell'XML
+      if(rit){
+        var pd=_pagDi(f), sc24='';
+        if(pd){ var dd=new Date(pd+'T12:00:00'); dd.setDate(16); dd.setMonth(dd.getMonth()+1); sc24=_ecGg(_ceIso(_fsLavorativo(dd))); }
+        var cau=X.ritenuta_causale||'';
+        avvisi.push({liv:2, tipo:'Ritenuta d\'acconto', testo:etich+': ritenuta '+fmt(rit)+' dichiarata nell\'XML ('+(X.ritenuta_tipo==='RT02'?'persona giuridica':'persona fisica')+(cau?', causale '+cau:'')+'), trattenuta sul pagamento di '+fmt(dovuto)+'. Da versare con F24'+((cau==='A'||!cau)?' codice tributo 1040':' (codice tributo secondo la causale '+cau+')')+(sc24?' entro il '+sc24+' (pagata il '+_ecGg(pd)+')':' entro il 16 del mese dopo il pagamento (non risulta ancora pagata)')+'. Poi va in Certificazione Unica e 770.'});
+      }
+      // integrazione IVA: acquisti UE / da estero e reverse charge interno
+      var rc={imp:0, k:[]}, estero=X&&X.ced_paese&&X.ced_paese!=='IT';
+      Object.keys(perAl).forEach(function(k){ if(/^N6/.test(k) || (estero && (/^N[237]/.test(k) || (!perAl[k].nat && !perAl[k].iva)))){ rc.imp+=perAl[k].imp; rc.k.push(k); } });
+      if(rc.imp>0.005){
+        var tdI=estero ? (X.ced_paese && /^(AT|BE|BG|CY|HR|DK|EE|FI|FR|DE|GR|IE|LV|LT|LU|MT|NL|PL|PT|CZ|RO|SK|SI|ES|SE|HU)$/.test(X.ced_paese) ? 'TD18 (beni da paese UE) o TD17 (servizi dall\'estero)' : 'TD17 (servizi) o TD19 (beni) da paese extra UE') : 'TD16 (reverse charge interno)';
+        integrazioni.push({data:f.data, forn:f.fornitore||'', num:num, paese:estero?X.ced_paese:'IT', imp:_ecR2(rc.imp), iva22:_ecR2(rc.imp*0.22), td:tdI});
+        avvisi.push({liv:2, tipo:'Integrazione IVA (reverse charge)', testo:etich+': '+fmt(rc.imp)+' senza IVA ('+rc.k.join(', ')+')'+(estero?' da fornitore '+X.ced_paese:' in inversione contabile')+': serve il documento integrativo '+tdI+' con l\'IVA (al 22%: '+fmt(rc.imp*0.22)+'), da registrare sia a debito sia a credito. Effetto zero sul saldo ma obbligatorio, entro il 15 del mese dopo il ricevimento.'});
+      }
+      if(ivaD) avvisi.push({liv:3, tipo:'IVA per cassa', testo:etich+': fornitore in IVA per cassa, '+fmt(ivaD)+' di IVA si detrae solo quando paghi (qui: conto '+_ecConto('ivacredD').c+', spostata nell\'IVA a credito al pagamento).'});
+      var costoImp=_ecR2(imp-bolloInRie), ivaI=_ecR2(iva-ivaD);
       if(!nc){
-        righe.push({k:costo, dare:imp, avere:0});
-        if(iva) righe.push({k:'ivacred', dare:iva, avere:0});
-        if(diff>0) righe.push({k:'c_bolli', dare:diff, avere:0, nota:'bolli/arrotondamenti'});
-        if(diff<0 && diff>-1) righe.push({k:'r_abbuoni', dare:0, avere:-diff, nota:'arrotondamenti'});
-        if(diff<=-1){ // netto a pagare più basso del lordo: ritenuta d'acconto (professionisti, affitti da privati)
-          righe.push({k:'ritenute', dare:0, avere:-diff, nota:'ritenuta d\'acconto'});
-          avvisi.push({tipo:'Ritenuta d\'acconto', testo:(f.fornitore||'')+' n. '+(f.numero||'—')+': da pagare '+fmt(tot)+' su '+fmt(imp+iva)+' → ritenuta presunta '+fmt(-diff)+' da versare con F24 (cod. 1040) entro il 16 del mese dopo il pagamento'});
-        }
-        righe.push({k:'fornitori', dare:0, avere:tot});
+        righe.push({k:costo, dare:costoImp, avere:0});
+        if(bolloInRie) righe.push({k:'c_bolli', dare:bolloInRie, avere:0, nota:'bollo addebitato in fattura'});
+        if(ivaI) righe.push({k:'ivacred', dare:ivaI, avere:0});
+        if(ivaD) righe.push({k:'ivacredD', dare:ivaD, avere:0, nota:'IVA per cassa: si detrae al pagamento'});
+        if(cBollo) righe.push({k:'c_bolli', dare:cBollo, avere:0, nota:'imposta di bollo'});
+        if(nonSpieg) righe.push({k:'c_bolli', dare:nonSpieg, avere:0, nota:'differenza da verificare'});
+        if(cArr>0) righe.push({k:'c_bolli', dare:cArr, avere:0, nota:'arrotondamento'});
+        if(cArr<0) righe.push({k:'r_abbuoni', dare:0, avere:-cArr, nota:'arrotondamento'});
+        if(sconto) righe.push({k:'r_sconti', dare:0, avere:sconto, nota:'omaggio/sconto in fattura'});
+        if(rit) righe.push({k:'ritenute', dare:0, avere:rit, nota:'ritenuta d\'acconto (dall\'XML)'});
+        righe.push({k:'fornitori', dare:0, avere:dovuto});
       } else {
-        righe.push({k:'fornitori', dare:tot, avere:0});
-        righe.push({k:costo, dare:0, avere:imp});
-        if(iva) righe.push({k:'ivacred', dare:0, avere:iva});
-        if(diff>0) righe.push({k:'r_abbuoni', dare:0, avere:diff});
-        if(diff<0) righe.push({k:'c_bolli', dare:-diff, avere:0});
+        righe.push({k:'fornitori', dare:dovuto, avere:0});
+        righe.push({k:costo, dare:0, avere:costoImp});
+        if(bolloInRie) righe.push({k:'c_bolli', dare:0, avere:bolloInRie});
+        if(ivaI) righe.push({k:'ivacred', dare:0, avere:ivaI});
+        if(ivaD) righe.push({k:'ivacredD', dare:0, avere:ivaD});
+        if(cBollo) righe.push({k:'c_bolli', dare:0, avere:cBollo});
+        if(diff>0 && !cBollo) righe.push({k:'r_abbuoni', dare:0, avere:_ecR2(diff)});
+        if(diff<0) righe.push({k:'c_bolli', dare:_ecR2(-diff), avere:0});
+        if(rit) righe.push({k:'ritenute', dare:rit, avere:0});
       }
-      add({data:f.data, causale:nc?'NC':'FA', causDescr:nc?'Nota di credito ricevuta':'Fattura di acquisto', doc:{data:f.data, num:f.numero}, controparte:f.fornitore, piva:f.piva||'', descr:(nc?'NC ':'Fatt. ')+(f.numero||'')+' '+(f.fornitore||''), righe:righe, fid:f.id});
-      regIva.push({data:f.data, num:f.numero||'', forn:f.fornitore||'', piva:f.piva||'', nc:nc, tot:nc?-tot:tot, perAl:perAl, xml:!!B, pag:f.pagamento||'', stato:f.stato||''});
+      add({data:f.data, causale:nc?'NC':'FA', causDescr:nc?'Nota di credito ricevuta':'Fattura di acquisto', doc:{data:f.data, num:num}, controparte:f.fornitore, piva:(X&&(X.ced_piva||X.ced_cf))||f.piva||'', descr:(nc?'NC ':'Fatt. ')+num+' '+(f.fornitore||''), righe:righe, fid:f.id});
+      regIva.push({id:f.id, data:f.data, num:num, forn:f.fornitore||'', piva:(X&&(X.ced_piva||X.ced_cf))||f.piva||'', paese:(X&&X.ced_paese)||'', td:(X&&X.td)||(nc?'TD04':'TD01'), nc:nc, tot:nc?-tot:tot, rit:rit, dovuto:dovuto, ivaD:ivaD, perAl:perAl, xml:fonte==='xml', fonte:fonte, pag:f.pagamento||'', stato:f.stato||''});
     });
   }
 
@@ -28398,14 +28520,41 @@ function _ecCostruisci(o){
       if(St.length){ St.forEach(function(s){ if(s && s.data) voci.push({data:s.data, imp:Math.abs(+s.importo||0), fin:_ecContoFin(f.pagamento, s.banca, s.movId), descr:s.descrizione||''}); }); }
       else if(f.stato==='pagata'){ voci.push({data:f.dataPagamento||f.data, imp:Math.abs(+f.importo||0), fin:_ecContoFin(f.pagamento), descr:''}); }
       else if(f.stato==='parziale' && f.parzPagato){ voci.push({data:f.dataPagamento||(f.riconciliazione&&f.riconciliazione.data)||f.data, imp:Math.abs(+f.parzPagato||0), fin:_ecContoFin(f.pagamento), descr:'acconto'}); }
+      var DD=_ivaDi(f); // IVA per cassa: diventa detraibile quando si paga
       voci.forEach(function(v){
         if(!inP(v.data) || !v.imp) return;
         pagati++;
+        var rr=[{k:'fornitori', dare:v.imp, avere:0},{k:v.fin, dare:0, avere:v.imp}];
+        if(DD && DD.dovuto>0){ var q=_ecR2(DD.ivaD*Math.min(1, v.imp/DD.dovuto)); if(q){ rr.push({k:'ivacred', dare:q, avere:0, nota:'IVA per cassa detraibile col pagamento'}, {k:'ivacredD', dare:0, avere:q}); ivaCassa.push({data:v.data, iva:q, forn:f.fornitore||''}); } }
         add({data:v.data, causale:'PAG', causDescr:'Pagamento fornitore', doc:{data:f.data, num:f.numero}, controparte:f.fornitore, piva:f.piva||'', descr:'Pag. fatt. '+(f.numero||'')+' '+(f.fornitore||'')+(v.descr?' · '+String(v.descr).slice(0,60):''),
-          righe:[{k:'fornitori', dare:v.imp, avere:0},{k:v.fin, dare:0, avere:v.imp}],
-          fid:f.id, pagData:v.data, pagImp:v.imp});
+          righe:rr, fid:f.id, pagData:v.data, pagImp:v.imp});
       });
     });
+  }
+  // 2-bis. Saldi di apertura dei fornitori (28/09): le fatture di prima del
+  // periodo ancora da pagare al giorno prima. Senza, i pagamenti di fatture
+  // vecchie facevano risultare "Debiti v/fornitori" in DARE (pagato più del
+  // fatturato). Stessa logica dei pagamenti qui sopra, così i conti tornano
+  // con lo scadenzario.
+  var apertura=0;
+  if(o.fatture && o.pagamenti){
+    var perForn={};
+    F.filter(function(f){ return f.tipo!=='nota_credito' && f.data && String(f.data).slice(0,10)<o.dal; }).forEach(function(f){
+      var tot=Math.abs(+f.importo||0); if(!tot) return;
+      var prima=0, St=Array.isArray(f.riconciliazioneStorico)?f.riconciliazioneStorico:[];
+      if(St.length) St.forEach(function(s){ if(s && s.data && String(s.data).slice(0,10)<o.dal) prima+=Math.abs(+s.importo||0); });
+      else if(f.stato==='pagata'){ if(String(f.dataPagamento||f.data).slice(0,10)<o.dal) prima=tot; }
+      else if(f.stato==='parziale' && f.parzPagato){ if(String(f.dataPagamento||(f.riconciliazione&&f.riconciliazione.data)||f.data).slice(0,10)<o.dal) prima=Math.abs(+f.parzPagato||0); }
+      var res=_ecR2(tot-prima); if(res<=0.005) return;
+      var k=f.fornitore||'—'; var p=perForn[k]=perForn[k]||{imp:0, n:0, piva:f.piva||''}; p.imp+=res; p.n++;
+    });
+    // note di credito di prima del periodo non ancora usate: riducono il debito di apertura
+    F.filter(function(f){ return f.tipo==='nota_credito' && f.stato!=='pagata' && f.data && String(f.data).slice(0,10)<o.dal; }).forEach(function(f){
+      var t=Math.abs(+f.importo||0); if(!t) return; var k=f.fornitore||'—'; var p=perForn[k]=perForn[k]||{imp:0, n:0, piva:f.piva||''}; p.imp-=t; p.n++; });
+    Object.keys(perForn).sort().forEach(function(k){ var p=perForn[k], v=_ecR2(p.imp); if(Math.abs(v)<0.005) return; apertura+=v;
+      add({data:o.dal, causale:'APE', causDescr:'Saldo di apertura fornitore', doc:{data:o.dal, num:''}, controparte:k, piva:p.piva, descr:'Apertura: '+p.n+(p.n===1?' documento':' documenti')+' precedenti ancora aperti al '+_ecGg(o.dal),
+        righe:[{k:'apertura', dare:v, avere:0},{k:'fornitori', dare:0, avere:v}]}); });
+    apertura=_ecR2(apertura);
   }
 
   // 3. Corrispettivi giornalieri (registro corrispettivi) — non se si filtra per fornitore
@@ -28433,6 +28582,37 @@ function _ecCostruisci(o){
     });
   }
 
+  // 3-bis. Giorni senza corrispettivi (28/09): un mese senza chiusure ha
+  // IVA a debito zero e la liquidazione risulta falsamente a credito.
+  var copertura=[];
+  if(o.corrispettivi && !fornFiltro){
+    var oggiK=_ceIso(new Date()), ieri=(function(){ var d=new Date(); d.setDate(d.getDate()-1); return _ceIso(d); })();
+    var fineC=o.al<oggiK ? o.al : ieri, giorniReg={};
+    (typeof chiusure!=='undefined'?chiusure:[]).forEach(function(c){ if(!c.deleted_at && inP(c.data)) giorniReg[String(c.data).slice(0,10)]=1; });
+    var dC=new Date(o.dal+'T12:00:00'), perM={};
+    while(_ceIso(dC)<=fineC){ var kd=_ceIso(dC), mk=kd.slice(0,7); var x=perM[mk]=perM[mk]||{mese:mk, attesi:0, registrati:0, mancanti:[]}; x.attesi++; if(giorniReg[kd]) x.registrati++; else x.mancanti.push(+kd.slice(8,10)); dC.setDate(dC.getDate()+1); }
+    Object.keys(perM).sort().forEach(function(mk){ var x=perM[mk]; copertura.push(x);
+      if(x.mancanti.length) avvisi.push({liv:1, tipo:'Corrispettivi mancanti', testo:_ceMeseLbl(mk,true)+': chiusure registrate '+x.registrati+' giorni su '+x.attesi+' — '+(x.registrati===0?'NESSUN giorno: IVA a debito del mese assente, la liquidazione non è attendibile':'mancano i giorni '+x.mancanti.join(', '))+'. Se il bar era chiuso va bene; altrimenti mancano incassi e IVA a debito.'}); });
+    var stimate=regCorr.filter(function(r){ return r.stima; }).length;
+    if(stimate) avvisi.push({liv:2, tipo:'Aliquote dei corrispettivi', testo:stimate+' giorni senza ripartizione per aliquota: IVA calcolata tutta al 10% (scorporo). Se ci sono vendite al 22% (es. asporto di alcuni prodotti) va presa la ripartizione dal registratore telematico.'});
+    if(regCorr.length && regCorr.every(function(r){ return r.al.length===1 && r.al[0].a==='10'; })) avvisi.push({liv:3, tipo:'Aliquote dei corrispettivi', testo:'Tutti i corrispettivi del periodo sono al 10%. Verificare con i dati del registratore telematico (Agenzia delle Entrate → Fatture e Corrispettivi) che non ci siano vendite al 22% o al 4%.'});
+  }
+  // 3-ter. Credito o debito IVA da riportare all'inizio del periodo
+  var riporto=null;
+  if(o._interno) riporto=o._riporto||{cred:0, deb:0, fonte:'—'};
+  else if(o.fatture && o.corrispettivi && !fornFiltro){
+    var annoR=o.dal.slice(0,4), ini=(window._ecCredIni||{})[annoR];
+    riporto={cred:(ini!=null && !isNaN(+ini))?+ini:0, deb:0, fonte:(ini!=null && !isNaN(+ini))?'inserito':'non inserito', anno:annoR, mesiPrima:0};
+    if(o.dal>annoR+'-01-01'){
+      var dPrima=new Date(o.dal+'T12:00:00'); dPrima.setDate(dPrima.getDate()-1);
+      try{
+        var G0=_ecCostruisci({dal:annoR+'-01-01', al:_ceIso(dPrima), fatture:true, pagamenti:true, corrispettivi:true, banca:false, _interno:true, _riporto:{cred:riporto.cred, deb:0}});
+        var L0=_ecLiquidazione(G0);
+        riporto.cred=L0.credFinale; riporto.deb=L0.debFinale; riporto.mesiPrima=L0.length; riporto.incompleto=L0.some(function(l){ return l.incompleto; });
+      }catch(e){}
+    }
+  }
+
   // 4. Movimenti di banca e carta NON legati a fatture
   if(o.banca && !fornFiltro){
     var movs=(typeof _crMovimentiBanca==='function'?_crMovimentiBanca():(_bancaMovimenti||[])).filter(function(m){ return inP(m.data) && !m.ignorata; });
@@ -28444,14 +28624,14 @@ function _ecCostruisci(o){
       var ds=String(m.descrizione||'').slice(0,90);
       if(m.importo>0){
         var contro = /giroconto|ceraldi group/i.test(ds) ? 'giroconti' : /finanziament/i.test(ds) ? 'finsoci' : (cat==='numia' || /sumup|numia|pos/i.test(ds)) ? 'pos' : (cat==='versamento' ? 'cassa' : 'sospent');
-        if(contro==='sospent') avvisi.push({tipo:'Entrata da classificare', testo:_ecGg(m.data)+' '+fmt(imp)+' · '+ds, imp:imp});
+        if(contro==='sospent') avvisi.push({liv:1, tipo:'Entrata da classificare', testo:_ecGg(m.data)+' '+fmt(imp)+' · '+ds, imp:imp});
         var CE={pos:['INCPOS','Accredito incassi POS'], cassa:['VERS','Versamento contanti'], giroconti:['GIRO','Giroconto tra conti propri'], finsoci:['FINS','Finanziamento dei soci'], sospent:['ENT','Entrata da classificare (rimborsi, altro)']}[contro];
         add({data:m.data, causale:CE[0], causDescr:CE[1], doc:{data:m.data,num:''}, controparte:'', piva:'', descr:ds,
           righe:[{k:fin, dare:imp, avere:0},{k:contro, dare:0, avere:imp}]});
       } else {
         var mp=/giroconto/i.test(ds) ? ['giroconti','GIRO','Giroconto tra conti propri'] : /finanziament/i.test(ds) ? ['finsoci','RFINS','Rimborso finanziamento soci'] : null;
         if(!mp) mp={stipendi:['dipendenti','STIP','Pagamento retribuzioni'], numia:['c_banca','COMM','Commissioni POS'], f24:['erario','F24','Versamento F24'], mutuo:['mutuo','MUT','Rata mutuo'], spese:['c_banca','COMM','Commissioni e spese bancarie'], nexi:['carta','CARTA','Addebito carta di credito Nexi'], paypal:['sospusc','SOSP','Addebito PayPal da classificare']}[cat];
-        if(!mp){ mp=['sospusc','SOSP','Uscita da classificare']; avvisi.push({tipo:'Uscita da classificare', testo:_ecGg(m.data)+' '+fmt(imp)+' · '+ds, imp:imp}); }
+        if(!mp){ mp=['sospusc','SOSP','Uscita da classificare']; avvisi.push({liv:1, tipo:'Uscita da classificare', testo:_ecGg(m.data)+' '+fmt(imp)+' · '+ds, imp:imp}); }
         add({data:m.data, causale:mp[1], causDescr:mp[2], doc:{data:m.data,num:''}, controparte:(typeof _rcBeneficiario==='function'?_rcBeneficiario(m.descrizione):''), piva:'', descr:ds,
           righe:[{k:mp[0], dare:imp, avere:0},{k:fin, dare:0, avere:imp}]});
       }
@@ -28459,7 +28639,7 @@ function _ecCostruisci(o){
     // spese con carta non collegate a fatture
     ((typeof _cartaMovimenti!=='undefined'?_cartaMovimenti:[])||[]).filter(function(c){ return inP(c.data) && !c.abbinata && !c.ignorata; }).forEach(function(c){
       var imp=Math.abs(parseFloat(c.importo)||0); if(!imp) return;
-      avvisi.push({tipo:'Spesa con carta senza fattura', testo:_ecGg(c.data)+' '+fmt(imp)+' · '+(c.descrizione||'')});
+      avvisi.push({liv:2, tipo:'Spesa con carta senza fattura', testo:_ecGg(c.data)+' '+fmt(imp)+' · '+(c.descrizione||'')});
       add({data:c.data, causale:'CARTA', causDescr:'Spesa con carta senza fattura', doc:{data:c.data,num:''}, controparte:c.descrizione||'', piva:'', descr:'Carta '+(c.carta_ultime4||'')+' · '+(c.descrizione||''),
         righe:[{k:'sospusc', dare:imp, avere:0},{k:'carta', dare:0, avere:imp}]});
     });
@@ -28475,20 +28655,72 @@ function _ecCostruisci(o){
   var scad=F.filter(function(f){ return f.tipo!=='nota_credito' && String(f.data||'')<=o.al && (f.stato==='da_pagare'||f.stato==='parziale'||(f.dataPagamento && f.dataPagamento>o.al)); }).map(function(f){
     var res = (f.dataPagamento && f.dataPagamento>o.al && f.stato==='pagata') ? Math.abs(+f.importo||0) : Math.max(0,Math.abs(+f.importo||0)-(f.stato==='parziale'?(+f.parzPagato||0):0));
     return {forn:f.fornitore||'', piva:f.piva||'', num:f.numero||'', data:f.data, scad:f.scadenza||'', tot:Math.abs(+f.importo||0), res:res, metodo:f.pagamento||''};
-  }).filter(function(x){ return x.res>0.005; }).sort(function(a,b){ return String(a.scad||a.data).localeCompare(String(b.scad||b.data)); });
+  }).filter(function(x){ return x.res>0.005; });
+  // 28/09 — note di credito non ancora usate: riducono il debito, come nel giornale (così scadenzario e conto fornitori coincidono)
+  F.filter(function(f){ return f.tipo==='nota_credito' && f.stato!=='pagata' && String(f.data||'')<=o.al; }).forEach(function(f){
+    var t=Math.abs(+f.importo||0); if(t>0.005) scad.push({forn:f.fornitore||'', piva:f.piva||'', num:(f.numero||'')+' (nota di credito)', data:f.data, scad:f.scadenza||f.data, tot:-t, res:-t, metodo:'da compensare'}); });
+  scad.sort(function(a,b){ return String(a.scad||a.data).localeCompare(String(b.scad||b.data)); });
+  // 28/09 — pagamenti collegati che non tornano con la fattura: fanno divergere
+  // conto fornitori e scadenzario, quindi vanno sistemati nell'app.
+  if(o.pagamenti && o.fatture){
+    F.forEach(function(f){
+      if(f.tipo==='nota_credito' || String(f.data||'')>o.al) return;
+      var St=(Array.isArray(f.riconciliazioneStorico)?f.riconciliazioneStorico:[]).filter(function(x){ return x && x.data; });
+      if(!St.length || !(inP(f.data) || St.some(function(x){ return inP(x.data); }))) return;
+      var tp=_ecR2(St.reduce(function(t,x){ return t+Math.abs(+x.importo||0); },0)), tot=Math.abs(+f.importo||0), et=(f.fornitore||'')+' n. '+(f.numero||'—')+' del '+_ecGg(f.data);
+      var prima=St.filter(function(x){ return String(x.data).slice(0,10)<String(f.data).slice(0,10); });
+      if(prima.length) avvisi.push({liv:1, tipo:'Pagamento prima della fattura', testo:et+': collegato un pagamento del '+prima.map(function(x){ return _ecGg(x.data)+' ('+fmt(Math.abs(+x.importo||0))+')'; }).join(', ')+', precedente alla fattura: probabilmente è il pagamento di un\'altra fattura. Controlla il collegamento.'});
+      if(f.stato==='pagata' && Math.abs(tp-tot)>0.02) avvisi.push({liv:1, tipo:'Pagamenti diversi dal totale', testo:et+': risulta pagata ma i pagamenti collegati sommano '+fmt(tp)+' su '+fmt(tot)+'. Nel giornale conto i pagamenti reali: sistema il collegamento o lo stato.'});
+      if(f.stato!=='pagata' && tp>tot+0.02) avvisi.push({liv:1, tipo:'Pagato più del totale', testo:et+': pagamenti collegati '+fmt(tp)+' su '+fmt(tot)+'.'});
+    });
+    var sF={}; reg.forEach(function(r){ r.righe.forEach(function(x){ if(x.k==='fornitori'){ var k=r.controparte||'—'; sF[k]=(sF[k]||0)+x.avere-x.dare; } }); });
+    Object.keys(sF).forEach(function(k){ var v=_ecR2(sF[k]); if(v<-0.5) avvisi.push({liv:2, tipo:'Fornitore con saldo a credito', testo:k+': a fine periodo risulta un credito di '+fmt(-v)+' (note di credito o pagamenti oltre il dovuto). Se la nota di credito è stata rimborsata, il rimborso va registrato; se è da compensare, resta un credito verso il fornitore.'}); });
+  }
   // raggruppa avvisi di categoria
   var visti={}; avvisi=avvisi.filter(function(a){ if(!a.chiave) return true; if(visti[a.chiave]) return false; visti[a.chiave]=1; return true; });
-  return {o:o, reg:reg, regIva:regIva, regCorr:regCorr, perConto:perConto, totD:_ecR2(totD), totA:_ecR2(totA), scad:scad, avvisi:avvisi, pagati:pagati};
+  var fiscIncompleti={}; regIva.forEach(function(r){ if(r.fonte==='no'){ var mk=String(r.data).slice(0,7); fiscIncompleti[mk]=(fiscIncompleti[mk]||0)+1; } });
+  return {o:o, reg:reg, regIva:regIva, regCorr:regCorr, perConto:perConto, totD:_ecR2(totD), totA:_ecR2(totA), scad:scad, avvisi:avvisi, pagati:pagati,
+    ivaCassa:ivaCassa, integrazioni:integrazioni, copertura:copertura, riporto:riporto, apertura:apertura, fiscIncompleti:fiscIncompleti, fiscErr:window._ecFiscErr||''};
 }
 function _ecGg(d){ d=String(d||'').slice(0,10); return d? d.slice(8,10)+'/'+d.slice(5,7)+'/'+d.slice(0,4) : ''; }
 function _ecDate(d){ d=String(d||'').slice(0,10); if(!d) return ''; var x=new Date(d+'T12:00:00'); return isNaN(x)?d:x; }
 
-// Liquidazione IVA per mese nel periodo
+// Liquidazione IVA mensile nel periodo (rifatta il 28/09 — Valerio: "non trovo
+// il saldo progressivo"). Ogni mese: IVA a debito dei corrispettivi, IVA a
+// credito degli acquisti (per data documento, NC in meno, IVA per cassa al
+// pagamento), riporto del credito o del debito sotto soglia dal mese prima,
+// saldo progressivo e importo da versare. Regole:
+//  • credito del mese → si riporta al mese dopo (non si versa nulla);
+//  • debito fino a 25,82 € → non si versa, si somma al mese dopo;
+//  • il credito dell'anno precedente vale solo se inserito (dichiarazione IVA);
+//  • un mese con corrispettivi mancanti o non ancora finito è PROVVISORIO.
 function _ecLiquidazione(G){
-  var mesi={};
-  G.regIva.forEach(function(r){ var m=String(r.data).slice(0,7); var x=mesi[m]=mesi[m]||{deb:0,cred:0}; var iva=0; Object.keys(r.perAl).forEach(function(a){ iva+=r.perAl[a].iva; }); x.cred+= r.nc ? -iva : iva; });
-  G.regCorr.forEach(function(r){ var m=String(r.data).slice(0,7); var x=mesi[m]=mesi[m]||{deb:0,cred:0}; r.al.forEach(function(a){ x.deb+=a.iva; }); });
-  return Object.keys(mesi).sort().map(function(m){ var x=mesi[m]; return {mese:m, deb:_ecR2(x.deb), cred:_ecR2(x.cred), saldo:_ecR2(x.deb-x.cred)}; });
+  var o=G.o, mesi={}, ord=[], oggiK=_ceIso(new Date());
+  var d=new Date(o.dal.slice(0,7)+'-01T12:00:00'), fineMk=o.al.slice(0,7);
+  var meseOggi=oggiK.slice(0,7);
+  while(ord.length<240){ var mk=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); if(mk>fineMk || mk>meseOggi) break; ord.push(mk); mesi[mk]={deb:0, cred:0, credCassa:0}; d.setMonth(d.getMonth()+1); }
+  G.regIva.forEach(function(r){ var x=mesi[String(r.data).slice(0,7)]; if(!x) return; var iva=0; Object.keys(r.perAl).forEach(function(a){ iva+=(r.perAl[a].iva||0)-(r.perAl[a].ivaD||0); }); x.cred+= r.nc ? -iva : iva; });
+  (G.ivaCassa||[]).forEach(function(c){ var x=mesi[String(c.data).slice(0,7)]; if(x){ x.cred+=c.iva; x.credCassa+=c.iva; } });
+  G.regCorr.forEach(function(r){ var x=mesi[String(r.data).slice(0,7)]; if(!x) return; r.al.forEach(function(a){ x.deb+=a.iva; }); });
+  var cop={}; (G.copertura||[]).forEach(function(c){ cop[c.mese]=c; });
+  var R=G.riporto||{cred:0, deb:0}, cred=_ecR2(R.cred||0), debS=_ecR2(R.deb||0), out=[];
+  ord.forEach(function(mk){
+    var x=mesi[mk], deb=_ecR2(x.deb), cr=_ecR2(x.cred), saldo=_ecR2(deb-cr);
+    var rC=cred, rD=debS, prog=_ecR2(saldo-rC+rD), versare=0, credOut=0, debOut=0, esito;
+    if(prog>25.82){ versare=prog; esito='da versare'; }
+    else if(prog>0.005){ debOut=prog; esito='debito fino a 25,82 €: non si versa, si somma al mese dopo'; }
+    else if(prog<-0.005){ credOut=-prog; esito='a credito: si riporta al mese dopo'; }
+    else esito='saldo zero';
+    var aa=+mk.slice(0,4), mm=+mk.slice(5,7), fineMese=mk+'-'+String(new Date(aa,mm,0).getDate()).padStart(2,'0');
+    var finito=fineMese<oggiK, c=cop[mk], incompleto=!!(c && c.mancanti.length);
+    var scad=''; if(versare){ var sd=new Date(aa, mm, 16, 12); scad=_ceIso(_fsLavorativo(sd)); }
+    var stato = !finito ? 'mese non ancora finito: dato parziale' : incompleto ? 'PROVVISORIA: corrispettivi mancanti in '+c.mancanti.length+(c.mancanti.length===1?' giorno':' giorni') : (G.fiscIncompleti&&G.fiscIncompleti[mk] ? 'da verificare: '+G.fiscIncompleti[mk]+' fatture senza XML' : 'completa');
+    out.push({mese:mk, deb:deb, cred:cr, credCassa:_ecR2(x.credCassa), saldo:saldo, rCred:rC, rDeb:rD, prog:prog, versare:_ecR2(versare), credOut:_ecR2(credOut), debOut:_ecR2(debOut), esito:esito,
+      codice:versare?'60'+mk.slice(5,7):'', scad:scad, stato:stato, finito:finito, incompleto:incompleto});
+    cred=_ecR2(credOut); debS=_ecR2(debOut);
+  });
+  out.credFinale=cred; out.debFinale=debS; out.riporto=R;
+  return out;
 }
 
 // ── EXCEL ──
@@ -28510,39 +28742,79 @@ function _ecXlsx(G){
   var o=G.o, per='Periodo '+_ecGg(o.dal)+' – '+_ecGg(o.al);
   // 0. Riepilogo
   var liq=_ecLiquidazione(G);
-  var r0=[['CERALDI GROUP S.R.L. — CAFFETTERIA CERALDI'],['Export contabile in partita doppia'],[per],['Generato il '+new Date().toLocaleString('it-IT')+' dall\'app Fatture'],[],
+  var nBlocc=G.avvisi.filter(function(a){ return (a.liv||1)===1; }).length;
+  var nXml=G.regIva.filter(function(r){ return r.fonte==='xml'; }).length;
+  var r0=[['CERALDI GROUP S.R.L. — CAFFETTERIA CERALDI'],['Export contabile in partita doppia'],[per],['Generato il '+new Date().toLocaleString('it-IT')+' dall\'app Fatture'],
+    [nBlocc ? 'STATO DEL FILE: DA COMPLETARE — '+nBlocc+' punti da sistemare prima di usarlo per le dichiarazioni (foglio «Controlli», gravità 1)' : 'STATO DEL FILE: nessun punto bloccante trovato dai controlli automatici'],[],
     ['Voce','Valore'],['Registrazioni nel giornale',G.reg.length],['Totale DARE',G.totD],['Totale AVERE',G.totA],['Quadratura',Math.abs(G.totD-G.totA)<0.01?'OK — dare = avere':'ATTENZIONE: differenza '+fmt(G.totD-G.totA)],
-    ['Documenti di acquisto (fatture + NC)',G.regIva.length],['Pagamenti a fornitori',G.pagati],['Giorni di corrispettivi',G.regCorr.length],['Partite aperte a fine periodo',G.scad.length],['Controlli da verificare',G.avvisi.length],[],
+    ['Documenti di acquisto (fatture + NC)',G.regIva.length],['… con dati fiscali letti dall\'XML',nXml+' su '+G.regIva.length+(G.fiscErr?' (XML non disponibili: '+G.fiscErr+')':'')],['Pagamenti a fornitori',G.pagati],['Saldi di apertura fornitori (fatture precedenti non pagate)',G.apertura||0],['Giorni di corrispettivi',G.regCorr.length],['Partite aperte a fine periodo',G.scad.length],['Controlli da verificare',G.avvisi.length+(nBlocc?' (di cui '+nBlocc+' da sistemare)':'')],[],
     ['Filtri applicati', _ecDescrFiltri(o)||'nessuno']];
-  if(liq.length){ r0.push([]); r0.push(['Liquidazione IVA','IVA a debito','IVA a credito','Saldo']); liq.forEach(function(l){ r0.push([_ceMeseLbl(l.mese,true), l.deb, l.cred, l.saldo]); }); }
-  sh('Riepilogo', r0, [44,18,18,18], [1,2,3], []);
+  if(liq.length){
+    r0.push([]); r0.push(['Liquidazione IVA mensile (dettaglio e regole nel foglio «Liquidazione IVA»)']);
+    r0.push(['Mese','IVA a debito','IVA a credito','Saldo del mese','Riporto dal mese prima (− credito, + debito)','Saldo progressivo','Da versare','Esito','Stato del dato']);
+    liq.forEach(function(l){ r0.push([_ceMeseLbl(l.mese,true), l.deb, l.cred, l.saldo, _ecR2(l.rDeb-l.rCred), l.prog, l.versare||null, l.esito, l.stato]); });
+    var R=liq.riporto||{};
+    r0.push(['Credito IVA a fine periodo', liq.credFinale||null]);
+    r0.push([R.fonte==='inserito' ? 'Credito IVA dell\'anno precedente incluso nel riporto: '+fmt(+((window._ecCredIni||{})[R.anno])||0)+' (dalla dichiarazione IVA, inserito nell\'app)'
+      : R.fonte==='non inserito' ? 'Il credito IVA dell\'anno precedente NON è incluso (non inserito nell\'app): se la dichiarazione IVA ne riporta uno, va sottratto dai debiti dei primi mesi.' : '']);
+    if(R.mesiPrima) r0.push(['Il riporto iniziale comprende i mesi da gennaio al mese prima del periodo ('+R.mesiPrima+' mesi)'+(R.incompleto?', alcuni con corrispettivi mancanti':'')+'.']);
+  }
+  sh('Riepilogo', r0, [52,16,16,16,22,16,14,40,44], [1,2,3,4,5,6], []);
   // 1. Giornale
   var g=[['N. reg.','Data reg.','Causale','Descrizione causale','Data doc.','N. doc.','Conto','Descrizione conto','DARE','AVERE','Controparte','P.IVA','Descrizione','Nota']];
   G.reg.forEach(function(r){ r.righe.forEach(function(x){ var c=_ecConto(x.k); g.push([r.n,_ecDate(r.data),r.causale,r.causDescr,_ecDate(r.doc.data),r.doc.num||'',c.c,c.d,x.dare||null,x.avere||null,r.controparte||'',r.piva||'',r.descr||'',x.nota||'']); }); });
   g.push([]); g.push(['','','','TOTALI','','','','',G.totD,G.totA]);
   sh('Libro giornale', g, [7,11,7,26,11,14,8,34,13,13,28,13,44,16], [8,9], [1,4]);
-  // 2. Registro IVA acquisti
-  var al=[]; G.regIva.forEach(function(r){ Object.keys(r.perAl).forEach(function(a){ if(al.indexOf(a)<0) al.push(a); }); });
-  al.sort(function(a,b){ return (parseFloat(b)||-1)-(parseFloat(a)||-1); });
-  var h=['Prot.','Data doc.','N. doc.','Tipo','Fornitore','P.IVA']; al.forEach(function(a){ h.push('Imponibile '+(a==='?'?'(senza XML)':a+'%')); h.push('IVA '+(a==='?'?'(n.d.)':a+'%')); }); h.push('Totale imponibile','Totale IVA','Totale documento','XML','Metodo pagamento','Stato');
-  var ri=[h], tImp={}, tIva={}, tt=[0,0,0];
-  G.regIva.forEach(function(r,i){ var s=r.nc?-1:1, row=[i+1,_ecDate(r.data),r.num,r.nc?'Nota credito':'Fattura',r.forn,r.piva], si=0, sv=0;
-    al.forEach(function(a){ var v=r.perAl[a]; var i1=v?_ecR2(s*v.imp):null, i2=v?_ecR2(s*v.iva):null; row.push(i1,i2); if(v){ si+=s*v.imp; sv+=s*v.iva; tImp[a]=(tImp[a]||0)+s*v.imp; tIva[a]=(tIva[a]||0)+s*v.iva; } });
-    row.push(_ecR2(si),_ecR2(sv),_ecR2(r.tot),r.xml?'sì':'NO',r.pag,r.stato); tt[0]+=si; tt[1]+=sv; tt[2]+=r.tot; ri.push(row); });
-  var trow=['','','','','TOTALI',''];
-  al.forEach(function(a){ trow.push(_ecR2(tImp[a]||0),_ecR2(tIva[a]||0)); }); trow.push(_ecR2(tt[0]),_ecR2(tt[1]),_ecR2(tt[2])); ri.push([]); ri.push(trow);
-  var numC=[]; for(var ci=6; ci<6+al.length*2+3; ci++) numC.push(ci);
-  sh('Registro IVA acquisti', ri, [6,11,14,11,32,13].concat(al.map(function(){ return 13; })).concat(al.map(function(){ return 11; })).concat([14,12,14,6,12,10]), numC, [1]);
+  // 2. Registro IVA acquisti (28/09: numero e P.IVA dall'XML, colonne per
+  // aliquota e per Natura, IVA per cassa, ritenuta, netto a pagare)
+  var NATL={'N1':'escluse art. 15','N2.1':'non soggette art. 7','N2.2':'non soggette','N3.1':'non imp. esportazioni','N3.2':'non imp. cessioni UE','N3.3':'non imp. San Marino','N3.4':'non imp. assimilate','N3.5':'non imp. dich. intento','N3.6':'non imponibili','N4':'esenti','N5':'regime del margine','N6.1':'reverse charge','N6.2':'reverse charge','N6.3':'reverse charge','N6.4':'reverse charge','N6.5':'reverse charge','N6.6':'reverse charge','N6.7':'reverse charge','N6.8':'reverse charge','N6.9':'reverse charge','N7':'IVA assolta in altro Stato UE'};
+  var TDN={TD01:'Fattura',TD02:'Acconto su fattura',TD03:'Acconto su parcella',TD04:'Nota di credito',TD05:'Nota di debito',TD06:'Parcella',TD24:'Fattura differita',TD25:'Fattura differita',TD26:'Cessione beni ammortizzabili',TD27:'Autoconsumo'};
+  var kAl=[], kNat=[];
+  G.regIva.forEach(function(r){ Object.keys(r.perAl).forEach(function(k){ var p=r.perAl[k]; if(p.nat || k==='?' || (k==='0')){ if(kNat.indexOf(k)<0) kNat.push(k); } else if(kAl.indexOf(k)<0) kAl.push(k); }); });
+  kAl.sort(function(a,b){ return (parseFloat(b)||0)-(parseFloat(a)||0); }); kNat.sort();
+  var h=['Prot.','Data doc.','N. doc.','Tipo doc.','Fornitore','P.IVA / C.F.','Paese'];
+  kAl.forEach(function(a){ h.push('Imponibile '+a+'%'); h.push('IVA '+a+'%'); });
+  kNat.forEach(function(k){ h.push(k==='?'?'Imponibile (senza XML, IVA n.d.)':k==='0'?'Imponibile 0% (natura non indicata)':'Imponibile '+k+' ('+(NATL[k]||'senza IVA')+')'); });
+  h.push('Totale imponibile','Totale IVA','di cui IVA per cassa','Totale documento','Ritenuta d\'acconto','Netto da pagare','Dati da','Metodo pagamento','Stato');
+  var ri=[h], tA={}, tN={}, tt={imp:0,iva:0,ivaD:0,tot:0,rit:0,dov:0};
+  G.regIva.forEach(function(r,i){ var s=r.nc?-1:1, si=0, sv=0;
+    var row=[i+1,_ecDate(r.data),r.num,(TDN[r.td]||r.td||'')+(r.td?' ('+r.td+')':''),r.forn,r.piva,r.paese||''];
+    kAl.forEach(function(a){ var v=r.perAl[a]; row.push(v?_ecR2(s*v.imp):null, v?_ecR2(s*v.iva):null); if(v){ si+=s*v.imp; sv+=s*v.iva; var t=tA[a]=tA[a]||{imp:0,iva:0}; t.imp+=s*v.imp; t.iva+=s*v.iva; } });
+    kNat.forEach(function(k){ var v=r.perAl[k]; row.push(v?_ecR2(s*v.imp):null); if(v){ si+=s*v.imp; sv+=s*v.iva; tN[k]=(tN[k]||0)+s*v.imp; } });
+    row.push(_ecR2(si),_ecR2(sv),r.ivaD?_ecR2(s*r.ivaD):null,_ecR2(r.tot),r.rit?_ecR2(s*r.rit):null,_ecR2(s*r.dovuto),r.fonte==='xml'?'XML':r.fonte==='app'?'app (XML assente)':'NO XML',r.pag,r.stato);
+    tt.imp+=si; tt.iva+=sv; tt.ivaD+=s*(r.ivaD||0); tt.tot+=r.tot; tt.rit+=s*(r.rit||0); tt.dov+=s*r.dovuto; ri.push(row); });
+  var trow=['','','','','TOTALI','',''];
+  kAl.forEach(function(a){ trow.push(_ecR2((tA[a]||{}).imp||0),_ecR2((tA[a]||{}).iva||0)); }); kNat.forEach(function(k){ trow.push(_ecR2(tN[k]||0)); });
+  trow.push(_ecR2(tt.imp),_ecR2(tt.iva),_ecR2(tt.ivaD)||null,_ecR2(tt.tot),_ecR2(tt.rit)||null,_ecR2(tt.dov)); ri.push([]); ri.push(trow);
+  ri.push([]); ri.push(['','','','','Protocollo: numerazione progressiva dei documenti del periodo esportato. Data di riferimento: data del documento (il commercialista può registrare per data di ricezione SdI).']);
+  if(G.integrazioni && G.integrazioni.length){ ri.push([]); ri.push(['','','','','DA INTEGRARE (reverse charge / acquisti dall\'estero): IVA da registrare a debito e a credito']);
+    G.integrazioni.forEach(function(x){ ri.push(['',_ecDate(x.data),x.num,x.td,x.forn,'',x.paese,x.imp,x.iva22]); }); }
+  var nNum=kAl.length*2+kNat.length+6, numC=[]; for(var ci=7; ci<7+nNum; ci++) numC.push(ci);
+  sh('Registro IVA acquisti', ri, [6,11,16,18,32,14,6].concat(kAl.map(function(){ return 13; })).concat(kAl.map(function(){ return 11; })).concat(kNat.map(function(){ return 16; })).concat([14,12,12,14,12,14,12,12,10]), numC, [1]);
   // 3. Registro corrispettivi
   var rc=[['Data','Totale corrispettivi','Imponibile 10%','IVA 10%','Imponibile 22%','IVA 22%','Imponibile 4%','IVA 4%','Contanti','POS','Non riscosso','Differenza cassa','Aliquote stimate']];
   G.regCorr.forEach(function(r){ var g2=function(a){ var x=r.al.find(function(y){ return y.a===a; }); return x?[_ecR2(x.imp),_ecR2(x.iva)]:[null,null]; };
     rc.push([_ecDate(r.data),r.tot].concat(g2('10'),g2('22'),g2('4'),[r.cassa||null,r.pos||null,r.nr||null,r.diff||null,r.stima?'sì (scorporo 10%)':''])); });
   sh('Registro corrispettivi', rc, [11,16,14,11,14,11,13,10,12,12,12,14,18], [1,2,3,4,5,6,7,8,9,10,11], [0]);
-  // 4. Liquidazione IVA
-  var lq=[['Mese','IVA a debito (corrispettivi)','IVA a credito (acquisti, al netto NC)','Saldo','Esito','Codice tributo F24']];
-  liq.forEach(function(l){ lq.push([_ceMeseLbl(l.mese,true), l.deb, l.cred, l.saldo, l.saldo>=0?'da versare entro il 16 del mese dopo':'a credito, si riporta', l.saldo>=0?'60'+l.mese.slice(5,7):'']); });
-  lq.push([]); lq.push(['Nota','Calcolo per data documento delle fatture e delle chiusure. Il commercialista può spostare le fatture ricevute in ritardo: verificare prima di versare.']);
-  sh('Liquidazione IVA', lq, [18,24,30,14,34,16], [1,2,3], []);
+  // 4. Liquidazione IVA (28/09: riporto, saldo progressivo, soglia 25,82 €, stato del dato)
+  var lq=[['Mese','IVA a debito (corrispettivi)','IVA a credito (acquisti, al netto NC)','di cui IVA per cassa detratta al pagamento','Saldo del mese (debito − credito)','Riporto dal mese prima (− credito, + debito)','Saldo progressivo','Da versare','Codice tributo F24','Scadenza','Esito','Stato del dato']];
+  liq.forEach(function(l){ lq.push([_ceMeseLbl(l.mese,true), l.deb, l.cred, l.credCassa||null, l.saldo, _ecR2(l.rDeb-l.rCred), l.prog, l.versare||null, l.codice, l.scad?_ecDate(l.scad):'', l.esito, l.stato]); });
+  var LR=liq.riporto||{};
+  lq.push([]);
+  lq.push(['Credito IVA a fine periodo', liq.credFinale||0]); if(liq.debFinale) lq.push(['Debito sotto soglia da sommare al mese dopo', liq.debFinale]);
+  lq.push([]);
+  lq.push(['Come si legge']);
+  lq.push(['Saldo del mese','IVA a debito dei corrispettivi del mese − IVA a credito delle fatture d\'acquisto con data nel mese (note di credito in meno).']);
+  lq.push(['Saldo progressivo','Saldo del mese più il riporto: se è negativo è credito e passa al mese dopo; se è positivo oltre 25,82 € si versa entro il 16 del mese dopo; fino a 25,82 € non si versa e si somma al mese dopo.']);
+  lq.push(['Credito anno precedente', LR.fonte==='inserito'?'Incluso nel riporto iniziale: '+fmt(+((window._ecCredIni||{})[LR.anno])||0)+' (inserito nell\'app, dalla dichiarazione IVA).':'NON incluso: non è stato inserito nell\'app. Se la dichiarazione IVA dell\'anno prima chiude a credito, quel credito va sottratto ai debiti dei primi mesi.']);
+  if(LR.mesiPrima) lq.push(['Mesi prima del periodo','Il riporto iniziale comprende gennaio → mese prima del periodo ('+LR.mesiPrima+' mesi), calcolato con gli stessi dati.']);
+  lq.push(['Stato del dato','«PROVVISORIA» = mancano chiusure di cassa in quel mese (IVA a debito sottostimata). «Mese non ancora finito» = dato parziale. Non versare su un mese provvisorio prima di aver completato i dati.']);
+  lq.push(['Data della detrazione','L\'IVA a credito è attribuita per data del documento. Per legge si detrae nel mese in cui si riceve la fattura (quelle ricevute entro il 15 per operazioni del mese prima possono andare nel mese prima): il commercialista può spostare alcune fatture.']);
+  lq.push(['IVA per cassa','Le fatture di fornitori in IVA per cassa (esigibilità D) sono detratte solo al pagamento, in proporzione a quanto pagato.']);
+  if(G.integrazioni && G.integrazioni.length) lq.push(['Reverse charge / estero', G.integrazioni.length+' documenti da integrare (elenco nel Registro IVA acquisti): l\'IVA va a debito e a credito per lo stesso importo, quindi il saldo non cambia, ma va registrata.']);
+  lq.push(['Acconto IVA di dicembre','Non calcolato qui: si versa entro il 27 dicembre (codice 6013), di norma l\'88% del versamento di dicembre dell\'anno prima.']);
+  lq.push(['Periodicità','Calcolo mensile (codici 6001–6012). Se l\'azienda fosse trimestrale: codici 6031–6034 e interessi dell\'1%.']);
+  sh('Liquidazione IVA', lq, [22,18,20,18,18,22,16,14,12,12,46,44], [1,2,3,4,5,6,7], [9]);
   // 5. Bilancio di verifica (rifatto il 21/09 — Valerio: "mi porta circa 2
   //    milioni, sono cifre spropositate"). Il totale NON era sbagliato: è la
   //    somma di tutte le righe del giornale, dove ogni euro passa più volte
@@ -28567,7 +28839,8 @@ function _ecXlsx(G){
     [],
     ['Come leggere il totale in fondo: è la somma di TUTTE le righe registrate, non una cifra di denaro.'],
     ['Lo stesso euro compare più volte (la fattura e poi il suo pagamento, il corrispettivo e poi l\'accredito POS in banca).'],
-    ['Non ci sono i saldi di apertura, né il costo del personale, ammortamenti e ratei: quelli li aggiunge il commercialista.'],
+    ['Saldi di apertura: ci sono solo i debiti verso fornitori (conto '+_ecConto('apertura').c+'). Mancano cassa, banca e gli altri conti, per questo cassa e banca possono risultare in negativo.'],
+    ['Non ci sono il costo del personale, gli ammortamenti e i ratei: li aggiunge il commercialista.'],
     [],
     ['Conto','Descrizione','Totale DARE','Totale AVERE','Saldo DARE','Saldo AVERE','Nota']
   ];
@@ -28580,7 +28853,11 @@ function _ecXlsx(G){
       var p=G.perConto[b.k], c=_ecConto(b.k), sd=_ecR2(p.d-p.a); td+=p.d; ta+=p.a;
       var nota = (b.k==='sospent'||b.k==='sospusc') ? 'DA CLASSIFICARE: assegna questi movimenti'
         : (b.k==='dipendenti') ? 'qui c\'è solo il pagamento: il costo del personale viene dai cedolini'
-        : (b.k==='erario'||b.k==='mutuo'||b.k==='ritenute') ? 'qui c\'è solo il versamento, non il debito che lo precede'
+        : (b.k==='erario'||b.k==='mutuo') ? 'qui c\'è solo il versamento, non il debito che lo precede'
+        : (b.k==='ritenute') ? 'ritenute trattenute ai professionisti (dall\'XML): il versamento con F24 cod. 1040 è tra gli F24 (conto '+_ecConto('erario').c+')'
+        : (b.k==='ivacredD') ? 'IVA di fornitori in IVA per cassa non ancora pagati: diventa detraibile al pagamento'
+        : (b.k==='apertura') ? 'contropartita dei debiti v/fornitori di inizio periodo (fatture precedenti non pagate)'
+        : (b.k==='cassa'||b.k==='banca'||b.k==='sumup') ? 'senza saldo di apertura: il saldo qui è solo la differenza entrate − uscite del periodo'
         : (b.k==='pos'||b.k==='giroconti') ? 'conto di transito: a fine periodo dovrebbe tendere a zero'
         : '';
       bv.push([c.c, c.d, _ecR2(p.d), _ecR2(p.a), sd>0?sd:null, sd<0?-sd:null, nota]);
@@ -28642,7 +28919,10 @@ function _ecXlsx(G){
   var sc=[['Fornitore','P.IVA','N. doc.','Data doc.','Scadenza','Totale documento','Residuo al '+_ecGg(o.al),'Metodo abituale','Giorni di ritardo']];
   var alD=new Date(o.al+'T12:00:00');
   G.scad.forEach(function(x){ var rit=x.scad?Math.round((alD-new Date(String(x.scad).slice(0,10)+'T12:00:00'))/86400000):null; sc.push([x.forn,x.piva,x.num,_ecDate(x.data),_ecDate(x.scad),x.tot,_ecR2(x.res),x.metodo,rit>0?rit:null]); });
-  sc.push([]); sc.push(['TOTALE','','','','',null,_ecR2(G.scad.reduce(function(s,x){ return s+x.res; },0))]);
+  var totSc=_ecR2(G.scad.reduce(function(s,x){ return s+x.res; },0)), pF=G.perConto['fornitori']||{d:0,a:0}, salF=_ecR2(pF.a-pF.d);
+  sc.push([]); sc.push(['TOTALE (fatture da pagare − note di credito da compensare)','','','','',null,totSc]);
+  sc.push(['Saldo del conto Debiti v/fornitori a fine periodo','','','','',null,salF]);
+  if(Math.abs(totSc-salF)>0.02) sc.push(['Differenza: pagamenti collegati che non tornano con le fatture (vedi Controlli: «Pagamenti…», «Fornitore con saldo a credito»)','','','','',null,_ecR2(salF-totSc)]);
   sh('Scadenzario fornitori', sc, [32,13,14,11,11,15,16,14,12], [5,6], [3,4]);
   // 8-bis. Riconciliazione analitica (21/09): per ogni fattura, TUTTI i
   // collegamenti — bonifici, SDD, assegni, contanti, carta, note di credito
@@ -28651,18 +28931,19 @@ function _ecXlsx(G){
     var ric=[_EC_RIC_HEAD].concat(_ecRiconcRighe(G.o,false));
     if(ric.length>1) sh('Riconciliazione', ric, [12,10,16,15,26,70,34,16,30,12,13,10,10,13,16,16], [3,10,13], [0,9]);
   }catch(e){}
-  // 9. Controlli
-  // 21/09 — prima i soldi non classificati, dal più grosso: sono quelli che
-  // fanno sballare il bilancio (nel periodo provato, un'entrata da 119.000 €).
-  var avv=G.avvisi.slice().sort(function(x,y){ return (+y.imp||0)-(+x.imp||0); });
+  // 9. Controlli (28/09: gravità — 1 da sistemare prima di usare il file,
+  // 2 adempimento da fare, 3 informativo — e ordine per gravità e importo)
+  var LIVL={1:'1 · Da sistemare',2:'2 · Adempimento / da verificare',3:'3 · Informativo'};
+  var livDi=function(a){ return a.liv || (/classificare/i.test(a.tipo)?1:(/Carta/i.test(a.tipo)?2:2)); };
+  var avv=G.avvisi.slice().sort(function(x,y){ return livDi(x)-livDi(y) || (+y.imp||0)-(+x.imp||0) || String(x.tipo).localeCompare(String(y.tipo)); });
   var nonCl=avv.filter(function(a){ return +a.imp>0; });
-  var ck=[['Tipo','Importo','Cosa verificare']];
+  var ck=[['Gravità','Tipo','Importo','Cosa verificare']];
   if(nonCl.length){
-    ck.push(['DA CLASSIFICARE', _ecR2(nonCl.reduce(function(t,a){ return t+(+a.imp||0); },0)), nonCl.length+' movimenti di banca senza una destinazione: finché restano così, il bilancio non torna']);
+    ck.push([LIVL[1],'DA CLASSIFICARE', _ecR2(nonCl.reduce(function(t,a){ return t+(+a.imp||0); },0)), nonCl.length+' movimenti di banca senza una destinazione: finché restano così, il bilancio non torna']);
   }
-  avv.forEach(function(a){ ck.push([a.tipo, (+a.imp||null), a.testo]); });
-  if(!G.avvisi.length) ck.push(['—', null, 'Nessun controllo da segnalare']);
-  sh('Controlli', ck, [28,14,110], [1], []);
+  avv.forEach(function(a){ ck.push([LIVL[livDi(a)], a.tipo, (+a.imp||null), a.testo]); });
+  if(!G.avvisi.length) ck.push(['—','—', null, 'Nessun controllo da segnalare']);
+  sh('Controlli', ck, [26,30,14,120], [2], []);
   // 10. Piano dei conti usato
   var pc=[['Codice','Descrizione','Chiave interna']]; _EC_CONTI.forEach(function(b){ var c=_ecConto(b.k); pc.push([c.c,c.d,b.k]); });
   sh('Piano dei conti', pc, [9,46,14], [], []);
@@ -28682,8 +28963,8 @@ function _ecCsvGiornale(G){
   return new Blob([_ecCsv(R)], {type:'text/csv;charset=utf-8'});
 }
 function _ecCsvIva(G){
-  var R=[['PROT','DATA_DOC','NUM_DOC','TIPO','FORNITORE','PIVA','ALIQUOTA','IMPONIBILE','IVA','TOTALE_DOC','XML']];
-  G.regIva.forEach(function(r,i){ var s=r.nc?-1:1; Object.keys(r.perAl).forEach(function(a){ var v=r.perAl[a]; R.push([String(i+1),_ecGg(r.data),r.num,r.nc?'NC':'FA',r.forn,r.piva,a==='?'?'':a,_ecR2(s*v.imp),_ecR2(s*v.iva),_ecR2(r.tot),r.xml?'S':'N']); }); });
+  var R=[['PROT','DATA_DOC','NUM_DOC','TIPO_DOC','FORNITORE','PIVA','PAESE','ALIQUOTA','NATURA','IMPONIBILE','IVA','IVA_PER_CASSA','TOTALE_DOC','RITENUTA','NETTO_A_PAGARE','FONTE']];
+  G.regIva.forEach(function(r,i){ var s=r.nc?-1:1; Object.keys(r.perAl).forEach(function(k){ var v=r.perAl[k]; R.push([String(i+1),_ecGg(r.data),r.num,r.td||(r.nc?'TD04':'TD01'),r.forn,r.piva,r.paese||'',k==='?'?'':String(v.al||0),v.nat||'',_ecR2(s*v.imp),_ecR2(s*v.iva),v.ivaD?_ecR2(s*v.ivaD):'',_ecR2(r.tot),r.rit?_ecR2(s*r.rit):'',_ecR2(s*r.dovuto),r.fonte==='xml'?'XML':r.fonte==='app'?'APP':'NO_XML']); }); });
   return new Blob([_ecCsv(R)], {type:'text/csv;charset=utf-8'});
 }
 
@@ -28706,8 +28987,9 @@ function _ecPdf(G){
   _EC_CONTI.forEach(function(b){ var p=G.perConto[b.k]; if(!p) return; var c=_ecConto(b.k), s=p.d-p.a; riga([c.c,c.d,n(p.d),n(p.a),s>0.005?n(s):'',s<-0.005?n(-s):''],L,{dx:{2:1,3:1,4:1,5:1}}); });
   riga(['','TOTALI',n(G.totD),n(G.totA),'',''],L,{b:true,dx:{2:1,3:1}});
   var liq=_ecLiquidazione(G);
-  if(liq.length){ titolo('Liquidazione IVA'); var L2=[46,40,40,40]; riga(['Mese','IVA a debito','IVA a credito','Saldo'],L2,{b:true,dx:{1:1,2:1,3:1},linea:true});
-    liq.forEach(function(l){ riga([_ceMeseLbl(l.mese,true),n(l.deb),n(l.cred),(l.saldo>=0?'da versare ':'a credito ')+n(Math.abs(l.saldo))],L2,{dx:{1:1,2:1,3:1}}); }); }
+  if(liq.length){ titolo('Liquidazione IVA'); var L2=[30,24,24,24,24,26,34]; riga(['Mese','IVA debito','IVA credito','Saldo mese','Riporto','Progressivo','Esito'],L2,{b:true,dx:{1:1,2:1,3:1,4:1,5:1},linea:true});
+    liq.forEach(function(l){ riga([_ceMeseLbl(l.mese,true),n(l.deb),n(l.cred),n(l.saldo),n(l.rDeb-l.rCred),n(l.prog),(l.versare?'versare '+n(l.versare):l.credOut?'credito '+n(l.credOut):l.esito.slice(0,22))+(l.incompleto?' *':(!l.finito?' °':''))],L2,{dx:{1:1,2:1,3:1,4:1,5:1}}); });
+    riga(['* provvisoria: mancano corrispettivi · ° mese non finito · credito anno prec.: '+((liq.riporto||{}).fonte==='inserito'?'incluso':'non inserito')],[186],{fs:7}); }
   if(G.regIva.length){ titolo('Registro IVA acquisti'); var L3=[9,18,24,63,24,20,28]; riga(['Prot.','Data','N. doc.','Fornitore','Imponibile','IVA','Totale'],L3,{b:true,dx:{4:1,5:1,6:1},linea:true});
     var ti=0,tv=0,tt=0; G.regIva.forEach(function(r,i){ var s=r.nc?-1:1, im=0, iv=0; Object.keys(r.perAl).forEach(function(a){ im+=s*r.perAl[a].imp; iv+=s*r.perAl[a].iva; }); ti+=im; tv+=iv; tt+=r.tot;
       riga([i+1,_ecGg(r.data),r.num+(r.nc?' (NC)':''),r.forn+(r.xml?'':' *'),n(im),n(iv),n(r.tot)],L3,{fs:7.5,h:4.1,dx:{4:1,5:1,6:1}}); });
@@ -28734,6 +29016,7 @@ function _ecPeriodoDefault(){ var d=new Date(); d.setDate(1); d.setMonth(d.getMo
 // {modo, mese, dal, al, fornitore, metodo, stato}.
 async function _ecApri(opz){
   await _ecCaricaCodici();
+  await Promise.all([_ecCaricaFiscale(true), _ecCaricaCredIni()]);
   if(typeof _ceCarica==='function'){ try{ await _ceCarica(); }catch(e){} }
   if(!_ecOpz){ var p=_ecPeriodoDefault(); _ecOpz={modo:'elenco', baseData:'doc', dal:p.dal, al:p.al, per:'mese', perVal:p.dal.slice(0,7), fatture:true, pagamenti:true, corrispettivi:true, banca:true, fornitore:'', categoria:'', stato:'', metodo:'', aliquota:'', xml:'', tipoDoc:'', bancaF:''}; }
   if(typeof opz==='string') opz={mese:opz};
@@ -28816,6 +29099,9 @@ function _ecRender(){
     h+='<div class="sf-lbl">Il periodo si riferisce alla</div><div class="sf-chips">'+[['doc','Data della fattura'],['pag','Data di pagamento'],['scad','Scadenza']].map(function(x){ return '<button class="chip'+(o.baseData===x[0]?' active':'')+'" onclick="_ecSet(\'baseData\',\''+x[0]+'\')">'+x[1]+'</button>'; }).join('')+'</div>';
   }
   if(o.modo==='contabile'){
+    var annoCI=o.dal.slice(0,4), vCI=(window._ecCredIni||{})[annoCI];
+    h+='<div class="sf-lbl">Credito IVA dall\'anno precedente</div><div class="ec-date" style="align-items:flex-end"><label style="flex:1">Credito da riportare nel '+annoCI+' (dalla dichiarazione IVA)<input type="text" inputmode="decimal" placeholder="non inserito" value="'+(vCI!=null?String(vCI).replace('.',','):'')+'" onchange="_ecSalvaCredIni(\''+annoCI+'\',this.value)"></label></div>'+
+      '<div class="gr-s" style="margin:-2px 2px 10px">Si somma al credito della liquidazione di gennaio. Lascia vuoto se non c\'è o non lo sai: il file lo segnala.</div>';
     h+='<div class="sf-lbl">Cosa registrare</div><div class="ec-cbs">'+cb('fatture','Fatture e note di credito','costo, IVA a credito, debito v/fornitore')+cb('pagamenti','Pagamenti ai fornitori','banca, cassa o carta secondo il metodo reale')+cb('corrispettivi','Corrispettivi giornalieri','cassa, POS, ricavi e IVA a debito'+(fornFiltro?' · esclusi con i filtri fornitore':''))+cb('banca','Altri movimenti di banca e carta','stipendi, F24, mutuo, commissioni, versamenti, POS'+(fornFiltro?' · esclusi con i filtri fornitore':''))+'</div>';
   }
   if(o.modo==='elenco' || o.modo==='contabile'){
@@ -28846,7 +29132,7 @@ function _ecRender(){
     h+='<div class="gr-card" style="margin-top:12px"><div class="gr-kpi">'+
         '<div><span>Registrazioni</span><b>'+G.reg.length+'</b><em class="ce-dl">'+G.regIva.length+' documenti · '+G.pagati+' pagamenti</em></div>'+
         '<div><span>Dare = Avere</span><b style="color:'+(quadra?'var(--green)':'var(--red)')+'">'+(quadra?'✓ quadra':'✗ '+fmt(G.totD-G.totA))+'</b><em class="ce-dl">'+fmt(G.totD)+'</em></div>'+
-        '<div><span>IVA debito − credito</span><b>'+(ivaD-ivaC<0?'−':'')+fmt(Math.abs(ivaD-ivaC))+'</b><em class="ce-dl">'+fmt(ivaD)+' − '+fmt(ivaC)+'</em></div>'+
+        '<div><span>IVA a fine periodo</span><b>'+(liq.credFinale>0.005?'credito '+fmt(liq.credFinale):liq.length&&liq[liq.length-1].versare?'da versare '+fmt(liq[liq.length-1].versare):'—')+'</b><em class="ce-dl">debito '+fmt(ivaD)+' · credito '+fmt(ivaC)+(liq.some(function(l){ return l.incompleto; })?' · ⚠️ mesi provvisori':'')+'</em></div>'+
       '</div>'+
       (G.avvisi.length?'<details class="ec-avv"><summary>'+G.avvisi.length+' cose da verificare (finiscono anche nel foglio «Controlli»)</summary>'+G.avvisi.slice(0,40).map(function(a){ return '<div><b>'+esc(a.tipo)+'</b> '+esc(a.testo)+'</div>'; }).join('')+(G.avvisi.length>40?'<div>…e altre '+(G.avvisi.length-40)+'</div>':'')+'</details>':'')+
       '</div>'+
@@ -29203,6 +29489,7 @@ async function _ecScarica(tipo, btn){
     // I pagamenti in contanti stanno in Prima Nota: si caricano ora, così
     // ogni export può dire anche COME è uscito il contante.
     await _ecCaricaPn(_ecOpz);
+    await Promise.all([_ecCaricaFiscale(), window._ecCredIni?Promise.resolve():_ecCaricaCredIni()]);
     var G=null, blob, nome=_ecNomeBase();
     if(tipo==='rcsv'){
       blob=_ecRiconcCsv(_ecOpz); nome=nome.replace('contabilita','riconciliazione')+'.csv';
