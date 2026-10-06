@@ -418,7 +418,7 @@ html[data-theme="dark"] .todo-ft{background:rgba(255,255,255,.03)}
 </nav>
 
 <script>
-var APP_VERSION='8.1.3';
+var APP_VERSION='8.2.0';
 var BUILD_VERSION=APP_VERSION, BUILD_NUM=APP_VERSION;
 var APP={key:'ordini',nome:'Ordini',versione:APP_VERSION,authKey:'or_auth_v2',oldAuthKey:'ceraldi_ordini_auth_session',
   markBg:'linear-gradient(145deg,#FFC04D 0%,#FF9F0A 50%,#C2410C 100%)',
@@ -1550,13 +1550,20 @@ function salvaAlias(nome, id){
   docModifica('or8_conf', function(d){ d.alias = d.alias || {}; d.alias[k] = id; });
   api('ceraldi_alias_prodotti?on_conflict=alias_norm', { method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: { alias_norm: k, product_id: id } }).catch(function(){});
 }
-function chiaveAI(){ try{ return (localStorage.getItem('ceraldi_apikey') || '').replace(/^"|"$/g, '').trim(); }catch(e){ return ''; } }
+/* IA (06/10/2026): la chiave Anthropic non sta più sul telefono. Le richieste
+   passano dalla funzione "ia" del server, che tiene la chiave e risponde solo a
+   chi ha un account abilitato a Ordini. La vecchia chiave salvata qui si cancella. */
+try{ localStorage.removeItem('ceraldi_apikey'); }catch(e){}
+function chiaveAI(){ return (typeof _authSess !== 'undefined' && _authSess && _authSess.access_token) ? 'server' : ''; }
 async function chiamaClaude(contenuto, maxTok){
-  var k = chiaveAI(); if(!k) throw new Error('Chiave IA non impostata (Impostazioni → Intelligenza artificiale)');
-  var resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': k, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
-    body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: maxTok || 4000, messages: [{ role: 'user', content: contenuto }] }) });
-  var d = await resp.json();
+  if(!chiaveAI()) throw new Error('Per usare l\'IA accedi con il tuo account');
+  try{ await _authPronto(); }catch(e){}
+  var corpo = JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: maxTok || 4000, messages: [{ role: 'user', content: contenuto }] });
+  var invia = function(){ return fetch(SB_URL + '/functions/v1/ia?app=ordini', { method: 'POST',
+    headers: { 'Content-Type': 'application/json', apikey: SB_KEY, Authorization: 'Bearer ' + _authToken() }, body: corpo }); };
+  var resp = await invia();
+  if(resp.status === 401){ try{ await _authRefresh(); }catch(e){} resp = await invia(); }
+  var d = await resp.json().catch(function(){ return {}; });
   if(!resp.ok || d.error) throw new Error((d.error && d.error.message) || ('IA: errore ' + resp.status));
   var tb = (d.content || []).find(function(b){ return b.type === 'text'; });
   return tb ? tb.text : '';
@@ -4049,7 +4056,7 @@ function apriImpostazioni(){
       voce('🗑', 'Prodotti eliminati', c.length + ' recuperabili per 30 giorni', 'apriCestinoProdotti()') + '</div>' +
     '<div class="sec-title">App</div><div class="grp">' +
       voce('🏢', 'Dati dell\'attività', 'Intestazione dei PDF d\'ordine', 'apriAzienda()') +
-      voce('✨', 'Intelligenza artificiale', chiaveAI() ? 'Chiave impostata su questo dispositivo' : 'Serve per leggere PDF e foto e per i nomi incerti', 'apriIA()', 'ic-p') +
+      voce('✨', 'Intelligenza artificiale', 'Legge PDF e foto e decide i nomi incerti · la chiave è al sicuro sul server', 'apriIA()', 'ic-p') +
       voce('🔔', 'Notifiche', 'Avvisi delle nuove richieste su questo dispositivo', 'apriNotifiche()', 'ic-r') +
       '<div class="row"><div class="row-ico">🌗</div><div class="row-main"><div class="row-t">Aspetto</div></div></div><div style="padding:0 14px 12px"><div class="seg" style="margin:0">' + [['auto', 'Automatico'], ['light', 'Chiaro'], ['dark', 'Scuro']].map(function(t){ return '<button class="seg-b' + (temaScelto() === t[0] ? ' active' : '') + '" onclick="impostaTema(\'' + t[0] + '\');apriImpostazioni()">' + t[1] + '</button>'; }).join('') + '</div></div>' +
       voce('🩺', 'Diagnostica', (e ? e + ' errori registrati · ' : '') + 'sincronizzazione, storico prezzi, cache', 'apriDiagnostica()') + '</div>' +
@@ -4189,12 +4196,10 @@ function apriAzienda(){
 }
 function salvaAzienda(){ var v = function(i){ return document.getElementById(i).value.trim(); }; docModifica('or8_conf', function(d){ d.azienda = { nome: v('azN') || 'Caffetteria Ceraldi', indirizzo: v('azI'), piva: v('azP'), tel: v('azT'), email: v('azE') }; }); toast('Salvato ✓'); apriImpostazioni(); }
 function apriIA(){
-  var k = chiaveAI();
-  sotto('shIA', 'Intelligenza artificiale', '<p class="hint" style="font-size:13.5px;margin-bottom:12px">La chiave Anthropic resta solo su questo dispositivo (la stessa usata dalla versione precedente). Serve per leggere listini in PDF o foto e per decidere i nomi incerti. Senza chiave l\'app funziona lo stesso: i nomi incerti li confermi tu.</p>' +
-    '<div class="field"><label>Chiave API</label><input class="inp" id="iaK" type="password" autocomplete="off" value="' + esc(k) + '" placeholder="sk-ant-…"></div><div id="iaEsito"></div>',
-    '<div class="btn-row"><button class="btn btn-s" onclick="provaIA()">Prova</button><button class="btn btn-p" onclick="try{localStorage.setItem(\'ceraldi_apikey\',document.getElementById(\'iaK\').value.trim())}catch(e){};toast(\'Chiave salvata\');apriImpostazioni()">Salva</button></div>');
+  sotto('shIA', 'Intelligenza artificiale', '<p class="hint" style="font-size:13.5px;margin-bottom:12px">L\'IA legge listini in PDF o foto e aiuta a riconoscere i nomi incerti. La chiave Anthropic è custodita sul server: non sta più su questo telefono e nessuno può copiarla da qui. Può usarla solo chi entra con un account abilitato a Ordini.</p><div id="iaEsito"></div>',
+    '<div class="btn-row"><button class="btn btn-p" onclick="provaIA()">Prova</button></div>');
 }
-async function provaIA(){ try{ localStorage.setItem('ceraldi_apikey', document.getElementById('iaK').value.trim()); }catch(e){} var el = document.getElementById('iaEsito'); el.innerHTML = '<div class="loading"><span class="spinner"></span></div>'; try{ var t = await chiamaClaude('Rispondi solo: OK', 10); el.innerHTML = '<div class="banner g">✓ Funziona (' + esc(t.trim()) + ')</div>'; }catch(e){ el.innerHTML = '<div class="banner r">' + esc(e.message) + '</div>'; } }
+async function provaIA(){ var el = document.getElementById('iaEsito'); el.innerHTML = '<div class="loading"><span class="spinner"></span></div>'; try{ var t = await chiamaClaude('Rispondi solo: OK', 10); el.innerHTML = '<div class="banner g">✓ Funziona (' + esc(t.trim()) + ')</div>'; }catch(e){ el.innerHTML = '<div class="banner r">' + esc(e.message) + '</div>'; } }
 async function apriNotifiche(){
   var iscr = await ntfIscritto();
   sotto('shNtf', 'Notifiche', '<div class="grp"><div class="row"><div class="row-ico ic-r">🔔</div><div class="row-main"><div class="row-t">Avvisi su questo dispositivo</div><div class="row-s">' + (!ntfSupportate() ? 'Non supportato da questo browser' : (ntfIOS() && !ntfInstallata() ? 'Su iPhone aggiungi prima l\'app alla schermata Home' : (iscr ? 'Attivi' : 'Spenti'))) + '</div></div>' +
@@ -4326,7 +4331,7 @@ async function leggiImport(){
       if(!aoa.length) throw new Error('Il file è vuoto');
       mappaColonne(aoa);
     } else {
-      if(!chiaveAI()) throw new Error('Per PDF e foto serve la chiave IA (Impostazioni → Intelligenza artificiale). In alternativa usa Excel o CSV.');
+      if(!chiaveAI()) throw new Error('Per PDF e foto serve l\'IA: accedi con il tuo account. In alternativa usa Excel o CSV.');
       var b64 = await new Promise(function(ok, ko){ var r = new FileReader(); r.onload = function(){ ok(String(r.result).split(',')[1]); }; r.onerror = ko; r.readAsDataURL(f); });
       var tipo = f.type === 'application/pdf' ? 'document' : 'image', mt = f.type || (tipo === 'document' ? 'application/pdf' : 'image/jpeg');
       st.innerHTML = '<div class="loading"><span class="spinner"></span>L\'intelligenza artificiale sta leggendo il documento… (può volerci un minuto)</div>';

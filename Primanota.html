@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.9.7</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.10.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -2369,8 +2369,15 @@ function setFornitoreAbbinato(fornitore,valore){
     sbSaveImpostazione(KABBINA,cacheGet(KABBINA,{}));
   },600);
 }
-const getApiKey = ()=>localStorage.getItem('fatture_apikey')||'';
-const AI_HEADERS = ()=>({'Content-Type':'application/json','x-api-key':getApiKey(),'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'});
+// SICUREZZA 06/10/2026 — La chiave Anthropic non sta più sul telefono: le
+// richieste all'IA passano dalla funzione "ia" del server, che tiene la chiave
+// e risponde solo a chi entra con un account abilitato a Fatture. La vecchia
+// chiave salvata qui viene cancellata. getApiKey() ora dice solo se l'IA è
+// disponibile (account collegato), così i controlli esistenti restano validi.
+try{ localStorage.removeItem('fatture_apikey'); }catch(_){}
+const getApiKey = ()=>(typeof _authSess!=='undefined' && _authSess && _authSess.access_token) ? 'server' : '';
+const AI_URL = SB_URL + '/functions/v1/ia?app=fatture';
+const AI_HEADERS = ()=>({'Content-Type':'application/json','apikey':SB_KEY,'Authorization':SB_H.Authorization});
 
 // BUG REALE (trovato 02/09, segnalato da Valerio: l'assistente "resta così
 // per tanto tempo" su "⏳ …", senza mai un errore) — nessuna delle chiamate
@@ -2612,27 +2619,32 @@ function _aiCostruisciDettaglioCorrezione(f, campi){
 // Stesso principio del resto dell'app: solo lettura diretta, nessuna
 // scrittura — l'abbinamento alla fattura passa comunque da
 // proponi_correzione_fattura, quindi da una conferma esplicita di Valerio.
-var _paypalTokenCache = null; // {token, scadeIl}
-async function _paypalOttieniToken(){
-  var cid = localStorage.getItem('ceraldi_paypal_client_id')||'';
-  var sec = localStorage.getItem('ceraldi_paypal_secret')||'';
-  if(!cid || !sec) throw new Error('Credenziali PayPal non configurate (Impostazioni → PayPal)');
-  if(_paypalTokenCache && _paypalTokenCache.scadeIl > Date.now()+30000){
-    return _paypalTokenCache.token;
-  }
-  var res = await _fetchConTimeout('https://api-m.paypal.com/v1/oauth2/token', {
-    method: 'POST',
-    headers: {
-      'Authorization': 'Basic ' + btoa(cid+':'+sec),
-      'Content-Type': 'application/x-www-form-urlencoded'
-    },
-    body: 'grant_type=client_credentials'
-  }, 15000);
-  if(!res.ok){ throw new Error('PayPal login fallito: HTTP '+res.status); }
-  var data = await res.json();
-  _paypalTokenCache = { token: data.access_token, scadeIl: Date.now() + (data.expires_in||32000)*1000 };
-  return _paypalTokenCache.token;
+// SICUREZZA 06/10/2026 — ID e segreto PayPal non stanno più sul telefono:
+// le chiamate a PayPal le fa la funzione "paypal" del server, che custodisce
+// le credenziali. Se su questo telefono erano salvate, al primo avvio vengono
+// spostate sul server da sole e cancellate da qui (_paypalMigra).
+async function _paypalServer(corpo, timeout){
+  try{ await _authPronto(); }catch(_){}
+  return _fetchConTimeout(SB_URL + '/functions/v1/paypal', { method:'POST',
+    headers:{ 'Content-Type':'application/json', 'apikey':SB_KEY, 'Authorization':SB_H.Authorization },
+    body: JSON.stringify(corpo) }, timeout || 20000);
 }
+var _paypalMigrazione = false;
+async function _paypalMigra(){
+  if(_paypalMigrazione || typeof _authSess==='undefined' || !_authSess || !_authSess.access_token) return;
+  var cid='', sec='';
+  try{ cid = localStorage.getItem('ceraldi_paypal_client_id')||''; sec = localStorage.getItem('ceraldi_paypal_secret')||''; }catch(_){ return; }
+  if(!cid && !sec) return;
+  _paypalMigrazione = true;
+  try{
+    var r = await _paypalServer({azione:'salva', client_id:cid, secret:sec}, 20000);
+    // salvate sul server, oppure rifiutate da PayPal (quindi inutili): in entrambi i casi via dal telefono
+    if(r.ok || r.status===400){ localStorage.removeItem('ceraldi_paypal_client_id'); localStorage.removeItem('ceraldi_paypal_secret'); }
+  }catch(_){ /* offline: si riprova al prossimo avvio */ }
+  _paypalMigrazione = false;
+}
+setTimeout(_paypalMigra, 6000);
+document.addEventListener('visibilitychange', function(){ if(!document.hidden) setTimeout(_paypalMigra, 2000); });
 
 async function _aiLeggiPaypal(input){
   try{
@@ -2643,15 +2655,15 @@ async function _aiLeggiPaypal(input){
     // login per una richiesta che verrebbe comunque rifiutata.
     var giorni = (new Date(dataA) - new Date(dataDa)) / 86400000;
     if(giorni > 31) return JSON.stringify({errore:'Intervallo troppo lungo ('+Math.round(giorni)+' giorni) — PayPal accetta al massimo 31 giorni per chiamata. Dividi la ricerca in più intervalli.'});
-    var token = await _paypalOttieniToken();
     // PayPal vuole date-time ISO con orario; prendo l'intera giornata.
     var startDate = dataDa+'T00:00:00-0000';
     var endDate = dataA+'T23:59:59-0000';
-    var url = 'https://api-m.paypal.com/v1/reporting/transactions?start_date='+encodeURIComponent(startDate)+
-      '&end_date='+encodeURIComponent(endDate)+'&fields=all&page_size=100';
-    var res = await _fetchConTimeout(url, { headers: { 'Authorization': 'Bearer '+token } }, 20000);
+    await _paypalMigra();
+    var res = await _paypalServer({azione:'transazioni', start_date:startDate, end_date:endDate}, 25000);
     if(!res.ok){
       var errBody = await res.text();
+      var errJ = null; try{ errJ = JSON.parse(errBody); }catch(_){}
+      if(errJ && errJ.errore) return JSON.stringify({errore: errJ.errore});
       return JSON.stringify({errore:'PayPal HTTP '+res.status, dettaglio: errBody.slice(0,300)});
     }
     var data = await res.json();
@@ -2872,7 +2884,7 @@ async function _aiCicloConStrumenti(systemPrompt, bollaRisposta){
   var messages = (window._aiHistory||[]).slice();
   try{
     for(var iter=0; iter<8; iter++){
-      var res = await _fetchConTimeout('https://api.anthropic.com/v1/messages',{
+      var res = await _fetchConTimeout(AI_URL,{
         method:'POST', headers: AI_HEADERS(),
         body: JSON.stringify({model:'claude-sonnet-4-5', max_tokens:1500, system: systemPrompt, tools: AI_TOOLS, messages: messages})
       }, 30000);
@@ -4737,8 +4749,8 @@ function _impRenderHome(){
 
       <div class="imp-group-label">Intelligenza artificiale</div>
       <div class="imp-group">
-        ${_impRow('🧠','API Key Anthropic', hasKey?'Configurata':'Non configurata', "_impRenderSub('apikey')")}
-        ${_impRow('🅿️','PayPal (per riconciliazione)', hasPaypalKeys?'Configurato':'Non configurato', "_impRenderSub('paypal')")}
+        ${_impRow('🧠','Intelligenza artificiale', 'Chiave al sicuro sul server', "_impRenderSub('apikey')")}
+        ${_impRow('🅿️','PayPal (per riconciliazione)', 'Credenziali al sicuro sul server', "_impRenderSub('paypal')")}
         ${_impRow('🗑️','Cancella apprendimento AI', aiSub, "if(confirm('Cancellare tutte le correzioni memorizzate dall\\'AI?')){resetMemoriaAI();_impRenderHome();}")}
       </div>
 
@@ -4792,35 +4804,29 @@ function _impRenderSub(key){
   if(key==='azienda'){ _azRender(body); return; }
   if(key==='banca_eb'){ _ebRender(body); return; }
   if(key==='apikey'){
-    body.innerHTML = _impBack('API Key Anthropic') + `
+    body.innerHTML = _impBack('Intelligenza artificiale') + `
       <div style="padding:4px 20px 24px">
-        <input type="password" id="apiKeyInput" placeholder="sk-ant-..." autocomplete="off" spellcheck="false"
-          value="${(localStorage.getItem('fatture_apikey')||'').replace(/"/g,'&quot;')}"
-          style="width:100%;padding:12px 14px;border:1.5px solid var(--sep);border-radius:var(--radius-sm);font-size:14px;font-family:'Inter',-apple-system,sans-serif;background:var(--surface2);box-sizing:border-box;margin-bottom:8px;color:var(--ink)">
-        <div style="font-size:12px;color:var(--ink3);margin-bottom:8px">Ottienila su <strong>console.anthropic.com</strong> — serve per l'Assistente e per la lettura automatica delle scansioni</div>
-        <div style="font-size:12px;color:#b36a00;background:var(--orange-light);border-radius:8px;padding:9px 11px;margin-bottom:18px;line-height:1.4">
-          ⚠️ <strong>Avviso sicurezza:</strong> la chiave è salvata solo su questo dispositivo (localStorage). Non condividere il file HTML con altri se contiene la tua key.
-        </div>
-        <button onclick="salvaApiKey()" style="width:100%;padding:13px;border:none;border-radius:var(--radius-sm);background:var(--blue);color:#fff;font-size:15px;font-weight:600;cursor:pointer;font-family:'Inter',-apple-system,sans-serif">Salva</button>
+        <div style="font-size:14px;color:var(--ink2);line-height:1.5;margin-bottom:12px">L'IA legge scansioni e PDF delle fatture, classifica i fornitori e risponde nell'Assistente.</div>
+        <div style="font-size:13px;color:var(--green);background:var(--green-light,rgba(52,199,89,.12));border-radius:8px;padding:10px 12px;line-height:1.45">🔒 La chiave Anthropic è custodita sul server: non sta su questo telefono e nessuno può copiarla da qui. Può usarla solo chi entra con un account abilitato a Fatture.</div>
       </div>`;
   } else if(key==='paypal'){
     body.innerHTML = _impBack('PayPal') + `
       <div style="padding:4px 20px 24px">
-        <div style="font-size:12px;color:var(--ink3);margin-bottom:10px">Serve per far leggere all'Assistente chi hai pagato davvero tramite PayPal (in banca compare solo "PayPal Europe S.a.r.l.", mai il vero destinatario) e proporre l'abbinamento con la fattura giusta.</div>
+        <div style="font-size:12px;color:var(--ink3);margin-bottom:10px">Serve per far leggere all'Assistente chi hai pagato davvero tramite PayPal (in banca compare solo "PayPal Europe S.a.r.l.").</div>
+        <div id="paypalStato" style="font-size:13px;border-radius:8px;padding:10px 12px;margin-bottom:14px;background:var(--surface2);color:var(--ink2)">Controllo…</div>
         <div style="font-size:11px;font-weight:700;color:var(--ink3);margin-bottom:4px">CLIENT ID</div>
         <input type="text" id="paypalClientIdInput" placeholder="AZ..." autocomplete="off" spellcheck="false"
-          value="${(localStorage.getItem('ceraldi_paypal_client_id')||'').replace(/"/g,'&quot;')}"
-          style="width:100%;padding:12px 14px;border:1.5px solid var(--sep);border-radius:var(--radius-sm);font-size:14px;font-family:'Inter',-apple-system,sans-serif;background:var(--surface2);box-sizing:border-box;margin-bottom:12px;color:var(--ink)">
+          style="width:100%;padding:12px 14px;border:1.5px solid var(--sep);border-radius:var(--radius-sm);font-size:14px;font-family:'Inter',-apple-system,sans-serif;background:var(--surface2);box-sizing:border-box;margin-bottom:10px">
         <div style="font-size:11px;font-weight:700;color:var(--ink3);margin-bottom:4px">SECRET</div>
         <input type="password" id="paypalSecretInput" placeholder="EL..." autocomplete="off" spellcheck="false"
-          value="${(localStorage.getItem('ceraldi_paypal_secret')||'').replace(/"/g,'&quot;')}"
-          style="width:100%;padding:12px 14px;border:1.5px solid var(--sep);border-radius:var(--radius-sm);font-size:14px;font-family:'Inter',-apple-system,sans-serif;background:var(--surface2);box-sizing:border-box;margin-bottom:8px;color:var(--ink)">
-        <div style="font-size:12px;color:var(--ink3);margin-bottom:8px">Li trovi su <strong>developer.paypal.com</strong> → Apps &amp; Credentials → il tuo account PayPal reale (non sandbox) → App REST → Client ID e Secret</div>
-        <div style="font-size:12px;color:#b36a00;background:var(--orange-light);border-radius:8px;padding:9px 11px;margin-bottom:18px;line-height:1.4">
-          ⚠️ <strong>Avviso sicurezza:</strong> salvati solo su questo dispositivo (localStorage), come la chiave Anthropic. Non condividere il file HTML con altri se li contiene.
-        </div>
-        <button onclick="salvaPaypalKeys()" style="width:100%;padding:13px;border:none;border-radius:var(--radius-sm);background:var(--blue);color:#fff;font-size:15px;font-weight:600;cursor:pointer;font-family:'Inter',-apple-system,sans-serif">Salva</button>
+          style="width:100%;padding:12px 14px;border:1.5px solid var(--sep);border-radius:var(--radius-sm);font-size:14px;font-family:'Inter',-apple-system,sans-serif;background:var(--surface2);box-sizing:border-box;margin-bottom:10px">
+        <div style="font-size:12px;color:var(--ink3);margin-bottom:14px">Li trovi su <strong>developer.paypal.com</strong> → Apps &amp; Credentials → il tuo account PayPal reale (non sandbox). Compila solo per cambiarle: vengono provate con PayPal e salvate sul server, mai su questo telefono.</div>
+        <button onclick="salvaPaypalKeys()" style="width:100%;padding:13px;border:none;border-radius:var(--radius-sm);background:var(--blue);color:#fff;font-size:15px;font-weight:600;cursor:pointer;font-family:'Inter',-apple-system,sans-serif">Salva sul server</button>
       </div>`;
+    _paypalServer({azione:'stato'}, 15000).then(function(r){ return r.json(); }).then(function(j){
+      var el=document.getElementById('paypalStato'); if(!el) return;
+      el.innerHTML = j.configurato ? '🔒 Credenziali configurate e custodite sul server.' : 'Credenziali non ancora configurate: inseriscile qui sotto.';
+    }).catch(function(){ var el=document.getElementById('paypalStato'); if(el) el.textContent='Non riesco a controllare adesso (sei offline?).'; });
   } else if(key==='aspetto'){
     body.innerHTML = _impBack('Aspetto') + `
       <div style="padding:4px 20px 24px">
@@ -4886,14 +4892,19 @@ function salvaApiKey(){
   _impRenderHome();
 }
 
-function salvaPaypalKeys(){
+async function salvaPaypalKeys(){
   const cid=document.getElementById('paypalClientIdInput').value.trim();
   const sec=document.getElementById('paypalSecretInput').value.trim();
-  if(cid) localStorage.setItem('ceraldi_paypal_client_id',cid); else localStorage.removeItem('ceraldi_paypal_client_id');
-  if(sec) localStorage.setItem('ceraldi_paypal_secret',sec); else localStorage.removeItem('ceraldi_paypal_secret');
-  _paypalTokenCache = null; // forza un nuovo login la prossima volta che serve
-  toast('Impostazioni salvate ✓');
-  _impRenderHome();
+  if(!cid || !sec){ toast('⚠️ Inserisci Client ID e Secret'); return; }
+  toast('Provo le credenziali con PayPal…');
+  try{
+    const r = await _paypalServer({azione:'salva', client_id:cid, secret:sec}, 20000);
+    const j = await r.json().catch(function(){ return {}; });
+    if(!r.ok || !j.ok) throw new Error(j.errore || ('HTTP '+r.status));
+    try{ localStorage.removeItem('ceraldi_paypal_client_id'); localStorage.removeItem('ceraldi_paypal_secret'); }catch(_){}
+    toast('🔒 Credenziali PayPal salvate sul server ✓');
+    _impRenderHome();
+  }catch(e){ toast('⚠️ '+String(e.message||e).slice(0,90)); }
 }
 
 // FIX 19/09 (richiesto da Valerio: "se navigo tra le varie sezioni, tipo da
@@ -5272,7 +5283,7 @@ Se nella foto vedi UN ASSEGNO BANCARIO sovrapposto o accanto al documento princi
 
 // Helper: esegue una singola chiamata AI e ritorna l'oggetto parsato (o null in caso di errore parsing)
 async function _chiamataAI(base64, mime, system, user, HEADERS){
-  const res = await fetch('https://api.anthropic.com/v1/messages',{
+  const res = await fetch(AI_URL,{
     method:'POST', headers:HEADERS,
     body:JSON.stringify({
       model:'claude-sonnet-4-5',
@@ -8492,7 +8503,7 @@ STEP 4 — Rispondi SOLO con JSON valido, nessun testo prima o dopo:
 {"tipo_documento":"fattura","fornitore":"","numero_fattura":"","numero_ddt":"","data":"YYYY-MM-DD","importo":0,"pagamento":"","numero_assegno":"","intestatario_assegno":"","banca_assegno":""}
 `+apprendimento;
     try{
-      const res=await fetch('https://api.anthropic.com/v1/messages',{
+      const res=await fetch(AI_URL,{
         method:'POST',
         headers:AI_HEADERS(),
         body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:2048,messages:[
@@ -8843,7 +8854,7 @@ async function analizzaXmlTesto(xmlTesto, nomeFile){
     const apprendimento=buildPromptCompleto(gv('rForn')||'');
     const prompt='Analizza questo XML di fattura elettronica italiana (FatturaPA). Rispondi SOLO con JSON: {"fornitore":"","numero_fattura":"","numero_ddt":"","data":"YYYY-MM-DD","importo":0,"pagamento":"contanti|bonifico|assegno o vuoto","numero_assegno":"","intestatario_assegno":"","banca_assegno":""}. Per "numero_ddt": cerca nel XML riferimenti a DDT o Documento di Trasporto allegato (tag NumeroFatture, DatiDDT, NumeroDDT, o simili). Se non presente lascia "".\n\n'+xmlTesto.slice(0,8000)+apprendimento;
     try{
-      const res=await fetch('https://api.anthropic.com/v1/messages',{
+      const res=await fetch(AI_URL,{
         method:'POST',
         headers:AI_HEADERS(),
         body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:500,messages:[{role:'user',content:[{type:'text',text:prompt}]}]})
@@ -14326,7 +14337,8 @@ async function _eseguiSyncSumUp(){
     var newest = al + 'T23:59:59Z';
     var fnUrl = SB_URL + '/functions/v1/sumup-proxy?action=transactions&limit=200'
       + '&oldest_time=' + encodeURIComponent(oldest) + '&newest_time=' + encodeURIComponent(newest);
-    var resp = await fetch(fnUrl, { headers: { Authorization: 'Bearer ' + SB_KEY } });
+    try{ await _authPronto(); }catch(_){}
+    var resp = await fetch(fnUrl, { headers: { apikey: SB_KEY, Authorization: SB_H.Authorization } });
     var data = await resp.json();
     if(!resp.ok) throw new Error((data && data.error) ? data.error + (data.dettaglio ? (' — '+JSON.stringify(data.dettaglio)) : '') : 'Errore sconosciuto');
 
@@ -17592,10 +17604,6 @@ async function sincronizzaPaypal(){
 function renderRiconciliazionePaypal(){
   var wrap = document.getElementById('paypalContenuto');
   if(!wrap) return;
-  if(!localStorage.getItem('ceraldi_paypal_client_id') || !localStorage.getItem('ceraldi_paypal_secret')){
-    wrap.innerHTML = '<div style="text-align:center;padding:24px;color:var(--ink3);font-size:13px">🅿️ Configura prima le credenziali in Impostazioni → PayPal</div>';
-    return;
-  }
   if(!_paypalTransazioni.length){
     wrap.innerHTML = '<div style="text-align:center;padding:24px;color:var(--ink3);font-size:13px">Nessuna transazione caricata per questo mese — tocca "Sincronizza" qui sopra</div>';
     return;
@@ -25023,7 +25031,8 @@ async function pnAggiornaScioperiNapoli(){
     // risultato: "Sincronizzazione scioperi fallita: Load failed". Ora si
     // passa dalla Edge Function scioperi-proxy (stesso schema già usato per
     // sumup-proxy), che gira sul server e non è soggetta a CORS.
-    const resp = await fetch(SB_URL+'/functions/v1/scioperi-proxy', {headers:{Authorization:'Bearer '+SB_KEY}});
+    try{ await _authPronto(); }catch(_){}
+    const resp = await fetch(SB_URL+'/functions/v1/scioperi-proxy', {headers:{apikey:SB_KEY, Authorization:SB_H.Authorization}});
     if(!resp.ok) throw new Error('HTTP '+resp.status);
     const json = await resp.json();
     const strikes = (json.strikes||[]).filter(s=>
@@ -27472,8 +27481,9 @@ document.addEventListener('DOMContentLoaded', function(){ setTimeout(_rcCarica, 
    si vede l'anteprima, lo si spegne/riaccende, o lo si manda subito. */
 var _RS_KEY='fatture_riepilogo_cfg';
 async function _rsChiama(corpo){
+  try{ await _authPronto(); }catch(_){}
   var r = await fetch(SB_URL+'/functions/v1/fatture-riepilogo', {method:'POST',
-    headers:{'Content-Type':'application/json', Authorization:'Bearer '+SB_KEY, apikey:SB_KEY},
+    headers:{'Content-Type':'application/json', Authorization:SB_H.Authorization, apikey:SB_KEY},
     body: JSON.stringify(corpo)});
   var j = await r.json().catch(function(){ return {}; });
   if(!r.ok) throw new Error(j.errore||('HTTP '+r.status));
@@ -27958,7 +27968,7 @@ async function _ceAiProponi(lista, onAvanzamento){
       'Fornitori da classificare:\n'+righe+'\n\n'+
       'Rispondi con: {"r":[{"i":<numero del fornitore>,"c":"<chiave categoria>","p":"<massimo 6 parole sul perché>","s":<1 poco sicuro, 2 abbastanza, 3 sicuro>}]}\n'+
       'Una voce per ogni fornitore, nello stesso ordine. Se proprio non sai, usa "altro" con s=1.';
-    var res=await _fetchConTimeout('https://api.anthropic.com/v1/messages',{method:'POST', headers:AI_HEADERS(),
+    var res=await _fetchConTimeout(AI_URL,{method:'POST', headers:AI_HEADERS(),
       body:JSON.stringify({model:'claude-sonnet-4-5', max_tokens:3000, system:sys, messages:[{role:'user',content:usr},{role:'assistant',content:'{"r":['}]})}, 90000);
     if(!res.ok) throw new Error('AI non raggiungibile ('+res.status+')');
     var j=await res.json();
@@ -30015,7 +30025,7 @@ async function _faChiediRicetta(F, dest, errPrec, ricettaPrec){
     'Estratto:\n'+campione.join('\n')+'\n\nProduci la ricetta secondo questo schema:\n'+schema+
     '\nRegole: importi sempre in euro; escludi dai movimenti le righe di saldo, riporti e totali (usa righeDaIgnorare); le regex devono funzionare con new RegExp(pattern,"i") in JavaScript.'+
     (errPrec? '\n\nLa ricetta precedente:\n'+JSON.stringify(ricettaPrec)+'\nha prodotto questi ERRORI di verifica, correggila:\n- '+errPrec.join('\n- '):'');
-  var res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST', headers:AI_HEADERS(), body:JSON.stringify({model:'claude-sonnet-4-5', max_tokens:2500, system:sys, messages:[{role:'user',content:usr},{role:'assistant',content:'{'}]})});
+  var res=await fetch(AI_URL,{method:'POST', headers:AI_HEADERS(), body:JSON.stringify({model:'claude-sonnet-4-5', max_tokens:2500, system:sys, messages:[{role:'user',content:usr},{role:'assistant',content:'{'}]})});
   if(!res.ok) throw new Error('AI non raggiungibile ('+res.status+')');
   var j=await res.json(); var txt='{'+((j.content||[]).map(function(c){ return c.text||''; }).join(''));
   txt=txt.slice(0, txt.lastIndexOf('}')+1);
@@ -30206,7 +30216,8 @@ async function _auEsegui(chi, btn){
   var t=btn?btn.textContent:''; if(btn){ btn.disabled=true; btn.textContent='In corso…'; }
   try{
     if(chi==='sumup'){
-      var r=await fetch(SB_URL+'/functions/v1/sumup-daily-sync',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+SB_KEY,apikey:SB_KEY},body:'{}'});
+      try{ await _authPronto(); }catch(_){}
+      var r=await fetch(SB_URL+'/functions/v1/sumup-daily-sync',{method:'POST',headers:{'Content-Type':'application/json',Authorization:SB_H.Authorization,apikey:SB_KEY},body:'{}'});
       var j=await r.json().catch(function(){ return {}; });
       if(j.ok) alert('✓ SumUp: '+j.lette+' transazioni lette, '+j.salvate+' salvate negli incassi.'); else throw new Error(j.error||j.dettaglio||'errore');
     } else if(chi==='riepilogo'){
