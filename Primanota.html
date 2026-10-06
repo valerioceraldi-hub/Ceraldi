@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.9.6</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.9.7</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -12523,17 +12523,36 @@ async function autoEstraiPrezzi(xmlText,fattObj){
     try{var ck=await fetch(SB_URL+'/rest/v1/prezzi_da_fatture?fattura_id=eq.'+encodeURIComponent(fatturaId)+'&select=id&limit=1',{headers:SB_H});if(ck.ok){var d=await ck.json();if(d&&d.length>0){toast('ℹ️ Prezzi già presenti');return;}}}catch(e){return;}
     var righe=gaA('DettaglioLinee');if(!righe.length){toast('⚠️ Nessuna riga DettaglioLinee');return;}
     var toInsert=[];
+    // Riferimenti per Ordini: a quale DDT e a quale ordine appartiene ogni riga.
+    // DatiDDT / DatiOrdineAcquisto indicano le righe con RiferimentoNumeroLinea (se mancano, valgono per tutte).
+    var _rifPer=function(tagBlocco,tagNum,tagData){var mappa={},tutte=null;gaA(tagBlocco).forEach(function(b){var v={n:(gA(tagNum,b)||'').slice(0,40),d:(gA(tagData,b)||'').slice(0,10)};if(!v.n&&!v.d)return;var lin=gaA('RiferimentoNumeroLinea',b);if(!lin.length){if(!tutte)tutte=v;}else lin.forEach(function(x){var k=x.textContent.trim();if(k&&!mappa[k])mappa[k]=v;});});return function(nl){return mappa[nl]||tutte||null;};};
+    var ddtDi=_rifPer('DatiDDT','NumeroDDT','DataDDT'),ordDi=_rifPer('DatiOrdineAcquisto','IdDocumento','Data');
+    var _codOrd=function(t){var m=/ORD\s*(\d{6}-\d{4})/i.exec(t||'');return m?'ORD '+m[1]:'';};
+    var ordCausale=_codOrd(gaA('Causale').map(function(c){return c.textContent;}).join(' '));
     righe.forEach(function(r){
       var desc=gA('Descrizione',r);var codArt=gA('CodiceValore',r)||null;
+      var nLinea=gA('NumeroLinea',r)||'';var _ddt=ddtDi(nLinea),_ord=ordDi(nLinea);
+      var rifOrd=_codOrd(desc)||_codOrd(gaA('RiferimentoTesto',r).map(function(x){return x.textContent;}).join(' '))||(_ord&&_codOrd(_ord.n))||ordCausale||(_ord&&_ord.n)||null;
       var pUnit=parseFloat((gA('PrezzoUnitario',r)||'0').replace(',','.'))||0;
       var aliq=parseFloat((gA('AliquotaIVA',r)||'0').replace(',','.'))||0;
       var qta=parseFloat((gA('Quantita',r)||'1').replace(',','.'))||1;
+      // Prezzo realmente pagato: PrezzoTotale è già al netto di sconti e maggiorazioni
+      var pTot=parseFloat((gA('PrezzoTotale',r)||'').replace(',','.'));
+      if(!isNaN(pTot)&&pTot>0&&qta>0){var pNetto=pTot/qta;if(Math.abs(pNetto-pUnit)>0.0001)pUnit=pNetto;}
       if(!desc||pUnit<=0)return;
-      toInsert.push({fattura_id:fatturaId,fornitore:fornitore,data_fattura:dataFatt||null,cod_articolo:codArt,descrizione:desc,qta:qta,prezzo_unit:Math.round(pUnit*10000)/10000,iva:aliq||null,prezzo_ivato:Math.round(pUnit*(1+aliq/100)*10000)/10000,stato:'pending'});
+      toInsert.push({fattura_id:fatturaId,fornitore:fornitore,data_fattura:dataFatt||null,cod_articolo:codArt,descrizione:desc,qta:qta,prezzo_unit:Math.round(pUnit*10000)/10000,iva:aliq||null,prezzo_ivato:Math.round(pUnit*(1+aliq/100)*10000)/10000,stato:'pending',rif_ordine:rifOrd,ddt_numero:(_ddt&&_ddt.n)||null,ddt_data:(_ddt&&/^\d{4}-\d{2}-\d{2}$/.test(_ddt.d))?_ddt.d:null});
     });
     if(!toInsert.length){toast('⚠️ Nessuna riga con prezzo valido');return;}
     toast('⏳ Invio '+toInsert.length+' righe per '+fornitore+'...');
     var resp=await fetch(SB_URL+'/rest/v1/prezzi_da_fatture',{method:'POST',headers:{...SB_H,'Prefer':'resolution=ignore-duplicates,return=minimal'},body:JSON.stringify(toInsert)});
+    if(!resp.ok&&resp.status===400){
+      // Database senza le colonne rif_ordine/ddt_numero/ddt_data: invio come prima
+      var _e400=await resp.clone().text().catch(function(){return'';});
+      if(/rif_ordine|ddt_numero|ddt_data|PGRST204|column/i.test(_e400)){
+        toInsert.forEach(function(x){delete x.rif_ordine;delete x.ddt_numero;delete x.ddt_data;});
+        resp=await fetch(SB_URL+'/rest/v1/prezzi_da_fatture',{method:'POST',headers:{...SB_H,'Prefer':'resolution=ignore-duplicates,return=minimal'},body:JSON.stringify(toInsert)});
+      }
+    }
     if(resp.ok||resp.status===201){toast('✅ '+toInsert.length+' prezzi salvati per '+fornitore);}
     else{
       var et=await resp.text().catch(function(){return'';});
