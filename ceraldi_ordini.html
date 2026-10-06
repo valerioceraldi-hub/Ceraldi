@@ -418,7 +418,7 @@ html[data-theme="dark"] .todo-ft{background:rgba(255,255,255,.03)}
 </nav>
 
 <script>
-var APP_VERSION='8.2.0';
+var APP_VERSION='8.3.0';
 var BUILD_VERSION=APP_VERSION, BUILD_NUM=APP_VERSION;
 var APP={key:'ordini',nome:'Ordini',versione:APP_VERSION,authKey:'or_auth_v2',oldAuthKey:'ceraldi_ordini_auth_session',
   markBg:'linear-gradient(145deg,#FFC04D 0%,#FF9F0A 50%,#C2410C 100%)',
@@ -1076,6 +1076,299 @@ var DUP = (function(){
   return { analizza: analizza, confronta: confronta, abbina: abbina, prezziSimili: prezziSimili };
 })();
 
+/* ══════════════════════════════════════════════════════════════════
+   RIC · RICONOSCERE UN PRODOTTO SCRITTO DA UNA PERSONA (06/10/2026)
+   Serve quando un dipendente scrive un nome a mano ("cynar", "becks
+   lattina", "poeersde", "vino bianco fiagre"): capire quale prodotto
+   del catalogo intende, con margine d'errore quasi zero.
+
+   Non regole caso per caso, ma tre misure generali:
+   1. PAROLE CHE DISTINGUONO. Ogni parola pesa quanto è rara nel
+      catalogo: "ACQUA", "VINO", "BIRRA" pesano poco, "TALISKER",
+      "FIAGRE", "CYNAR" pesano molto. Le parole si riconoscono anche
+      scritte male (POEERSDE = POWERADE, NATURARLE = NATURALE), abbreviate
+      (FRIZZ = FRIZZANTE) o attaccate (ESTATHE ⊃ THE).
+   2. COPERTURA NEI DUE SENSI. Quanto del nome scritto è spiegato dal
+      prodotto, e quanto del prodotto è spiegato dal nome scritto.
+      Una parola rara non spiegata (una marca che il catalogo non ha,
+      "PALIATA", o un secondo prodotto, "CAMPARI APEROL") blocca il
+      collegamento automatico.
+   3. NIENTE CONTRADDIZIONI. Formato, pezzi, peso, anni, gusto, colore,
+      naturale/frizzante, vetro/lattina, zero/normale: se il nome li dice
+      e il prodotto ne dice uno diverso, quel prodotto è escluso.
+   Se più prodotti sono lo stesso prodotto in formati diversi
+   (DISARONNO CL70 / CL100) e il nome non dice quale, decide lo storico:
+   il formato che ordini sempre. Se lo storico non basta, chiede.
+   ══════════════════════════════════════════════════════════════════ */
+var RIC = (function(){
+  var STOP = ' DI DA DEL DELLA DELLO DEI DEGLI DELLE DAL DALLA AL ALLA ALLE ALLO AI AGLI PER CON SENZA E ED IL LO LA LE GLI I UN UNA UNO IN SU TIPO MARCA FORMATO ' +
+    'X CL LT ML KG GR G L PZ CT CTX BT CF NR N CONF CONFEZIONE CONFEZIONI BOTTIGLIA BOTTIGLIE BOTT BOT CARTONE CARTONI CARTONCINO PEZZO PEZZI PZ SCATOLA SCATOLE FARDELLO FARDELLI KAR CASSA CASSE CASSETTA BUSTA BUSTE ' +
+    'SAN SANTO SANTA ST DOC DOCG IGT IGP DOP SRL SPA SNC SAS SOC LTD UK INC CO ' +
+    'ITALIA ITALIANO ITALIANA GERMANIA BELGIO DANIMARCA OLANDA CUBA MESSICO SCOZIA IRLANDA FRANCIA SPAGNA INGHILTERRA GIAPPONE JAPAN ' +
+    'NUOVO NUOVA SOLITO SOLITA QUELLO QUELLA QUELLI GRANDE GRANDI PICCOLO PICCOLA PICCOLI ANCORA ALTRO ALTRA ALTRI URGENTE ';
+  // gruppi di attributi: se il nome ne dice uno e il prodotto un altro dello stesso gruppo, non è lui
+  var GRUPPI = {
+    colore: { BIANCO: 'BIANCO', BIANCA: 'BIANCO', BIANCHI: 'BIANCO', BIANCHE: 'BIANCO', ROSSO: 'ROSSO', ROSSA: 'ROSSO', ROSSI: 'ROSSO', ROSATO: 'ROSE', ROSE: 'ROSE', NERO: 'NERO', NERA: 'NERO', BLACK: 'NERO', ORO: 'ORO', GOLD: 'ORO', DORATO: 'ORO', BLU: 'BLU', BLUE: 'BLU', VERDE: 'VERDE', GIALLO: 'GIALLO', GIALLA: 'GIALLO', WHITE: 'BIANCO', RED: 'ROSSO', ARGENTO: 'ARGENTO', SILVER: 'ARGENTO' },
+    gas: { NATURALE: 'NAT', LISCIA: 'NAT', NATURA: 'NAT', OLIGOMINERALE: null, FRIZZANTE: 'FRIZ', FRIZZ: 'FRIZ', GASSATA: 'FRIZ', GASATA: 'FRIZ', GASSATO: 'FRIZ', EFFERVESCENTE: 'FRIZ', SPARKLING: 'FRIZ', LEGGERMENTE: 'LEGG' },
+    cont: { VETRO: 'VETRO', VAP: 'VETRO', PET: 'PET', PLASTICA: 'PET', LATTINA: 'LATTINA', LATTINE: 'LATTINA', LATT: 'LATTINA', SLEEK: 'LATTINA', CAN: 'LATTINA', BRIK: 'BRIK', BRICK: 'BRIK', TETRAPAK: 'BRIK' },
+    gusto: { LIMONE: 'LIMONE', LEMON: 'LIMONE', PESCA: 'PESCA', PEACH: 'PESCA', ARANCIA: 'ARANCIA', ARANCIO: 'ARANCIA', ARANCIATA: 'ARANCIA', ORANGE: 'ARANCIA', CITRUS: 'CITRUS', AGRUMI: 'CITRUS', FRAGOLA: 'FRAGOLA', STRAWBERRY: 'FRAGOLA', MENTA: 'MENTA', COCCO: 'COCCO', COCO: 'COCCO', VANIGLIA: 'VANIGLIA', VANILLA: 'VANIGLIA', CILIEGIA: 'CILIEGIA', AMARENA: 'CILIEGIA', MELONE: 'MELONE', MELA: 'MELA', MELE: 'MELA', PERA: 'PERA', ANANAS: 'ANANAS', BANANA: 'BANANA', MIRTILLO: 'MIRTILLO', POMPELMO: 'POMPELMO', GRAPEFRUIT: 'POMPELMO', MANDARINO: 'MANDARINO', LAMPONE: 'LAMPONE', CIOCCOLATO: 'CIOCCOLATO', CACAO: 'CIOCCOLATO', NOCCIOLA: 'NOCCIOLA', PISTACCHIO: 'PISTACCHIO', MANDORLA: 'MANDORLA', MANDORLE: 'MANDORLA', ACE: 'ACE', MELOGRANO: 'MELOGRANO', CRANBERRY: 'CRANBERRY', GRANATINA: 'GRANATINA', GRANADINA: 'GRANATINA', ZENZERO: 'ZENZERO', GINGER: 'ZENZERO', ELDERFLOWER: 'SAMBUCO', ELDERFLOWERS: 'SAMBUCO', SAMBUCO: 'SAMBUCO', MARACUJA: 'PASSION', PASSION: 'PASSION', LIME: 'LIME', CEDRO: 'CEDRO', CEDRATA: 'CEDRO', POMODORO: 'POMODORO', ALBICOCCA: 'ALBICOCCA', CAFFE: 'CAFFE', CAFE: 'CAFFE', COFFEE: 'CAFFE', TONICA: 'TONICA', TONIC: 'TONICA', MIRTILLI: 'MIRTILLO' }
+  };
+  var ZERO = { ZERO: 1, LIGHT: 1, DIET: 1, ANALCOLICO: 1, ANALCOLICA: 1, ANALCOLICI: 1, ANALCOLICHE: 1, ALCOHOLFREE: 1, SENZALCOOL: 1 };
+  var SINONIMI = { WHISKEY: 'WHISKY', TE: 'THE', TEA: 'THE', ESTATE: 'ESTATHE', LIQ: 'LIQUORE', SCIR: 'SCIROPPO', BITTERS: 'BITTER', AMARI: 'AMARO', SUCCHI: 'SUCCO', BIRRE: 'BIRRA', VINI: 'VINO', ACQUE: 'ACQUA', SCIROPPI: 'SCIROPPO', LIQUORI: 'LIQUORE', RHUM: 'RUM', RON: 'RUM', CHAMPAGNE: 'CHAMPAGNE', SPUMANTI: 'SPUMANTE', CANNUCCIA: 'CANNUCCE', TOVAGLIOLO: 'TOVAGLIOLI', BICCHIERE: 'BICCHIERI', COPERCHIO: 'COPERCHI', PALETTA: 'PALETTE', BUSTINA: 'BUSTINE', MONODOSE: 'BUSTINE', MONOPORZIONE: 'BUSTINE' };
+  // parole che descrivono ma non identificano: se il prodotto non le ha, contano poco
+  var CATEGORIE = ' VINO BIRRA ACQUA WHISKY GIN RUM VODKA LIQUORE AMARO SCIROPPO SUCCO BIBITA BEVANDA BRANDY COGNAC GRAPPA SPUMANTE THE APERITIVO BITTER TEQUILA CHAMPAGNE PROSECCO SALSA CREMA LIQUEUR ';
+  var DESCRITTORI = ' MINERALE LONDON DRY SINGLE MALT SCOTCH ORIGINAL ORIGINALE FINEST FINE CLASSICO CLASSICA CLASICO SPECIAL VERY OLD YR YRS YEAR YEARS ANNI PREMIUM EXTRA RESERVA RISERVA ANEJO BLEND BLENDED CRAFT ORGANIC ITALIAN IRISH JAPANESE FRATELLI SPINA AROMATIC PURO PURA CANTINA AZIENDA DISTILLERIA SPIRIT DISTILLED STRAIGHT KENTUCKY BOURBON PRODOTTO PRODUCT ' +
+    'CAMPANIA SICILIA TOSCANA PIEMONTE VENETO PUGLIA ABRUZZO FRIULI SARDEGNA CALABRIA LAZIO TRENTINO ALTO ADIGE IRPINIA VULTURE MARCHE UMBRIA LOMBARDIA LIGURIA BASILICATA MOLISE ';
+
+  function pulisci(s){
+    s = String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
+    s = s.replace(/[’‘`´']/g, ' ').replace(/\b([A-Z])\s?&\s?([A-Z])\b/g, '$1$2').replace(/&/g, ' E ');
+    s = s.replace(/º|°/g, ' ');
+    s = s.replace(/([A-Z])(?=\d)|(\d)(?=[A-Z])/g, '$1$2 ');
+    return s;
+  }
+  // parole del nome (senza formati e numeri); gli attributi restano tra le parole ma si confrontano anche a parte
+  function parole(nome){
+    var out = [];
+    pulisci(nome).split(/[^A-Z0-9]+/).forEach(function(w){
+      if(!w || /\d/.test(w) || w.length < 2) return;
+      if(STOP.indexOf(' ' + w + ' ') >= 0) return;
+      w = SINONIMI[w] || w;
+      if(out.indexOf(w) < 0) out.push(w);
+    });
+    return out;
+  }
+  // come parole(), ma segna le parole "secondarie": tra parentesi o dopo PER / X ("bitter per aspritz", "ape (aspritz)")
+  function paroleInfo(nome){
+    var out = [], sec = false, par = 0;
+    pulisci(nome).replace(/[()\[\]]/g, function(m){ return ' ' + m + ' '; }).split(/[^A-Z0-9()\[\]]+/).forEach(function(w){
+      if(w === '(' || w === '[' ){ par++; return; } if(w === ')' || w === ']'){ par = Math.max(0, par - 1); return; }
+      if(w === 'PER' || w === 'X'){ sec = true; return; }
+      if(!w || /\d/.test(w) || w.length < 2) return;
+      if(STOP.indexOf(' ' + w + ' ') >= 0) return;
+      w = SINONIMI[w] || w;
+      if(!out.some(function(x){ return x.t === w; })) out.push({ t: w, sec: sec || par > 0 });
+    });
+    return out;
+  }
+  function attributi(nome, tok){
+    var a = { colore: null, gas: null, cont: null, gusto: [], zero: false };
+    tok.forEach(function(t){
+      if(ZERO[t]) a.zero = true;
+      ['colore', 'gas', 'cont'].forEach(function(g){ var v = GRUPPI[g][t]; if(v) a[g] = a[g] && a[g] !== v ? '?' : v; });   // due valori diversi nello stesso nome: non lo considero
+      var gu = GRUPPI.gusto[t]; if(gu && a.gusto.indexOf(gu) < 0) a.gusto.push(gu);
+    });
+    if(/\b0\s?%|\bO%/.test(String(nome).toUpperCase())) a.zero = true;
+    return a;
+  }
+  // distanza di modifica con scambio di lettere vicine (Damerau), fermandosi oltre max
+  function dist(a, b, max){
+    if(Math.abs(a.length - b.length) > max) return max + 1;
+    var d = [], i, j;
+    for(i = 0; i <= a.length; i++){ d[i] = [i]; }
+    for(j = 0; j <= b.length; j++) d[0][j] = j;
+    for(i = 1; i <= a.length; i++){
+      var mn = 99;
+      for(j = 1; j <= b.length; j++){
+        var c = a[i - 1] === b[j - 1] ? 0 : 1;
+        d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + c);
+        if(i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+        if(d[i][j] < mn) mn = d[i][j];
+      }
+      if(mn > max) return max + 1;
+    }
+    return d[a.length][b.length];
+  }
+  function radice(w){ return w.replace(/(CH|GH)?[AEIOU]+$/, function(m, h){ return h ? h[0] : ''; }); }
+  function scheletro(w){ w = semplifica(w); return w[0] + w.slice(1).replace(/[AEIOU]/g, ''); }
+  function semplifica(w){ return w.replace(/(.)\1+/g, '$1').replace(/PH/g, 'F').replace(/Y/g, 'I').replace(/K/g, 'C').replace(/W/g, 'V').replace(/H/g, ''); }
+  // quanto la parola scritta q somiglia alla parola del catalogo c (0..1)
+  var _mc = {};
+  function somiglia(q, c){
+    if(q === c) return 1;
+    var k = q + '|' + c; if(_mc[k] != null) return _mc[k];
+    var r = 0, lq = q.length, lc = c.length, mn = Math.min(lq, lc);
+    // stesso gruppo di attributi ma valore diverso: mai simili (ROSA ≠ ROSSA, MELA ≠ MELE)
+    var gq = gruppoDi(q), gc = gruppoDi(c);
+    if(gq && gc){ r = gq === gc ? 1 : 0; return (_mc[k] = r); }
+    if((gq || gc) && semplifica(q) !== semplifica(c) && IX.df[gq ? c : q]) return (_mc[k] = 0);   // un attributo non somiglia a un'altra parola vera (BIANCO ≠ BRANCA); a una scritta male sì (PESSION = PASSION)
+    if(mn >= 4 && radice(q) === radice(c)) return (_mc[k] = 0.97);                                   // singolare/plurale: FUSTI = FUSTO, ANALCOLICHE = ANALCOLICA
+    if(semplifica(q) === semplifica(c) && mn >= 3) r = 0.95;                       // BECKS/BECK'S, HENDRIK/HENDRICK
+    else if(mn >= 4 && (c.indexOf(q) === 0 || q.indexOf(c) === 0)) r = lq >= lc ? 0.9 : (lq >= 4 && lq / lc >= 0.5 ? 0.85 : 0); // FRIZZ → FRIZZANTE, BECKS ⊃ BECK
+    else if(mn >= 3 && lc > lq + 1 && (c.slice(-lq) === q) && lq >= 3) r = 0.8;    // ESTATHE ⊃ THE (parola attaccata)
+    else if(lq >= 4 && lc >= 4){
+      var max = mn >= 9 ? 3 : mn >= 6 ? 2 : 1;
+      var d = dist(q, c, max);
+      if(d <= max){ r = 1 - d * (mn >= 7 ? 0.1 : 0.15); if(q[0] !== c[0]) r -= 0.15; }
+      else { d = max + 1; var d2 = dist(semplifica(q), semplifica(c), max); if(d2 <= max && (q[0] === c[0] || (d2 === 1 && mn >= 6))) r = 0.85 - d2 * 0.12; }
+      if(d <= max && q[0] !== c[0] && mn >= 7) r += 0.05;
+      if(r < 0.7 && mn >= 5){ var sq = scheletro(q), sc = scheletro(c); if(sq.length >= 3 && sq === sc) r = 0.78; }   // KEBEER ≈ KBIRR
+    }
+    return (_mc[k] = Math.max(0, r));
+  }
+  function gruppoDi(t){ var g = GRUPPI.colore[t] ? 'col:' + GRUPPI.colore[t] : GRUPPI.gas[t] ? 'gas:' + GRUPPI.gas[t] : GRUPPI.cont[t] ? 'cont:' + GRUPPI.cont[t] : GRUPPI.gusto[t] ? 'gu:' + GRUPPI.gusto[t] : null; return g; }
+
+  /* ── Indice del catalogo ───────────────────────────────────────── */
+  var IX = { firma: '', prodotti: [], df: {}, n: 0, voc: [] };
+  function firma(cat){ var s = cat.length + '|'; for(var i = 0; i < cat.length; i += Math.max(1, Math.floor(cat.length / 40))) s += cat[i].id + ':' + (cat[i].name || '').length + ','; return s; }
+  function prepara(cat){
+    var f = firma(cat || []); if(IX.firma === f) return IX;
+    var df = {}, prodotti = [];
+    (cat || []).forEach(function(p){
+      var nome = String(p.name || ''), tok = parole(nome), an = typeof DUP !== 'undefined' ? DUP.analizza(nome) : { vol: null, pack: null, peso: null, eta: null, nums: [] };
+      prodotti.push({ p: p, tok: tok, att: attributi(nome, tok), an: an });
+      tok.forEach(function(t){ df[t] = (df[t] || 0) + 1; });
+    });
+    IX = { firma: f, prodotti: prodotti, df: df, n: prodotti.length || 1, voc: Object.keys(df) };
+    return IX;
+  }
+  function idf(t){ var d = IX.df[t] || 0; return Math.log((IX.n + 1) / (d + 0.5)); }
+  var IDF_MAX = function(){ return Math.log((IX.n + 1) / 0.5); };
+  // per una parola scritta male: la parola del catalogo più vicina (per pesarla come quella)
+  var _vic = {};
+  function parolaNota(q){
+    if(IX.df[q]) return { t: q, s: 1 };
+    if(_vic[IX.firma + q]) return _vic[IX.firma + q];
+    var best = null;
+    IX.voc.forEach(function(c){ var s = somiglia(q, c); if(s >= 0.7 && (!best || s > best.s || (s === best.s && IX.df[c] > IX.df[best.t]))) best = { t: c, s: s }; });
+    return (_vic[IX.firma + q] = best);
+  }
+  function peso(t){ var g = gruppoDi(t); var w = idf(t); return g ? Math.min(w, 2.2) : w; }   // gli attributi contano, ma meno di una marca
+
+  /* ── Confronto nome ↔ prodotto ─────────────────────────────────── */
+  function contraddizioni(Q, P){
+    var a = Q.att, b = P.att, x = Q.an, y = P.an;
+    function v(z){ return z === '?' ? null : z; }
+    if(x.vol != null && y.vol != null && Math.abs(x.vol - y.vol) > Math.max(5, 0.03 * y.vol)) return 'formato';
+    if(x.pack != null && y.pack != null && x.pack !== y.pack) return 'pezzi';
+    if(x.peso != null && y.peso != null && Math.abs(x.peso - y.peso) > Math.max(5, 0.03 * y.peso)) return 'peso';
+    if(x.eta != null && y.eta != null && x.eta !== y.eta) return 'anni';
+    // "HAVANA ANEJO 7" → 7 anni: un numero piccolo scritto a mano vale come età se il prodotto ne ha una
+    if(x.eta == null && y.eta != null && x.nums && x.nums.length && x.nums.every(function(n){ return n !== y.eta && n < 40; }) && !(y.nums || []).some(function(n){ return x.nums.indexOf(n) >= 0; })) return 'anni';
+    if(v(a.colore) && v(b.colore) && a.colore !== b.colore) return 'colore';
+    if(v(a.gas) && v(b.gas) && a.gas !== b.gas) return 'naturale/frizzante';
+    if(v(a.cont) && v(b.cont) && a.cont !== b.cont) return 'contenitore';
+    if(a.zero && !b.zero) return 'zero';
+    // misure scritte come 24X24, 33X40 (tovaglioli, sacchi, vassoi): se entrambi le hanno devono coincidere
+    var mq = misure(Q.nome), mp = misure(P.p.name); if(mq.length && mp.length && !mq.some(function(x){ return mp.indexOf(x) >= 0; })) return 'misure';
+    if(a.gusto.length && b.gusto.length && !a.gusto.some(function(g){ return b.gusto.indexOf(g) >= 0; })) return 'gusto';
+    return null;
+  }
+  function misure(n){ var out = []; String(n || '').toUpperCase().replace(/(^|[^A-Z0-9,.])(\d{1,3})\s?X\s?(\d{1,3})(?![\d,.])/g, function(m, a, x, y){ out.push(x + 'X' + y); return m; }); return out; }
+  function valuta(Q, P){
+    var no = contraddizioni(Q, P); if(no) return { s: 0, no: no };
+    var tq = Q.tok, tp = P.tok, usate = {}, wQ = 0, mQ = 0, nonSpiegate = [], dettaglio = [], wForte = 0, nTrov = 0, haCat = false, haGusto = false;
+    var salta = -1, bjSalta = -1;
+    tq.forEach(function(q, qi){
+      var best = 0, bj = -1;
+      if(qi === salta){ best = 1; bj = bjSalta; }   // seconda metà di due parole unite ("KE BEER" = KBIRR)
+      else {
+        tp.forEach(function(c, j){ var s = somiglia(q, c); if(s > best){ best = s; bj = j; } });
+        // parola attaccata: "BIANCOSARTI" = "BIANCO SARTI", "LEMONSODA" = "LEMON SODA"
+        if(best < 0.9) for(var j = 0; j < tp.length - 1; j++){ if(tp[j] + tp[j + 1] === q){ best = 1; bj = j; usate[j + 1] = 1; } }
+        if(best < 0.9) tp.forEach(function(c, j){ if(c.length >= 6 && q.length > c.length + 2 && q.indexOf(c) >= 0){ var r = q.replace(c, ''); if(r.length >= 3 && tp.some(function(c2){ return c2 !== c && somiglia(r, c2) >= 0.85; })){ best = 0.95; bj = j; } } });
+        // due parole scritte staccate che nel catalogo sono una ("LEMON SODA" = LEMONSODA, "KE BEER" = KBIRR)
+        if(best < 0.85 && qi < tq.length - 1){ var unite = q + tq[qi + 1]; tp.forEach(function(c, j){ var x = somiglia(unite, c); if(x >= 0.75 && x > best){ best = x; bj = j; salta = qi + 1; bjSalta = j; } }); }
+      }
+      var nota = parolaNota(q), w = nota ? Math.min(peso(nota.t), IDF_MAX()) : IDF_MAX() * 0.9;
+      if(best < 0.7){
+        if(/^(cont|gas):/.test(gruppoDi(q) || '') && !tp.some(function(c){ return gruppoDi(c) && gruppoDi(c).split(':')[0] === gruppoDi(q).split(':')[0]; })) w *= 0.4;   // attributo che il prodotto non dice: conta meno
+        if(CATEGORIE.indexOf(' ' + q + ' ') >= 0 || (nota && nota.s >= 0.85 && CATEGORIE.indexOf(' ' + nota.t + ' ') >= 0)) w = Math.min(w, 0.8);   // "VINO" bianco fiagre: la categoria spesso non è nel nome
+        else if(DESCRITTORI.indexOf(' ' + q + ' ') >= 0) w = Math.min(w, 0.6);                                                          // london dry, single malt…
+        if(Q.sec[qi]) w = Math.min(w * 0.25, 0.8);                                                                                                    // tra parentesi o "per …"
+      }
+      wQ += w;
+      if(best >= 0.7){ mQ += w * best; usate[bj] = 1; dettaglio.push(q + (tp[bj] !== q ? '≈' + tp[bj] : '')); var gr = gruppoDi(tp[bj]), cate = CATEGORIE.indexOf(' ' + tp[bj] + ' ') >= 0, ident = !gr && !cate && DESCRITTORI.indexOf(' ' + tp[bj] + ' ') < 0; if(ident){ nTrov++; if(best >= 0.95 && w > wForte) wForte = w; } if(cate) haCat = true; if(gr && /^(gu|col):/.test(gr) && best >= 0.95) haGusto = true; }
+      else nonSpiegate.push({ t: q, w: w, nota: !!nota });
+    });
+    var wP = 0, mP = 0, mancanti = [];
+    tp.forEach(function(c, j){ var w = peso(c); if(!usate[j] && (CATEGORIE.indexOf(' ' + c + ' ') >= 0 || DESCRITTORI.indexOf(' ' + c + ' ') >= 0)) w *= 0.3; wP += w; if(usate[j]) mP += w; else mancanti.push(c); });
+    var covQ = wQ ? mQ / wQ : 0, covP = wP ? mP / wP : 0;
+    // numeri e formato in comune aiutano a scegliere
+    var bonus = 0;
+    if(Q.an.vol != null && Q.an.vol === P.an.vol) bonus += 0.04;
+    if(Q.an.pack != null && Q.an.pack === P.an.pack) bonus += 0.03;
+    if(Q.an.eta != null && Q.an.eta === P.an.eta) bonus += 0.03;
+    if(Q.an.eta == null && P.an.eta != null && (Q.an.nums || []).indexOf(P.an.eta) >= 0) bonus += 0.04;
+    var malus = 0;
+    if(P.att.zero && !Q.att.zero) malus += 0.25;   // ZERO non richiesto: preferisco la versione normale
+    var s = Math.max(0, Math.min(1, 0.62 * covQ + 0.38 * covP + bonus - malus));
+    return { s: s, covQ: covQ, covP: covP, nonSpiegate: nonSpiegate, mancanti: mancanti, comuni: dettaglio, certo: nTrov >= 2 || wForte > 0 || (haCat && haGusto), ident: nTrov > 0 || (haCat && haGusto) };   // "SCIROPPO GRANATINA": categoria + gusto identificano
+  }
+  function analisiNome(nome){
+    var info = paroleInfo(nome);
+    // attributi riconosciuti anche scritti male (VETEO = VETRO, NATURARLE = NATURALE)
+    var tok = info.map(function(x){ var t = x.t; if(gruppoDi(t) || ZERO[t] || IX.df[t]) return t; var n = parolaNota(t); return n && n.s >= 0.85 && (gruppoDi(n.t) || ZERO[n.t]) ? n.t : t; });
+    var corrette = tok;
+    return { nome: nome, tok: tok, sec: info.map(function(x){ return x.sec; }), att: attributi(nome, corrette), an: typeof DUP !== 'undefined' ? DUP.analizza(nome) : { nums: [] } };
+  }
+  // stessi prodotti in formati diversi: stesse parole a parte formato, pezzi, anni
+  function stessaFamiglia(A, B){
+    if(A.att.zero !== B.att.zero) return false;
+    var a = A.tok.filter(function(t){ return !GRUPPI.cont[t]; }), b = B.tok.filter(function(t){ return !GRUPPI.cont[t]; });
+    if(a.length !== b.length) return false;
+    return a.every(function(t){ return b.some(function(u){ return somiglia(t, u) >= 0.9; }); });
+  }
+
+  /* cerca(nome, o) → { tipo: 'esatto'|'scegli'|'forse'|'nessuno', p, gruppo, cand: [{c, s, ...}], perche }
+     o: { lista, storia: {id: volte}, no: [id], settore } */
+  function cerca(nome, o){
+    o = o || {};
+    prepara(o.lista || (typeof CAT !== 'undefined' ? CAT : []));
+    var Q = analisiNome(nome);
+    if(!Q.tok.length) return { tipo: 'nessuno', cand: [], perche: 'nome senza parole utili' };
+    var no = o.no || [], storia = o.storia || {};
+    var ris = [];
+    IX.prodotti.forEach(function(P){
+      if(no.indexOf(P.p.id) >= 0) return;
+      if(o.settore && P.p.settore && P.p.settore !== o.settore) return;
+      // prefiltro veloce: almeno una parola in comune o simile
+      if(!Q.tok.some(function(q){ return P.tok.some(function(c){ return somiglia(q, c) >= 0.7 || (c.length >= 6 && q.indexOf(c) >= 0); }); })) return;
+      var v = valuta(Q, P); if(!(v.s > 0)) return;
+      v.P = P; v.c = P.p; ris.push(v);
+    });
+    ris.sort(function(a, b){ return b.s - a.s || (storia[b.c.id] || 0) - (storia[a.c.id] || 0); });
+    var cand = ris.slice(0, 8).map(function(v){ return { c: v.c, s: Math.round(v.s * 100), covQ: v.covQ, covP: v.covP, nonSpiegate: v.nonSpiegate.map(function(x){ return x.t; }), comuni: v.comuni }; });
+    if(!ris.length) return { tipo: 'nessuno', cand: [], perche: 'nessun prodotto con parole in comune' };
+    var top = ris[0];
+    // 1. chi spiega TUTTE le parole scritte (con i pesi: marca e nome contano, "vino"/"per…" poco)
+    var spiegano = ris.filter(function(v){ return v.covQ >= 0.8 && v.s >= 0.5 && v.ident; });   // senza una parola che identifica ("THE LONDON N.1") non si sceglie
+    if(spiegano.length){
+      // 2. raggruppo per prodotto (stesso prodotto in formati diversi = una famiglia)
+      var fams = [];
+      spiegano.forEach(function(v){ var f = fams.find(function(F){ return stessaFamiglia(F[0].P, v.P); }); if(f) f.push(v); else fams.push([v]); });
+      function vicinanza(F){ return Math.max.apply(null, F.map(function(v){ return v.covP - (v.P.att.zero && !Q.att.zero ? 0.5 : 0); })); }
+      fams.sort(function(A, B){ return vicinanza(B) - vicinanza(A) || B[0].s - A[0].s; });
+      // 3. un solo prodotto spiega il nome, oppure uno lo spiega senza aggiungere nulla e gli altri hanno parole in più
+      //    (TANQUERAY → GIN TANQUERAY, non TANQUERAY TEN né 0%; PERONI ROSSA → GRAN RISERVA ROSSA)
+      var unico = fams.length === 1 || (vicinanza(fams[0]) >= 0.95 && vicinanza(fams[1]) <= vicinanza(fams[0]) - 0.2);
+      if(unico){
+        var F = fams[0];
+        // prova d'identità: almeno una parola giusta (non solo corretta da un errore) e il nome copre una parte vera del prodotto
+        if(!F.some(function(v){ return v.certo && v.ident && v.covP >= 0.3; })) return { tipo: 'forse', p: F[0].c, gruppo: F.length > 1 ? F.map(function(v){ return v.c; }) : null, cand: cand, perche: F[0].certo ? 'il nome dice poco di questo prodotto' : 'parola corretta da un errore di battitura: conferma' };
+        if(F.length === 1) return { tipo: 'esatto', p: F[0].c, cand: cand, perche: fams.length === 1 ? 'è l\'unico prodotto con questo nome' : 'è la versione base (le altre hanno parole in più)' };
+        var tot = 0, migl = null;
+        F.forEach(function(v){ var n = storia[v.c.id] || 0; tot += n; if(!migl || n > (storia[migl.c.id] || 0)) migl = v; });
+        var gruppo = F.map(function(v){ return v.c; }).sort(function(a, b){ return (storia[b.id] || 0) - (storia[a.id] || 0); });
+        if(migl && tot >= 3 && (storia[migl.c.id] || 0) / tot >= 0.75) return { tipo: 'esatto', p: migl.c, gruppo: gruppo, cand: cand, perche: 'è il formato che ordini di solito (' + storia[migl.c.id] + ' volte su ' + tot + ')' };
+        return { tipo: 'scegli', p: gruppo[0], gruppo: gruppo, cand: cand, perche: 'c\'è in ' + F.length + ' formati: quale?' };
+      }
+      var scelte = fams.slice(0, 6).map(function(F){ return F.slice().sort(function(a, b){ return (storia[b.c.id] || 0) - (storia[a.c.id] || 0) || b.s - a.s; })[0].c; });
+      scelte.sort(function(a, b){ return (storia[b.id] || 0) - (storia[a.id] || 0); });
+      return { tipo: 'scegli', p: scelte[0], gruppo: scelte, cand: cand, perche: fams.length + ' prodotti diversi corrispondono: quale?' };
+    }
+    // solo gusto/colore ("ELDERFLOWER", "granatina"): propongo chi li ha, mai in automatico
+    var soloAttr = Q.tok.every(function(t){ return gruppoDi(t) || CATEGORIE.indexOf(' ' + t + ' ') >= 0 || ZERO[t]; }) && Q.tok.some(function(t){ return /^(gu|col):/.test(gruppoDi(t) || ''); });
+    if(soloAttr){ var conAttr = ris.filter(function(v){ return v.covQ >= 0.8; }).slice(0, 6); if(conAttr.length) return { tipo: 'scegli', p: conAttr[0].c, gruppo: conAttr.map(function(v){ return v.c; }), cand: cand, perche: 'più prodotti hanno questo gusto: quale?' }; }
+    var perche = 'non tutte le parole corrispondono' + (top.nonSpiegate.length ? ' (' + top.nonSpiegate.map(function(x){ return x.t; }).join(', ') + ')' : '');
+    if((top.s >= 0.45 && top.covQ >= 0.45 && top.covP >= 0.4) || (top.covP >= 0.75 && top.certo)) return { tipo: 'forse', p: top.c, cand: cand, perche: perche };
+    return { tipo: 'nessuno', cand: cand, perche: perche };
+  }
+  // per la ricerca mentre si scrive: i prodotti più vicini, anche con errori di battitura
+  function suggerisci(nome, o){ var r = cerca(nome, o || {}); return r.cand.filter(function(x){ return x.s >= 35; }).map(function(x){ return x.c; }); }
+  return { cerca: cerca, suggerisci: suggerisci, prepara: prepara, parole: parole, somiglia: somiglia, _valuta: function(n, p){ prepara(typeof CAT !== 'undefined' ? CAT : []); return valuta(analisiNome(n), IX.prodotti.find(function(x){ return x.p.id === p; })); } };
+})();
+
 /* ── Codici a barre: un prodotto può averne più d'uno (pezzo, cartone, confezione nuova).
    Nel catalogo stanno nello stesso campo, separati da virgola: "8001234567890,8009876543210". ── */
 function barcodeLista(p){ return String((p && p.barcode) || '').split(/[,;\s]+/).map(function(c){ return c.trim(); }).filter(Boolean); }
@@ -1486,7 +1779,7 @@ async function cambiaStatoRichieste(ids, stato, daStati){
   if(!ids.length) return [];
   var q = 'ceraldi_richieste_storico?id=in.(' + ids.join(',') + ')' + (daStati ? '&stato=in.(' + daStati.join(',') + ')' : '');
   var r = await api(q, { method: 'PATCH', prefer: 'return=representation', body: { stato: stato } });
-  (r || []).forEach(function(x){ var i = RICH.findIndex(function(y){ return y.id === x.id; }); if(i >= 0) RICH[i] = x; });
+  (r || []).forEach(function(x){ var i = RICH.findIndex(function(y){ return y.id === x.id; }); if(i >= 0) RICH[i] = x; else if(x.stato === 'pending' || x.stato === 'importata') RICH.unshift(x); if(VR.tutte){ var j = VR.tutte.findIndex(function(y){ return y.id === x.id; }); if(j >= 0) VR.tutte[j] = x; } });
   RICH = RICH.filter(function(x){ return x.stato === 'pending' || x.stato === 'importata'; });
   return r || [];
 }
@@ -1549,6 +1842,61 @@ function salvaAlias(nome, id){
   if((docDati('or8_conf').alias || {})[k] === id) return;
   docModifica('or8_conf', function(d){ d.alias = d.alias || {}; d.alias[k] = id; });
   api('ceraldi_alias_prodotti?on_conflict=alias_norm', { method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: { alias_norm: k, product_id: id } }).catch(function(){});
+}
+/* ── Riconoscimento dei nomi scritti dai dipendenti (motore RIC) ─────
+   Storia: quante volte ogni prodotto è stato ordinato (decide il formato
+   quando il dipendente non lo scrive). "No": prodotti che hai già detto
+   non essere quel nome — non vengono più proposti. */
+var _storia = { firma: '', m: {} };
+function storiaProdotti(){
+  var f = STORICO.length + '|' + (STORICO[0] ? STORICO[0].id : '');
+  if(_storia.firma === f) return _storia.m;
+  var m = {};
+  STORICO.forEach(function(o){ (o.items || []).forEach(function(i){ if(i.id != null) m[i.id] = (m[i.id] || 0) + 1; }); });
+  _storia = { firma: f, m: m }; return m;
+}
+function noRic(nome){ return ((docDati('or8_conf').noRic || {})[aliasNorm(nome)] || []); }
+function salvaNoRic(nome, id){
+  var k = aliasNorm(nome); if(!k || id == null) return;
+  docModifica('or8_conf', function(d){ d.noRic = d.noRic || {}; var l = d.noRic[k] || []; if(l.indexOf(id) < 0) l.push(id); d.noRic[k] = l.slice(-12); if(d.alias && d.alias[k] === id) delete d.alias[k]; });
+}
+// Ricerca per le schermate "scegli un prodotto": prima chi contiene tutte le parole, poi i più simili anche scritti male
+function cercaCatalogo(q, n){
+  n = n || 30; q = String(q || '').trim(); if(!q) return [];
+  var esatti = CAT.filter(function(p){ return cercaTutte(p.name, q) || barcodeHa(p, q); });
+  if(esatti.length >= n || q.length < 3) return esatti.slice(0, n);
+  var simili = RIC.cerca(q, { storia: storiaProdotti() }).cand.filter(function(x){ return x.s >= 30; }).map(function(x){ return x.c; }).filter(function(p){ return esatti.indexOf(p) < 0; });
+  return esatti.concat(simili).slice(0, n);
+}
+/* Un prodotto scritto a mano in una richiesta → { p, tipo: esatto | scegli | forse | nessuno, gruppo, cand, perche }
+   1. nome già collegato una volta da te  2. codice a barre  3. motore RIC (parole, errori, formati, storia) */
+function riconosciRichiesta(it){
+  var no = noRic(it.name);
+  var a = aliasDi(it.name);
+  if(a && no.indexOf(a.id) < 0) return { p: a, tipo: 'esatto', perche: 'l\'hai già collegato tu una volta' };
+  if(it.barcode){ var bc = prodottoDaBarcode(CAT, it.barcode); if(bc) return { p: bc, tipo: 'esatto', perche: 'riconosciuto dal codice a barre' }; }
+  var r = RIC.cerca(it.name, { storia: storiaProdotti(), no: no });
+  // "somiglia a" solo per chi ha in comune almeno metà del nome (non basta un colore: ROSA ≠ MALFY ROSA)
+  return { p: r.p || null, tipo: r.tipo, gruppo: r.gruppo || null, cand: (r.cand || []).map(function(x){ return x.c; }), simili: (r.cand || []).filter(function(x){ return x.covQ >= 0.45 && x.s >= 40; }).map(function(x){ return x.c; }), perche: r.perche || '' };
+}
+/* L'assistente come secondo parere sui casi incerti: conferma solo se sceglie lo stesso prodotto del motore,
+   altrimenti propone il suo (sempre da confermare). Mai un prodotto fuori dai candidati. */
+async function secondoParereIA(voci){
+  if(!voci.length || !chiaveAI()) return;
+  try{
+    var prompt = 'Sei il magazziniere di un bar. Un dipendente ha scritto a mano il nome di un prodotto da ordinare. Per ciascuna voce scegli quale dei prodotti del catalogo intende, oppure nessuno.\n' +
+      'Regole: marca e tipo devono coincidere; se il dipendente non scrive il formato, va bene un formato qualsiasi dello stesso prodotto; errori di battitura e dialetto sono normali (es. "poeersde" = Powerade). Se non sei sicuro rispondi conf "bassa".\n\nVOCI:\n' +
+      voci.map(function(v, i){ return i + '. "' + v.nome + '" — catalogo: ' + v.cand.map(function(p){ return '[id:' + p.id + '] ' + p.name; }).join(' | '); }).join('\n') +
+      '\n\nRispondi SOLO con un array JSON, un elemento per voce nello stesso ordine: [{"id":123,"conf":"alta"},{"id":null,"conf":"nessuna"}].';
+    var arr = jsonDaTesto(await chiamaClaude(prompt, Math.min(4000, 200 + voci.length * 60)));
+    if(!Array.isArray(arr) || arr.length !== voci.length) return;
+    voci.forEach(function(v, i){
+      var r = arr[i], x = v.x; if(!r || r.id == null) return;
+      var p = v.cand.find(function(c){ return c.id === r.id; }); if(!p) return;
+      if(x.p && x.p.id === p.id && r.conf === 'alta' && x.tipo === 'forse'){ x.tipo = 'esatto'; x.perche = 'riconosciuto e confermato dall\'assistente'; }
+      else if(x.tipo !== 'esatto'){ x.ia = p; x.iaConf = r.conf; }
+    });
+  }catch(e){ _registraErrore('ia richieste', e.message); }
 }
 /* IA (06/10/2026): la chiave Anthropic non sta più sul telefono. Le richieste
    passano dalla funzione "ia" del server, che tiene la chiave e risponde solo a
@@ -2374,7 +2722,9 @@ function renderProdotti(){
   var l = filtraProdotti(), m = l.slice(0, VIEW.limite);
   var h = m.map(rigaProdotto).join('');
   if(l.length > m.length) h += '<button class="btn btn-s" style="margin-top:6px" onclick="VIEW.limite+=100;renderProdotti()">Mostra altri ' + (l.length - m.length) + '</button>';
-  if(!l.length) h = '<div class="empty"><div class="ei">🔎</div><b>Nessun prodotto</b><p>' + (VIEW.q ? 'Nel catalogo non c\'è "' + esc(VIEW.q) + '".' : 'Niente in questa sezione.') + '</p>' +
+  var forse = !l.length && VIEW.q && VIEW.q.length >= 3 && !/^\d{8,14}$/.test(VIEW.q) ? RIC.cerca(VIEW.q, { storia: storiaProdotti() }).cand.filter(function(x){ return x.s >= 35; }).slice(0, 6).map(function(x){ return x.c; }) : [];
+  if(forse.length) h = '<div class="sec-title">Nessun prodotto con "' + esc(VIEW.q) + '" · forse cercavi</div>' + forse.map(rigaProdotto).join('') + (!U.lettura ? '<button class="btn btn-s" style="margin-top:10px" onclick="apriNuovoProdotto(VIEW.q)">Non è nessuno di questi: crea "' + esc(maiusc(VIEW.q)) + '"</button>' : '');
+  else if(!l.length) h = '<div class="empty"><div class="ei">🔎</div><b>Nessun prodotto</b><p>' + (VIEW.q ? 'Nel catalogo non c\'è "' + esc(VIEW.q) + '".' : 'Niente in questa sezione.') + '</p>' +
     (VIEW.q && !U.lettura ? '<button class="btn btn-s" style="margin-top:14px" onclick="apriNuovoProdotto(VIEW.q)">+ Crea "' + esc(maiusc(VIEW.q)) + '"</button>' : '') + '</div>';
   el.innerHTML = h;
   cercaListini();
@@ -2438,15 +2788,15 @@ function aggiungi(id, qty, opz){
   var q = qty || p.qty_min || 1, k = 'p' + id;
   docModifica('or8_carrello', function(d){
     var r = d.righe[k];
-    if(r){ r.qty = (r.qty || 0) + q; if(opz.da) r.da = (r.da || []).concat(opz.da); if(opz.nota) r.nota = opz.nota; if(opz.forn) r.forn = opz.forn; }
-    else d.righe[k] = { id: id, nome: p.name, conf: p.conf || '', qty: q, forn: opz.forn || null, nota: opz.nota || p.nota_ordine || '', da: opz.da || [], at: new Date().toISOString() };
+    if(r){ r.qty = (r.qty || 0) + q; if(opz.da) r.da = (r.da || []).concat(opz.da); if(opz.nota) r.nota = opz.nota; if(opz.forn) r.forn = opz.forn; if(opz.orig && !r.orig) r.orig = opz.orig; if(opz.sost && !r.sost) r.sost = opz.sost; }
+    else { d.righe[k] = { id: id, nome: p.name, conf: p.conf || '', qty: q, forn: opz.forn || null, nota: opz.nota || p.nota_ordine || '', da: opz.da || [], at: new Date().toISOString() }; if(opz.orig) d.righe[k].orig = opz.orig; if(opz.sost) d.righe[k].sost = opz.sost; }
   });
   if(!opz.muto){ aggiornaRiga(id); aggiornaBarra(); toast(nomeBreve(p.name, 30) + ' × ' + q + ' nel carrello', { durata: 1500 }); }
 }
 function aggiungiProvvisorio(nome, conf, qty, opz){
   opz = opz || {};
   var k = 'x' + uid();
-  docModifica('or8_carrello', function(d){ d.righe[k] = { id: null, nome: maiusc(nome), conf: conf || '', qty: qty || 1, forn: opz.forn || null, nota: opz.nota || '', da: opz.da || [], barcode: opz.barcode || null, at: new Date().toISOString() }; });
+  docModifica('or8_carrello', function(d){ d.righe[k] = { id: null, nome: maiusc(nome), orig: nome, conf: conf || '', qty: qty || 1, forn: opz.forn || null, nota: opz.nota || '', da: opz.da || [], barcode: opz.barcode || null, at: new Date().toISOString() }; });
   return k;
 }
 function cambiaQ(k, d){
@@ -2653,6 +3003,8 @@ function renderCarrello(){
       if(r.forn && x.p && migliore(x.p).forn && migliore(x.p).forn !== gr.forn){ var mm = migliore(x.p); bd += '<span class="bdg n">da ' + esc(mm.forn) + ' costa ' + eur(mm.prezzo) + '</span> '; }
       (r.da || []).forEach(function(d){ bd += '<span class="bdg b">da ' + esc(String(d.n || '').split(' ')[0]) + '</span> '; });
       if(r.nota) bd += '<span class="bdg n">📝 ' + esc(nomeBreve(r.nota, 26)) + '</span>';
+      if(r.sost) bd += '<span class="bdg b">🔄 al posto di ' + esc(nomeBreve(r.sost, 26)) + '</span>';
+      else if(r.orig && r.id != null && norm(r.orig) !== norm(r.nome)) bd += '<span class="bdg n">scritto «' + esc(nomeBreve(r.orig, 24)) + '»</span>';
       h += '<div class="cr"><div class="row-main" onclick="' + (r.id != null ? 'apriProdotto(' + r.id + ')' : '') + '"><div class="cr-t">' + esc(r.nome) + '</div><div class="cr-s">' + esc(r.conf || '') + (x.prezzo != null ? ' · ' + eur(x.prezzo) + ' cad.' : '') + '</div>' + (bd ? '<div class="pr-res">' + bd + '</div>' : '') + '</div>' +
         '<div class="cr-r"><b class="tnum">' + (x.prezzo != null ? eur(x.sub) : '—') + '</b><div style="display:flex;gap:6px;align-items:center"><span class="stp"><button onclick="cambiaQ(\'' + x.k + '\',-1)">−</button><b data-q="' + x.k + '">' + r.qty + '</b><button onclick="cambiaQ(\'' + x.k + '\',1)">+</button></span><button class="more-b" onclick="menuRiga(\'' + x.k + '\')">⋯</button></div></div></div>';
     });
@@ -2670,7 +3022,8 @@ function menuRiga(k){
   apriSheet('shMR', { titolo: nomeBreve(r.nome, 38), corpo:
     '<div class="sec-title">Ordina da</div><div class="grp">' + opz.slice(0, p ? 30 : 30).map(function(o){ return '<button class="row" data-f="' + esc(o.f) + '" onclick="cambiaFornRiga(\'' + k + '\',this.dataset.f)"><div class="row-main"><div class="row-t" style="font-size:14.5px">' + esc(o.f) + '</div>' + (o.pr == null && p ? '<div class="row-s">prezzo non disponibile</div>' : '') + '</div><div class="row-r">' + (o.pr != null ? '<b style="color:var(--ink)">' + eur(o.pr) + '</b>' : '') + (o.f === att ? ' <span style="color:var(--blue)">✓</span>' : '') + '</div></button>'; }).join('') + '</div>' +
     '<div class="grp"><button class="row" onclick="notaRiga(\'' + k + '\')"><div class="row-ico">📝</div><div class="row-main"><div class="row-t">Nota per questo prodotto</div><div class="row-s">' + esc(r.nota || 'nessuna') + '</div></div></button>' +
-    (r.id == null ? '<button class="row" onclick="chiudiSheet(\'shMR\');collegaProvvisorio(\'' + k + '\')"><div class="row-ico ic-p">🔗</div><div class="row-main"><div class="row-t">Collega a un prodotto del catalogo</div><div class="row-s">o crealo nuovo</div></div></button>' : '') +
+    (r.id == null ? '<button class="row" onclick="chiudiSheet(\'shMR\');collegaProvvisorio(\'' + k + '\')"><div class="row-ico ic-p">🔗</div><div class="row-main"><div class="row-t">Collega a un prodotto del catalogo</div><div class="row-s">o crealo nuovo</div></div></button>'
+      : '<button class="row" onclick="chiudiSheet(\'shMR\');apriSostituisci(\'' + k + '\')"><div class="row-ico ic-p">🔄</div><div class="row-main"><div class="row-t">Sostituisci con un altro prodotto</div><div class="row-s">Stessa quantità' + ((r.da || []).length ? ', il dipendente lo vede nell\'avviso' : '') + '</div></div></button>') +
     '<button class="row" onclick="salvaPerDopo(\'' + k + '\')"><div class="row-ico ic-b">🕓</div><div class="row-main"><div class="row-t">Salva per dopo</div><div class="row-s">Lo togli da questo ordine ma non lo perdi</div></div></button>' +
     '<button class="row" onclick="chiudiSheet(\'shMR\');rimuoviRiga(\'' + k + '\')"><div class="row-ico ic-r">✕</div><div class="row-main"><div class="row-t" style="color:var(--red)">Togli dal carrello</div></div></button></div>' });
 }
@@ -2691,17 +3044,45 @@ async function svuotaCarrello(){
   chiudiSheet('shCarr'); renderOrdina();
   toast('Carrello svuotato', { azione: 'Annulla', onAzione: function(){ docModifica('or8_carrello', function(d){ Object.assign(d.righe, copia); }); renderOrdina(); } });
 }
+/* ── Sostituire un prodotto del carrello con un altro del catalogo ─── */
+function apriSostituisci(k){
+  var r = carr().righe[k]; if(!r) return;
+  var simili = RIC.cerca(r.orig || r.nome, { storia: storiaProdotti() }).cand.map(function(x){ return x.c; });
+  var stessaCat = r.id != null && CATMAP[r.id] ? CAT.filter(function(p){ return p.id !== r.id && catDi(p) === catDi(CATMAP[r.id]) && settoreDi(p) === settoreDi(CATMAP[r.id]); }) : [];
+  var visti = {}; visti[r.id] = 1;
+  var l = simili.concat(stessaCat).filter(function(p){ if(visti[p.id]) return false; visti[p.id] = 1; return true; }).slice(0, 12);
+  var impara = r.orig && norm(r.orig) !== norm(r.nome) ? '<label class="banner b" style="display:flex;gap:10px;align-items:flex-start;cursor:pointer"><input type="checkbox" id="sostImpara" style="width:18px;height:18px;margin-top:2px"><div style="font-size:13px">Il dipendente aveva scritto <b>«' + esc(r.orig) + '»</b> e l\'app l\'aveva collegato a questo prodotto. Spunta se era un errore: la prossima volta «' + esc(r.orig) + '» diventa il prodotto che scegli ora. Lascia vuoto se lo cambi solo questa volta (es. non disponibile).</div></label>' : '';
+  apriSheet('shSost', { titolo: 'Sostituisci', sotto: 'Al posto di <b>' + esc(r.nome) + '</b> × ' + r.qty,
+    corpo: impara + '<div class="sw"><span class="si">🔎</span><input id="sostQ" placeholder="Cerca nel catalogo" oninput="sostCerca(\'' + k + '\')"></div><div id="sostRis">' + (l.length ? '<div class="sec-title">Simili</div>' : '') + sostRighe(k, l) + '</div>' });
+}
+function sostRighe(k, l){ return '<div class="grp">' + (l.length ? l.map(function(p){ var m = migliore(p); return '<button class="row" onclick="sostituisciRiga(\'' + k + '\',' + p.id + ')"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p.name) + '</div><div class="row-s">' + esc([p.conf, m.forn ? m.forn + ' ' + eur(m.prezzo) : ''].filter(Boolean).join(' · ')) + '</div></div><span class="chev">›</span></button>'; }).join('') : '<div class="row"><div class="row-main row-s">Scrivi per cercare.</div></div>') + '</div>'; }
+function sostCerca(k){ var r = carr().righe[k], q = document.getElementById('sostQ').value; document.getElementById('sostRis').innerHTML = sostRighe(k, cercaCatalogo(q, 30).filter(function(p){ return !r || p.id !== r.id; })); }
+function sostituisciRiga(k, id){
+  var r = carr().righe[k], p = CATMAP[id]; if(!r || !p) return;
+  var copia = JSON.parse(JSON.stringify(r)), vecchio = r.id, nomeVecchio = r.nome, nk = 'p' + id;
+  // solo se dici che era riconosciuto male imparo il collegamento giusto (una sostituzione per mancanza non è un errore)
+  var imp = document.getElementById('sostImpara');
+  if(r.orig && imp && imp.checked){ if(vecchio != null) salvaNoRic(r.orig, vecchio); salvaAlias(r.orig, id); }
+  docModifica('or8_carrello', function(d){
+    var x = d.righe[k]; if(!x) return; delete d.righe[k];
+    var forn = x.forn && prezzoDi(p, x.forn) != null ? x.forn : null;
+    var nuovo = Object.assign({}, x, { id: id, nome: p.name, conf: p.conf || '', forn: forn, sost: (x.da || []).length ? (x.sost || nomeVecchio) : null });
+    if(d.righe[nk]){ d.righe[nk].qty += x.qty; d.righe[nk].da = (d.righe[nk].da || []).concat(x.da || []); if(nuovo.sost) d.righe[nk].sost = nuovo.sost; } else d.righe[nk] = nuovo;
+  });
+  chiudiSheet('shSost'); renderCarrello(); renderOrdina(); aggiornaBarra();
+  toast('Sostituito con ' + nomeBreve(p.name, 28), { azione: 'Annulla', onAzione: function(){ docModifica('or8_carrello', function(d){ var y = d.righe[nk]; if(y){ if(y.qty > copia.qty) y.qty -= copia.qty; else delete d.righe[nk]; } d.righe[k] = copia; }); renderCarrello(); renderOrdina(); aggiornaBarra(); } });
+}
 async function collegaProvvisorio(k){
   var r = carr().righe[k]; if(!r) return;
-  var c = candidati(r.nome, CAT, 6);
+  var c = RIC.cerca(r.orig || r.nome, { storia: storiaProdotti(), no: noRic(r.orig || r.nome) }).cand.slice(0, 8);
   apriSheet('shCol', { titolo: 'Collega al catalogo', sotto: esc(r.nome), corpo: '<div class="sw"><span class="si">🔎</span><input id="colQ" placeholder="Cerca nel catalogo" oninput="colCerca(\'' + k + '\')"></div><div id="colRis">' + colRighe(k, c.map(function(x){ return x.c; })) + '</div>',
     piede: '<button class="btn btn-s" onclick="chiudiSheet(\'shCol\');creaDaProvvisorio(\'' + k + '\')">Non c\'è: crea nuovo prodotto</button>' });
 }
 function colRighe(k, l){ return '<div class="grp">' + (l.length ? l.map(function(p){ return '<button class="row" onclick="collegaA(\'' + k + '\',' + p.id + ')"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p.name) + '</div><div class="row-s">' + esc([p.conf, migliore(p).forn].filter(Boolean).join(' · ')) + '</div></div><span class="chev">›</span></button>'; }).join('') : '<div class="row"><div class="row-main row-s">Nessun prodotto simile.</div></div>') + '</div>'; }
-function colCerca(k){ var q = document.getElementById('colQ').value; document.getElementById('colRis').innerHTML = colRighe(k, CAT.filter(function(p){ return cercaTutte(p.name, q); }).slice(0, 30)); }
+function colCerca(k){ var q = document.getElementById('colQ').value; document.getElementById('colRis').innerHTML = colRighe(k, cercaCatalogo(q, 30)); }
 function collegaA(k, id){
   var r = carr().righe[k], p = CATMAP[id]; if(!r || !p) return;
-  salvaAlias(r.nome, id);
+  salvaAlias(r.orig || r.nome, id);
   if(r.barcode && !barcodeHa(p, r.barcode)) aggiornaProdotto(id, { barcode: barcodeConAggiunto(p, r.barcode) }).catch(function(){});
   docModifica('or8_carrello', function(d){ var x = d.righe[k]; if(!x) return; delete d.righe[k]; var nk = 'p' + id; if(d.righe[nk]){ d.righe[nk].qty += x.qty; d.righe[nk].da = (d.righe[nk].da || []).concat(x.da || []); } else d.righe[nk] = Object.assign(x, { id: id, nome: p.name, conf: p.conf || '' }); });
   chiudiSheet('shCol'); renderCarrello(); renderOrdina(); toast('Collegato: la prossima volta lo riconosco da solo');
@@ -2726,6 +3107,7 @@ function snapshotOrdine(forn){
   var items = rr.map(function(x){
     var it = { id: x.r.id, name: x.r.nome, conf: x.r.conf || '', qty: x.r.qty, price: x.prezzo != null ? x.prezzo : 0, note: x.r.nota || '' };
     var rich = (x.r.da || []).map(function(d){ return d.r; }).filter(Boolean); if(rich.length) it.rich = rich;
+    if(x.r.sost) it.sost = x.r.sost;
     return it;
   });
   return { forn: forn, righe: rr, items: items, nota: nota, totale: r2(items.reduce(function(s, i){ return s + i.price * i.qty; }, 0)) };
@@ -2786,7 +3168,7 @@ async function finalizzaOrdine(s, canale){
       cambiate.forEach(function(r){
         var u = utenteRichiesta(r); if(!u) return;
         var miei = s.items.filter(function(i){ return s.righe.some(function(x){ return x.r.id === i.id && (x.r.da || []).some(function(d){ return d.r === r.id; }); }); });
-        inviaNotifica('✅ La tua richiesta è stata ordinata', 'Ordinato a ' + s.forn + ': ' + miei.slice(0, 6).map(function(i){ return i.name + ' ×' + i.qty; }).join(', ') + (miei.length > 6 ? '…' : ''),
+        inviaNotifica('✅ La tua richiesta è stata ordinata', 'Ordinato a ' + s.forn + ': ' + miei.slice(0, 6).map(function(i){ return i.name + ' ×' + i.qty + (i.sost ? ' (al posto di ' + i.sost + ')' : ''); }).join(', ') + (miei.length > 6 ? '…' : ''),
           { app: 'richieste', tipo: 'richiesta_ordinata', a: [u], link: SITE + 'ceraldi_richieste.html#storico', dati: { richiesta: r.id } });
       });
     }catch(e){ _registraErrore('richieste', e.message); }
@@ -2866,7 +3248,7 @@ function renderOrdini(){
   var h = '<div class="hero"><div class="hero-lbl">' + ora.toLocaleDateString('it-IT', { month: 'long', year: 'numeric' }) + '</div><div class="hero-big">' + eur(mese.reduce(function(s, o){ return s + (Number(o.total) || 0); }, 0)) + '</div><div class="hero-sub">ordinati questo mese (prezzi da listino)</div>' +
     '<div class="hero-stats"><div class="hero-stat"><b>' + mese.length + '</b><span>Ordini</span></div><div class="hero-stat"><b>' + aperti.length + '</b><span>Da ricevere</span></div><div class="hero-stat"><b>' + outbox().length + '</b><span>In attesa</span></div></div></div>';
   h += '<div class="sw' + (VO.q ? ' has' : '') + '" id="oSw"><span class="si"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg></span><input id="oQ" type="search" placeholder="Cerca fornitore o prodotto" value="' + esc(VO.q) + '" oninput="VO.q=this.value.trim();renderListaOrdini()"><button class="sx" onclick="VO.q=\'\';renderOrdini()">✕</button></div>';
-  h += '<div class="seg">' + [['aperti', 'Da ricevere', aperti.length], ['tutti', 'Tutti'], ['ricevuti', 'Arrivati']].map(function(x){ return '<button class="seg-b' + (VO.filtro === x[0] ? ' active' : '') + '" onclick="VO.filtro=\'' + x[0] + '\';renderOrdini()">' + x[1] + (x[2] ? '<span class="n">' + x[2] + '</span>' : '') + '</button>'; }).join('') + '</div>';
+  h += '<div class="seg">' + [['aperti', 'In arrivo', aperti.length], ['tutti', 'Tutti'], ['ricevuti', 'Arrivati'], ['richieste', 'Richieste']].map(function(x){ return '<button class="seg-b' + (VO.filtro === x[0] ? ' active' : '') + '" onclick="VO.filtro=\'' + x[0] + '\';renderOrdini()">' + x[1] + (x[2] ? '<span class="n">' + x[2] + '</span>' : '') + '</button>'; }).join('') + '</div>';
   var q = outbox(); if(q.length) h += '<div class="banner o"><span>⏳</span><div style="flex:1"><b>' + q.length + ' ordin' + (q.length === 1 ? 'e' : 'i') + ' non ancora salvat' + (q.length === 1 ? 'o' : 'i') + ' sul server</b><br>Partono appena torna la connessione.</div><button class="btn-sm o" onclick="svuotaOutbox().then(renderOrdini)">Riprova</button></div>';
   h += '<div id="listaOrdini"></div>';
   el.innerHTML = h; renderListaOrdini();
@@ -2874,6 +3256,7 @@ function renderOrdini(){
 }
 function renderListaOrdini(){
   var el = document.getElementById('listaOrdini'); if(!el) return;
+  if(VO.filtro === 'richieste'){ renderStoricoRichieste(el); return; }
   var l = STORICO.slice();
   if(VO.filtro === 'aperti') l = l.filter(ordineAperto);
   else if(VO.filtro === 'ricevuti') l = l.filter(function(o){ var s = statoOrdine(o); return s && (s.s === 'ricevuto' || s.s === 'parziale'); });
@@ -2887,6 +3270,83 @@ function renderListaOrdini(){
     h += '<button class="ord-card" onclick="apriOrdine(' + o.id + ')"><span class="sup-av" style="background:' + coloreForn(o.supplier) + '">' + esc(iniziali(o.supplier)) + '</span><div class="row-main"><div class="row-t">' + esc(o.supplier) + '</div><div class="row-s">' + esc(quando(d.toISOString())) + ' · ' + (o.items || []).length + ' prodotti</div></div><div style="text-align:right"><b class="tnum">' + eur(o.total) + '</b><div style="margin-top:4px">' + etichettaStato(o) + '</div>' + (function(b){ return b ? '<div style="margin-top:3px">' + b + '</div>' : ''; })(badgeFattura(o)) + '</div></button>';
   });
   el.innerHTML = h;
+}
+/* ── Storico delle richieste dei dipendenti (tutte, per dipendente) ──
+   Per vedere chi ha chiesto cosa e quando, e per recuperare una richiesta:
+   rimetterla nel carrello o di nuovo in "Da fare". */
+var VR = { tutte: null, at: 0, dip: '', aperta: null, carico: null };
+var STATI_RICH = { pending: ['In attesa', 'o'], importata: ['Nel carrello', 'b'], ordinata: ['Ordinata', 'g'], scartata: ['Non accettata', 'r'], annullata: ['Annullata dal dipendente', 'n'] };
+function caricaStoricoRichieste(forza){
+  if(VR.carico) return VR.carico;                                        // già in corso: aspetto quella
+  if(!forza && VR.tutte && Date.now() - VR.at < 60000) return Promise.resolve(false);
+  VR.carico = apiTutte('ceraldi_richieste_storico?select=*&order=created_at.desc', 500)
+    .then(function(r){ VR.tutte = r || []; VR.at = Date.now(); VR.errore = ''; return true; })
+    .catch(function(e){ VR.errore = e.message; if(!VR.tutte) VR.at = Date.now(); return false; })
+    .finally(function(){ VR.carico = null; });
+  return VR.carico;
+}
+function nomeDip(r){ return String(r.dipendente || 'Dipendente').trim(); }
+function renderStoricoRichieste(el){
+  if(!VR.tutte){
+    if(VR.errore && !VR.carico){ el.innerHTML = '<div class="empty"><div class="ei">⚠️</div><b>Richieste non caricate</b><p>' + esc(VR.errore) + '</p><button class="btn btn-s" style="margin-top:12px" onclick="VR.errore=\'\';caricaStoricoRichieste(true).then(renderListaOrdini)">Riprova</button></div>'; return; }
+    el.innerHTML = '<div class="loading"><span class="spinner"></span>Carico le richieste…</div>';
+    caricaStoricoRichieste().then(function(cambiate){ if(cambiate !== undefined && VO.filtro === 'richieste' && (VR.tutte || VR.errore)) renderListaOrdini(); });
+    return;
+  }
+  if(Date.now() - VR.at > 60000 && !VR.carico) caricaStoricoRichieste().then(function(c){ if(c && VO.filtro === 'richieste') renderListaOrdini(); });
+  var tutte = VR.tutte, conteggio = {};
+  tutte.forEach(function(r){ var n = nomeDip(r); conteggio[n] = (conteggio[n] || 0) + 1; });
+  var nomi = Object.keys(conteggio).sort(function(a, b){ return conteggio[b] - conteggio[a] || a.localeCompare(b, 'it'); });
+  var l = tutte.filter(function(r){ return !VR.dip || nomeDip(r) === VR.dip; });
+  if(VO.q) l = l.filter(function(r){ return cercaTutte(nomeDip(r) + ' ' + (r.nota || '') + ' ' + (r.items || []).map(function(i){ return i.name; }).join(' '), VO.q); });
+  var h = '<p class="hint" style="font-size:12.5px;margin:2px 4px 8px">Tutte le richieste dei dipendenti. Tocca una richiesta per vedere i prodotti e, se serve, rimetterla nel carrello o di nuovo in "Da fare".</p>';
+  h += '<div class="chips" style="flex-wrap:wrap;margin-bottom:8px"><button class="chip' + (!VR.dip ? ' active' : '') + '" onclick="VR.dip=\'\';renderListaOrdini()">Tutti · ' + tutte.length + '</button>' +
+    nomi.map(function(n){ return '<button class="chip' + (VR.dip === n ? ' active' : '') + '" data-n="' + esc(n) + '" onclick="VR.dip=this.dataset.n;renderListaOrdini()">' + esc(n.split(' ')[0]) + ' · ' + conteggio[n] + '</button>'; }).join('') + '</div>';
+  if(VR.dip){
+    var mie = tutte.filter(function(r){ return nomeDip(r) === VR.dip; }), pz = {};
+    mie.forEach(function(r){ (r.items || []).forEach(function(i){ var n = i.id != null && CATMAP[i.id] ? CATMAP[i.id].name : i.name; pz[n] = (pz[n] || 0) + (i.qty || 1); }); });
+    var top = Object.keys(pz).sort(function(a, b){ return pz[b] - pz[a]; }).slice(0, 5);
+    h += '<div class="banner b" style="display:block"><b>' + esc(VR.dip) + '</b>: ' + mie.length + ' richieste, l\'ultima ' + esc(quando(mie[0] && mie[0].created_at)) + '.' + (top.length ? '<div style="font-size:12.5px;margin-top:4px">Chiede più spesso: ' + top.map(function(n){ return esc(nomeBreve(n, 28)) + ' (' + pz[n] + ')'; }).join(', ') + '</div>' : '') + '</div>';
+  }
+  if(!l.length){ el.innerHTML = h + '<div class="empty"><div class="ei">📋</div><b>Nessuna richiesta</b></div>'; return; }
+  var mese = '';
+  l.slice(0, 300).forEach(function(r){
+    var d = new Date(r.created_at), m = d.toLocaleDateString('it-IT', { month: 'long', year: 'numeric' }), st = STATI_RICH[r.stato] || [r.stato || '', 'n'], ap = VR.aperta === r.id;
+    if(m !== mese){ mese = m; h += '<div class="sec-title">' + esc(m) + '</div>'; }
+    h += '<div class="todo"><button class="todo-hd" style="width:100%;background:none;border:0;text-align:left;font:inherit;color:inherit;cursor:pointer" onclick="VR.aperta=VR.aperta===' + r.id + '?null:' + r.id + ';renderListaOrdini()"><span class="sup-av" style="background:' + coloreForn(nomeDip(r)) + '">' + esc(iniziali(nomeDip(r))) + '</span><div class="row-main"><div class="row-t">' + esc(nomeDip(r)) + (r.urgente || /URGENTE/.test(r.nota || '') ? ' <span class="bdg r">urgente</span>' : '') + '</div><div class="row-s">' + esc(dataIt(r.created_at, true)) + ' · ' + (r.items || []).length + ' prodott' + ((r.items || []).length === 1 ? 'o' : 'i') + '</div></div><span class="bdg ' + st[1] + '">' + esc(st[0]) + '</span><span class="chev">' + (ap ? '⌃' : '⌄') + '</span></button>';
+    if(ap){
+      if(r.nota) h += '<div class="todo-it" style="color:var(--ink2)">📝 ' + esc(String(r.nota).replace(/^⚠️ URGENTE( — )?/, '')) + '</div>';
+      (r.items || []).forEach(function(it){ var p = !it.custom && it.id != null ? CATMAP[it.id] : null; h += '<div class="todo-it" style="display:flex;gap:10px"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p ? p.name : it.name) + '</div><div class="row-s">' + esc([it.conf, it.custom ? 'scritto a mano' : (p ? '' : 'non più in catalogo')].filter(Boolean).join(' · ')) + '</div></div><b class="tnum">× ' + (it.qty || 1) + '</b></div>'; });
+      if(!U.lettura) h += '<div class="todo-ft"><button class="btn-sm p" onclick="recuperaRichiesta(' + r.id + ')">🛒 Rimetti nel carrello</button>' + (r.stato !== 'pending' ? '<button class="btn-sm" onclick="riapriRichiesta(' + r.id + ')">↩︎ Di nuovo in Da fare</button>' : '<button class="btn-sm" onclick="vaiTab(\'dafare\')">Apri Da fare</button>') + '</div>';
+    }
+    h += '</div>';
+  });
+  el.innerHTML = h;
+}
+async function recuperaRichiesta(id){
+  var r = (VR.tutte || []).find(function(x){ return x.id === id; }); if(!r) return;
+  var da = [{ r: id, n: r.dipendente || '' }], ok = 0, daCollegare = 0;
+  (r.items || []).forEach(function(it){
+    var q = it.qty || 1;
+    if(!it.custom && it.id != null && CATMAP[it.id]){ aggiungi(it.id, q, { da: da, muto: true }); ok++; return; }
+    var x = it.custom ? riconosciRichiesta(it) : { tipo: 'nessuno' };
+    if(x.tipo === 'esatto' && x.p){ aggiungi(x.p.id, q, { da: da, muto: true, orig: it.name }); ok++; }
+    else { aggiungiProvvisorio(it.name, it.conf, q, { da: da, barcode: it.barcode || null, nota: it.note || '' }); daCollegare++; }
+  });
+  if(r.stato === 'pending' || r.stato === 'scartata' || r.stato === 'annullata'){ try{ await cambiaStatoRichieste([id], 'importata', [r.stato]); r.stato = 'importata'; }catch(e){} }
+  renderOrdina(); renderListaOrdini(); aggiornaBadge();
+  toast(ok + ' prodotti nel carrello' + (daCollegare ? ', ' + daCollegare + ' da collegare' : ''), { azione: 'Apri carrello', onAzione: function(){ vaiTab('ordina'); apriCarrello(); } });
+}
+async function riapriRichiesta(id){
+  var r = (VR.tutte || []).find(function(x){ return x.id === id; }); if(!r) return;
+  if(!(await conferma('Rimettere in "Da fare"?', 'La richiesta di ' + esc(nomeDip(r)) + ' torna tra quelle da gestire. Il dipendente la vede di nuovo "in attesa".', 'Rimetti'))) return;
+  try{
+    var ok = await cambiaStatoRichieste([id], 'pending', [r.stato]);
+    if(!ok.length){ toast('Non riesco: forse è già cambiata. Aggiorno.'); await caricaStoricoRichieste(true); renderListaOrdini(); return; }
+    r.stato = 'pending'; delete DF.ris[id];
+    await caricaRichieste(); preparaRichieste(); renderListaOrdini(); aggiornaBadge();
+    toast('Di nuovo in "Da fare"', { azione: 'Apri', onAzione: function(){ vaiTab('dafare'); } });
+  }catch(e){ toast('⚠️ ' + e.message); }
 }
 function apriOrdine(id){
   var o = STORICO.find(function(x){ return x.id === id; }); if(!o) return;
@@ -3426,18 +3886,7 @@ function sezioneRichieste(){
     if(r.nota) h += '<div class="todo-it" style="color:var(--ink2)">📝 ' + esc(String(r.nota).replace(/^⚠️ URGENTE( — )?/, '')) + '</div>';
     (r.items || []).forEach(function(it, ix){
       var k = r.id + ':' + ix, x = ris[ix] || {}, escluso = DF.escl[k], p = x.p;
-      var dett = '';
-      if(it.custom){
-        if(p && x.tipo === 'esatto') dett = '<div class="row-s">→ ' + esc(p.name) + ' <span class="bdg g">riconosciuto</span></div>';
-        else if(p) dett = '<div class="row-s">→ forse <b>' + esc(p.name) + '</b> <button class="btn-sm g" onclick="confermaRis(\'' + k + '\',true)">Sì</button> <button class="btn-sm" onclick="confermaRis(\'' + k + '\',false)">No</button></div>';
-        else dett = '<div class="row-s"><span class="bdg p">non a catalogo</span> <button class="lnk-btn" style="font-size:12.5px;padding:0 4px" onclick="scegliPerRichiesta(\'' + k + '\')">collega…</button></div>';
-        if(it.barcode) dett += '<div class="row-s">codice ' + esc(it.barcode) + '</div>';
-      } else if(p){
-        var m = migliore(p);
-        dett = '<div class="row-s">' + (it.giacenza != null ? 'ne ha ' + it.giacenza + (it.scortaMin != null ? ' su ' + it.scortaMin : '') + ' · ' : '') + (m.forn ? esc(m.forn) + ' ' + eur(m.prezzo) : 'senza prezzo') + '</div>';
-        if(it.needsScortaMin && p.scorta_min == null) dett += '<label class="row-s" style="display:flex;gap:6px;align-items:center;margin-top:4px"><input type="checkbox" style="width:16px;height:16px" ' + (DF.scorta[k] !== false ? 'checked' : '') + ' onchange="DF.scorta[\'' + k + '\']=this.checked"> imposta scorta minima a ' + ((it.giacenza || 0) + (it.qty || 1)) + '</label>';
-      } else dett = '<div class="row-s"><span class="bdg o">prodotto non più in catalogo</span></div>';
-      h += '<div class="todo-it" style="display:flex;gap:10px;align-items:flex-start;' + (escluso ? 'opacity:.45' : '') + '"><input type="checkbox" ' + (escluso ? '' : 'checked') + ' onchange="DF.escl[\'' + k + '\']=!this.checked;renderDaFare()" style="margin-top:2px"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(it.name) + ' <span class="muted" style="font-weight:500">' + esc(it.conf || '') + '</span></div>' + dett + '</div><b class="tnum">× ' + (it.qty || 1) + '</b></div>';
+      h += '<div class="todo-it" style="display:flex;gap:10px;align-items:flex-start;' + (escluso ? 'opacity:.45' : '') + '"><input type="checkbox" ' + (escluso ? '' : 'checked') + ' onchange="DF.escl[\'' + k + '\']=!this.checked;renderDaFare()" style="margin-top:2px"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(it.name) + ' <span class="muted" style="font-weight:500">' + esc(it.conf || '') + '</span></div>' + dettaglioVoce(it, x, k) + '</div><b class="tnum">× ' + (it.qty || 1) + '</b></div>';
     });
     if(!U.lettura) h += '<div class="todo-ft"><button class="btn-sm p" onclick="prendiRichiesta(' + r.id + ')">🛒 Metti nel carrello</button><button class="btn-sm r" onclick="rifiutaRichiesta(' + r.id + ')">Non accettare</button></div>';
     h += '</div>';
@@ -3445,33 +3894,82 @@ function sezioneRichieste(){
   if(imp.length) h += '<div class="banner b"><span>🛒</span><div>' + imp.length + ' richiest' + (imp.length === 1 ? 'a presa' : 'e prese') + ' in carico: i prodotti sono nel carrello, segnati con il nome di chi li ha chiesti. Quando invii l\'ordine, il dipendente riceve l\'avviso.</div></div>';
   return h;
 }
+/* Cosa vedi sotto ogni prodotto di una richiesta: sempre una frase chiara e il tasto per cambiarlo */
+function dettaglioVoce(it, x, k){
+  var p = x.p, cambia = U.lettura ? '' : ' <button class="lnk-btn" style="font-size:12.5px;padding:0 4px" onclick="scegliPerRichiesta(\'' + k + '\')">' + (p ? 'cambia' : 'cerca…') + '</button>';
+  function chip(c, label){ return '<button class="btn-sm" style="margin:4px 6px 0 0" onclick="srScegli(\'' + k + '\',' + c.id + ')">' + esc(label || nomeBreve(c.name, 34)) + '</button>'; }
+  var h = '';
+  if(!it.custom){
+    if(!p) return '<div class="row-s"><span class="bdg o">prodotto non più in catalogo</span>' + cambia + '</div>';
+    var m = migliore(p);
+    h = '<div class="row-s">' + (x.cambiato ? '→ <b>' + esc(p.name) + '</b> <span class="bdg b">al posto di ' + esc(nomeBreve(x.cambiato.name, 24)) + '</span> · ' : '') + (it.giacenza != null ? 'ne ha ' + it.giacenza + (it.scortaMin != null ? ' su ' + it.scortaMin : '') + ' · ' : '') + (m.forn ? esc(m.forn) + ' ' + eur(m.prezzo) : 'senza prezzo') + cambia + '</div>';
+    if(it.needsScortaMin && p.scorta_min == null) h += '<label class="row-s" style="display:flex;gap:6px;align-items:center;margin-top:4px"><input type="checkbox" style="width:16px;height:16px" ' + (DF.scorta[k] !== false ? 'checked' : '') + ' onchange="DF.scorta[\'' + k + '\']=this.checked"> imposta scorta minima a ' + ((it.giacenza || 0) + (it.qty || 1)) + '</label>';
+    return h;
+  }
+  if(p && x.tipo === 'esatto') h = '<div class="row-s">→ <b>' + esc(p.name) + '</b> <span class="bdg g">✓ riconosciuto</span></div><div class="row-s" style="font-size:12px">' + esc(x.perche || '') + (x.scelto ? '' : ' · non è lui?') + cambia + '</div>';
+  else if(x.tipo === 'scegli' && x.gruppo && x.gruppo.length) h = '<div class="row-s">' + esc(x.perche || 'Più prodotti corrispondono') + ' Tocca quello giusto:</div><div>' + x.gruppo.slice(0, 6).map(function(c){ return chip(c); }).join('') + '</div>' + (x.ia ? '<div class="row-s" style="font-size:12px">L\'assistente direbbe: ' + esc(nomeBreve(x.ia.name, 34)) + '</div>' : '') + '<div class="row-s">Nessuno di questi?' + cambia + '</div>';
+  else if(p && x.tipo === 'forse'){
+    var prop = x.ia && x.iaConf === 'alta' ? x.ia : p;
+    h = '<div class="row-s">È questo? → <b>' + esc(prop.name) + '</b>' + (x.ia && x.ia.id !== p.id && prop === x.ia ? ' <span class="bdg b">proposto dall\'assistente</span>' : '') + '</div><div style="margin-top:4px"><button class="btn-sm g" onclick="srScegli(\'' + k + '\',' + prop.id + ')">Sì, è questo</button> <button class="btn-sm" onclick="confermaRis(\'' + k + '\',false)">No</button>' + cambia + '</div>';
+  }
+  else {
+    var sim = (x.ia ? [x.ia] : []).concat((x.simili || []).filter(function(c){ return !x.ia || c.id !== x.ia.id; })).slice(0, 2);
+    h = '<div class="row-s"><span class="bdg p">non trovato nel catalogo</span>' + cambia + '</div>' + (sim.length ? '<div class="row-s" style="font-size:12px">Somiglia a: ' + sim.map(function(c){ return chip(c); }).join('') + '</div>' : '') + '<div class="row-s" style="font-size:12px">Se lo lasci così entra nel carrello come prodotto da collegare.</div>';
+  }
+  if(it.barcode) h += '<div class="row-s" style="font-size:12px">codice ' + esc(it.barcode) + '</div>';
+  if(it.note) h += '<div class="row-s" style="font-size:12px">📝 ' + esc(it.note) + '</div>';
+  return h;
+}
 async function preparaRichieste(){
   var daFare = RICH.filter(function(r){ return r.stato === 'pending' && !DF.ris[r.id]; });
   if(!daFare.length) return;
-  for(var i = 0; i < daFare.length; i++){
-    var r = daFare[i], items = r.items || [], out = new Array(items.length), nomi = [], idx = [];
-    items.forEach(function(it, ix){
-      if(!it.custom && it.id != null && CATMAP[it.id]) out[ix] = { p: CATMAP[it.id], tipo: 'esatto' };
-      else if(it.custom){
-        var bc = it.barcode && prodottoDaBarcode(CAT, it.barcode);
-        if(bc) out[ix] = { p: bc, tipo: 'esatto' }; else { nomi.push(it.name); idx.push(ix); }
-      } else out[ix] = {};
+  var dubbi = [];
+  daFare.forEach(function(r){
+    DF.ris[r.id] = (r.items || []).map(function(it){
+      if(!it.custom && it.id != null && CATMAP[it.id]) return { p: CATMAP[it.id], tipo: 'esatto', dalCatalogo: true };
+      if(!it.custom) return { tipo: 'nessuno', perso: true };
+      var x = riconosciRichiesta(it);
+      if(x.tipo !== 'esatto' && (x.cand || []).length) dubbi.push({ nome: it.name, cand: (x.gruppo || []).concat(x.cand.filter(function(c){ return !(x.gruppo || []).some(function(g){ return g.id === c.id; }); })).slice(0, 6), x: x });
+      return x;
     });
-    if(nomi.length){ var rr = await riconosci(nomi, null, { senzaIA: !chiaveAI() }); rr.forEach(function(m, j){ var ix = idx[j]; if(m.id && CATMAP[m.id]) out[ix] = { p: CATMAP[m.id], tipo: m.tipo === 'esatto' ? 'esatto' : 'probabile' }; else if(m.cand && m.cand[0] && m.cand[0].s >= 55) out[ix] = { p: m.cand[0].c, tipo: 'probabile' }; else out[ix] = {}; }); }
-    DF.ris[r.id] = out;
-  }
+  });
   if(VIEW.tab === 'dafare') renderDaFare();
+  if(dubbi.length){ await secondoParereIA(dubbi.slice(0, 40)); if(VIEW.tab === 'dafare') renderDaFare(); }
 }
-function confermaRis(k, si){ var a = k.split(':'), x = (DF.ris[a[0]] || [])[a[1]]; if(!x) return; if(si) x.tipo = 'esatto'; else { x.p = null; x.tipo = null; } renderDaFare(); }
+function _itemRich(k){ var a = k.split(':'), r = RICH.find(function(x){ return String(x.id) === a[0]; }); return r ? { r: r, it: (r.items || [])[a[1]], ix: +a[1] } : null; }
+function confermaRis(k, si){
+  var a = k.split(':'), x = (DF.ris[a[0]] || [])[a[1]], z = _itemRich(k); if(!x || !z) return;
+  if(si){ x.tipo = 'esatto'; x.scelto = true; x.perche = 'confermato da te'; }
+  else {
+    // "No, non è questo": non lo ripropongo più per questo nome e cerco il prossimo
+    if(x.p && z.it.custom) salvaNoRic(z.it.name, x.p.id);
+    var nx = z.it.custom ? riconosciRichiesta(Object.assign({}, z.it, { barcode: null })) : { tipo: 'nessuno', cand: [] };
+    if(x.p && nx.p && nx.p.id === x.p.id) nx = { tipo: 'nessuno', cand: nx.cand || [] };
+    if(nx.tipo === 'esatto') nx.tipo = 'forse';
+    DF.ris[a[0]][a[1]] = nx;
+  }
+  renderDaFare();
+}
 function scegliPerRichiesta(k){
-  var a = k.split(':'), r = RICH.find(function(x){ return String(x.id) === a[0]; }); if(!r) return;
-  var it = r.items[a[1]];
-  apriSheet('shSR', { titolo: 'Collega al catalogo', sotto: esc(it.name), corpo: '<div class="sw"><span class="si">🔎</span><input id="srQ" placeholder="Cerca nel catalogo" oninput="srCerca(\'' + k + '\')"></div><div id="srRis"></div>', piede: '<button class="btn btn-s" onclick="srCrea(\'' + k + '\')">Non c\'è: crea nuovo prodotto</button>' });
-  document.getElementById('srRis').innerHTML = srRighe(k, candidati(it.name, CAT, 8).map(function(x){ return x.c; }));
+  var z = _itemRich(k); if(!z) return;
+  var x = (DF.ris[z.r.id] || [])[z.ix] || {}, it = z.it;
+  var base = (x.gruppo || []).concat(x.ia ? [x.ia] : []).concat(x.cand || []).concat(it.custom ? riconosciRichiesta(it).cand || [] : cercaCatalogo(it.name, 8));
+  var visti = {}, l = base.filter(function(p){ if(!p || visti[p.id]) return false; visti[p.id] = 1; return true; }).slice(0, 10);
+  apriSheet('shSR', { titolo: x.p ? 'Cambia prodotto' : 'Collega al catalogo', sotto: 'Il dipendente ha scritto «' + esc(it.name) + '»' + (x.p ? '. Ora è collegato a ' + esc(x.p.name) : ''),
+    corpo: '<div class="sw"><span class="si">🔎</span><input id="srQ" placeholder="Cerca nel catalogo (anche scritto male)" oninput="srCerca(\'' + k + '\')"></div><div id="srRis"></div>',
+    piede: '<button class="btn btn-s" onclick="srCrea(\'' + k + '\')">Non c\'è: crea nuovo prodotto</button>' });
+  document.getElementById('srRis').innerHTML = (l.length ? '<div class="sec-title">Più simili</div>' : '') + srRighe(k, l);
 }
 function srRighe(k, l){ return '<div class="grp">' + l.map(function(p){ return '<button class="row" onclick="srScegli(\'' + k + '\',' + p.id + ')"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p.name) + '</div><div class="row-s">' + esc(p.conf || '') + '</div></div><span class="chev">›</span></button>'; }).join('') + '</div>'; }
-function srCerca(k){ var q = document.getElementById('srQ').value; document.getElementById('srRis').innerHTML = srRighe(k, CAT.filter(function(p){ return cercaTutte(p.name, q); }).slice(0, 30)); }
-function srScegli(k, id){ var a = k.split(':'); DF.ris[a[0]] = DF.ris[a[0]] || []; DF.ris[a[0]][a[1]] = { p: CATMAP[id], tipo: 'esatto', scelto: true }; chiudiSheet('shSR'); renderDaFare(); }
+function srCerca(k){ var q = document.getElementById('srQ').value; document.getElementById('srRis').innerHTML = srRighe(k, cercaCatalogo(q, 30)); }
+function srScegli(k, id){
+  var a = k.split(':'), z = _itemRich(k); DF.ris[a[0]] = DF.ris[a[0]] || [];
+  var prima = DF.ris[a[0]][a[1]] || {};
+  // il motore aveva collegato o proposto un altro prodotto: per questo nome non lo ripropongo
+  if(z && z.it.custom && prima.p && prima.p.id !== id && !prima.scelto) salvaNoRic(z.it.name, prima.p.id);
+  DF.ris[a[0]][a[1]] = { p: CATMAP[id], tipo: 'esatto', scelto: true, perche: 'scelto da te', dalCatalogo: prima.dalCatalogo, cambiato: prima.dalCatalogo && prima.p && prima.p.id !== id ? prima.p : null };
+  chiudiSheet('shSR'); renderDaFare();
+}
 function srCrea(k){ var a = k.split(':'), r = RICH.find(function(x){ return String(x.id) === a[0]; }), it = r.items[a[1]]; chiudiSheet('shSR'); apriNuovoProdotto(it.name, { barcode: it.barcode, onCreato: function(p){ srScegli(k, p.id); } }); }
 async function prendiRichiesta(id){
   var r = RICH.find(function(x){ return x.id === id; }); if(!r) return;
@@ -3486,8 +3984,8 @@ async function prendiRichiesta(id){
     if(x.p && x.tipo === 'esatto'){
       if(it.custom){ salvaAlias(it.name, x.p.id); if(it.barcode) collegaCodice(x.p, it.barcode, true); }
       if(it.needsScortaMin && x.p.scorta_min == null && DF.scorta[k] !== false) aggiornaProdotto(x.p.id, { scorta_min: (it.giacenza || 0) + q }).catch(function(){});
-      aggiungi(x.p.id, q, { da: da, muto: true });
-    } else aggiungiProvvisorio(it.name, it.conf, q, { da: da, barcode: it.barcode || null });
+      aggiungi(x.p.id, q, { da: da, muto: true, orig: it.custom ? it.name : null, sost: x.cambiato ? x.cambiato.name : null });
+    } else aggiungiProvvisorio(it.name, it.conf, q, { da: da, barcode: it.barcode || null, nota: it.note || '' });
     n++;
   }
   renderDaFare(); renderOrdina(); aggiornaBadge();
