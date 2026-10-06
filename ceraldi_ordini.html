@@ -418,7 +418,7 @@ html[data-theme="dark"] .todo-ft{background:rgba(255,255,255,.03)}
 </nav>
 
 <script>
-var APP_VERSION='8.1.1';
+var APP_VERSION='8.1.2';
 var BUILD_VERSION=APP_VERSION, BUILD_NUM=APP_VERSION;
 var APP={key:'ordini',nome:'Ordini',versione:APP_VERSION,authKey:'or_auth_v2',oldAuthKey:'ceraldi_ordini_auth_session',
   markBg:'linear-gradient(145deg,#FFC04D 0%,#FF9F0A 50%,#C2410C 100%)',
@@ -856,20 +856,23 @@ function _ntfB64(s){ var p = '='.repeat((4 - s.length % 4) % 4), b = atob((s + p
 function _ntfChiave(sub, n){ var k = sub.getKey(n); if(!k) return ''; return btoa(String.fromCharCode.apply(null, new Uint8Array(k))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
 function _ntfDispositivo(){ var u = navigator.userAgent || ''; if(/iphone/i.test(u)) return 'iPhone'; if(/ipad/i.test(u)) return 'iPad'; if(/android/i.test(u)) return 'Android'; if(/mac/i.test(u)) return 'Mac'; if(/windows/i.test(u)) return 'PC'; return 'Dispositivo'; }
 async function ntfIscritto(){ var r = await ntfRegistra(); if(!r || !r.pushManager) return false; try{ return !!(await r.pushManager.getSubscription()); }catch(e){ return false; } }
+var _ntfErr = '';
+function _ntfNo(m){ _ntfErr = m; toast(m); return false; }
 async function ntfAttiva(){
-  if(!ntfSupportate()){ toast('Questo browser non supporta le notifiche'); return false; }
-  if(ntfIOS() && !ntfInstallata()){ toast('Su iPhone: Condividi → "Aggiungi a Home", poi riapri da lì'); return false; }
+  _ntfErr = '';
+  if(!ntfSupportate()){ return _ntfNo('Questo browser non supporta le notifiche'); }
+  if(ntfIOS() && !ntfInstallata()){ return _ntfNo('Su iPhone: Condividi → "Aggiungi a Home", poi riapri da lì'); }
   var p = 'default'; try{ p = Notification.permission; }catch(e){}
   if(p !== 'granted'){ try{ p = await Notification.requestPermission(); }catch(e){ p = 'denied'; } }
-  if(p !== 'granted'){ toast('Notifiche bloccate: attivale dalle impostazioni del telefono'); return false; }
-  var r = await ntfRegistra(); if(!r){ toast('⚠️ Service worker non disponibile'); return false; }
+  if(p !== 'granted'){ return _ntfNo('Il telefono ha bloccato le notifiche per questa app. Vai in Impostazioni di iPhone → Notifiche → (nome app) e consentile, poi riprova.'); }
+  var r = await ntfRegistra(); if(!r){ return _ntfNo('Il telefono non ha avviato il servizio notifiche. Chiudi l\'app del tutto, riaprila e riprova.'); }
   try{
     var sub = await r.pushManager.getSubscription();
     if(!sub) sub = await r.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: _ntfB64(_NTF_VAPID) });
     await api('rpc/push_iscrivi', { method: 'POST', body: { p_endpoint: sub.endpoint, p_p256dh: _ntfChiave(sub, 'p256dh'), p_auth: _ntfChiave(sub, 'auth'), p_dispositivo: _ntfDispositivo(), p_app: APP.key } });
     toast('🔔 Notifiche attive su questo ' + _ntfDispositivo().toLowerCase());
     return true;
-  }catch(e){ toast('⚠️ Iscrizione non riuscita: ' + String(e.message || e).slice(0, 60)); return false; }
+  }catch(e){ return _ntfNo('Iscrizione non riuscita: ' + String(e.message || e).slice(0, 140)); }
 }
 async function ntfSpegni(){
   var r = await ntfRegistra(); var sub = r && r.pushManager ? await r.pushManager.getSubscription() : null;
@@ -4196,7 +4199,7 @@ async function apriNotifiche(){
   var iscr = await ntfIscritto();
   sotto('shNtf', 'Notifiche', '<div class="grp"><div class="row"><div class="row-ico ic-r">🔔</div><div class="row-main"><div class="row-t">Avvisi su questo dispositivo</div><div class="row-s">' + (!ntfSupportate() ? 'Non supportato da questo browser' : (ntfIOS() && !ntfInstallata() ? 'Su iPhone aggiungi prima l\'app alla schermata Home' : (iscr ? 'Attivi' : 'Spenti'))) + '</div></div>' +
     (ntfSupportate() && !(ntfIOS() && !ntfInstallata()) ? '<span class="tgl"><input type="checkbox" ' + (iscr ? 'checked' : '') + ' onchange="this.checked?ntfAttiva().then(apriNotifiche):ntfSpegni().then(apriNotifiche)"><span></span></span>' : '') + '</div></div>' +
-    '<p class="hint">Ricevi un avviso quando un dipendente manda una richiesta (anche urgente). Il dipendente riceve un avviso quando la sua richiesta viene ordinata o non accettata.</p>');
+    (_ntfErr ? '<div class="banner r">' + esc(_ntfErr) + '</div>' : '') + '<p class="hint">Ricevi un avviso quando un dipendente manda una richiesta (anche urgente). Il dipendente riceve un avviso quando la sua richiesta viene ordinata o non accettata.</p>');
 }
 
 /* ── Diagnostica ─────────────────────────────────────────────────── */
