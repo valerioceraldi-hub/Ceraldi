@@ -391,7 +391,7 @@ body.has-fbar{padding-bottom:calc(150px + var(--safe-b))}
 
 <script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js" defer></script>
 <script>
-var APP_VERSION='8.0.0';
+var APP_VERSION='8.1.0';
 var BUILD_NUM=APP_VERSION;
 var APP={key:'richieste',nome:'Richieste',versione:APP_VERSION,authKey:'rq_auth_v2',oldAuthKey:'ceraldi_richieste_auth_session',
   markBg:'linear-gradient(145deg,#C4A1FF 0%,#8B5CF6 50%,#5B21B6 100%)',
@@ -905,6 +905,8 @@ var DUP = (function(){
   function analizza(nome){
     var k = String(nome || ''); if(cache[k]) return cache[k];
     var s = pulisci(k), a = { cont: null, vol: null, pack: null, peso: null, eta: null, nums: [], zero: false, tok: [], abbr: {} };
+    // "275MLX24": separo la misura dal numero di pezzi
+    s = s.replace(/(\d)(ML|CL|LT|KG|GR|G)X(?=\s?\d)/g, '$1$2 X');
     function prendi(re, fn){ s = s.replace(re, function(){ fn.apply(null, arguments); return ' '; }); }
     function n(x){ return parseFloat(String(x).replace(',', '.')); }
     // gradi e percentuali non distinguono (40°, 43%, 47,3°) — tranne 0%
@@ -919,6 +921,8 @@ var DUP = (function(){
     prendi(/\bML\s?\.?\s?(\d+)/g, function(m, x){ a.vol = parseInt(x, 10); });
     prendi(/(\d+)\s?(?:ML|CC)\b/g, function(m, x){ a.vol = parseInt(x, 10); });
     prendi(/(?:^|\s)0[.,](\d{2,3})(?=\s|$)/g, function(m, x){ if(a.vol == null) a.vol = Math.round(parseFloat('0.' + x) * 1000); });
+    // confezioni multiple di peso: "4XG.125", "4X125G", "4 X GR 125" → 4 × 125 g = 500 g
+    prendi(/\b(\d{1,2})\s?X\s?(?:(?:GR|G)\s?\.?\s?(\d+(?:[.,]\d+)?)|(\d+(?:[.,]\d+)?)\s?(?:GR|G)\b)/g, function(m, q, x, y){ if(a.peso == null) a.peso = Math.round(parseInt(q, 10) * n(x || y)); });
     // pezzi per cartone
     prendi(/(?:\bCTX|\bCT\.?\s?X|\bX)\s?(\d{1,3})(?!\d)/g, function(m, x){ if(a.pack == null) a.pack = parseInt(x, 10); });
     prendi(/\b(?:PZ|PEZZI)\s?\.?\s?(\d{1,4})\b|\b(\d{1,4})\s?(?:PZ|PEZZI)\b/g, function(m, x, y){ a.pack = parseInt(x || y, 10); });
@@ -1041,6 +1045,14 @@ var DUP = (function(){
   }
   return { analizza: analizza, confronta: confronta, abbina: abbina, prezziSimili: prezziSimili };
 })();
+
+/* ── Codici a barre: un prodotto può averne più d'uno (pezzo, cartone, confezione nuova).
+   Nel catalogo stanno nello stesso campo, separati da virgola: "8001234567890,8009876543210". ── */
+function barcodeLista(p){ return String((p && p.barcode) || '').split(/[,;\s]+/).map(function(c){ return c.trim(); }).filter(Boolean); }
+function barcodeHa(p, c){ c = String(c || '').trim(); return !!c && barcodeLista(p).indexOf(c) >= 0; }
+function barcodeConAggiunto(p, c){ var l = barcodeLista(p); c = String(c || '').trim(); if(c && l.indexOf(c) < 0) l.push(c); return l.join(','); }
+function barcodeSenza(p, c){ return barcodeLista(p).filter(function(x){ return x !== String(c).trim(); }).join(','); }
+function prodottoDaBarcode(lista, c){ return (lista || []).find(function(p){ return barcodeHa(p, c); }) || null; }
 
 /* ══════════════════════════════════════════════════════════════════
    CERALDI RICHIESTE 8 — riscritta da zero (05/10/2026)
@@ -1571,14 +1583,29 @@ async function npSalva(){
   var nota = ((document.getElementById('npNota') || {}).value || '').trim();
   var k = 'c' + uid();
   LISTA[k] = { name: nome, conf: tipoLabel(_np.tipo, _np.qty), qty: _np.qty, custom: true, barcode: _np.barcode || null, note: nota || undefined };
+  segnalaCodiceNuovo(_np.barcode, nome);
   salvaLista(); chiudiSheet('shNuovo'); renderTutto();
   toast(_np.qty + ' ' + tipoLabel(_np.tipo, _np.qty).toLowerCase() + ' · ' + nome + ' ✓');
 }
+/* Codice a barre letto e collegato a un prodotto:
+   - il responsabile (admin) lo salva subito nel catalogo (si aggiunge agli altri codici del prodotto);
+   - un dipendente lo PROPONE: il responsabile lo conferma in Ordini → Da fare. Fino ad allora vale solo per la sua richiesta. */
 function collegaBarcode(p, codice){
-  if(!p || !codice || p.barcode === codice) return;
-  api('catalogo_ceraldi?id=eq.' + p.id, { method: 'PATCH', prefer: 'return=minimal', body: { barcode: codice } })
-    .then(function(){ p.barcode = codice; lsSet('rq_catalogo', CAT); toast('🔗 Codice collegato a ' + p.name); })
-    .catch(function(e){ toast('⚠️ Codice non collegato: ' + e.message); });
+  if(!p || !codice || barcodeHa(p, codice)) return;
+  if(U.admin){
+    var altro = prodottoDaBarcode(CAT, codice);
+    var lavori = [api('catalogo_ceraldi?id=eq.' + p.id, { method: 'PATCH', prefer: 'return=minimal', body: { barcode: barcodeConAggiunto(p, codice) } })];
+    if(altro && altro.id !== p.id) lavori.push(api('catalogo_ceraldi?id=eq.' + altro.id, { method: 'PATCH', prefer: 'return=minimal', body: { barcode: barcodeSenza(altro, codice) || null } }));
+    Promise.all(lavori).then(function(){ p.barcode = barcodeConAggiunto(p, codice); if(altro && altro.id !== p.id) altro.barcode = barcodeSenza(altro, codice); lsSet('rq_catalogo', CAT); toast('🔗 Codice collegato a ' + p.name); })
+      .catch(function(e){ toast('⚠️ Codice non collegato: ' + e.message); });
+    return;
+  }
+  api('ceraldi_barcode_sconosciuti', { method: 'POST', prefer: 'return=minimal', body: { barcode: String(codice), nome_suggerito: p.name, dipendente: U.nome || '', stato: 'proposto:' + p.id } })
+    .then(function(){ toast('📷 Codice proposto per ' + p.name + ': lo conferma il responsabile'); }).catch(function(){});
+}
+function segnalaCodiceNuovo(codice, nome){
+  if(!codice || U.admin) return;
+  api('ceraldi_barcode_sconosciuti', { method: 'POST', prefer: 'return=minimal', body: { barcode: String(codice), nome_suggerito: nome || '', dipendente: U.nome || '', stato: 'nuovo' } }).catch(function(){});
 }
 
 /* ── Le mie richieste ────────────────────────────────────────────── */
@@ -1782,12 +1809,15 @@ function scTick(){
 async function scLetto(codice){
   if(codice === SC.ultimo && Date.now() - SC.ultimoT < 2500) return;
   SC.ultimo = codice; SC.ultimoT = Date.now(); SC.aperto = true; scBeep();
-  var p = CAT.find(function(x){ return x.barcode && String(x.barcode) === String(codice); });
+  var p = prodottoDaBarcode(CAT, codice);
   if(!p){
-    try{ var r = await api('catalogo_ceraldi?select=id,name,conf,cat,subcat,settore,giacenza,scorta_min,barcode&barcode=eq.' + encodeURIComponent(codice)); if(r && r[0]){ p = r[0]; if(!CATMAP[p.id]){ CAT.push(p); } else Object.assign(CATMAP[p.id], p); indicizza(); } }catch(e){}
+    try{ var r = await api('catalogo_ceraldi?select=id,name,conf,cat,subcat,settore,giacenza,scorta_min,barcode&barcode=ilike.*' + encodeURIComponent(codice) + '*'); r = (r || []).filter(function(x){ return barcodeHa(x, codice); }); if(r && r[0]){ p = r[0]; if(!CATMAP[p.id]){ CAT.push(p); } else Object.assign(CATMAP[p.id], p); indicizza(); } }catch(e){}
   }
   if(p){ scPannelloCatalogo(p, null); return; }
   var st = document.getElementById('scStato'); if(st) st.textContent = 'Cerco il prodotto…';
+  // un collega l'ha già collegato, in attesa di conferma: lo propongo (non lo do per certo)
+  SC.proposta = null;
+  try{ var pr = await api('ceraldi_barcode_sconosciuti?select=stato,nome_suggerito,dipendente&barcode=eq.' + encodeURIComponent(codice) + '&stato=like.proposto*&order=created_at.desc&limit=1'); var m = pr && pr[0] && /^proposto:(\d+)/.exec(pr[0].stato); if(m && CATMAP[m[1]]) SC.proposta = { p: CATMAP[m[1]], da: pr[0].dipendente }; }catch(e){}
   var nome = '';
   try{
     var rr = await fetch('https://world.openfoodfacts.org/api/v2/product/' + encodeURIComponent(codice) + '.json?product_type=all');
@@ -1823,9 +1853,11 @@ function scTipo(b){ document.querySelectorAll('#scPanel .qa-chip').forEach(funct
 function scQ(d){ SC.qty = Math.max(1, Math.min(999, SC.qty + d)); var e = document.getElementById('scQv'); if(e) e.textContent = SC.qty; }
 function scSuggerisci(){
   var v = (document.getElementById('scNome') || {}).value || '', box = document.getElementById('scSug'); if(!box) return;
-  if(v.trim().length < 2){ box.innerHTML = ''; return; }
-  var t = CAT.filter(function(p){ return cercaTutte(p.name, v); }).slice(0, 6);
-  box.innerHTML = t.length ? '<div class="qa-sug">' + t.map(function(p){ return '<button onclick="scScegli(' + p.id + ')">' + esc(p.name) + '<small>' + esc(p.conf || '') + ' · tocca per collegare il codice</small></button>'; }).join('') + '</div>' : '';
+  if(v.trim().length < 2 && !SC.proposta){ box.innerHTML = ''; return; }
+  var vis = v.trim().length < 2 ? [] : prodottiVisibili(), uguali = vis.filter(function(p){ var r = DUP.confronta(v, p.name, {}); return r.livello === 'sicuro' || r.livello === 'probabile'; });
+  var t = uguali.concat(vis.filter(function(p){ return uguali.indexOf(p) < 0 && cercaTutte(p.name, v); })).slice(0, 6);
+  if(SC.proposta && t.indexOf(SC.proposta.p) < 0) t.unshift(SC.proposta.p);
+  box.innerHTML = t.length ? '<div class="qa-lbl" style="margin-top:10px">È uno di questi? Tocca quello giusto</div><div class="qa-sug">' + t.map(function(p){ var pr = SC.proposta && SC.proposta.p === p; return '<button onclick="scScegli(' + p.id + ')">' + esc(p.name) + '<small>' + esc(p.conf || '') + (pr ? ' · già indicato da ' + esc(String(SC.proposta.da || 'un collega').split(' ')[0]) : uguali.indexOf(p) >= 0 ? ' · sembra lui' : '') + '</small></button>'; }).join('') + '</div>' : '';
 }
 function scScegli(id){ var p = CATMAP[id]; if(!p) return; collegaBarcode(p, SC.codice); scPannelloCatalogo(p, null); }
 function scConferma(){
@@ -1839,6 +1871,7 @@ function scConferma(){
     var nome = ((document.getElementById('scNome') || {}).value || '').trim().toUpperCase();
     if(!nome){ toast('Scrivi il nome del prodotto'); return; }
     LISTA['c' + uid()] = { name: nome, conf: tipoLabel(SC.tipo, SC.qty), qty: SC.qty, custom: true, barcode: SC.codice || null };
+    segnalaCodiceNuovo(SC.codice, nome);
     toast(nome + ' × ' + SC.qty + ' ✓', { durata: 1400 });
   }
   salvaLista(); SC.n++; var n = document.getElementById('scN'); if(n) n.textContent = SC.n;

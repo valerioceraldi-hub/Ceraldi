@@ -418,7 +418,7 @@ html[data-theme="dark"] .todo-ft{background:rgba(255,255,255,.03)}
 </nav>
 
 <script>
-var APP_VERSION='8.0.2';
+var APP_VERSION='8.1.1';
 var BUILD_VERSION=APP_VERSION, BUILD_NUM=APP_VERSION;
 var APP={key:'ordini',nome:'Ordini',versione:APP_VERSION,authKey:'or_auth_v2',oldAuthKey:'ceraldi_ordini_auth_session',
   markBg:'linear-gradient(145deg,#FFC04D 0%,#FF9F0A 50%,#C2410C 100%)',
@@ -932,6 +932,8 @@ var DUP = (function(){
   function analizza(nome){
     var k = String(nome || ''); if(cache[k]) return cache[k];
     var s = pulisci(k), a = { cont: null, vol: null, pack: null, peso: null, eta: null, nums: [], zero: false, tok: [], abbr: {} };
+    // "275MLX24": separo la misura dal numero di pezzi
+    s = s.replace(/(\d)(ML|CL|LT|KG|GR|G)X(?=\s?\d)/g, '$1$2 X');
     function prendi(re, fn){ s = s.replace(re, function(){ fn.apply(null, arguments); return ' '; }); }
     function n(x){ return parseFloat(String(x).replace(',', '.')); }
     // gradi e percentuali non distinguono (40°, 43%, 47,3°) — tranne 0%
@@ -946,6 +948,8 @@ var DUP = (function(){
     prendi(/\bML\s?\.?\s?(\d+)/g, function(m, x){ a.vol = parseInt(x, 10); });
     prendi(/(\d+)\s?(?:ML|CC)\b/g, function(m, x){ a.vol = parseInt(x, 10); });
     prendi(/(?:^|\s)0[.,](\d{2,3})(?=\s|$)/g, function(m, x){ if(a.vol == null) a.vol = Math.round(parseFloat('0.' + x) * 1000); });
+    // confezioni multiple di peso: "4XG.125", "4X125G", "4 X GR 125" → 4 × 125 g = 500 g
+    prendi(/\b(\d{1,2})\s?X\s?(?:(?:GR|G)\s?\.?\s?(\d+(?:[.,]\d+)?)|(\d+(?:[.,]\d+)?)\s?(?:GR|G)\b)/g, function(m, q, x, y){ if(a.peso == null) a.peso = Math.round(parseInt(q, 10) * n(x || y)); });
     // pezzi per cartone
     prendi(/(?:\bCTX|\bCT\.?\s?X|\bX)\s?(\d{1,3})(?!\d)/g, function(m, x){ if(a.pack == null) a.pack = parseInt(x, 10); });
     prendi(/\b(?:PZ|PEZZI)\s?\.?\s?(\d{1,4})\b|\b(\d{1,4})\s?(?:PZ|PEZZI)\b/g, function(m, x, y){ a.pack = parseInt(x || y, 10); });
@@ -1068,6 +1072,14 @@ var DUP = (function(){
   }
   return { analizza: analizza, confronta: confronta, abbina: abbina, prezziSimili: prezziSimili };
 })();
+
+/* ── Codici a barre: un prodotto può averne più d'uno (pezzo, cartone, confezione nuova).
+   Nel catalogo stanno nello stesso campo, separati da virgola: "8001234567890,8009876543210". ── */
+function barcodeLista(p){ return String((p && p.barcode) || '').split(/[,;\s]+/).map(function(c){ return c.trim(); }).filter(Boolean); }
+function barcodeHa(p, c){ c = String(c || '').trim(); return !!c && barcodeLista(p).indexOf(c) >= 0; }
+function barcodeConAggiunto(p, c){ var l = barcodeLista(p); c = String(c || '').trim(); if(c && l.indexOf(c) < 0) l.push(c); return l.join(','); }
+function barcodeSenza(p, c){ return barcodeLista(p).filter(function(x){ return x !== String(c).trim(); }).join(','); }
+function prodottoDaBarcode(lista, c){ return (lista || []).find(function(p){ return barcodeHa(p, c); }) || null; }
 
 /* ══════════════════════════════════════════════════════════════════
    CERALDI ORDINI 8 — riscritta da zero (05/10/2026)
@@ -1992,6 +2004,298 @@ async function annullaSostituzione(idVoce){
 }
 
 /* ══════════════════════════════════════════════════════════════════
+   PARTE 1d · RICONOSCIMENTO DELLE RIGHE DI FATTURA
+   Non una regola per ogni caso, ma PROVE INDIPENDENTI che devono
+   essere d'accordo. Collego da solo solo quando almeno una prova di
+   identità (codice articolo, nome imparato, nome uguale) è confermata
+   da una prova diversa (prezzo coerente con lo storico, prodotto
+   presente nell'ordine) e NIENTE va contro. Altrimenti chiedo, e dico
+   quale prova non torna. Ogni risposta dell'utente diventa una prova.
+
+   Prove a favore:  codice articolo del fornitore · nome imparato ·
+                    nome uguale (DUP) · attributi uguali (IA) ·
+                    prezzo coerente · ordinato a quel fornitore
+   Prove contro:    "non è questo" detto dall'utente · attributi
+                    diversi (formato, peso, marca, variante…) ·
+                    prezzo incoerente · codice che porta altrove
+   ══════════════════════════════════════════════════════════════════ */
+var MEMF = { righe: {}, agg: '', codici: {}, storia: {}, conflitti: [], sospetti: [], pronto: false };
+var LS_MEMF = 'or8_memf_v1', LS_ATTR = 'or8_attr_v1';
+
+function descrPulita(d){ return String(d || '').split(/\r?\n/)[0].replace(/\s+/g, ' ').trim(); }
+function codNorm(c){ c = String(c || '').trim().toUpperCase().replace(/\s+/g, ''); return c ? (c.replace(/^0+(?=[0-9A-Z])/, '') || c) : ''; }
+function chiaveCod(forn, cod){ var c = codNorm(cod); return forn && c ? norm(nomeFornitore(forn)) + '|' + c : ''; }
+function fornDiRigaPF(r){ var f = risolviFornitore(r.fornitore); return f && f.nome ? f.nome : null; }
+
+/* Quanto vale una riga già lavorata come prova di "codice → prodotto" */
+function pesoRiga(r){
+  var n = r.note || '';
+  if(/a mano|Creato nuovo prodotto/i.test(n)) return 3;
+  if(r.stato === 'approved') return /Superata|già uguale/i.test(n) ? 1 : 3;
+  if(r.stato === 'rejected') return /Contestato/i.test(n) ? 2 : 0;
+  if(r.stato === 'matched_auto') return 1;
+  return 0;   // review / new_price: collegamento non ancora confermato
+}
+
+/* ── Memoria: tutte le righe già collegate (copia locale, si aggiorna solo con le novità) ── */
+async function caricaMemoriaFatture(forza){
+  if(!forza && MEMF.pronto && Date.now() - (MEMF.letto || 0) < 10 * 60000) return MEMF;
+  var cache = lsGet(LS_MEMF, null);
+  if(cache && cache.righe && !forza){ MEMF.righe = cache.righe; MEMF.agg = cache.agg || ''; }
+  var campi = 'id,fornitore,cod_articolo,product_id,stato,note,descrizione,prezzo_ivato,prezzo_unit,data_fattura,updated_at';
+  try{
+    var nuove = await apiTutte('prezzi_da_fatture?select=' + campi + (MEMF.agg ? '&updated_at=gt.' + encodeURIComponent(MEMF.agg) : '') + '&order=id');
+    (nuove || []).forEach(function(r){ MEMF.righe[r.id] = { f: r.fornitore, c: r.cod_articolo || '', p: r.product_id, s: r.stato, n: (r.note || '').slice(0, 60), d: descrPulita(r.descrizione).slice(0, 90), v: num(r.prezzo_ivato) > 0 ? num(r.prezzo_ivato) : num(r.prezzo_unit), t: r.data_fattura }; if(r.updated_at > MEMF.agg) MEMF.agg = r.updated_at; });
+    lsSet(LS_MEMF, { righe: MEMF.righe, agg: MEMF.agg });
+    MEMF.letto = Date.now();
+  }catch(e){ if(!Object.keys(MEMF.righe).length) throw e; }
+  indicizzaMemoria();
+  return MEMF;
+}
+// prodotti del codice compatibili con le descrizioni viste in fattura (un formato diverso esclude)
+function idsDelCodice(k, e){ var descr = Object.keys(e.descr || {}); return Object.keys(e.ids).map(Number).filter(function(i){ return CATMAP[i] && !negato(k, null, i) && !descr.some(function(d){ return formatoDiverso(CATMAP[i].name, d); }); }); }
+function indicizzaMemoria(){
+  var cod = {}, st = {}, ds = {};
+  Object.keys(MEMF.righe).forEach(function(id){
+    var x = MEMF.righe[id]; if(x.p == null || !CATMAP[x.p]) return;
+    var r = { stato: x.s, note: x.n }, w = pesoRiga(r); if(!w) return;
+    var fr = risolviFornitore(x.f), forn = fr && fr.nome ? fr.nome : null; if(!forn) return;
+    var k = chiaveCod(forn, x.c);
+    if(k){ cod[k] = cod[k] || { ids: {}, descr: {}, dp: {} }; cod[k].ids[x.p] = (cod[k].ids[x.p] || 0) + w; cod[k].descr[x.d] = 1; if(w >= 3){ (cod[k].dp[x.p] = cod[k].dp[x.p] || {})[norm(x.d)] = 1; } cod[k].forn = forn; cod[k].cod = x.c; }
+    var kd = norm(forn) + '|' + norm(x.d); ds[kd] = ds[kd] || { ids: {}, cod: {} }; ds[kd].ids[x.p] = (ds[kd].ids[x.p] || 0) + w; if(x.c) ds[kd].cod[codNorm(x.c)] = x.c;
+    if(x.v > 0){ var ks = x.p + '|' + forn; (st[ks] = st[ks] || []).push({ v: x.v, t: x.t || '', w: w }); }
+  });
+  MEMF.codici = cod; MEMF.storia = st; MEMF.descr = ds; MEMF.pronto = true;
+  // stesso codice collegato a prodotti diversi, entrambi con conferme: va chiarito una volta
+  var scelte = conf().codici || {};
+  MEMF.conflitti = Object.keys(cod).filter(function(k){ return scelte[k] === undefined && idsDelCodice(k, cod[k]).length > 1; })
+    .map(function(k){ return { chiave: k, forn: cod[k].forn, cod: cod[k].cod, descr: Object.keys(cod[k].descr), ids: idsDelCodice(k, cod[k]) }; });
+  // collegamenti passati (anche confermati) che oggi le prove smentiscono: il prezzo in catalogo potrebbe venire dalla riga sbagliata
+  var ver = conf().verificati || {}, visti = {}, lim = new Date(Date.now() - 200 * 86400000).toISOString().slice(0, 10);
+  MEMF.sospetti = [];
+  Object.keys(MEMF.righe).forEach(function(id){
+    var x = MEMF.righe[id], p = x.p != null ? CATMAP[x.p] : null; if(!p || ver[id] || (x.t && x.t < lim)) return;
+    if(!/approved|matched_auto/.test(x.s) || /a mano/i.test(x.n)) return;
+    var k = norm(x.d) + '|' + x.p; if(visti[k]) return;
+    var mot = formatoDiverso(p.name, x.d) || (negato(null, x.d, x.p) ? 'hai detto che non è questo prodotto' : '');
+    if(!mot){ var fr = risolviFornitore(x.f), kc = fr && fr.nome ? chiaveCod(fr.nome, x.c) : ''; var sc = (conf().codici || {})[kc]; if(kc && sc != null && sc !== x.p && CATMAP[sc]) mot = 'il codice ' + x.c + ' è di «' + nomeBreve(CATMAP[sc].name, 40) + '»'; }
+    if(mot){ visti[k] = 1; MEMF.sospetti.push({ id: +id, forn: x.f, descr: x.d, pid: x.p, prezzo: x.v, data: x.t, motivo: mot }); }
+  });
+}
+/* L'utente ha appena deciso: diventa subito una prova (senza aspettare il prossimo caricamento) */
+function imparaRiga(r, pid, peso){
+  if(!r) return;
+  MEMF.righe[r.id] = { f: r.fornitore, c: r.cod_articolo || '', p: pid, s: 'approved', n: 'a mano', d: descrPulita(r.descrizione).slice(0, 90), v: pfPrezzo(r), t: r.data_fattura };
+  lsSet(LS_MEMF, { righe: MEMF.righe, agg: MEMF.agg });
+  var k = chiaveCod(fornDiRigaPF(r), r.cod_articolo);
+  if(k && peso >= 3 && MEMF.conflitti.some(function(c){ return c.chiave === k; })) docModifica('or8_conf', function(d){ d.codici = d.codici || {}; d.codici[k] = pid; });
+  indicizzaMemoria();
+}
+
+/* ── "Non è questo": memoria dei no ── */
+function chiaviNo(r, forn){ var l = ['d:' + aliasNorm(descrPulita(r.descrizione))]; var k = chiaveCod(forn, r.cod_articolo); if(k) l.push('c:' + k); return l; }
+function negato(chiaveC, descr, pid){
+  var no = conf().no || {};
+  if(chiaveC && (no['c:' + chiaveC] || []).indexOf(pid) >= 0) return true;
+  if(descr && (no['d:' + aliasNorm(descr)] || []).indexOf(pid) >= 0) return true;
+  return false;
+}
+function salvaNo(r, forn, pid){
+  if(!r || pid == null) return;
+  var ks = chiaviNo(r, forn);
+  docModifica('or8_conf', function(d){ d.no = d.no || {}; ks.forEach(function(k){ var l = d.no[k] = d.no[k] || []; if(l.indexOf(pid) < 0) l.push(pid); if(l.length > 20) l.shift(); }); if(d.alias){ var a = aliasNorm(descrPulita(r.descrizione)); if(d.alias[a] === pid) delete d.alias[a]; } });
+}
+
+/* ── Prova "codice articolo" ── */
+function prodottoDaCodice(forn, cod){
+  var k = chiaveCod(forn, cod); if(!k) return null;
+  var sc = conf().codici || {};
+  if(sc[k] !== undefined) return sc[k] != null && CATMAP[sc[k]] ? { id: sc[k], scelto: true, k: k } : { id: null, k: k };
+  var e = MEMF.codici[k]; if(!e) return null;
+  var ids = idsDelCodice(k, e).sort(function(a, b){ return e.ids[b] - e.ids[a]; });
+  if(!ids.length) return null;
+  if(ids.length > 1) return { id: null, conflitto: ids, k: k };
+  return { id: ids[0], peso: e.ids[ids[0]], k: k };
+}
+
+/* ── Prova "prezzo coerente": il prezzo in fattura è compatibile con quello che quel prodotto costa? ──
+   Vale per QUALSIASI differenza che cambia il prezzo (formato, peso, marca, pezzi per cartone…). */
+function coerenzaPrezzo(p, forn, prezzo){
+  if(!(prezzo > 0) || !p) return { stato: null };
+  var rif = prezzoDi(p, forn), da = 'catalogo', larga = false;
+  var st = (MEMF.storia[p.id + '|' + forn] || []).slice().sort(function(a, b){ return String(b.t).localeCompare(String(a.t)); });
+  if(st.length && (rif == null || st[0].w >= 3)) { rif = rif == null ? st[0].v : rif; }
+  if(rif == null){
+    var altri = Object.keys(p.prices || {}).map(function(k){ return num(p.prices[k]); }).filter(function(v){ return v > 0; }).sort(function(a, b){ return a - b; });
+    if(!altri.length) return { stato: null };
+    rif = altri[Math.floor(altri.length / 2)]; da = 'altri fornitori'; larga = true;
+  }
+  var q = prezzo / rif, lo = larga ? 0.5 : 0.65, hi = larga ? 2 : 1.5;
+  if(q >= lo && q <= hi) return { stato: 'ok', q: q, rif: rif, da: da };
+  var pz = (typeof DUP !== 'undefined' ? DUP.analizza(p.name).pack : null);
+  var perPezzo = pz > 1 && Math.abs(q * pz - 1) < 0.12, perCartone = pz > 1 && Math.abs(q / pz - 1) < 0.12;
+  return { stato: 'no', q: q, rif: rif, da: da, perPezzo: perPezzo, perCartone: perCartone };
+}
+function testoPrezzo(c){
+  if(!c || c.stato !== 'no') return '';
+  if(c.perPezzo) return 'il prezzo sembra di un solo pezzo, il catalogo è a cartone';
+  if(c.perCartone) return 'il prezzo sembra di un cartone, il catalogo è a pezzo';
+  return 'il prezzo (' + (c.q < 1 ? '−' : '+') + Math.round(Math.abs(c.q - 1) * 100) + '% rispetto a ' + eur(c.rif) + ') non è compatibile con questo prodotto';
+}
+
+/* ── Prova "ordinato": il prodotto era in un ordine a quel fornitore nei giorni prima della fattura ── */
+function ordinatiPrima(forn, data){
+  var t = Date.parse(data || ''), ids = {}; if(isNaN(t)) return ids;
+  var nf = nomeFornitore(forn);
+  STORICO.forEach(function(o){ var d = Date.parse(dataOrdine(o) || 0); if(d < t - 45 * 86400000 || d > t + 2 * 86400000 || nomeFornitore(o.supplier) !== nf) return; (o.items || []).forEach(function(i){ if(i.id != null) ids[i.id] = 1; }); });
+  return ids;
+}
+
+/* ── Valuta UN prodotto per UNA riga: prove a favore e contro ── */
+function valutaCandidato(r, forn, p, ctx){
+  ctx = ctx || {};
+  var desc = descrPulita(r.descrizione), prezzo = pfPrezzo(r), pro = [], contro = [], forte = false;
+  var kc = chiaveCod(forn, r.cod_articolo);
+  if(negato(kc, desc, p.id)){ contro.push({ k: 'no', t: 'hai detto che non è questo prodotto', duro: true }); return { p: p, pro: pro, contro: contro }; }
+  var c = ctx.codice;
+  if(c && c.id === p.id){ pro.push({ k: 'codice', t: 'stesso codice articolo (' + r.cod_articolo + ') già confermato' }); forte = true; }
+  else if(c && c.id != null && c.id !== p.id && (c.scelto || c.peso >= 3)) contro.push({ k: 'codice', t: 'il codice ' + r.cod_articolo + ' è di «' + nomeBreve(CATMAP[c.id].name, 40) + '»', duro: true });
+  var a = aliasDi(desc); if(a && a.id === p.id){ pro.push({ k: 'alias', t: 'nome già collegato da te' }); forte = true; }
+  // stessa descrizione già confermata da questo fornitore (anche se il codice articolo è cambiato)
+  var ed = (MEMF.descr || {})[norm(forn) + '|' + norm(desc)];
+  if(ed && ed.ids[p.id] && !(a && a.id === p.id)){
+    var altri = Object.keys(ed.ids).filter(function(i){ return +i !== p.id && CATMAP[i] && !negato(kc, desc, +i); });
+    if(!altri.length || ed.ids[p.id] > 2 * Math.max.apply(null, altri.map(function(i){ return ed.ids[i]; }))){
+      var vecchi = Object.keys(ed.cod).filter(function(c){ return c !== codNorm(r.cod_articolo); });
+      pro.push({ k: 'descr', t: 'stessa descrizione già confermata da ' + forn + (r.cod_articolo && vecchi.length && !(c && c.id === p.id) ? ' (il fornitore ha cambiato codice: prima ' + ed.cod[vecchi[0]] + ')' : '') }); forte = true;
+    }
+  }
+  var d = DUP.confronta(desc, p.name, {});
+  if(d.livello === 'sicuro'){ pro.push({ k: 'nome', t: 'stesso prodotto nel nome' }); forte = true; }
+  else if(d.livello === 'probabile') pro.push({ k: 'simile', t: 'nome simile (' + d.motivo + ')' });
+  else if(MOTIVI_DIVERSI.test(d.motivo || '')) contro.push({ k: 'attributi', t: d.motivo, duro: true });
+  else if(ctx.simileId === p.id && !paroleInContrasto(d.motivo)) pro.push({ k: 'simile', t: 'il nome più simile nel catalogo' });
+  // parole che si contraddicono (ELECTA / VERA): non blocca per sempre, ma impedisce di collegare da solo,
+  // a meno che tu non abbia già confermato proprio questa descrizione per questo prodotto
+  if(paroleInContrasto(d.motivo) && !(a && a.id === p.id) && !(ed && ed.ids[p.id])){
+    var ec = kc && MEMF.codici[kc], gia = ec && ec.dp && ec.dp[p.id] && ec.dp[p.id][norm(desc)];
+    if(!gia){ var mm = /parole diverse: (.+)$/.exec(d.motivo); contro.push({ k: 'nome', t: 'nel nome ci sono parole diverse (' + mm[1].toLowerCase() + ')', duro: false }); }
+  }
+  var at = ctx.attr && ctx.attr[p.id];
+  if(at){ if(at.uguali) { pro.push({ k: 'ia', t: 'stessa marca, tipo e formato (letti dall\'IA)' }); forte = true; } else if(at.diff.length) contro.push({ k: 'ia', t: at.diff.join(', '), duro: at.duro }); }
+  var cp = coerenzaPrezzo(p, forn, prezzo);
+  if(cp.stato === 'ok') pro.push({ k: 'prezzo', t: 'prezzo in linea (' + eur(cp.rif) + ' ' + (cp.da === 'catalogo' ? 'da ' + forn : 'da altri fornitori') + ')' });
+  else if(cp.stato === 'no') contro.push({ k: 'prezzo', t: testoPrezzo(cp), duro: false, perPezzo: cp.perPezzo });
+  if(ctx.ordinati && ctx.ordinati[p.id]) pro.push({ k: 'ordine', t: 'era nell\'ordine a ' + forn });
+  return { p: p, pro: pro, contro: contro, forte: forte, prezzo: cp };
+}
+// "parole diverse: LIMONE / SODA" = prodotti diversi; "MESS / MES" o "LIMONE / LIMONATA" = stessa parola scritta diversa
+function paroleInContrasto(motivo){
+  var m = /parole diverse: (.+) \/ (.+)$/.exec(motivo || ''); if(!m) return false;
+  var A = m[1].split(' ').filter(function(w){ return w.length > 2 && !/^\d+$/.test(w); }), B = m[2].split(' ').filter(function(w){ return w.length > 2 && !/^\d+$/.test(w); });
+  function vicina(w, l){ return l.some(function(z){ var c = w.length < z.length ? w : z, g = c === w ? z : w; return _lev1(w, z) || (c.length >= 3 && g.indexOf(c) === 0) || (w.length >= 4 && z.length >= 4 && w.slice(0, 4) === z.slice(0, 4)); }); }
+  return A.some(function(w){ return !vicina(w, B); }) && B.some(function(w){ return !vicina(w, A); });
+}
+function ha(v, k){ return v.pro.some(function(x){ return x.k === k; }); }
+/* Collegamento sicuro: una prova di identità + una prova indipendente, e nessuna prova contro */
+function decisione(v){
+  if(!v || v.contro.length) return false;
+  var conferma = ha(v, 'prezzo') || ha(v, 'ordine');
+  if(ha(v, 'codice')) return conferma || v.prezzo.stato == null;
+  if(ha(v, 'alias') || ha(v, 'descr')) return conferma || v.prezzo.stato == null;
+  if(ha(v, 'nome') || ha(v, 'ia')) return conferma || (v.prezzo.stato == null && ha(v, 'nome') && ha(v, 'ia'));
+  return false;
+}
+
+/* ── Riconosce una riga: { tipo: 'esatto'|'probabile'|'nessuno', id, v (prove), cand } ── */
+function riconosciRiga(r, forn, ctx){
+  ctx = Object.assign({ codice: prodottoDaCodice(forn, r.cod_articolo), ordinati: ordinatiPrima(forn, r.data_fattura) }, ctx || {});
+  var desc = descrPulita(r.descrizione), prezzo = pfPrezzo(r), lista = {};
+  function metti(p){ if(p && !lista[p.id]) lista[p.id] = p; }
+  if(ctx.codice && ctx.codice.id != null) metti(CATMAP[ctx.codice.id]);
+  if(ctx.codice && ctx.codice.conflitto) ctx.codice.conflitto.forEach(function(i){ metti(CATMAP[i]); });
+  metti(aliasDi(desc));
+  var u = trovaUguale(desc, { forn: forn, prezzo: prezzo }); metti(u.sicuro); u.forse.slice(0, 4).forEach(metti);
+  var cs = candidati(desc, CAT, 6, forn); cs.filter(function(x){ return x.s >= 30; }).forEach(function(x){ metti(x.c); });
+  // il più simile per distacco netto sugli altri è un indizio (mai da solo una prova)
+  if(cs[0] && cs[0].s >= 30 && (!cs[1] || cs[0].s >= 1.6 * cs[1].s)) ctx.simileId = cs[0].c.id;
+  Object.keys(ctx.ordinati).forEach(function(i){ var p = CATMAP[i]; if(p && DUP.confronta(desc, p.name, {}).livello) metti(p); });
+  if(ctx.extra) ctx.extra.forEach(metti);
+  var val = Object.keys(lista).map(function(i){ return valutaCandidato(r, forn, lista[i], ctx); }).filter(function(v){ return !v.contro.some(function(c){ return c.k === 'no'; }); });
+  function forza(v){ var s = 0; v.pro.forEach(function(x){ s += { codice: 50, alias: 40, descr: 40, nome: 30, ia: 30, simile: 12, prezzo: 15, ordine: 15 }[x.k] || 0; }); v.contro.forEach(function(x){ s -= x.duro ? 60 : 25; }); return s; }
+  val.forEach(function(v){ v.s = forza(v); });
+  val.sort(function(a, b){ return b.s - a.s; });
+  var best = val[0], sec = val[1];
+  var cand = val.filter(function(v){ return v.s > 0 || v.pro.length; }).slice(0, 6).map(function(v){ return { c: v.p, s: Math.max(1, Math.min(100, v.s)) }; });
+  // due candidati entrambi "sicuri": decido solo se uno ha chiaramente più prove
+  if(best && decisione(best) && !(sec && decisione(sec) && sec.s >= best.s - 10)) return { tipo: 'esatto', id: best.p.id, v: best, cand: cand, conflitto: ctx.codice && ctx.codice.conflitto };
+  // proposta solo se c'è almeno un indizio sul NOME o sul CODICE (il solo prezzo simile non basta)
+  var indizio = best && best.pro.some(function(x){ return /codice|alias|descr|nome|simile|ia/.test(x.k); });
+  if(best && indizio && best.s > 0 && !best.contro.some(function(c){ return c.duro; })) return { tipo: 'probabile', id: best.p.id, v: best, cand: cand, conflitto: ctx.codice && ctx.codice.conflitto };
+  return { tipo: 'nessuno', id: null, v: best || null, cand: cand, conflitto: ctx.codice && ctx.codice.conflitto };
+}
+function testoProve(v){ return v ? v.pro.map(function(x){ return x.t; }).join(' · ') : ''; }
+
+/* ── IA: scompone i nomi in attributi; il confronto lo fa il programma ──
+   L'IA "capisce" (POMOLA' è una marca, GLASSATA una lavorazione, SLEEK una lattina),
+   il codice decide con una regola sola: un attributo presente da entrambe le parti e diverso = prodotto diverso. */
+function attrCache(){ return lsGet(LS_ATTR, {}) || {}; }
+async function scomponiNomi(nomi){
+  var cache = attrCache(), manca = nomi.filter(function(n, i, l){ return n && l.indexOf(n) === i && !cache[norm(n)]; });
+  for(var b = 0; b < manca.length; b += 40){
+    var parte = manca.slice(b, b + 40);
+    var prompt = 'Sei un esperto di prodotti per bar, pasticceria e ristorazione in Italia. Scomponi ogni nome (spesso abbreviato, come nelle fatture dei grossisti) in attributi.\n' +
+      'Regole: "marca" = produttore o marchio (es. POMOLA\', TORRENTE, HEINEKEN, ELECTA, VERA); "prodotto" = cosa è, in parole semplici (es. passata di pomodoro, acqua naturale, birra lager, scorza di limone candita); ' +
+      '"variante" = gusto, tipo o lavorazione che lo distingue (es. glassata, frizzante, zero, pesca, integrale), vuoto se non c\'è; "misura" = contenuto di UNA unità convertito in grammi o millilitri (3 KG → 3000, CL33 → 330, LT 1,5 → 1500); ' +
+      '"unita" = "g" o "ml"; "pezzi" = unità per confezione o cartone (CTX24, X 24, PZ 100 → 24, 24, 100); "contenitore" = vetro, lattina, pet, fusto, busta, brick, barattolo o vuoto. Se un dato non c\'è usa null. Non inventare.\n\nNOMI:\n' +
+      parte.map(function(n, i){ return i + '. ' + n; }).join('\n') +
+      '\n\nRispondi SOLO con un array JSON, un oggetto per nome nello stesso ordine: [{"marca":"...","prodotto":"...","variante":null,"misura":700,"unita":"g","pezzi":null,"contenitore":null}]';
+    try{
+      var arr = jsonDaTesto(await chiamaClaude(prompt, Math.min(8000, 400 + parte.length * 90)));
+      if(Array.isArray(arr) && arr.length === parte.length){ parte.forEach(function(n, i){ if(arr[i] && typeof arr[i] === 'object') cache[norm(n)] = arr[i]; }); lsSet(LS_ATTR, cache); }
+    }catch(e){ _registraErrore('ia', e.message); break; }
+  }
+  return cache;
+}
+function _t(s){ return norm(s).split(' ').filter(function(w){ return w.length > 2; }); }
+function _simili(a, b){ a = norm(a).replace(/ /g, ''); b = norm(b).replace(/ /g, ''); if(!a || !b) return true; if(a === b || a.indexOf(b) >= 0 || b.indexOf(a) >= 0) return true; return a.length > 3 && b.length > 3 && _lev1(a, b); }
+function _lev1(a, b){ if(Math.abs(a.length - b.length) > 1) return false; var i = 0, j = 0, e = 0; while(i < a.length && j < b.length){ if(a[i] === b[j]){ i++; j++; continue; } if(++e > 1) return false; if(a.length > b.length) i++; else if(b.length > a.length) j++; else { i++; j++; } } return e + (a.length - i) + (b.length - j) <= 1; }
+function confrontaAttributi(A, B){
+  if(!A || !B) return null;
+  var diff = [], duro = false, soloUno = false;
+  if(A.marca && B.marca && !_simili(A.marca, B.marca)){ diff.push('marca diversa (' + A.marca + ' / ' + B.marca + ')'); duro = true; }
+  if(A.prodotto && B.prodotto){ var ta = _t(A.prodotto), tb = _t(B.prodotto); if(ta.length && tb.length && !ta.some(function(w){ return tb.some(function(z){ return _simili(w, z) || w.slice(0, 5) === z.slice(0, 5); }); })){ diff.push('prodotto diverso (' + A.prodotto + ' / ' + B.prodotto + ')'); duro = true; } }
+  if(A.variante && B.variante && !_simili(A.variante, B.variante)){ diff.push('variante diversa (' + A.variante + ' / ' + B.variante + ')'); duro = true; }
+  else if(!!A.variante !== !!B.variante){ diff.push('«' + (A.variante || B.variante) + '» solo da una parte'); soloUno = true; }
+  if(A.misura && B.misura && A.unita === B.unita && Math.abs(A.misura - B.misura) > Math.max(5, 0.03 * Math.max(A.misura, B.misura))){ diff.push('misura diversa (' + A.misura + A.unita + ' / ' + B.misura + B.unita + ')'); duro = true; }
+  if(A.pezzi && B.pezzi && +A.pezzi !== +B.pezzi){ diff.push('pezzi diversi (' + A.pezzi + ' / ' + B.pezzi + ')'); duro = true; }
+  if(A.contenitore && B.contenitore && !_simili(A.contenitore, B.contenitore)){ diff.push('contenitore diverso (' + A.contenitore + ' / ' + B.contenitore + ')'); duro = true; }
+  var marcaOk = !A.marca || !B.marca || _simili(A.marca, B.marca);
+  return { uguali: !diff.length && marcaOk && !!(A.marca && B.marca), diff: diff, duro: duro, soloUno: soloUno };
+}
+/* Rivaluta con l'IA le righe rimaste in dubbio (solo se c'è la chiave) */
+async function rifinisciConIA(righe, esiti){
+  if(!chiaveAI()) return esiti;
+  var idx = esiti.map(function(e, i){ return e.tipo !== 'esatto' && e.cand.length ? i : -1; }).filter(function(i){ return i >= 0; });
+  if(!idx.length) return esiti;
+  var nomi = []; idx.forEach(function(i){ nomi.push(descrPulita(righe[i].r.descrizione)); esiti[i].cand.slice(0, 4).forEach(function(x){ nomi.push(x.c.name); }); });
+  var cache = await scomponiNomi(nomi);
+  idx.forEach(function(i){
+    var x = righe[i], A = cache[norm(descrPulita(x.r.descrizione))]; if(!A) return;
+    var attr = {}; esiti[i].cand.slice(0, 4).forEach(function(c){ var B = cache[norm(c.c.name)]; if(B) attr[c.c.id] = confrontaAttributi(A, B); });
+    esiti[i] = riconosciRiga(x.r, x.forn, { attr: attr, extra: esiti[i].cand.map(function(c){ return c.c; }) });
+  });
+  return esiti;
+}
+
+/* ── Rivaluta un collegamento già esistente (fatto da una versione precedente o da un'altra regola) ── */
+function verificaCollegamento(r){
+  var forn = fornDiRigaPF(r), p = r.product_id != null ? CATMAP[r.product_id] : null; if(!p || !forn) return null;
+  var ctx = { codice: prodottoDaCodice(forn, r.cod_articolo), ordinati: ordinatiPrima(forn, r.data_fattura) };
+  return valutaCandidato(r, forn, p, ctx);
+}
+
+/* ══════════════════════════════════════════════════════════════════
    PARTE 2 · ORDINA — catalogo, scheda prodotto, carrello, invio
    ══════════════════════════════════════════════════════════════════ */
 var VIEW = { q: '', settore: 'Tutti', cat: 'Tutte', limite: 60, tab: 'ordina' };
@@ -2047,7 +2351,7 @@ function filtraProdotti(){
   if(q){
     var f = fornDi(q);
     if(f) l = l.filter(function(p){ return prezzoDi(p, f.nome) != null; });
-    else if(/^\d{8,14}$/.test(q)) l = l.filter(function(p){ return String(p.barcode || '') === q; });
+    else if(/^\d{8,14}$/.test(q)) l = l.filter(function(p){ return barcodeHa(p, q); });
     else l = l.filter(function(p){ return cercaTutte(p.name + ' ' + (p.conf || '') + ' ' + catDi(p), q); });
     var qn = norm(q);
     l.sort(function(a, b){ var sa = norm(a.name).indexOf(qn) === 0, sb = norm(b.name).indexOf(qn) === 0; if(sa !== sb) return sa ? -1 : 1; return a.name.localeCompare(b.name, 'it'); });
@@ -2191,7 +2495,7 @@ function renderScheda(){
     '<div class="row"><div class="row-ico ic-r">⚠️</div><div class="row-main"><div class="row-t">Scorta minima</div><div class="row-s">Sotto questa quantità va riordinato · la usa anche Richieste</div></div><input class="num-in' + (p.scorta_min != null ? ' filled' : '') + '" inputmode="numeric" value="' + (p.scorta_min == null ? '' : p.scorta_min) + '" placeholder="–" ' + (ro ? 'disabled' : '') + ' onchange="salvaNumero(' + p.id + ',\'scorta_min\',this)"></div></div>';
   // Dati
   h += '<div class="sec-title">Dati del prodotto' + (ro ? '' : '<button class="lnk" onclick="modificaDati(' + p.id + ')">Modifica</button>') + '</div><div class="grp">' +
-    [['Nome', p.name], ['Confezione', p.conf], ['Categoria', catDi(p)], ['Reparto', settoreDi(p)], ['IVA', p.iva ? p.iva + '%' : ''], ['Codice a barre', p.barcode]].map(function(x){ return '<div class="row"><div class="row-main row-s" style="margin:0">' + x[0] + '</div><div class="row-r" style="color:var(--ink);max-width:62%;overflow:hidden;text-overflow:ellipsis">' + esc(x[1] || '—') + '</div></div>'; }).join('') + '</div>';
+    [['Nome', p.name], ['Confezione', p.conf], ['Categoria', catDi(p)], ['Reparto', settoreDi(p)], ['IVA', p.iva ? p.iva + '%' : ''], ['Codici a barre', barcodeLista(p).join(', ')]].map(function(x){ return '<div class="row"><div class="row-main row-s" style="margin:0">' + x[0] + '</div><div class="row-r" style="color:var(--ink);max-width:62%;overflow:hidden;text-overflow:ellipsis">' + esc(x[1] || '—') + '</div></div>'; }).join('') + '</div>';
   // Storico
   var ord = STORICO.filter(function(o){ return (o.items || []).some(function(i){ return i.id === p.id || (i.id == null && norm(i.name) === norm(p.name)); }); }).slice(0, 6);
   h += '<div class="sec-title">Ultimi ordini</div><div class="grp">' + (ord.length ? ord.map(function(o){ var it = o.items.find(function(i){ return i.id === p.id || norm(i.name) === norm(p.name); }); return '<div class="row"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(o.supplier) + '</div><div class="row-s">' + esc(dataIt(dataOrdine(o))) + '</div></div><div class="row-r tnum">× ' + it.qty + (it.price ? ' · ' + eur(it.price) : '') + '</div></div>'; }).join('') : '<div class="row"><div class="row-main row-s">Mai ordinato con questa app.</div></div>') + '</div>';
@@ -2268,7 +2572,7 @@ function formProdotto(p){
     '<div class="field"><label>Categoria</label><input class="inp" id="fpK" list="fpKl" autocapitalize="characters" value="' + esc(p.cat || '') + '"><datalist id="fpKl">' + Object.keys(cats).sort().map(function(c){ return '<option value="' + esc(c) + '">'; }).join('') + '</datalist></div>' +
     '<div class="field"><label>Sottocategoria (facoltativa)</label><input class="inp" id="fpS" autocapitalize="characters" value="' + esc(p.subcat || '') + '"></div>' +
     '<div class="field"><label>Reparto</label><div class="seg" id="fpR">' + SETTORI_BASE.map(function(s){ return '<button class="seg-b' + ((p.settore || settoreDi(p)) === s ? ' active' : '') + '" onclick="this.parentNode.querySelectorAll(\'.seg-b\').forEach(function(b){b.classList.remove(\'active\')});this.classList.add(\'active\')">' + s + '</button>'; }).join('') + '</div></div>' +
-    '<div class="field"><label>Codice a barre</label><input class="inp" id="fpB" inputmode="numeric" value="' + esc(p.barcode || '') + '"></div>';
+    '<div class="field"><label>Codici a barre (se più d\'uno, separati da virgola)</label><input class="inp" id="fpB" value="' + esc(p.barcode || '') + '"></div>';
 }
 function leggiFormProdotto(){
   var r = document.querySelector('#fpR .seg-b.active');
@@ -2388,7 +2692,7 @@ function colCerca(k){ var q = document.getElementById('colQ').value; document.ge
 function collegaA(k, id){
   var r = carr().righe[k], p = CATMAP[id]; if(!r || !p) return;
   salvaAlias(r.nome, id);
-  if(r.barcode && !p.barcode) aggiornaProdotto(id, { barcode: r.barcode }).catch(function(){});
+  if(r.barcode && !barcodeHa(p, r.barcode)) aggiornaProdotto(id, { barcode: barcodeConAggiunto(p, r.barcode) }).catch(function(){});
   docModifica('or8_carrello', function(d){ var x = d.righe[k]; if(!x) return; delete d.righe[k]; var nk = 'p' + id; if(d.righe[nk]){ d.righe[nk].qty += x.qty; d.righe[nk].da = (d.righe[nk].da || []).concat(x.da || []); } else d.righe[nk] = Object.assign(x, { id: id, nome: p.name, conf: p.conf || '' }); });
   chiudiSheet('shCol'); renderCarrello(); renderOrdina(); toast('Collegato: la prossima volta lo riconosco da solo');
 }
@@ -2935,13 +3239,46 @@ async function patchPF(ids, campi){
   PF.forEach(function(r){ if(ids.indexOf(r.id) >= 0) Object.assign(r, campi); });
   PF = PF.filter(function(r){ return STATI_APERTI_PF.indexOf(r.stato) >= 0; });
 }
+// Prodotto del catalogo e riga di fattura con formato/peso/pezzi diversi: non possono essere lo stesso prodotto
+var MOTIVI_DIVERSI = /formato diverso|pezzi diversi|peso diverso|invecchiamento diverso|contenitore diverso|zero\/analcolico|oggetto diverso/;
+function formatoDiverso(nomeCat, desc){
+  if(typeof DUP === 'undefined' || !nomeCat || !desc) return '';
+  var c = DUP.confronta(nomeCat, desc); return c && !c.livello && MOTIVI_DIVERSI.test(c.motivo || '') ? c.motivo : '';
+}
+// solo i collegamenti con prove concordi possono essere aggiornati in blocco
+function collegamentoSicuro(r){ if(abbinatoAMano(r)) return true; var v = typeof verificaCollegamento === 'function' ? verificaCollegamento(r) : null; return !!(v && decisione(v)); }
+function abbinatoAMano(r){ return /a mano/i.test(r.note || ''); }
+// Ogni collegamento ancora aperto viene rivalutato con tutte le prove: se una prova forte va contro
+// (formato diverso, codice di un altro prodotto, "non è questo"), lo sposto sul prodotto giusto o lo sgancio.
+function abbinamentoSbagliato(r){
+  if(abbinatoAMano(r) || r.product_id == null || !CATMAP[r.product_id]) return '';
+  var v = typeof verificaCollegamento === 'function' ? verificaCollegamento(r) : null;
+  var d = v && v.contro.find(function(c){ return c.duro; });
+  return d ? d.t : '';
+}
+async function ricontrollaAbbinamenti(){
+  if(U.lettura || !CAT.length) return 0;
+  try{ await caricaMemoriaFatture(); }catch(e){}
+  var l = PF.filter(function(r){ return (r.stato === 'review' || r.stato === 'new_price') && abbinamentoSbagliato(r); });
+  for(var i = 0; i < l.length; i++){
+    var r = l[i], mot = abbinamentoSbagliato(r), forn = fornDiRigaPF(r), alt = forn ? riconosciRiga(r, forn) : null, prima = r.product_id;
+    try{
+      if(alt && alt.tipo === 'esatto' && alt.id !== prima){
+        var p = CATMAP[alt.id], att = prezzoDi(p, forn), nuovo = pfPrezzo(r);
+        await patchPF([r.id], { product_id: p.id, stato: att == null ? 'new_price' : 'review', prezzo_attuale: att, variazione_pct: att ? Math.round((nuovo - att) / att * 10000) / 100 : null, match_score: alt.v.s, note: ('Spostato da #' + prima + ' (' + mot + '): ' + testoProve(alt.v)).slice(0, 250) });
+      } else await patchPF([r.id], { stato: 'new_product', product_id: null, prezzo_attuale: null, variazione_pct: null, match_score: 0, note: ('Sganciato da #' + prima + ': ' + mot).slice(0, 250) });
+    }catch(e){}
+  }
+  if(l.length) await risolviPrezziUguali();
+  return l.length;
+}
 function gruppiPF(){
   var g = { variazioni: [], nuovi: [], fornitori: {} };
   PF.forEach(function(r){
     var f = pfForn(r);
     if(!f){ var k = String(r.fornitore || '?'); (g.fornitori[k] = g.fornitori[k] || []).push(r); return; }
     if(r.stato === 'pending') return;
-    if(r.product_id && CATMAP[r.product_id] && (r.stato === 'review' || r.stato === 'new_price')) g.variazioni.push(r);
+    if(r.product_id && CATMAP[r.product_id] && (r.stato === 'review' || r.stato === 'new_price') && !abbinamentoSbagliato(r)) g.variazioni.push(r);
     else g.nuovi.push(r);
   });
   return g;
@@ -2951,7 +3288,7 @@ function contaDaFare(){
   // il conto per il badge usa l'ultimo calcolo; quello nuovo parte quando l'app è libera
   if(CAT.length && DOPPI.firma !== firmaCatalogo()){ clearTimeout(contaDaFare._t); contaDaFare._t = setTimeout(function(){ calcolaDoppioni(); aggiornaBadge(); }, 1200); }
   var dop = DOPPI.gruppi.length;
-  return { rich: RICH.filter(function(r){ return r.stato === 'pending'; }).length, var: g.variazioni.length, nuovi: g.nuovi.length, forn: Object.keys(g.fornitori).length + (CAT.length ? fornitoriOrfani().length : 0), pd: PD.length, dop: dop };
+  return { rich: RICH.filter(function(r){ return r.stato === 'pending'; }).length, var: g.variazioni.length, nuovi: g.nuovi.length, forn: Object.keys(g.fornitori).length + (CAT.length ? fornitoriOrfani().length : 0), pd: PD.length, dop: dop, cod: (typeof MEMF !== 'undefined' ? MEMF.conflitti.length + MEMF.sospetti.length : 0) + BC.l.filter(function(x){ return /^proposto/.test(x.stato); }).length };
 }
 
 /* ── Elaborazione automatica delle righe nuove arrivate da Fatture ── */
@@ -2965,20 +3302,25 @@ async function processaPending(){
     pend.forEach(function(r){ var f = risolviFornitore(r.fornitore); if(f && f.ignora) ignora.push(r.id); else if(f && f.nome) lav.push({ r: r, forn: f.nome }); });
     if(ignora.length) await patchPF(ignora, { stato: 'rejected', note: 'Fornitore escluso da Ordini', resolved_at: new Date().toISOString() });
     if(!lav.length) return 0;
-    var ris = await riconosci(lav.map(function(x){ return x.r.descrizione; }), lav.map(function(x){ return { forn: x.forn, prezzo: pfPrezzo(x.r) }; }));
+    try{ await caricaMemoriaFatture(); }catch(e){}
+    var esiti = lav.map(function(x){ return riconosciRiga(x.r, x.forn); });
+    try{ esiti = await rifinisciConIA(lav, esiti); }catch(e){ _registraErrore('ia', e.message); }
     var auto = 0;
     for(var i = 0; i < lav.length; i++){
-      var x = lav[i], m = ris[i], prezzo = pfPrezzo(x.r), c;
+      var x = lav[i], m = esiti[i], prezzo = pfPrezzo(x.r), c;
       try{
         if(m.tipo === 'esatto' && CATMAP[m.id] && prezzo > 0){
-          var p = CATMAP[m.id], att = prezzoDi(p, x.forn), v = att ? Math.round((prezzo - att) / att * 10000) / 100 : null;
-          if(att == null) c = { stato: 'new_price', product_id: p.id, match_score: m.s, prezzo_attuale: null, variazione_pct: null };
+          var p = CATMAP[m.id], att = prezzoDi(p, x.forn), v = att ? Math.round((prezzo - att) / att * 10000) / 100 : null, perche = 'auto: ' + testoProve(m.v);
+          if(att == null) c = { stato: 'new_price', product_id: p.id, match_score: m.v.s, prezzo_attuale: null, variazione_pct: null, note: perche.slice(0, 250) };
           else if(Math.abs(v) <= 1){
             if(Math.abs(prezzo - att) > 0.005) await impostaPrezzo(p.id, x.forn, prezzo);
-            c = { stato: 'matched_auto', product_id: p.id, match_score: m.s, prezzo_attuale: att, variazione_pct: v, resolved_at: new Date().toISOString(), note: 'Aggiornato in automatico (variazione entro l\'1%)' }; auto++;
-          } else c = { stato: 'review', product_id: p.id, match_score: m.s, prezzo_attuale: att, variazione_pct: v };
-          if(m.ia) c.note = 'riconosciuto con IA';
-        } else c = { stato: prezzo > 0 ? 'new_product' : 'no_match', match_score: m.s || 0 };
+            c = { stato: 'matched_auto', product_id: p.id, match_score: m.v.s, prezzo_attuale: att, variazione_pct: v, resolved_at: new Date().toISOString(), note: perche.slice(0, 250) }; auto++;
+          } else c = { stato: 'review', product_id: p.id, match_score: m.v.s, prezzo_attuale: att, variazione_pct: v, note: perche.slice(0, 250) };
+        } else if(m.tipo === 'probabile' && CATMAP[m.id] && prezzo > 0){
+          // collegamento proposto ma NON confermato: lo vedrai con la domanda "È lo stesso prodotto?"
+          var p2 = CATMAP[m.id], a2 = prezzoDi(p2, x.forn);
+          c = { stato: a2 == null ? 'new_price' : 'review', product_id: p2.id, match_score: Math.max(1, m.v.s), prezzo_attuale: a2, variazione_pct: a2 ? Math.round((prezzo - a2) / a2 * 10000) / 100 : null, note: ('dubbio: ' + testoProve(m.v)).slice(0, 250) };
+        } else c = { stato: prezzo > 0 ? 'new_product' : 'no_match', match_score: 0 };
         await patchPF([x.r.id], c);
       }catch(e){ _registraErrore('fatture', x.r.id + ': ' + e.message); }
     }
@@ -3002,11 +3344,14 @@ function renderDaFare(){
     var ora = new Date(), hh = String(ora.getHours()).padStart(2, '0') + ':' + String(ora.getMinutes()).padStart(2, '0');
     if(hh >= (pm.ora || '00:00')) h += '<div class="banner b"><span>⏰</span><div style="flex:1"><b>Oggi è giorno d\'ordine</b><br>Controlla magazzino e richieste, poi invia gli ordini.</div><button class="btn-sm p" onclick="lsSet(\'or8_prom_\'+oggiISO(),true);renderDaFare()">Fatto</button></div>';
   }
-  var tot = n.rich + n.var + n.forn + n.dop;
+  var tot = n.rich + n.var + n.forn + n.dop + n.cod;
   if(!tot && !uniteDiRecente().length && !n.nuovi && !n.pd && !CAT.filter(function(p){ return sottoScorta(p) && !inCarrello(p.id); }).length) h += '<div class="empty"><div class="ei">✅</div><b>Tutto in ordine</b><p>Nessuna richiesta, nessun prezzo da controllare, nessun prodotto sotto scorta.</p></div>';
   h += sezioneRichieste();
+  h += sezioneBarcode();
   h += sezioneOrfani();
   h += sezioneDoppioni();
+  h += sezioneCodici();
+  h += sezioneSospetti();
   h += sezioneVariazioni(g.variazioni);
   h += sezioneFornitori(g.fornitori);
   h += sezioneNuovi(g.nuovi);
@@ -3016,6 +3361,49 @@ function renderDaFare(){
   preparaRichieste();
 }
 function titoloSez(t, n, extra){ return '<div class="sec-title">' + t + (n != null ? ' · ' + n : '') + (extra || '') + '</div>'; }
+
+/* ── Codici a barre proposti dai dipendenti ──────────────────────── */
+var BC = { l: [], at: 0 };
+async function caricaBarcode(){ try{ BC.l = await api('ceraldi_barcode_sconosciuti?select=id,barcode,nome_suggerito,dipendente,stato,created_at&stato=in.(nuovo)&order=created_at.desc&limit=200') || []; var pr = await api('ceraldi_barcode_sconosciuti?select=id,barcode,nome_suggerito,dipendente,stato,created_at&stato=like.proposto*&order=created_at.desc&limit=200') || []; BC.l = pr.concat(BC.l); BC.at = Date.now(); }catch(e){ BC.l = []; } }
+/* Aggiunge il codice al prodotto (un prodotto può averne più d'uno); se era su un altro prodotto lo sposta */
+async function collegaCodice(p, codice, muto){
+  codice = String(codice || '').trim(); if(!p || !codice) return;
+  var altro = CAT.find(function(x){ return x.id !== p.id && barcodeHa(x, codice); });
+  if(altro && !muto && !(await conferma('Codice già usato', 'Il codice ' + esc(codice) + ' è collegato a <b>' + esc(altro.name) + '</b>. Lo sposto su <b>' + esc(p.name) + '</b>?', 'Sposta'))) return false;
+  try{
+    if(!barcodeHa(p, codice)) await aggiornaProdotto(p.id, { barcode: barcodeConAggiunto(p, codice) });
+    if(altro) await aggiornaProdotto(altro.id, { barcode: barcodeSenza(altro, codice) || null });
+    var aperti = BC.l.filter(function(x){ return x.barcode === codice; }).map(function(x){ return x.id; });
+    if(aperti.length) api('ceraldi_barcode_sconosciuti?id=in.(' + aperti.join(',') + ')', { method: 'PATCH', prefer: 'return=minimal', body: { stato: 'confermato:' + p.id } }).catch(function(){});
+    BC.l = BC.l.filter(function(x){ return x.barcode !== codice; });
+    return true;
+  }catch(e){ toast('⚠️ ' + e.message); return false; }
+}
+function sezioneBarcode(){
+  var vis = {}, l = BC.l.filter(function(x){ if(vis[x.barcode] || prodottoDaBarcode(CAT, x.barcode)) return false; vis[x.barcode] = 1; return true; });
+  if(!l.length || U.lettura) return '';
+  var h = titoloSez('Codici a barre da confermare', l.length);
+  h += '<p class="hint" style="font-size:12.5px;margin:-2px 4px 8px">I dipendenti hanno scansionato codici che il catalogo non conosceva. Conferma il prodotto giusto: da quel momento, per tutti, quel codice porta sempre a quel prodotto.</p>';
+  h += '<div class="todo">' + l.slice(0, DF.mostra.bc ? 60 : 5).map(function(x){
+    var m = /^proposto:(\d+)/.exec(x.stato || ''), p = m && CATMAP[m[1]], chi = esc(String(x.dipendente || 'Un dipendente').split(' ')[0]);
+    return '<div class="todo-it"><div class="row-s" style="font-size:12px">📷 codice ' + esc(x.barcode) + ' · ' + esc(quando(x.created_at)) + '</div>' +
+      (p ? '<div class="row-t" style="font-size:14px">' + chi + ' dice che è <b>' + esc(p.name) + '</b></div><div style="font-weight:700;font-size:13.5px;margin-top:8px">È giusto?</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button class="btn-sm g" onclick="bcConferma(' + x.id + ',' + p.id + ')">Sì, conferma</button><button class="btn-sm" onclick="bcScegli(' + x.id + ')">No, è un altro</button><button class="btn-sm" onclick="bcIgnora(' + x.id + ')">Ignora</button></div>'
+        : '<div class="row-t" style="font-size:14px">' + chi + ' l\'ha chiamato «' + esc(x.nome_suggerito || '?') + '» (non era nel catalogo)</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="btn-sm p" onclick="bcScegli(' + x.id + ')">Collega a un prodotto…</button><button class="btn-sm" onclick="bcNuovo(' + x.id + ')">Aggiungi al catalogo</button><button class="btn-sm" onclick="bcIgnora(' + x.id + ')">Ignora</button></div>') + '</div>';
+  }).join('') + (l.length > 5 && !DF.mostra.bc ? '<div class="todo-ft"><button class="btn-sm p" onclick="DF.mostra.bc=1;renderDaFare()">Mostra tutti (' + l.length + ')</button></div>' : '') + '</div>';
+  return h;
+}
+async function bcConferma(id, pid){ var x = BC.l.find(function(y){ return y.id === id; }); if(!x || !CATMAP[pid]) return; if(await collegaCodice(CATMAP[pid], x.barcode)){ renderDaFare(); aggiornaBadge(); toast('Codice ' + x.barcode + ' → ' + nomeBreve(CATMAP[pid].name, 26) + ' ✓'); } }
+async function bcIgnora(id){ var x = BC.l.find(function(y){ return y.id === id; }); if(!x) return; var ids = BC.l.filter(function(y){ return y.barcode === x.barcode; }).map(function(y){ return y.id; }); try{ await api('ceraldi_barcode_sconosciuti?id=in.(' + ids.join(',') + ')', { method: 'PATCH', prefer: 'return=minimal', body: { stato: 'ignorato' } }); }catch(e){} BC.l = BC.l.filter(function(y){ return y.barcode !== x.barcode; }); renderDaFare(); aggiornaBadge(); }
+function bcNuovo(id){ var x = BC.l.find(function(y){ return y.id === id; }); if(!x) return; apriNuovoProdotto(x.nome_suggerito || '', { barcode: x.barcode, onCreato: function(p){ collegaCodice(p, x.barcode, true).then(function(){ renderDaFare(); aggiornaBadge(); }); } }); }
+function bcScegli(id){
+  var x = BC.l.find(function(y){ return y.id === id; }); if(!x) return;
+  var l = x.nome_suggerito ? candidati(x.nome_suggerito, CAT, 8).map(function(c){ return c.c; }) : [];
+  apriSheet('shBC', { titolo: 'Di che prodotto è questo codice?', sotto: 'codice ' + esc(x.barcode) + (x.nome_suggerito ? ' · «' + esc(x.nome_suggerito) + '»' : ''), alto: true,
+    corpo: '<div class="sw"><span class="si">🔎</span><input id="bcQ" type="search" placeholder="Cerca nel catalogo" oninput="bcCerca(' + id + ')"></div><div id="bcRis">' + bcRighe(id, l) + '</div>',
+    piede: '<button class="btn btn-p" onclick="chiudiSheet(\'shBC\');bcNuovo(' + id + ')">Non c\'è: aggiungilo al catalogo</button>' });
+}
+function bcRighe(id, l){ return '<div class="grp">' + l.map(function(p){ return '<button class="row" onclick="chiudiSheet(\'shBC\');bcConferma(' + id + ',' + p.id + ')"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p.name) + '</div><div class="row-s">' + esc(p.conf || '') + '</div></div><span class="chev">›</span></button>'; }).join('') + '</div>'; }
+function bcCerca(id){ var q = document.getElementById('bcQ').value; document.getElementById('bcRis').innerHTML = bcRighe(id, CAT.filter(function(p){ return cercaTutte(p.name, q) || barcodeHa(p, q); }).slice(0, 30)); }
 
 /* ── Richieste dei dipendenti ────────────────────────────────────── */
 function sezioneRichieste(){
@@ -3055,7 +3443,7 @@ async function preparaRichieste(){
     items.forEach(function(it, ix){
       if(!it.custom && it.id != null && CATMAP[it.id]) out[ix] = { p: CATMAP[it.id], tipo: 'esatto' };
       else if(it.custom){
-        var bc = it.barcode && CAT.find(function(p){ return p.barcode && String(p.barcode) === String(it.barcode); });
+        var bc = it.barcode && prodottoDaBarcode(CAT, it.barcode);
         if(bc) out[ix] = { p: bc, tipo: 'esatto' }; else { nomi.push(it.name); idx.push(ix); }
       } else out[ix] = {};
     });
@@ -3086,7 +3474,7 @@ async function prendiRichiesta(id){
     if(DF.escl[k]) continue;
     var q = it.qty || 1;
     if(x.p && x.tipo === 'esatto'){
-      if(it.custom){ salvaAlias(it.name, x.p.id); if(it.barcode && !x.p.barcode) aggiornaProdotto(x.p.id, { barcode: it.barcode }).catch(function(){}); }
+      if(it.custom){ salvaAlias(it.name, x.p.id); if(it.barcode) collegaCodice(x.p, it.barcode, true); }
       if(it.needsScortaMin && x.p.scorta_min == null && DF.scorta[k] !== false) aggiornaProdotto(x.p.id, { scorta_min: (it.giacenza || 0) + q }).catch(function(){});
       aggiungi(x.p.id, q, { da: da, muto: true });
     } else aggiungiProvvisorio(it.name, it.conf, q, { da: da, barcode: it.barcode || null });
@@ -3109,20 +3497,89 @@ async function rifiutaRichiesta(id){
   }catch(e){ toast('⚠️ ' + e.message); }
 }
 
+/* ── Stesso codice articolo collegato a prodotti diversi ──────────── */
+function sezioneCodici(){
+  var l = (typeof MEMF !== 'undefined' ? MEMF.conflitti : []); if(!l.length) return '';
+  var h = titoloSez('Da chiarire una volta sola', l.length);
+  if(!U.lettura) h += '<p class="hint" style="font-size:12.5px;margin:-2px 4px 8px">In passato la stessa riga di fattura (stesso codice articolo del fornitore) è stata collegata a prodotti diversi. Tocca quello giusto: da quel momento lo riconosco da solo, per sempre.</p>';
+  h += '<div class="todo">' + l.slice(0, DF.mostra.cod ? 50 : 4).map(function(c){
+    return '<div class="todo-it"><div class="row-s" style="font-size:12px">' + esc(c.forn) + ' · codice articolo ' + esc(c.cod) + '</div><div class="row-t" style="font-size:14px">In fattura: ' + esc(c.descr.join(' / ')) + '</div>' +
+      (U.lettura ? '' : '<div style="font-weight:700;font-size:13.5px;margin-top:8px">Qual è il prodotto giusto?</div>' + c.ids.map(function(i){ var p = CATMAP[i]; return '<button class="cand" onclick="scegliCodice(' + jsq(c.chiave) + ',' + i + ')"><span>È</span><b>' + esc(p.name) + '</b><span class="muted">' + (prezzoDi(p, c.forn) != null ? eur(prezzoDi(p, c.forn)) : '') + '</span></button>'; }).join('') +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="btn-sm" onclick="scegliCodice(' + jsq(c.chiave) + ',null)">Nessuno di questi</button></div>') + '</div>';
+  }).join('') + (l.length > 4 && !DF.mostra.cod ? '<div class="todo-ft"><button class="btn-sm p" onclick="DF.mostra.cod=1;renderDaFare()">Mostra tutti (' + l.length + ')</button></div>' : '') + '</div>';
+  return h;
+}
+function scegliCodice(k, pid){
+  var c = MEMF.conflitti.find(function(x){ return x.chiave === k; }); if(!c) return;
+  docModifica('or8_conf', function(d){ d.codici = d.codici || {}; d.codici[k] = pid; d.no = d.no || {}; var l = d.no['c:' + k] = d.no['c:' + k] || []; c.ids.forEach(function(i){ if(i !== pid && l.indexOf(i) < 0) l.push(i); }); });
+  indicizzaMemoria();
+  ricontrollaAbbinamenti().then(function(){ renderDaFare(); aggiornaBadge(); });
+  renderDaFare(); aggiornaBadge();
+  toast(pid != null ? 'Fatto: ' + nomeBreve(CATMAP[pid].name, 26) + ' ✓' : 'Segnato: nessuno dei due');
+}
+
+/* ── Collegamenti passati che le prove smentiscono ───────────────── */
+function sezioneSospetti(){
+  var l = (typeof MEMF !== 'undefined' ? MEMF.sospetti : []); if(!l.length || U.lettura) return '';
+  var h = titoloSez('Collegamenti vecchi da ricontrollare', l.length);
+  h += '<p class="hint" style="font-size:12.5px;margin:-2px 4px 8px">Queste righe di fattura erano state collegate (in automatico o con «Aggiorna prezzo») a un prodotto che, a guardarlo bene, non sembra lo stesso. Se il collegamento era sbagliato, anche il prezzo in catalogo potrebbe essere sbagliato.</p>';
+  h += '<div class="todo">' + l.slice(0, DF.mostra.sos ? 60 : 4).map(function(x){
+    var p = CATMAP[x.pid], f = nomeFornitore(x.forn), att = prezzoDi(p, f), uguale = att != null && Math.abs(att - x.prezzo) < 0.01;
+    return '<div class="todo-it"><div class="row-s" style="font-size:12px">' + esc(f) + (x.data ? ' · fattura del ' + esc(dataIt(x.data)) : '') + '</div>' +
+      '<div class="row-s" style="font-size:12px;margin-top:2px">In fattura</div><div class="row-t" style="font-size:14px">' + esc(x.descr) + ' <span class="muted tnum" style="font-weight:400">' + eur(x.prezzo) + '</span></div>' +
+      '<div class="row-s" style="font-size:12px;margin-top:4px">Era stato collegato a</div><div class="row-t" style="font-size:14px;font-weight:600">' + esc(p.name) + (att != null ? ' <span class="muted tnum" style="font-weight:400">' + eur(att) + '</span>' : '') + '</div>' +
+      '<div class="banner o" style="margin:8px 0 0;padding:8px 10px;font-size:12.5px"><span>⚠️</span><div>' + esc(x.motivo.charAt(0).toUpperCase() + x.motivo.slice(1)) + '.' + (uguale ? ' Il prezzo in catalogo (' + eur(att) + ') viene proprio da questa riga.' : '') + '</div></div>' +
+      '<div style="font-weight:700;font-size:13.5px;margin-top:10px">Era lo stesso prodotto?</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">' +
+      '<button class="btn-sm" onclick="esitoSospetto(' + x.id + ',true)">Sì, era giusto</button>' +
+      '<button class="btn-sm o" onclick="esitoSospetto(' + x.id + ',false)">No, era sbagliato' + (uguale ? ': correggi il prezzo' : '') + '</button></div></div>';
+  }).join('') + (l.length > 4 && !DF.mostra.sos ? '<div class="todo-ft"><button class="btn-sm p" onclick="DF.mostra.sos=1;renderDaFare()">Mostra tutti (' + l.length + ')</button></div>' : '') + '</div>';
+  return h;
+}
+function esitoSospetto(id, giusto){
+  var x = MEMF.sospetti.find(function(s){ return s.id === id; }); if(!x) return;
+  var r = { id: id, descrizione: x.descr, fornitore: x.forn, cod_articolo: (MEMF.righe[id] || {}).c, data_fattura: x.data, prezzo_ivato: x.prezzo };
+  if(giusto){ docModifica('or8_conf', function(d){ d.verificati = d.verificati || {}; d.verificati[id] = 1; }); salvaAlias(x.descr, x.pid); imparaRiga(r, x.pid, 3); }
+  else { salvaNo(r, nomeFornitore(x.forn), x.pid); docModifica('or8_conf', function(d){ d.verificati = d.verificati || {}; d.verificati[id] = 1; }); }
+  indicizzaMemoria(); renderDaFare(); aggiornaBadge();
+  if(!giusto){ var p = CATMAP[x.pid], f = nomeFornitore(x.forn), att = prezzoDi(p, f);
+    if(att != null && Math.abs(att - x.prezzo) < 0.01) chiediTesto('Prezzo giusto di ' + nomeBreve(p.name, 30), 'Da ' + f + ' oggi è ' + eur(att) + ', ma viene dalla riga sbagliata. Scrivi il prezzo corretto (vuoto = lascia così).', '', 'es. 12,50').then(function(t){ var v = numIt(t); if(v > 0) impostaPrezzo(p.id, f, v).then(function(){ toast(nomeBreve(p.name, 24) + ': ' + eur(v) + ' ✓'); renderDaFare(); }); });
+    else toast('Segnato: non lo collego più');
+  } else toast('Segnato come giusto ✓');
+}
+
 /* ── Prezzi cambiati in fattura ──────────────────────────────────── */
 function sezioneVariazioni(l){
   if(!l.length) return '';
   l = l.slice().sort(function(a, b){ return Math.abs(num(b.variazione_pct) || 0) - Math.abs(num(a.variazione_pct) || 0); });
-  var lim = DF.mostra.var ? l.length : 6, piccoli = l.filter(function(r){ return r.stato === 'review' && Math.abs(num(r.variazione_pct) || 0) <= 10; });
-  var h = titoloSez('Prezzi cambiati in fattura', l.length, piccoli.length > 1 && !U.lettura ? '<button class="lnk" onclick="aggiornaVariazioniPiccole()">Aggiorna i ≤10% (' + piccoli.length + ')</button>' : '');
-  h += '<div class="todo">' + l.slice(0, lim).map(function(r){
-    var p = CATMAP[r.product_id], f = pfForn(r), att = prezzoDi(p, f), nuovo = pfPrezzo(r), v = att ? (nuovo - att) / att * 100 : null, strano = v != null && Math.abs(v) >= 40;
-    return '<div class="todo-it"><div style="display:flex;gap:10px"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p.name) + '</div><div class="row-s">' + esc(f) + ' · fattura del ' + esc(dataIt(r.data_fattura)) + '</div><div class="row-s" style="font-size:11.5px">in fattura: "' + esc(nomeBreve(r.descrizione, 60)) + '"</div></div>' +
-      '<div style="text-align:right;flex-shrink:0">' + (att != null ? '<span class="muted" style="text-decoration:line-through;font-size:12.5px">' + eur(att) + '</span><br>' : '<span class="bdg b">nuovo fornitore</span><br>') + '<b class="tnum" style="font-size:16px">' + eur(nuovo) + '</b>' + (v != null ? '<br><span class="' + (v > 0 ? 'var-up' : 'var-dn') + '" style="font-size:12px">' + (v > 0 ? '+' : '') + v.toFixed(1) + '%</span>' : '') + '</div></div>' +
-      (strano ? '<div class="banner o" style="margin:8px 0 0;padding:8px 10px;font-size:12.5px"><span>⚠️</span><div>Differenza molto grande: controlla che fattura e catalogo usino la stessa unità (pezzo o cartone).</div></div>' : '') +
-      (U.lettura ? '' : '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="btn-sm g" onclick="applicaPF(' + r.id + ')">Aggiorna prezzo</button><button class="btn-sm" onclick="cambiaProdottoPF(' + r.id + ')">Non è questo</button>' + (v > 0 ? '<button class="btn-sm o" onclick="contestaPF(' + r.id + ')">Contesta</button>' : '') + '<button class="btn-sm" onclick="ignoraPF(' + r.id + ')">Ignora</button></div>') + '</div>';
-  }).join('') + (l.length > lim ? '<div class="todo-ft"><button class="btn-sm p" onclick="DF.mostra.var=1;renderDaFare()">Mostra tutti (' + l.length + ')</button></div>' : '') + '</div>';
+  var lim = DF.mostra.var ? l.length : 6, piccoli = l.filter(function(r){ return r.stato === 'review' && Math.abs(num(r.variazione_pct) || 0) <= 10 && collegamentoSicuro(r); });
+  var h = titoloSez('Prezzi diversi in fattura', l.length, piccoli.length > 1 && !U.lettura ? '<button class="lnk" onclick="aggiornaVariazioniPiccole()">Aggiorna i ≤10% (' + piccoli.length + ')</button>' : '');
+  if(!U.lettura) h += '<p class="hint" style="font-size:12.5px;margin:-2px 4px 8px">In queste fatture il prezzo è diverso dal catalogo. Per ogni riga rispondi: è lo stesso prodotto? <b>Sì</b> → il catalogo prende il prezzo nuovo. <b>No</b> → ho collegato il prodotto sbagliato: scegli quello giusto o aggiungilo.</p>';
+  h += '<div class="todo">' + l.slice(0, lim).map(rigaVariazione).join('') + (l.length > lim ? '<div class="todo-ft"><button class="btn-sm p" onclick="DF.mostra.var=1;renderDaFare()">Mostra tutti (' + l.length + ')</button></div>' : '') + '</div>';
   return h;
+}
+function rigaVariazione(r){
+  var p = CATMAP[r.product_id], f = pfForn(r), att = prezzoDi(p, f), nuovo = pfPrezzo(r), v = att ? (nuovo - att) / att * 100 : null, strano = v != null && Math.abs(v) >= 40;
+  var giorni = r.data_fattura ? (Date.now() - Date.parse(r.data_fattura)) / 86400000 : 0, vecchia = giorni > 150;
+  // le prove: cosa dice che è lui, cosa no
+  var ev = typeof verificaCollegamento === 'function' ? verificaCollegamento(r) : null, avvisi = [];
+  var cf = typeof DUP !== 'undefined' ? DUP.confronta(p.name, descrPulita(r.descrizione)) : null, diff = cf && cf.livello !== 'sicuro' && /in più: (.+)/.exec(cf.motivo || '');
+  if(ev) ev.contro.forEach(function(c){ avvisi.push(c.t.charAt(0).toUpperCase() + c.t.slice(1) + '.'); });
+  if(diff && !(ev && ev.contro.some(function(c){ return c.k === 'ia'; }))) avvisi.push('Il nome non è identico: <b>' + esc(diff[1]) + '</b> c\'è solo da una parte.');
+  else if(cf && !cf.livello && !(ev && (ev.forte || ev.contro.length))) avvisi.push('Il nome in fattura è abbastanza diverso da quello del catalogo.');
+  if(strano && !(ev && ev.contro.some(function(c){ return c.k === 'prezzo'; }))) avvisi.push('Prezzo ' + (v > 0 ? 'più alto' : 'più basso') + ' del ' + Math.abs(v).toFixed(0) + '%.');
+  if(vecchia) avvisi.push('Fattura di ' + (giorni > 330 ? 'circa un anno' : Math.round(giorni / 30) + ' mesi') + ' fa: il prezzo potrebbe essere già superato.');
+  var sicuro = ev && typeof decisione === 'function' && decisione(ev);
+  var prove = ev && ev.pro.length ? '<div class="row-s" style="font-size:12px;margin-top:6px;color:var(--green-ink,#1a7f37)">✓ ' + ev.pro.map(function(x){ return esc(x.t); }).join(' · ') + '</div>' : '';
+  return '<div class="todo-it">' +
+    '<div class="row-s" style="font-size:12px">' + esc(f) + ' · fattura del ' + esc(dataIt(r.data_fattura)) + (r.qta ? ' · q.tà ' + num(r.qta) : '') + '</div>' +
+    '<div style="display:flex;gap:10px;margin-top:2px"><div class="row-main"><div class="row-s" style="font-size:12px">In fattura' + (r.cod_articolo ? ' · cod. ' + esc(r.cod_articolo) : '') + '</div><div class="row-t" style="font-size:14px">' + esc(descrPulita(r.descrizione)) + '</div></div><div style="text-align:right;flex-shrink:0"><b class="tnum" style="font-size:16px">' + eur(nuovo) + '</b>' + (v != null ? '<br><span class="' + (v > 0 ? 'var-up' : 'var-dn') + '" style="font-size:12px">' + (v > 0 ? '+' : '') + v.toFixed(1) + '%</span>' : '') + '</div></div>' +
+    '<div style="display:flex;gap:10px;margin-top:6px"><div class="row-main"><div class="row-s" style="font-size:12px">Nel catalogo</div><div class="row-t" style="font-size:14px;font-weight:600">' + esc(p.name) + '</div></div><div style="text-align:right;flex-shrink:0">' + (att != null ? '<span class="tnum muted" style="font-size:14px">' + eur(att) + '</span>' : '<span class="bdg b">nessun prezzo da ' + esc(f) + '</span>') + '</div></div>' +
+    prove + (avvisi.length ? '<div class="banner o" style="margin:8px 0 0;padding:8px 10px;font-size:12.5px"><span>⚠️</span><div>' + (sicuro ? '' : '<b>Non sono sicuro che sia lui:</b><br>') + avvisi.join('<br>') + '</div></div>' : '') +
+    (U.lettura ? '' : '<div style="font-weight:700;font-size:13.5px;margin-top:10px">È lo stesso prodotto?</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">' +
+      '<button class="btn-sm g" onclick="applicaPF(' + r.id + ')">Sì, ' + (att != null ? 'aggiorna a ' : 'usa ') + eur(nuovo) + '</button>' +
+      '<button class="btn-sm" onclick="cambiaProdottoPF(' + r.id + ')">No, è un altro</button>' +
+      (v > 0 ? '<button class="btn-sm o" onclick="contestaPF(' + r.id + ')">Sì, ma contesta</button>' : '') +
+      '<button class="btn-sm" onclick="ignoraPF(' + r.id + ')">Ignora</button></div>') + '</div>';
 }
 async function applicaPF(id, muto){
   var r = PF.find(function(x){ return x.id === id; }); if(!r) return;
@@ -3132,7 +3589,7 @@ async function applicaPF(id, muto){
     await impostaPrezzo(p.id, f, nuovo);
     var ora = new Date().toISOString();
     await patchPF([id], { stato: 'approved', resolved_at: ora });
-    salvaAlias(r.descrizione, p.id);
+    salvaAlias(descrPulita(r.descrizione), p.id); imparaRiga(r, p.id, 3);
     // le righe più vecchie dello stesso prodotto/fornitore non servono più
     var vecchie = PF.filter(function(x){ return x.id !== id && x.product_id === p.id && pfForn(x) === f && (!x.data_fattura || !r.data_fattura || x.data_fattura <= r.data_fattura); }).map(function(x){ return x.id; });
     if(vecchie.length) await patchPF(vecchie, { stato: 'approved', resolved_at: ora, note: 'Superata da una fattura più recente' });
@@ -3141,35 +3598,43 @@ async function applicaPF(id, muto){
   }catch(e){ toast('⚠️ ' + e.message); return false; }
 }
 async function aggiornaVariazioniPiccole(){
-  var l = gruppiPF().variazioni.filter(function(r){ return r.stato === 'review' && Math.abs(num(r.variazione_pct) || 0) <= 10; });
-  if(!(await conferma('Aggiornare ' + l.length + ' prezzi?', 'Tutti i prezzi cambiati meno del 10% prendono il valore della fattura. Quelli con differenze più grandi restano da controllare uno per uno.', 'Aggiorna ' + l.length))) return;
+  var l = gruppiPF().variazioni.filter(function(r){ return r.stato === 'review' && Math.abs(num(r.variazione_pct) || 0) <= 10 && collegamentoSicuro(r); });
+  if(!(await conferma('Aggiornare ' + l.length + ' prezzi?', 'Tutti i prezzi cambiati meno del 10%, su prodotti riconosciuti con certezza, prendono il valore della fattura. Gli altri restano da controllare uno per uno.', 'Aggiorna ' + l.length))) return;
   var ok = 0; for(var i = 0; i < l.length; i++){ if(PF.some(function(x){ return x.id === l[i].id; }) && await applicaPF(l[i].id, true)) ok++; }
   renderDaFare(); aggiornaBadge(); toast(ok + ' prezzi aggiornati ✓');
 }
-async function ignoraPF(id){ try{ await patchPF([id], { stato: 'rejected', resolved_at: new Date().toISOString() }); renderDaFare(); aggiornaBadge(); toast('Ignorato', { azione: 'Annulla', onAzione: function(){ api('prezzi_da_fatture?id=eq.' + id, { method: 'PATCH', body: { stato: 'review', resolved_at: null } }).then(caricaPF).then(function(){ renderDaFare(); aggiornaBadge(); }); } }); }catch(e){ toast('⚠️ ' + e.message); } }
+async function ignoraPF(id){ var r0 = PF.find(function(x){ return x.id === id; }), st0 = r0 ? r0.stato : 'review'; try{ await patchPF([id], { stato: 'rejected', resolved_at: new Date().toISOString() }); renderDaFare(); aggiornaBadge(); toast('Ignorato', { azione: 'Annulla', onAzione: function(){ api('prezzi_da_fatture?id=eq.' + id, { method: 'PATCH', body: { stato: st0, resolved_at: null } }).then(caricaPF).then(function(){ renderDaFare(); aggiornaBadge(); }); } }); }catch(e){ toast('⚠️ ' + e.message); } }
 async function contestaPF(id){
   var r = PF.find(function(x){ return x.id === id; }); if(!r) return;
   var p = CATMAP[r.product_id], f = pfForn(r);
   try{
     await api('prezzi_difformi', { method: 'POST', prefer: 'return=minimal', body: { fornitore: f, nome_prodotto: p ? p.name : r.descrizione, id_prodotto_catalogo: p ? p.id : null, prezzo_catalogo: p ? prezzoDi(p, f) : null, prezzo_nuovo: pfPrezzo(r), fonte: 'fattura' } });
-    await patchPF([id], { stato: 'rejected', resolved_at: new Date().toISOString(), note: 'Contestato al fornitore' });
+    await patchPF([id], { stato: 'rejected', resolved_at: new Date().toISOString(), note: 'Contestato al fornitore' }); if(p) imparaRiga(r, p.id, 2);
     await caricaPD(); renderDaFare(); aggiornaBadge(); toast('Aggiunto alle contestazioni: il prezzo in catalogo resta quello di prima');
   }catch(e){ toast('⚠️ ' + e.message); }
 }
 function cambiaProdottoPF(id){
   var r = PF.find(function(x){ return x.id === id; }); if(!r) return;
-  apriSheet('shPFp', { titolo: 'Qual è il prodotto giusto?', sotto: esc(r.descrizione), corpo: '<div class="sw"><span class="si">🔎</span><input id="pfQ" placeholder="Cerca nel catalogo" oninput="pfCerca(' + id + ')"></div><div id="pfRis"></div>',
-    piede: '<button class="btn btn-s" onclick="chiudiSheet(\'shPFp\');creaDaPF(' + id + ')">Non c\'è: crea nuovo prodotto</button>' });
-  document.getElementById('pfRis').innerHTML = pfRighe(id, candidati(r.descrizione, CAT, 8, pfForn(r)).map(function(x){ return x.c; }));
+  var f = pfForn(r), prima = r.product_id != null && CATMAP[r.product_id] ? CATMAP[r.product_id] : null;
+  var m = typeof riconosciRiga === 'function' && f ? riconosciRiga(Object.assign({}, r, { product_id: null }), f) : { cand: [] };
+  var l = m.cand.map(function(x){ return x.c; }).concat(candidati(descrPulita(r.descrizione), CAT, 12, f).filter(function(x){ return x.s >= 30; }).map(function(x){ return x.c; }))
+    .filter(function(c, i, a){ return a.indexOf(c) === i && (!prima || c.id !== prima.id) && !formatoDiverso(c.name, descrPulita(r.descrizione)); }).slice(0, 6);
+  apriSheet('shPFp', { titolo: 'Cos\'è questo prodotto?', sotto: esc(f || '') + ' · ' + eur(pfPrezzo(r)), alto: true, corpo:
+    '<div class="banner b" style="margin-bottom:10px"><span>🧾</span><div><div class="row-s" style="font-size:12px">In fattura c\'è scritto</div><b>' + esc(descrPulita(r.descrizione)) + '</b>' + (r.cod_articolo ? '<div class="row-s" style="font-size:12px">codice articolo ' + esc(r.cod_articolo) + '</div>' : '') + '</div></div>' +
+    '<p class="hint" style="font-size:13px;margin:0 4px 8px">Tocca il prodotto del catalogo che corrisponde. <b>Se non c\'è</b>, usa il pulsante blu in basso per aggiungerlo.</p>' +
+    (l.length ? '<div class="sec-title" style="margin-top:4px">Forse è uno di questi</div><div id="pfSug">' + pfRighe(id, l) + '</div>' : '') +
+    '<div class="sec-title">Oppure cerca nel catalogo</div><div class="sw"><span class="si">🔎</span><input id="pfQ" type="search" placeholder="Scrivi una parola del nome" oninput="pfCerca(' + id + ')"></div><div id="pfRis"></div>',
+    piede: '<div class="btn-row"><button class="btn btn-s" onclick="chiudiSheet(\'shPFp\');ignoraPF(' + id + ')">Non mi interessa</button><button class="btn btn-p" onclick="chiudiSheet(\'shPFp\');creaDaPF(' + id + ')">Non c\'è: aggiungilo</button></div>' });
 }
-function pfRighe(id, l){ var r = PF.find(function(x){ return x.id === id; }), f = r ? pfForn(r) : ''; return '<div class="grp">' + l.map(function(p){ var a = prezzoDi(p, f); return '<button class="row" onclick="associaPF(' + id + ',' + p.id + ')"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p.name) + '</div><div class="row-s">' + esc(p.conf || '') + (a != null ? ' · ' + esc(f) + ' ' + eur(a) : '') + '</div></div><span class="chev">›</span></button>'; }).join('') + '</div>'; }
-function pfCerca(id){ var q = document.getElementById('pfQ').value; document.getElementById('pfRis').innerHTML = pfRighe(id, CAT.filter(function(p){ return cercaTutte(p.name, q); }).slice(0, 30)); }
+function pfRighe(id, l){ var r = PF.find(function(x){ return x.id === id; }), f = r ? pfForn(r) : ''; if(!l.length) return '<div class="row-s" style="padding:8px 4px">Nessun prodotto trovato.</div>'; return '<div class="grp">' + l.map(function(p){ var a = prezzoDi(p, f), fd = r ? formatoDiverso(p.name, r.descrizione) : ''; return '<button class="row" onclick="associaPF(' + id + ',' + p.id + ')"' + (fd ? ' style="opacity:.55"' : '') + '><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p.name) + '</div><div class="row-s">' + esc(p.conf || '') + (a != null ? ' · ' + esc(f) + ' ' + eur(a) : '') + (fd ? ' · <span style="color:var(--orange-ink)">' + esc(fd) + '</span>' : '') + '</div></div><span class="chev">›</span></button>'; }).join('') + '</div>'; }
+function pfCerca(id){ var q = document.getElementById('pfQ').value.trim(), sg = document.getElementById('pfSug'); if(sg) sg.style.display = q ? 'none' : ''; document.getElementById('pfRis').innerHTML = q ? pfRighe(id, CAT.filter(function(p){ return cercaTutte(p.name, q); }).slice(0, 30)) : ''; }
 async function associaPF(id, pid){
   var r = PF.find(function(x){ return x.id === id; }); if(!r) return;
   var p = CATMAP[pid], f = pfForn(r), att = prezzoDi(p, f), nuovo = pfPrezzo(r), v = att ? Math.round((nuovo - att) / att * 10000) / 100 : null;
   chiudiSheet('shPFp');
   try{
-    salvaAlias(r.descrizione, pid);
+    if(r.product_id != null && r.product_id !== pid) salvaNo(r, f, r.product_id);
+    salvaAlias(descrPulita(r.descrizione), pid); imparaRiga(r, pid, 3);
     await patchPF([id], { product_id: pid, stato: att == null ? 'new_price' : 'review', prezzo_attuale: att, variazione_pct: v, match_score: 100, note: 'Abbinato a mano' });
     if(att != null && Math.abs(nuovo - att) < 0.01){ await patchPF([id], { stato: 'approved', resolved_at: new Date().toISOString(), note: 'Prezzo già uguale' }); toast('Abbinato: il prezzo era già quello'); }
     else toast('Abbinato a ' + nomeBreve(p.name, 26) + ': ora conferma il prezzo');
@@ -3179,19 +3644,22 @@ async function associaPF(id, pid){
 function creaDaPF(id){
   var r = PF.find(function(x){ return x.id === id; }); if(!r) return;
   var f = pfForn(r);
-  apriNuovoProdotto(r.descrizione, { forn: f, prezzo: pfPrezzo(r), onCreato: async function(p){ salvaAlias(r.descrizione, p.id); await patchPF([id], { stato: 'approved', product_id: p.id, resolved_at: new Date().toISOString(), note: 'Creato nuovo prodotto' }); renderDaFare(); aggiornaBadge(); } });
+  apriNuovoProdotto(descrPulita(r.descrizione), { forn: f, prezzo: pfPrezzo(r), onCreato: async function(p){ if(r.product_id != null && r.product_id !== p.id) salvaNo(r, f, r.product_id); salvaAlias(descrPulita(r.descrizione), p.id); imparaRiga(r, p.id, 3); await patchPF([id], { stato: 'approved', product_id: p.id, resolved_at: new Date().toISOString(), note: 'Creato nuovo prodotto' }); renderDaFare(); aggiornaBadge(); } });
 }
 
 /* ── Righe di fattura non riconosciute ───────────────────────────── */
 function sezioneNuovi(l){
   if(!l.length) return '';
   var lim = DF.mostra.nuovi ? Math.min(l.length, 200) : 5;
-  var h = titoloSez('In fattura ma non riconosciuti', l.length, !U.lettura ? '<button class="lnk" onclick="ignoraTuttiNuovi()">Ignora tutti</button>' : '');
+  var h = titoloSez('In fattura ma non nel catalogo', l.length, !U.lettura ? '<button class="lnk" onclick="ignoraTuttiNuovi()">Ignora tutti</button>' : '');
+  if(!U.lettura) h += '<p class="hint" style="font-size:12.5px;margin:-2px 4px 8px">Non ho trovato questi prodotti nel catalogo. Se lo hai già con un altro nome, tocca <b>«È …»</b> o <b>Cerca</b>. Se è nuovo, <b>Aggiungi</b>. Se non lo ordini con l\'app (trasporto, cose una tantum), <b>Ignora</b>.</p>';
   h += '<div class="todo">' + l.slice(0, lim).map(function(r){
-    var f = pfForn(r), c = candidati(r.descrizione, CAT, 3, f).filter(function(x){ return x.s >= 30; });
-    return '<div class="todo-it"><div style="display:flex;gap:10px"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(r.descrizione) + '</div><div class="row-s">' + esc(f) + ' · ' + esc(dataIt(r.data_fattura)) + (r.qta ? ' · q.tà ' + num(r.qta) : '') + '</div></div><b class="tnum">' + eur(pfPrezzo(r)) + '</b></div>' +
+    var f = pfForn(r), c = candidati(r.descrizione, CAT, 8, f).filter(function(x){ return x.s >= 30 && !formatoDiverso(x.c.name, r.descrizione); }).slice(0, 3);
+    var sg = /^(?:Sganciato da|Scartato) #(\d+): (.+)$/.exec(r.note || ''), pr = sg && CATMAP[sg[1]];
+    return '<div class="todo-it"><div style="display:flex;gap:10px"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(descrPulita(r.descrizione)) + '</div><div class="row-s">' + esc(f) + ' · fattura del ' + esc(dataIt(r.data_fattura)) + (r.qta ? ' · q.tà ' + num(r.qta) : '') + '</div></div><b class="tnum">' + eur(pfPrezzo(r)) + '</b></div>' +
+      (pr ? '<div class="row-s" style="font-size:12px;margin-top:4px;color:var(--orange-ink)">Non è «' + esc(nomeBreve(pr.name, 40)) + '»: ' + esc(sg[2]) + '.</div>' : '') +
       (!U.lettura ? c.map(function(x){ var a = prezzoDi(x.c, f); return '<button class="cand" onclick="associaPF(' + r.id + ',' + x.c.id + ')"><span>È</span><b>' + esc(x.c.name) + '</b><span class="muted">' + (a != null ? eur(a) : 'nuovo') + '</span></button>'; }).join('') +
-      '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="btn-sm" onclick="cambiaProdottoPF(' + r.id + ')">Cerca…</button><button class="btn-sm p" onclick="creaDaPF(' + r.id + ')">Crea prodotto</button><button class="btn-sm" onclick="ignoraPF(' + r.id + ')">Ignora</button></div>' : '') + '</div>';
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="btn-sm p" onclick="creaDaPF(' + r.id + ')">Aggiungi al catalogo</button><button class="btn-sm" onclick="cambiaProdottoPF(' + r.id + ')">Cerca…</button><button class="btn-sm" onclick="ignoraPF(' + r.id + ')">Ignora</button></div>' : '') + '</div>';
   }).join('') + (l.length > lim ? '<div class="todo-ft"><button class="btn-sm p" onclick="DF.mostra.nuovi=1;renderDaFare()">Mostra altri ' + (Math.min(l.length, 200) - lim) + '</button></div>' : '') + '</div>';
   return h;
 }
@@ -4029,6 +4497,7 @@ async function sincronizza(manuale, completo){
     segnalaSync(rete ? 'Senza connessione' : '');
     await svuotaOutbox();
     renderTuttoSicuro();
+    if(!U.lettura){ await caricaBarcode(); try{ await caricaMemoriaFatture(); }catch(e){} if(await ricontrollaAbbinamenti()) renderTuttoSicuro(); else if(MEMF.conflitti.length) renderTuttoSicuro(); }
     if(!U.lettura && PF.some(function(r){ return r.stato === 'pending'; })){
       var auto = await processaPending();
       await risolviPrezziUguali();
@@ -4040,8 +4509,9 @@ async function sincronizza(manuale, completo){
   try{ await _syncInCorso; } finally { _syncInCorso = null; }
 }
 async function aggiornaLeggero(){
-  try{ await Promise.all([caricaRichieste(), caricaPF(), docCarica('or8_carrello'), docCarica('or8_stati')]); }catch(e){}
+  try{ await Promise.all([caricaRichieste(), caricaPF(), docCarica('or8_carrello'), docCarica('or8_stati'), U.lettura ? null : caricaBarcode()]); }catch(e){}
   if(PF.some(function(r){ return r.stato === 'pending'; })) await processaPending();
+  await ricontrollaAbbinamenti();
   renderTuttoSicuro();
 }
 function docAggiornatoDaRemoto(nome){ if(nome === 'or8_carrello'){ aggiornaBarra(); if(document.getElementById('shCarr')) renderCarrello(); } }
@@ -4091,7 +4561,7 @@ function vaiTab(t){
   if(t === 'dafare' && location.hash !== '#da-fare') try{ history.replaceState(null, '', location.pathname); }catch(e){}
 }
 function aggiornaBadge(){
-  var n = contaDaFare(), dafare = n.rich + n.var + n.forn + (conf().doppioniAuto ? 0 : n.dop), aperti = STORICO.filter(ordineAperto).length, sotto = CAT.filter(sottoScorta).length;
+  var n = contaDaFare(), dafare = n.rich + n.var + n.forn + n.cod + (conf().doppioniAuto ? 0 : n.dop), aperti = STORICO.filter(ordineAperto).length, sotto = CAT.filter(sottoScorta).length;
   setBadge('badgeDaFare', dafare); setBadge('badgeOrdini', aperti); setBadge('badgeMag', sotto);
   try{ if(navigator.setAppBadge){ if(dafare) navigator.setAppBadge(dafare); else navigator.clearAppBadge(); } }catch(e){}
 }
