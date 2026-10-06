@@ -2383,6 +2383,9 @@ html[data-theme="dark"] .ch-riep{background:#2C2C2E}
 .cr-fatti-h{width:100%;font-size:12px;color:var(--muted)}
 .cr-chip{display:inline-flex;flex-direction:column;align-items:flex-start;gap:1px;font:inherit;font-size:12px;font-weight:600;background:var(--green-light);color:var(--green);border:none;padding:4px 10px;border-radius:12px;cursor:pointer;text-align:left}
 .cr-chip small{font-size:10.5px;font-weight:600;color:var(--text);opacity:.75}
+.tv-aiuto{background:var(--orange-light);border:1px solid rgba(255,149,0,.4);border-radius:12px;padding:10px 12px;font-size:12.5px;line-height:1.5;text-align:left;color:var(--text)}
+.tv-aiuto ol{margin:6px 0 6px 18px;padding:0}
+.tv-aiuto li{margin-bottom:3px}
 .exp-dip-btn{display:flex;align-items:center;justify-content:space-between;text-align:left;cursor:pointer;width:100%}
 .exp-dip-btn .exp-dip-car{color:var(--muted);font-size:14px}
 .exp-dip-pannello{border:1px solid var(--border);border-radius:12px;background:var(--card);margin:-6px 0 14px;max-height:280px;overflow-y:auto;-webkit-overflow-scrolling:touch}
@@ -3282,7 +3285,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     <button class="hdr-btn" id="tb-back" style="display:none" aria-label="Indietro"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
     <div class="tb-titles">
       <h1 id="tb-title">Presenze</h1>
-      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v66</span></p>
+      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v67</span></p>
     </div>
     <span class="topbar-badge" id="role-badge"></span>
     <div class="hdr-actions">
@@ -11459,7 +11462,7 @@ async function telUI(box, opt) {
     ${st.verificato ? `<div class="tv-gia">✓ Il numero ${esc(st.telefono || '')} è già verificato. Rifai la verifica solo se hai cambiato numero.</div>` : ''}
     <div class="tv-passi">
       <div class="tv-p" id="tv-p1"><i>1</i><div><b>Apri Telegram</b><small>${st.collegato ? 'Il bot ti scrive da solo' : 'Nel bot premi <b>Avvia</b>'}</small></div></div>
-      <div class="tv-p" id="tv-p2"><i>2</i><div><b>Tocca «📱 Condividi il mio numero»</b><small>Telegram ci manda il numero del tuo account</small></div></div>
+      <div class="tv-p" id="tv-p2"><i>2</i><div><b>Tocca il pulsante grigio in basso «📱 Condividi il mio numero»</b><small>È al posto della tastiera, non dentro il messaggio. Poi conferma con «Condividi» / «OK»</small></div></div>
       <div class="tv-p" id="tv-p3"><i>3</i><div><b>Scrivi qui il codice</b><small>Il bot ti manda un codice a 6 cifre</small></div></div>
     </div>
     <button class="${attiva ? 'btn-secondary' : 'btn-primary'}" id="tv-apri" onclick="telApri()">${attiva ? 'Riapri Telegram' : 'Apri Telegram'}</button>
@@ -11477,13 +11480,24 @@ async function telUI(box, opt) {
 function _telMostra(st) {
   const set = (n, c) => { const el = $('tv-p' + n); if (el) el.className = 'tv-p ' + c; };
   const s = $('tv-stato');
+  if (st.stato !== 'avviata') TELV.avviataDa = 0;
   if (st.stato === 'codice_inviato') {
     set(1, 'ok'); set(2, 'ok'); set(3, 'on');
     if (s) s.innerHTML = `✓ Codice inviato su Telegram${st.telefono_nuovo ? ' per il numero <b>' + esc(st.telefono_nuovo) + '</b>' : ''}. Scrivilo qui sotto.`;
     if ($('tv-codice')) $('tv-codice').style.display = 'block';
   } else if (st.stato === 'avviata') {
     set(1, 'ok'); set(2, 'on'); set(3, '');
-    if (s) s.innerHTML = 'In attesa: nel bot tocca <b>«📱 Condividi il mio numero»</b>. Il codice arriva subito dopo.';
+    // 06/10/2026: molti si fermavano qui (toccavano il testo del messaggio,
+    // non il pulsante): dopo 25 secondi senza numero condiviso si spiega dove toccare
+    if (!TELV.avviataDa) TELV.avviataDa = Date.now();
+    const bloccato = Date.now() - TELV.avviataDa > 25000;
+    if (s) s.innerHTML = bloccato
+      ? `<div class="tv-aiuto"><b>Il codice non è ancora partito perché il numero non è stato condiviso.</b>
+         <ol><li>Torna nella chat del bot su Telegram.</li>
+         <li>In <b>basso</b>, dove di solito c'è la tastiera, tocca il pulsante grigio <b>📱 Condividi il mio numero</b> (il testo dentro il messaggio non è un pulsante).</li>
+         <li>Telegram chiede conferma: tocca <b>Condividi</b> / <b>OK</b>.</li></ol>
+         Non vedi il pulsante? Tocca l'icona <b>⌨︎</b> a destra del campo «Messaggio» e ricompare.</div>`
+      : 'In attesa: nel bot tocca il pulsante grigio in basso <b>«📱 Condividi il mio numero»</b>. Il codice arriva subito dopo.';
   } else if (st.stato === 'scaduta') {
     set(1, 'on'); set(2, ''); set(3, '');
     if (s) s.innerHTML = 'Il tempo è scaduto: tocca di nuovo <b>Apri Telegram</b>.';
@@ -11501,6 +11515,7 @@ async function telApri() {
   }
   _telResume(TELV.opt.ctx || 'profilo');
   if ($('tv-codice')) $('tv-codice').style.display = 'block';
+  TELV.avviataDa = Date.now();
   _telMostra({ stato: 'avviata' });
   if (btn) { btn.disabled = false; btn.textContent = 'Riapri Telegram'; btn.className = 'btn-secondary'; }
   apriLinkTelegram(url);
@@ -32083,7 +32098,16 @@ function meseDipRender(X) {
     else if (malSet.has(iso) || assOk.some(a => a.tipo === 'malattia')) cls += ' mal';
     else if (assOk.some(a => a.tipo === 'ferie')) cls += ' fer';
     else if (assOk.length) cls += ' fer';
-    if (p && (p.confermata_dip === false || p.richiesta_tipo)) { cls += ' md-attesa'; nAttesa++; righe.push(p.richiesta_tipo ? 'L\'admin ha chiesto di ' + (p.richiesta_tipo === 'elimina' ? 'eliminare' : 'modificare') + ' questa timbratura: aspetta la tua conferma' : 'Timbratura a mano: in attesa di conferma'); }
+    // 06/10/2026: "da confermare" SOLO per le timbrature a mano ancora non
+    // confermate (stessa regola di Stipendi) o con una richiesta dell'admin.
+    // Quelle col QR hanno confermata_dip=false di default ma non vanno confermate.
+    const _man = p && /manuale/.test(p.tipo_timbratura || '');
+    if (p && (p.richiesta_tipo || (_man && p.confermata_dip === false))) {
+      cls += ' md-attesa'; nAttesa++;
+      righe.push(p.richiesta_tipo ? 'L\'admin ha chiesto di ' + (p.richiesta_tipo === 'elimina' ? 'eliminare' : 'modificare') + ' questa timbratura: aspetta la tua conferma'
+        : p.tipo_timbratura === 'manuale_dip' ? 'Timbratura a mano inserita da te: in attesa che l\'admin la approvi'
+        : 'Timbratura inserita dall\'admin: aspetta la tua conferma');
+    }
     if (!lav && !assOk.length && turnoSet.has(iso) && iso < oggi && !fest) { cls += ' md-nonsceso'; tag = tag || '✕'; nNonSceso++; righe.push('Eri in turno ma non risulta nessuna timbratura'); }
     if (!lav && iso <= oggi && !righe.length) righe.push(turnoSet.has(iso) ? 'In turno' : 'Non lavorato');
     if (turnoSet.has(iso) && iso >= oggi && !lav) righe.push('In turno');
@@ -32139,10 +32163,10 @@ function meseDipRender(X) {
   }).join('') : '<div class="st-vuoto">Nessuna ferie, malattia o permesso in questo mese.</div>';
   const nLav = datePres.size;
   body.innerHTML = `
-    <div class="md-kpi"><div><b>${nLav}</b><small>${nLav === 1 ? 'giorno lavorato' : 'giorni lavorati'}</small></div><div class="${nNonSceso ? 'warn' : ''}"><b>${nNonSceso}</b><small>${nNonSceso === 1 ? 'turno senza timbratura' : 'turni senza timbratura'}</small></div><div class="${nAttesa ? 'warn' : ''}"><b>${nAttesa}</b><small>da confermare</small></div></div>
+    <div class="md-kpi"><div><b>${nLav}</b><small>${nLav === 1 ? 'giorno lavorato' : 'giorni lavorati'}</small></div><div class="${nNonSceso ? 'warn' : ''}"><b>${nNonSceso}</b><small>${nNonSceso === 1 ? 'turno senza timbratura' : 'turni senza timbratura'}</small></div><div class="${nAttesa ? 'warn' : ''}"><b>${nAttesa}</b><small>${nAttesa === 1 ? 'timbratura in attesa' : 'timbrature in attesa'}</small></div></div>
     <div class="card md-card">
       <div class="st-cal"><span>L</span><span>M</span><span>M</span><span>G</span><span>V</span><span>S</span><span>D</span>${cal}</div>
-      <div class="st-leg"><i class="lav"></i>lavorato <i class="festlav"></i>festività lavorata ×2 <i class="fest"></i>festività pagata <i class="fer"></i>ferie/permesso <i class="mal"></i>malattia <i class="md-nonsceso"></i>in turno, non timbrato <i class="md-attesa"></i>da confermare · € pagamento</div>
+      <div class="st-leg"><i class="lav"></i>lavorato <i class="festlav"></i>festività lavorata ×2 <i class="fest"></i>festività pagata <i class="fer"></i>ferie/permesso <i class="mal"></i>malattia <i class="md-nonsceso"></i>in turno, non timbrato <i class="md-attesa"></i>timbratura a mano in attesa · € pagamento</div>
       <div class="st-info" id="md-info">Tocca un giorno per vedere cosa è successo.</div>
     </div>
     ${soldi}
