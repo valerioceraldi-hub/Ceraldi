@@ -1,5 +1,5 @@
 /* ══════════════════════════════════════════════════════════════════
-   Service worker delle app Ceraldi — 20/09/2026 (aggiornato 05/10/2026)
+   Service worker delle app Ceraldi — 20/09/2026 (aggiornato 05/10 e 07/10/2026)
    Serve SOLO alle notifiche push: non mette niente in cache, così
    l'app aggiornata su GitHub arriva sempre fresca senza sorprese.
    Vive nella cartella del sito, quindi vale per tutte e quattro le app.
@@ -19,8 +19,23 @@ self.addEventListener('push', function (e) {
     tag: d.tag || ('ceraldi-' + app + '-' + (d.id || Date.now())),
     renotify: false,
     data: { link: d.link || '', app: app, id: d.id || null }
-  }));
+  }).then(function () { return confermaMostrata(d.ack); }));
 });
+
+// 07/10/2026: appena la notifica è sul telefono lo dice al server, così il
+// messaggio Telegram di riserva NON parte. Se la notifica non compare
+// (notifiche spente, app tolta…) la conferma non arriva e dopo 2 minuti
+// il server manda il messaggio su Telegram.
+var SB_URL_SW = 'https://qaqqptpprmfjlolordaq.supabase.co';
+var SB_ANON_SW = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFhcXFwdHBwcm1mamxvbG9yZGFxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4NDQ3MDgsImV4cCI6MjA5MTQyMDcwOH0.kTnxsNY3tua_ya4LCB8-vkVdQ1QBPGtLL7Gfg121d1o';
+function confermaMostrata(ack) {
+  if (!ack) return Promise.resolve();
+  return fetch(SB_URL_SW + '/functions/v1/notifica', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', apikey: SB_ANON_SW, Authorization: 'Bearer ' + SB_ANON_SW },
+    body: JSON.stringify({ azione: 'mostrata', ack: ack })
+  }).catch(function () {});
+}
 
 self.addEventListener('notificationclick', function (e) {
   e.notification.close();

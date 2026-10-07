@@ -2661,6 +2661,13 @@ html[data-theme="dark"] .ch-riep{background:#2C2C2E}
     <div class="sheet-body" id="push-body"></div>
   </div>
 </div>
+<div class="overlay" id="sh-adm-fid">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-hdr"><span class="sheet-title">🔒 Entrare con Face ID</span><button class="sheet-cls" onclick="closeSheet('sh-adm-fid')">✕</button></div>
+    <div class="sheet-body" id="adm-fid-body"></div>
+  </div>
+</div>
 <div class="overlay" id="sh-cambiaPwd">
   <div class="sheet">
     <div class="sheet-handle"></div>
@@ -3285,7 +3292,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     <button class="hdr-btn" id="tb-back" style="display:none" aria-label="Indietro"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
     <div class="tb-titles">
       <h1 id="tb-title">Presenze</h1>
-      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v67</span></p>
+      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v69</span></p>
     </div>
     <span class="topbar-badge" id="role-badge"></span>
     <div class="hdr-actions">
@@ -7186,6 +7193,7 @@ function renderMenuAltro(filtro) {
     ['App', [
       voce('razzo','94,92,230','Primi passi','Checklist di configurazione',"mostraPrimiPassi(true)"),
       voce('telefono','52,199,89','Notifiche sul telefono','Avvisi push su questo dispositivo',"pushApriFoglio()"),
+      voce('scudo','52,199,89','Entrare con Face ID','Sblocco dell\'app su questo dispositivo',"admFidFoglio()"),
       voce('user','142,142,147','Il mio account','Tema, aggiornamenti, esci',"apriAccount()"),
     ]],
   ];
@@ -7817,7 +7825,7 @@ out.innerHTML=(ko.length?'<span style="color:#c00">✕ '+ko.length+' eventi NON 
    annota.
    ══════════════════════════════════════════════════════════════════ */
 const FIRMA = { creds: null, supportata: null };
-APP_CONFIG.firmaObbligatoria = false; // true = senza firma dal telefono non si conferma
+APP_CONFIG.firmaObbligatoria = false; // (07/10/2026: impostata a true più sotto)
 
 /* ── utilità binarie ── */
 function _b64u(buf) { const b = new Uint8Array(buf); let s = ''; for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
@@ -7971,31 +7979,128 @@ async function firmaRevoca(id) {
 }
 
 /* ── firma di una dichiarazione (PRIMA di salvare la conferma) ──
-   Ritorna: oggetto firma · null (nessuna firma attiva: si procede come prima)
-   · false (la persona ha annullato: la conferma NON va salvata) */
+   Ritorna: oggetto firma · null (telefono senza Face ID/impronta: si
+   procede come prima, con data/ora/dispositivo nel registro)
+   · false (la persona ha annullato: NON va salvato nulla)
+   07/10/2026 — OBBLIGATORIA: se il telefono ha Face ID/impronta, senza
+   firma non si invia né si conferma. Chi non l'ha ancora attivata la
+   attiva lì per lì con un tocco. Il riconoscimento parte sempre dal tocco
+   su un pulsante (su iPhone è l'unico modo affidabile) e la finestra
+   mostra il testo esatto che si sta firmando. */
+APP_CONFIG.firmaObbligatoria = true;
+
+// crea la chiave del telefono: va chiamata DENTRO il tocco (niente attese prima)
+function _firmaCreaOra() {
+  return navigator.credentials.create({ publicKey: {
+    challenge: crypto.getRandomValues(new Uint8Array(32)),
+    rp: { name: APP_CONFIG.prodotto || 'Presenze', id: location.hostname },
+    user: { id: new TextEncoder().encode(ME.id), name: ME.email || ME.id, displayName: (ME.nome || '') + ' ' + (ME.cognome || '') },
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+    authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'preferred' },
+    attestation: 'none', timeout: 90000,
+    excludeCredentials: (FIRMA.creds || []).map(c => ({ type: 'public-key', id: _b64uDec(c.credential_id) })),
+  } }).then(async (cred) => {
+    if (!cred) throw new Error('attivazione annullata');
+    const { jwk, alg } = await _chiaveDaAttestazione(cred.response);
+    const { error } = await sb.rpc('firma_registra', { p_credential_id: _b64u(cred.rawId), p_public_key: jwk, p_alg: alg, p_dispositivo: _nomeDispositivo() });
+    if (error) throw new Error(error.message);
+    await firmaCredenziali(true);
+    toast('✍️ Firma con Face ID attivata');
+    return true;
+  });
+}
+
+// finestra con un solo pulsante: l'azione parte nel tocco
+function _firmaFinestra(o) {
+  return new Promise((resolve) => {
+    const el = document.createElement('div'); el.className = 'fp-ov';
+    el.innerHTML = `<div class="fp-box"><div class="fp-ico">${o.ico}</div><b class="fp-t">${esc(o.titolo)}</b><div class="fp-s">${o.testo}</div>`
+      + (o.citazione ? `<div class="fp-q">${esc(o.citazione)}</div>` : '')
+      + `<button class="btn-primary fp-btn">${esc(o.bottone)}</button><div class="fp-msg"></div>`
+      + (o.altro ? `<button class="fp-link fp-altro">${esc(o.altro.etichetta)}</button>` : '')
+      + `<button class="fp-link fp-no">Annulla</button></div>`;
+    document.body.appendChild(el);
+    const btn = el.querySelector('.fp-btn');
+    const msg = (t) => { el.querySelector('.fp-msg').textContent = t || ''; };
+    const fine = (v) => { el.remove(); resolve(v); };
+    const esegui = (fn) => {
+      let p; try { p = fn(); } catch (e) { p = Promise.reject(e); }
+      btn.disabled = true; msg('');
+      p.then((r) => fine(r)).catch((e) => {
+        btn.disabled = false;
+        msg(e && e.name === 'NotAllowedError' ? 'Annullato o non riconosciuto: tocca di nuovo il pulsante.'
+          : e && e.name === 'InvalidStateError' ? 'Questo telefono è già attivo: tocca il pulsante blu.'
+          : 'Non riuscito: ' + ((e && e.message) || e));
+      });
+    };
+    btn.onclick = () => esegui(o.azione);
+    if (o.altro) el.querySelector('.fp-altro').onclick = () => esegui(o.altro.azione);
+    el.querySelector('.fp-no').onclick = () => fine(false);
+  });
+}
+
 async function firmaPrima(azione, opt) {
   opt = opt || {};
-  if (!ME || ME.ruolo === 'admin') return null;
+  if (!ME || ME.ruolo === 'admin' || (typeof KIOSK !== 'undefined' && KIOSK)) return null;
+  if (!(await firmaSupportata())) return null; // telefono senza Face ID/impronta: come prima
   let creds = [];
   try { creds = await firmaCredenziali(); } catch (e) { creds = []; }
-  if (!creds.length || !(await firmaSupportata())) {
-    if (APP_CONFIG.firmaObbligatoria) { toast('Per confermare attiva prima la firma dal telefono (Profilo)'); return false; }
-    return null;
+  if (!creds.length) {
+    const ok = await _firmaFinestra({ ico: '✍️', titolo: 'Attiva la firma con Face ID',
+      testo: 'Da oggi richieste e conferme si firmano con Face ID o impronta: così nessuno può farlo al posto tuo. Si attiva una volta sola, poi basta un tocco.',
+      bottone: 'Attiva Face ID / impronta', azione: _firmaCreaOra });
+    if (!ok) { toast('Senza firma non si può inviare'); return false; }
+    creds = await firmaCredenziali(true);
+    if (!creds.length) return false;
   }
   const payload = JSON.stringify({ v: 1, app: 'presenze', utente: ME.id, azione, tabella: opt.tabella || null,
     rif: opt.rif != null ? String(opt.rif) : null, testo_sha256: _hexBuf(await _sha256Buf(_normTesto(opt.testo))), ts: new Date().toISOString() });
-  try {
-    const a = await navigator.credentials.get({ publicKey: {
-      challenge: await _sha256Buf(payload), rpId: location.hostname, userVerification: 'required', timeout: 90000,
-      allowCredentials: creds.map(c => ({ type: 'public-key', id: _b64uDec(c.credential_id) })),
-    } });
+  const challenge = await _sha256Buf(payload);
+  const firmaOra = () => navigator.credentials.get({ publicKey: {
+    challenge, rpId: location.hostname, userVerification: 'required', timeout: 90000,
+    allowCredentials: creds.map(c => ({ type: 'public-key', id: _b64uDec(c.credential_id) })),
+  } }).then((a) => {
+    if (!a) throw new Error('firma annullata');
     const cid = _b64u(a.rawId), c = creds.find(x => x.credential_id === cid) || creds[0];
     return { v: 1, payload, credential_id: cid, alg: c.alg, authenticator_data: _b64u(a.response.authenticatorData),
       client_data: _b64u(a.response.clientDataJSON), firma: _b64u(a.response.signature) };
-  } catch (e) {
-    if (APP_CONFIG.firmaObbligatoria) { toast('Firma annullata: la conferma non è stata registrata'); return false; }
-    return confirm('Firma con il telefono non completata.\n\nVuoi confermare comunque, senza firma?') ? null : false;
-  }
+  });
+  const r = await _firmaFinestra({ ico: '✍️', titolo: 'Firma con Face ID', testo: 'Stai firmando:',
+    citazione: _normTesto(opt.testo).slice(0, 400) || azione.replace(/_/g, ' '),
+    bottone: 'Firma con Face ID / impronta', azione: firmaOra,
+    altro: { etichetta: 'Non ti riconosce? Attiva questo telefono', azione: () => _firmaCreaOra().then(() => 'riattivato') } });
+  if (r === 'riattivato') return firmaPrima(azione, opt);
+  if (!r) { toast('Firma annullata: non è stato inviato nulla'); return false; }
+  return r;
+}
+(function () {
+  const st = document.createElement('style');
+  st.textContent = `.fp-ov{position:fixed;inset:0;z-index:2147482000;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center;padding:16px}
+  .fp-box{width:100%;max-width:420px;background:var(--card,#fff);border-radius:22px;padding:22px 18px 14px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;box-shadow:0 10px 40px rgba(0,0,0,.25);margin-bottom:max(8px,env(safe-area-inset-bottom))}
+  .fp-ico{font-size:34px} .fp-t{font-size:18px;color:var(--text)} .fp-s{font-size:13px;color:var(--muted);line-height:1.45}
+  .fp-q{width:100%;text-align:left;font-size:14px;line-height:1.45;color:var(--text);background:var(--bg,#f2f2f7);border-radius:12px;padding:10px 12px;max-height:30vh;overflow:auto}
+  .fp-btn{width:100%;margin-top:6px} .fp-msg{min-height:16px;font-size:13px;color:var(--red,#ff3b30)}
+  .fp-link{background:none;border:0;color:var(--accent);font-size:13px;padding:6px;cursor:pointer} .fp-no{color:var(--muted)}`;
+  document.head.appendChild(st);
+})();
+
+/* ── 07/10/2026: anche le RICHIESTE del dipendente si firmano (ferie,
+   permessi, acconti, cambi turno, timbrature dimenticate). Stesso
+   comportamento delle conferme: firma con Face ID/impronta obbligatoria
+   prima di inviare (vedi firmaPrima); solo i telefoni senza Face ID né
+   impronta inviano come prima.
+   La firma riguarda il testo mostrato (rif vuoto); l'id della richiesta
+   creata va nei dati del registro. */
+function _dataRich(d) { return d ? new Date(d + 'T12:00:00').toLocaleDateString('it-IT', { day: '2-digit', month: 'long', year: 'numeric' }) : ''; }
+async function firmaRichiesta(azione, tabella, testo) { return firmaPrima(azione, { tabella, testo }); }
+function certificaRichiesta(azione, tabella, testo, firma, id) {
+  certifica('dichiarazione', azione, { tabella, testo, firma: firma || undefined, dati: id ? { richiesta_id: String(id) } : {} });
+}
+function testoRichiestaAssenza(tipo, dal, al, importo, note, modifica) {
+  const nomi = { ferie: 'ferie', malattia: 'malattia', acconto: 'acconto', permesso: 'permesso', altro: 'assenza' };
+  return (modifica ? 'Modifico la mia richiesta: ' : 'Chiedo ') + (nomi[tipo] || tipo)
+    + (tipo === 'acconto' ? ' di € ' + (importo ? Number(importo).toFixed(2) : '—') : ' dal ' + _dataRich(dal) + ' al ' + _dataRich(al))
+    + (note ? '. Note: ' + note : '') + '.';
 }
 
 /* ── profilo: attiva / gestisci ── */
@@ -14452,6 +14557,7 @@ async function bootApp(user) {
     // solo per i dipendenti.
     if (p.ruolo === 'admin') {
       if (!p.telegram_chat_id) { mostraStepTelegram(); return; }
+      if (typeof admFidPrima === 'function') { const _ok = await admFidPrima(); if (!_ok) return; }
       avviaApp(p);
       return;
     }
@@ -15814,9 +15920,13 @@ async function salvaModificaAssenza() {
   if (!isAcc) { update.data_inizio = dal; update.data_fine = al; }
   else        { update.data_inizio = null; update.data_fine = null; }
 
+  const _testoMA = testoRichiestaAssenza(tipo, dal, al, importo, note, true);
+  const _firmaMA = await firmaRichiesta('modifica_richiesta_' + tipo, 'presenze_assenze', _testoMA);
+  if (_firmaMA === false) return;
   try {
     await DB.assenze.update(_modificaAssenzaId, update);
   } catch (e) { showMsg('mod-msg', e.message, 'err'); return; }
+  certificaRichiesta('modifica_richiesta_' + tipo, 'presenze_assenze', _testoMA, _firmaMA, _modificaAssenzaId);
 
   const nomeDip = ME.nome + (ME.cognome ? ' ' + ME.cognome : '');
   const appUrl = APP_URL + '#richiesta-' + _modificaAssenzaId; // 05/10/2026: dritto alla richiesta
@@ -15952,6 +16062,10 @@ async function inviaRichiestaAssenza() {
     }
   }
 
+  const _testoRA = testoRichiestaAssenza(tipo, dal, al, importo, note);
+  const _firmaRA = await firmaRichiesta('richiesta_' + tipo, 'presenze_assenze', _testoRA);
+  if (_firmaRA === false) return;
+
   const btn = $('na-btn');
   btn.disabled = true; btn.textContent = 'Invio in corso…';
 
@@ -15974,6 +16088,7 @@ async function inviaRichiestaAssenza() {
   const { data: ass, error } = await sb.from('presenze_assenze').insert(payload).select().single();
 
   if (error) { showMsg('na-msg', error.message, 'err'); btn.disabled=false; btn.textContent='Invia richiesta'; return; }
+  certificaRichiesta('richiesta_' + tipo, 'presenze_assenze', _testoRA, _firmaRA, ass && ass.id);
 
   // upload allegati
   if (files.length) {
@@ -16061,13 +16176,17 @@ async function inviaRichiestaCambioTurno() {
   if (!collegaId) { showMsg('ct-msg','Seleziona il collega con cui scambiare','err'); return; }
   if (!fascia)    { showMsg('ct-msg','Seleziona la fascia oraria del turno','err'); return; }
 
-  const btn = $('ct-btn');
-  btn.disabled = true; btn.textContent = 'Invio in corso…';
-
   const { data: _colleghiTutti } = await sb.rpc('presenze_colleghi');
   const collega = (_colleghiTutti||[]).find(c => c.id === collegaId) || null;
   const nomeRichiedente = ME.nome + (ME.cognome ? ' '+ME.cognome : '');
   const nomeCollega = collega ? (collega.nome||'')+(collega.cognome?' '+collega.cognome:'') : '—';
+
+  const _testoCT2 = 'Chiedo di scambiare con ' + nomeCollega + ' il turno del ' + _dataRich(data) + ' (' + fascia.replace('-', '–') + ')' + (note ? '. Note: ' + note : '') + '.';
+  const _firmaCT2 = await firmaRichiesta('richiesta_cambio_turno', 'presenze_cambi_turno', _testoCT2);
+  if (_firmaCT2 === false) return;
+
+  const btn = $('ct-btn');
+  btn.disabled = true; btn.textContent = 'Invio in corso…';
 
   let insertErr = null;
   try {
@@ -16085,6 +16204,7 @@ async function inviaRichiestaCambioTurno() {
       : insertErr.message;
     showMsg('ct-msg', msgErr, 'err'); btn.disabled=false; btn.textContent='Invia richiesta'; return;
   }
+  certificaRichiesta('richiesta_cambio_turno', 'presenze_cambi_turno', _testoCT2, _firmaCT2, null);
 
   // Passaggio semplificato: niente accettazione preventiva del collega —
   // decide solo l'admin. Il collega riceve solo un avviso informativo.
@@ -21639,6 +21759,9 @@ async function salvaTimbrManualeDip() {
     riabilitaDip(); return;
   }
   const ts = buildTS(data, ora);
+  const _testoTM = 'Dichiaro di essere entrato al lavoro il ' + _dataRich(data) + ' alle ' + ora + ' e chiedo di registrare la timbratura' + (motivo ? '. Motivo: ' + motivo : '') + '.';
+  const _firmaTM = await firmaRichiesta('richiesta_timbratura_manuale', 'presenze', _testoTM);
+  if (_firmaTM === false) { riabilitaDip(); return; }
   let insertErr = null;
   try {
     await DB.presenze.insert({
@@ -21653,6 +21776,7 @@ async function salvaTimbrManualeDip() {
     });
   } catch (e) { insertErr = e; }
   if (insertErr) { showMsg('tmDip-msg', insertErr.message, 'err'); riabilitaDip(); return; }
+  certificaRichiesta('richiesta_timbratura_manuale', 'presenze', _testoTM, _firmaTM, null);
   // Notifica admin per generare OTP
   const dataLbl = data === todayISO() ? '' : ' del '+new Date(data+'T12:00:00').toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit'});
   inviaNotificaTelegram('\u270b <b>Ceraldi Presenze \u2014 Timbratura manuale</b>\n'+escTG(ME.nome+(ME.cognome?' '+ME.cognome:''))+' ha registrato una timbratura manuale'+dataLbl+' alle <b>'+ora+'</b>'+(motivo ? ' \u00b7 <i>'+escTG(motivo)+'</i>' : '')+'.\n\nGenera l\u2019OTP per approvarla.', '#promemoria');
@@ -32218,6 +32342,244 @@ if (typeof apriControlloMensile === 'function') {
 
 try { if (KIOSK) { const c = $('md-home-card'); if (c) c.remove(); } } catch (e) {}
 try { if (navigator.serviceWorker && navigator.serviceWorker.startMessages) navigator.serviceWorker.startMessages(); } catch (e) {}
+
+/* ══════════════════════════════════════════════════════════════════
+   07/10/2026 — FACE ID / IMPRONTA PER ENTRARE (solo amministratori)
+   • Si attiva una volta per dispositivo (Altro → Entrare con Face ID,
+     oppure dalla proposta che compare all'ingresso).
+   • Da quel momento, su quel dispositivo, per entrare serve Face ID o
+     impronta: all'apertura e ogni volta che l'app resta chiusa o
+     inutilizzata per più di 30 minuti.
+   • Appena fatto l'accesso con password/Google/codice non lo chiede
+     (hai appena dimostrato chi sei). "Non funziona?" → esci e rientri
+     con la password.
+   • La chiave del telefono è la stessa tecnologia della firma dei
+     dipendenti (passkey): la verifica della firma avviene qui, con la
+     chiave pubblica salvata all'attivazione. Nessuna modifica al
+     database: si usa il registro dei dispositivi già esistente.
+   • Dipendenti: nessun cambiamento.
+   ══════════════════════════════════════════════════════════════════ */
+const ADM_FID = { INATTIVITA_MS: 30 * 60000, aperto: false, attesa: null, nonOra: false };
+const _admFidK = () => 'adm_fid_' + (ME && ME.id);
+const _admUsoK = () => 'adm_fid_uso_' + (ME && ME.id);
+function _admFidLeggi() { try { return JSON.parse(localStorage.getItem(_admFidK()) || 'null'); } catch (e) { return null; } }
+function _admFidScrivi(v) { try { if (v) localStorage.setItem(_admFidK(), JSON.stringify(v)); else localStorage.removeItem(_admFidK()); } catch (e) {} }
+function _admUltimoUso() { try { return parseInt(localStorage.getItem(_admUsoK()) || '0', 10) || 0; } catch (e) { return 0; } }
+function _admSegnaUso() {
+  if (!ME || ME.ruolo !== 'admin' || ADM_FID.aperto) return;
+  try { localStorage.setItem(_admUsoK(), String(Date.now())); } catch (e) {}
+}
+function _admAttivoQui() { return !!(ME && ME.ruolo === 'admin' && !KIOSK && _admFidLeggi()); }
+function _admEApple() { return /iPhone|iPad|Macintosh/.test(navigator.userAgent); }
+
+// accesso appena fatto (password, Google, codice): niente Face ID subito dopo
+async function _admLoginRecente() {
+  try {
+    const { data } = await sb.auth.getSession();
+    const t = data && data.session && data.session.access_token; if (!t) return false;
+    const c = JSON.parse(new TextDecoder().decode(_b64uDec(t.split('.')[1])));
+    const ts = Math.max(0, ...(c.amr || []).map(a => a.timestamp || 0));
+    return ts > 0 && (Date.now() / 1000 - ts) < 300;
+  } catch (e) { return false; }
+}
+
+// Chiamata da bootApp prima di aprire l'app admin. true = si entra.
+function admFidPrima() {
+  if (ADM_FID.attesa) return ADM_FID.attesa;
+  ADM_FID.attesa = (async () => {
+    try {
+      if (!ME || ME.ruolo !== 'admin' || KIOSK) return true;
+      const cfg = _admFidLeggi();
+      if (!cfg) { _admSegnaUso(); setTimeout(admFidProponi, 1500); return true; }
+      _admFidControllaRevoca(cfg);
+      if (await _admLoginRecente()) { _admSegnaUso(); return true; }
+      if (Date.now() - _admUltimoUso() < ADM_FID.INATTIVITA_MS) { _admSegnaUso(); return true; }
+      return await admFidBlocca();
+    } finally { setTimeout(() => { ADM_FID.attesa = null; }, 0); }
+  })();
+  return ADM_FID.attesa;
+}
+
+// se il dispositivo è stato disattivato da un altro telefono, si toglie anche qui
+async function _admFidControllaRevoca(cfg) {
+  try {
+    const { data, error } = await sb.from('presenze_firme_dispositivi').select('attivo').eq('credential_id', cfg.cid).maybeSingle();
+    if (!error && data && data.attivo === false) { _admFidScrivi(null); toast('Face ID per entrare disattivato su questo dispositivo'); }
+  } catch (e) {}
+}
+
+// Schermata di blocco: si risolve solo quando la verifica riesce
+function admFidBlocca() {
+  return new Promise((resolve) => {
+    ADM_FID.aperto = true;
+    let el = document.getElementById('adm-fid-lock');
+    if (!el) { el = document.createElement('div'); el.id = 'adm-fid-lock'; document.body.appendChild(el); }
+    el.className = 'afid-lock';
+    el.innerHTML = `<div class="afid-box">
+      <div class="afid-ico">🔒</div>
+      <b class="afid-t">Ciao ${esc((ME && ME.nome) || '')}</b>
+      <small class="afid-s">Per entrare come amministratore conferma che sei tu.</small>
+      <button class="btn-primary afid-btn" id="afid-btn">Sblocca con Face ID / impronta</button>
+      <div class="afid-msg" id="afid-msg"></div>
+      <button class="afid-esci" id="afid-esci">Non funziona? Esci e accedi con la password</button>
+    </div>`;
+    const msg = (t) => { const m = document.getElementById('afid-msg'); if (m) m.textContent = t || ''; };
+    const btn = document.getElementById('afid-btn');
+    btn.onclick = async () => {
+      if (btn.disabled) return;
+      btn.disabled = true; msg('');
+      const r = await _admFidVerifica();
+      btn.disabled = false;
+      if (r.ok) {
+        ADM_FID.aperto = false; el.remove(); _admSegnaUso();
+        try { navigator.vibrate && navigator.vibrate(30); } catch (e) {}
+        resolve(true);
+      } else msg(r.motivo);
+    };
+    document.getElementById('afid-esci').onclick = async () => {
+      ADM_FID.aperto = false; el.remove(); resolve(false);
+      try { await doLogout(); } catch (e) { location.reload(); }
+    };
+    // su Android/PC il riconoscimento parte da solo; su iPhone serve il tocco
+    if (!_admEApple()) setTimeout(() => { if (document.getElementById('afid-btn') === btn) btn.click(); }, 350);
+  });
+}
+
+// Verifica: il telefono firma una sfida casuale con la chiave attivata qui
+async function _admFidVerifica() {
+  const cfg = _admFidLeggi();
+  if (!cfg) return { ok: true };
+  try {
+    const sfida = crypto.getRandomValues(new Uint8Array(32));
+    const a = await navigator.credentials.get({ publicKey: {
+      challenge: sfida, rpId: location.hostname, userVerification: 'required', timeout: 60000,
+      allowCredentials: [{ type: 'public-key', id: _b64uDec(cfg.cid) }],
+    } });
+    if (!a || _b64u(a.rawId) !== cfg.cid) return { ok: false, motivo: 'Dispositivo non riconosciuto' };
+    const cd = new Uint8Array(a.response.clientDataJSON), cdj = JSON.parse(new TextDecoder().decode(cd));
+    if (cdj.type !== 'webauthn.get' || cdj.challenge !== _b64u(sfida)) return { ok: false, motivo: 'Verifica non valida' };
+    const ad = new Uint8Array(a.response.authenticatorData);
+    if (!(ad[32] & 0x04)) return { ok: false, motivo: 'Face ID / impronta non verificati' };
+    const dati = new Uint8Array(ad.length + 32); dati.set(ad); dati.set(await _sha256Buf(cd), ad.length);
+    let sig = new Uint8Array(a.response.signature), ok;
+    if (cfg.alg === -7) {
+      const key = await crypto.subtle.importKey('jwk', { kty: 'EC', crv: 'P-256', x: cfg.jwk.x, y: cfg.jwk.y }, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+      ok = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, sig[0] === 0x30 ? _derARaw(sig) : sig, dati);
+    } else {
+      const key = await crypto.subtle.importKey('jwk', { kty: 'RSA', n: cfg.jwk.n, e: cfg.jwk.e, alg: 'RS256' }, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
+      ok = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, sig, dati);
+    }
+    return ok ? { ok: true } : { ok: false, motivo: 'Verifica non riuscita: riprova' };
+  } catch (e) {
+    if (e && e.name === 'NotAllowedError') return { ok: false, motivo: 'Annullato. Tocca di nuovo il pulsante per riprovare.' };
+    return { ok: false, motivo: 'Non riuscito: ' + ((e && e.message) || e) };
+  }
+}
+
+// Attivazione su questo dispositivo
+async function admFidAttiva() {
+  if (!(await firmaSupportata())) { toast('Questo dispositivo non ha Face ID o impronta utilizzabili'); return false; }
+  try {
+    const cred = await navigator.credentials.create({ publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      rp: { name: APP_CONFIG.prodotto || 'Presenze', id: location.hostname },
+      user: { id: new TextEncoder().encode(ME.id), name: ME.email || ME.id, displayName: ((ME.nome || '') + ' ' + (ME.cognome || '')).trim() },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+      authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'preferred' },
+      attestation: 'none', timeout: 90000,
+    } });
+    if (!cred) return false;
+    const { jwk, alg } = await _chiaveDaAttestazione(cred.response);
+    const cid = _b64u(cred.rawId);
+    // copia nel registro dei dispositivi (così resta traccia e si può disattivare)
+    try { await sb.rpc('firma_registra', { p_credential_id: cid, p_public_key: jwk, p_alg: alg, p_dispositivo: _nomeDispositivo() + ' · accesso admin' }); } catch (e) {}
+    _admFidScrivi({ cid, jwk, alg, il: new Date().toISOString(), dispositivo: _nomeDispositivo() });
+    _admSegnaUso();
+    toast('🔒 Face ID attivato: da ora serve per entrare');
+    return true;
+  } catch (e) {
+    if (e && e.name === 'NotAllowedError') toast('Attivazione annullata');
+    else toast('Attivazione non riuscita: ' + ((e && e.message) || e));
+    return false;
+  }
+}
+async function admFidDisattiva() {
+  const cfg = _admFidLeggi(); if (!cfg) return;
+  if (!confirm('Disattivare Face ID per entrare su questo dispositivo?')) return;
+  try { const { data } = await sb.from('presenze_firme_dispositivi').select('id').eq('credential_id', cfg.cid).maybeSingle(); if (data) await sb.rpc('firma_revoca', { p_id: data.id }); } catch (e) {}
+  _admFidScrivi(null);
+  toast('Face ID per entrare disattivato su questo dispositivo');
+  admFidRenderFoglio();
+}
+
+// Proposta all'ingresso finché non è attivo (una volta per apertura)
+async function admFidProponi(tentativo) {
+  if (ADM_FID.nonOra || !ME || ME.ruolo !== 'admin' || KIOSK || _admFidLeggi()) return;
+  if (!(await firmaSupportata())) return;
+  // non sopra un'altra finestra (es. Centro attività): aspetta che si chiuda
+  if (document.querySelector('.overlay.on')) { if ((tentativo || 0) < 60) setTimeout(() => admFidProponi((tentativo || 0) + 1), 3000); return; }
+  ADM_FID.nonOra = true;
+  admFidFoglio();
+}
+async function admFidFoglio() { await admFidRenderFoglio(); openSheet('sh-adm-fid'); }
+// se un'altra finestra si apre sopra la proposta, la proposta si ritira e torna dopo
+(function () {
+  const _os = openSheet;
+  openSheet = function (id) {
+    try {
+      const f = document.getElementById('sh-adm-fid');
+      if (id !== 'sh-adm-fid' && f && f.classList.contains('on') && !_admFidLeggi() && ADM_FID.nonOra) {
+        closeSheet('sh-adm-fid'); ADM_FID.nonOra = false; setTimeout(() => admFidProponi(), 3000);
+      }
+    } catch (e) {}
+    return _os.apply(this, arguments);
+  };
+})();
+async function admFidRenderFoglio() {
+  const box = document.getElementById('adm-fid-body'); if (!box) return;
+  const cfg = _admFidLeggi(), sup = await firmaSupportata();
+  const riga = (ico, tit, txt) => '<div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:12px"><div style="font-size:20px;line-height:1.2">' + ico + '</div><div><div style="font-size:14px;font-weight:700;color:var(--text)">' + tit + '</div><div style="font-size:13px;color:var(--muted);line-height:1.5">' + txt + '</div></div></div>';
+  if (cfg) {
+    box.innerHTML = riga('✅', 'Attivo su questo dispositivo', 'Per entrare in Presenze serve Face ID o impronta: all\'apertura e quando l\'app resta chiusa o ferma per più di 30 minuti. Attivato il ' + new Date(cfg.il).toLocaleDateString('it-IT') + '.')
+      + riga('🔑', 'Se non funziona', 'Nella schermata di blocco tocca «Esci e accedi con la password»: dopo l\'accesso con password entri subito.')
+      + '<button class="btn-primary" style="margin-bottom:10px" onclick="admFidProva()">Prova adesso</button>'
+      + '<button class="btn-sm" style="width:100%;padding:11px" onclick="admFidDisattiva()">Disattiva su questo dispositivo</button>';
+  } else if (!sup) {
+    box.innerHTML = riga('⚠️', 'Non disponibile su questo dispositivo', 'Serve un telefono o un computer con Face ID, impronta o Windows Hello attivi. Su questo dispositivo si entra come sempre.');
+  } else {
+    box.innerHTML = riga('🔒', 'Proteggi l\'accesso amministratore', 'Chi prende in mano il tuo telefono sbloccato non potrà aprire Presenze: servirà il tuo Face ID o la tua impronta.')
+      + riga('⏱', 'Quando lo chiede', 'All\'apertura dell\'app e dopo 30 minuti in cui l\'app è rimasta chiusa o ferma. Non lo chiede subito dopo che hai fatto l\'accesso con la password.')
+      + '<button class="btn-primary" style="margin-bottom:10px" onclick="admFidAttiva().then(ok=>{ if(ok){ admFidRenderFoglio(); } })">Attiva Face ID / impronta</button>'
+      + '<button class="btn-sm" style="width:100%;padding:11px" onclick="closeSheet(\'sh-adm-fid\')">Non ora</button>';
+  }
+}
+async function admFidProva() { const r = await _admFidVerifica(); toast(r.ok ? '✓ Funziona: sei tu' : r.motivo); }
+
+// Blocco dopo 30 minuti con l'app chiusa o ferma
+document.addEventListener('visibilitychange', () => {
+  if (!_admAttivoQui()) return;
+  if (document.visibilityState === 'hidden') { _admSegnaUso(); return; }
+  if (!ADM_FID.aperto && Date.now() - _admUltimoUso() > ADM_FID.INATTIVITA_MS) admFidBlocca();
+});
+let _admUsoT = 0;
+['click', 'touchstart', 'keydown', 'scroll'].forEach(ev => document.addEventListener(ev, () => {
+  if (Date.now() - _admUsoT < 20000 || !_admAttivoQui()) return;
+  _admUsoT = Date.now(); _admSegnaUso();
+}, { passive: true, capture: true }));
+setInterval(() => {
+  if (!_admAttivoQui() || ADM_FID.aperto || document.visibilityState !== 'visible') return;
+  if (Date.now() - _admUltimoUso() > ADM_FID.INATTIVITA_MS) admFidBlocca();
+}, 60000);
+(function () {
+  const st = document.createElement('style');
+  st.textContent = `.afid-lock{position:fixed;inset:0;z-index:2147483000;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:24px}
+  .afid-box{width:100%;max-width:340px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:10px}
+  .afid-ico{font-size:44px;width:84px;height:84px;border-radius:24px;background:var(--card,#fff);display:flex;align-items:center;justify-content:center;box-shadow:0 6px 24px rgba(0,0,0,.08);margin-bottom:6px}
+  .afid-t{font-size:20px;letter-spacing:-.3px;color:var(--text)} .afid-s{font-size:14px;color:var(--muted);line-height:1.45;margin-bottom:10px}
+  .afid-btn{width:100%} .afid-msg{min-height:18px;font-size:13px;color:var(--red,#ff3b30)}
+  .afid-esci{background:none;border:0;color:var(--accent);font-size:13px;padding:8px;cursor:pointer}`;
+  document.head.appendChild(st);
+})();
 
 </script>
 </body>
