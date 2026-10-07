@@ -3292,7 +3292,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     <button class="hdr-btn" id="tb-back" style="display:none" aria-label="Indietro"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
     <div class="tb-titles">
       <h1 id="tb-title">Presenze</h1>
-      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v70</span></p>
+      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v71</span></p>
     </div>
     <span class="topbar-badge" id="role-badge"></span>
     <div class="hdr-actions">
@@ -3667,20 +3667,20 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 
       <div class="card" style="padding:6px 16px">
         <div class="sec-title" style="margin-top:12px;margin-bottom:2px">🏦 Riconciliazione bonifici</div>
-        <div style="font-size:12px;color:var(--muted);margin-bottom:4px">Ogni cedolino confrontato con i bonifici davvero partiti dalla banca: cosa è pagato, cosa manca, il saldo di ognuno.</div>
-        <div class="cont-row" onclick="ricPanoramica()">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:4px">Il motore collega da solo i bonifici ai cedolini quando è sicuro; a te restano solo i dubbi veri.</div>
+        <div class="cont-row" onclick="rcApri('persone')">
           <div class="cont-row-icon" style="background:rgba(10,132,255,.12);color:var(--accent)">👥</div>
           <div class="cont-row-body">
-            <div class="cont-row-title">Situazione per dipendente</div>
-            <div class="cont-row-desc">Saldo ad oggi, cedolini mancanti, differenze e anomalie di ognuno</div>
+            <div class="cont-row-title">Dare e Avere per persona</div>
+            <div class="cont-row-desc">Cedolini (Dare), bonifici (Avere) e saldo di ognuno, mese per mese</div>
           </div>
           <div class="cont-row-chev">›</div>
         </div>
         <div class="cont-row" onclick="apriRiconciliazioneBonifici()">
           <div class="cont-row-icon">🏦</div>
           <div class="cont-row-body">
-            <div class="cont-row-title">Riconciliazione</div>
-            <div class="cont-row-desc">Bonifici trovati in banca da confermare, con il perché della proposta</div>
+            <div class="cont-row-title">Da verificare</div>
+            <div class="cont-row-desc">Solo i casi in cui il motore ha un dubbio, con il perché</div>
           </div>
           <div class="cont-row-chev">›</div>
         </div>
@@ -3703,8 +3703,8 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
         <div class="cont-row" onclick="apriEsportaRiconciliazione()" style="border-bottom:none">
           <div class="cont-row-icon" style="background:rgba(47,138,92,.12);color:var(--green)">⬇</div>
           <div class="cont-row-body">
-            <div class="cont-row-title">Esporta</div>
-            <div class="cont-row-desc">Partitario in Excel con controllo automatico prima dello scarico</div>
+            <div class="cont-row-title">Report Dare/Avere</div>
+            <div class="cont-row-desc">Excel: riepilogo, per persona, dettaglio, movimenti, altre voci, anomalie</div>
           </div>
           <div class="cont-row-chev">›</div>
         </div>
@@ -5966,7 +5966,7 @@ async function presenzeConfermaMatchStipendio(risultato, movimenti, opts){
   if (!movimenti || !movimenti.length) return;
   for (const m of movimenti) {
     try {
-      await sb.from('presenze_bonifici_stipendio').insert({
+      const { error } = await sb.from('presenze_bonifici_stipendio').insert({
         dipendente_id: risultato.dipId,
         movimento_banca_id: m.id,
         mese_riferimento: risultato.mese,
@@ -5976,7 +5976,8 @@ async function presenzeConfermaMatchStipendio(risultato, movimenti, opts){
         descrizione_movimento: m.descrizione,
         data_movimento: m.data
       });
-    } catch (e) { console.warn('presenzeConfermaMatchStipendio insert:', e.message || e); }
+      if (error) throw error;
+    } catch (e) { console.warn('presenzeConfermaMatchStipendio insert:', e.message || e); toast('Collegamento non salvato: ' + (e.message || e)); throw e; }
   }
   if (opts.registraEccedenzaAcconto && risultato.stato === 'eccedenza' && risultato.diff > 0.5) {
     const meseSucc = risultato.mese === 12 ? 1 : risultato.mese + 1;
@@ -13327,7 +13328,7 @@ function ricPartitario(dip, D) {
   const add = (liv, tipo, testo, cosaFare, mese, anno) => anomalie.push({ liv, tipo, testo, cosaFare, mese, anno, dip: ricNome(dip) });
   // periodo analizzato: dal primo cedolino (o primo pagamento collegato) al mese scorso
   const chiavi = ced.map(c => _rK(c.mese, c.anno)).concat(bon.map(b => _rK(b.mese_riferimento, b.anno_riferimento)));
-  if (!chiavi.length) return { dip, righe: [], anomalie, tot: { dovuto: 0, ricevuto: 0, saldo: 0 }, periodo: null, definitivo: true, portafoglio: 0 };
+  if (!chiavi.length) return { dip, righe: [], anomalie, tot: { dovuto: 0, ricevuto: 0, saldo: 0 }, periodo: null, definitivo: true, portafoglio: 0, liberi: [] };
   let k0 = Math.min(...chiavi);
   const ultimoAtteso = my === 1 ? _rK(12, ay - 1) : _rK(my - 1, ay); // il mese scorso
   let k1 = Math.max(Math.max(...chiavi), ultimoAtteso);
@@ -23521,12 +23522,13 @@ async function presenzeCercaCandidatiCedolino(dipId, mese, anno, mancante){
 }
 
 async function presenzeAggancioCedolino(dipId, mese, anno, movId, data, importo, descrizione){
-  await sb.from('presenze_bonifici_stipendio').insert({
+  const { error } = await sb.from('presenze_bonifici_stipendio').insert({
     dipendente_id: dipId, movimento_banca_id: movId,
     mese_riferimento: mese, anno_riferimento: anno,
     importo, confermato: true, fonte_copertura: 'bonifico',
     descrizione_movimento: descrizione, data_movimento: data
   });
+  if (error) throw new Error('Collegamento non salvato: ' + error.message);
 }
 
 // ── Portafoglio dipendente ("finanziamento dipendente") ──
@@ -32662,6 +32664,502 @@ setInterval(() => {
   document.head.appendChild(st);
 })();
 
+</script>
+<style>
+/* Riconciliazione 3.0 (07/10/2026) — usa i colori e le schede di «ric-» */
+.rc-banca{display:flex;gap:10px;align-items:flex-start;font-size:12px;color:var(--muted);background:var(--surface2);border-radius:14px;padding:10px 12px;margin:10px 0}
+.rc-banca svg{width:16px;height:16px;flex-shrink:0;margin-top:1px}
+.rc-banca .rc-vecchio{color:var(--ric-warn);font-weight:700}
+.rc-banca-w{margin-top:4px;color:var(--ric-warn);font-weight:600}
+.rc-motore{background:var(--ric-ok-bg);border-radius:18px;padding:13px 14px;margin:10px 0}
+.rc-motore-t{display:flex;gap:8px;align-items:flex-start;font-size:14px;color:var(--text);line-height:1.35}
+.rc-motore-t svg{width:18px;height:18px;color:var(--ric-ok);flex-shrink:0}
+.rc-motore-s{font-size:12px;color:var(--muted);margin:6px 0 10px;line-height:1.4}
+.rc-motore-b{display:flex;gap:8px}.rc-motore-b button{flex:1;margin:0!important}
+.rc-tabs{display:flex;gap:6px;overflow-x:auto;margin:14px -2px 4px;padding:2px;scrollbar-width:none}
+.rc-tabs::-webkit-scrollbar{display:none}
+.rc-tabs button{flex-shrink:0;border:0;background:var(--surface2);color:var(--text);font:inherit;font-size:13px;font-weight:600;padding:8px 13px;border-radius:99px;cursor:pointer}
+.rc-tabs button span{display:inline-block;min-width:18px;padding:0 5px;border-radius:9px;background:var(--ric-warn);color:#fff;font-size:11px;margin-left:3px}
+.rc-tabs button.on{background:var(--accent);color:#fff}
+.rc-tabs button.on span{background:rgba(255,255,255,.3)}
+.rc-piede{text-align:center;font-size:11.5px;color:var(--muted);margin:12px 0 4px}
+.rc-piede a{color:var(--accent)}
+.rc-mese{background:var(--surface2);border-radius:16px;margin:8px 0;padding:0 12px;border-left:4px solid var(--ric-nd)}
+.rc-mese.ok{border-left-color:var(--ric-ok)}.rc-mese.warn{border-left-color:var(--ric-warn)}.rc-mese.ko{border-left-color:var(--ric-ko)}.rc-mese.info{border-left-color:var(--ric-info)}
+.rc-mese>summary{list-style:none;cursor:pointer;padding:11px 0}
+.rc-mese>summary::-webkit-details-marker{display:none}
+.rc-mese-t{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:14px}
+.rc-mese-n{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12px;color:var(--muted);margin-top:5px}
+.rc-mese[open]>summary{border-bottom:1px solid var(--border)}
+.rc-neg{color:var(--ric-warn);font-weight:700}.rc-pos{color:var(--ric-info);font-weight:700}
+.rc-prog{opacity:.75}
+.rc-info{font-size:11.5px;color:var(--muted);background:var(--surface);border-radius:8px;padding:2px 7px}
+.rc-q{display:block;width:100%;text-align:left;font:inherit;color:var(--text);background:var(--surface);border:0;border-radius:12px;padding:9px 11px;margin:8px 0;cursor:pointer}
+.rc-q.vuota{color:var(--muted);font-size:12.5px;cursor:default}
+.rc-q-h{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--muted)}
+.rc-q-h b{color:var(--text);font-size:14px;white-space:nowrap}
+.rc-q-c{font-size:12.5px;margin-top:3px;overflow-wrap:anywhere}
+.rc-q-f{display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap}
+.rc-q-m{font-size:11.5px;color:var(--muted);flex:1;min-width:150px}
+.rc-card{background:var(--surface2);border-radius:16px;padding:11px 12px;margin:8px 0;border-left:4px solid var(--ric-ok)}
+.rc-card.warn{border-left-color:var(--ric-warn)}
+.rc-coll{display:flex;justify-content:space-between;gap:10px;font-size:13px;cursor:pointer}
+.rc-coll>b{white-space:nowrap}
+.rc-motivi{margin:7px 0 0 18px;padding:0;font-size:12px;color:var(--muted);line-height:1.45}
+.rc-azioni{display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap}
+.rc-azioni .rc-info{flex:1}
+.rc-azioni button{margin:0!important;padding:8px 14px!important;width:auto!important;font-size:13px!important}
+.rc-gruppo{margin:6px 0 14px}
+.rc-gruppo-t{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:14px;margin:4px 2px}
+.rc-mini{border:0;background:var(--accent-light);color:var(--accent);font:inherit;font-size:12px;font-weight:700;padding:5px 11px;border-radius:99px;cursor:pointer;margin-left:auto}
+.rc-lbl{display:block;font-size:12px;color:var(--muted);margin:12px 0 0}
+.rc-lbl select,.rc-lbl input{display:block;width:100%;margin-top:5px;font:inherit;font-size:15px;padding:10px 12px;border-radius:12px;border:1px solid var(--border);background:var(--surface);color:var(--text)}
+</style>
+<script>
+/* ══════════════════════════════════════════════════════════════════
+   RICONCILIAZIONE 3.0 — Presenze (07/10/2026)
+   Il motore unico (server «riconciliazione», stesso codice di Fatture)
+   decide da solo tutto quello che può: qui si vede il risultato e si
+   risponde solo dove c'è un vero dubbio.
+   • Dare = netto dei cedolini · Avere = bonifici BPM/SumUp · Saldo = Dare − Avere
+   • Ogni riga dice solo: ✓ Riconciliato · ⚠ Probabile — verifica ·
+     ! Da riconciliare · € Saldo aperto (+ «pagato in più»)
+   • Lo stato di invio del cedolino è solo un'informazione: non blocca nulla.
+   • Le altre voci (liquidazioni, contanti, ex dipendenti, finanziamento
+     soci, fuori periodo) sono a parte e non toccano il saldo del cedolino.
+   ══════════════════════════════════════════════════════════════════ */
+const RC = { dati: null, quando: 0, vista: 'persone', occupato: false };
+const RC_STATO = {
+  riconciliato: { tono: 'ok', t: 'Riconciliato' },
+  probabile: { tono: 'warn', t: 'Probabile — verifica' },
+  da_riconciliare: { tono: 'ko', t: 'Da riconciliare' },
+  saldo_aperto: { tono: 'warn', t: 'Saldo aperto' },
+  eccedente: { tono: 'info', t: 'Pagato in più' },
+};
+const RC_ICO = { ok: '✓', warn: '⚠', ko: '!', info: '+', nd: '…' };
+const RC_TIPO = {
+  cedolino: 'Stipendio', compenso_admin: 'Compenso', altra_voce: 'Altra voce', finanziamento_soci: 'Finanziamento soci',
+  rimborso_spese: 'Rimborso spese', fuori_periodo: 'Fuori periodo', altro: 'Altro', commissione: 'Commissione',
+};
+const RC_ANOM = {
+  cedolino_senza_pagamento: { t: 'Cedolini senza pagamento', tono: 'ko' },
+  pagamento_senza_cedolino: { t: 'Pagamenti senza cedolino', tono: 'warn' },
+  parziale: { t: 'Pagati in parte', tono: 'warn' },
+  eccedente: { t: 'Pagati in più', tono: 'info' },
+  possibile_duplicato: { t: 'Possibili doppioni', tono: 'ko' },
+  da_verificare: { t: 'Da verificare', tono: 'warn' },
+};
+
+function rcChip(tono, txt) { return `<span class="ric-chip ${tono}"><i>${RC_ICO[tono] || '•'}</i>${esc(txt)}</span>`; }
+function rcStatoChip(st) { const s = RC_STATO[st] || { tono: 'nd', t: st }; return rcChip(s.tono, s.t); }
+function rcNome(id) {
+  const p = RC.dati && RC.dati.persone[id];
+  if (!p) return '—';
+  return _tc27(p.nome || '') + ' ' + _tc27(p.cognome || '');
+}
+function rcMov(id) { return (RC.dati && RC.dati.movimenti[id]) || null; }
+function rcMovPerRic(mv) { return mv ? { id: mv.id, data: mv.data, importo: mv.imp, banca: mv.banca, descrizione: mv.desc } : null; }
+function rcChiave(d) { return [d.mov, d.tipo, d.persona || '', d.controparte || '', d.anno || '', d.mese || '', Number(d.importo).toFixed(2)].join('|'); }
+
+async function rcCarica(forza) {
+  if (!forza && RC.dati && Date.now() - RC.quando < 120000) return RC.dati;
+  const { data, error } = await sb.functions.invoke('riconciliazione', { body: { azione: 'analizza' } });
+  if (error || !data || data.errore) {
+    let msg = (data && data.errore) || '';
+    if (!msg && error && error.context && error.context.json) { try { msg = (await error.context.json()).errore || ''; } catch (e) {} }
+    throw new Error(msg || (error && error.message) || 'Riconciliazione non disponibile');
+  }
+  RC.dati = data; RC.quando = Date.now();
+  rcPrepara(data);
+  return data;
+}
+// conti e liste derivate, calcolate una volta per caricamento
+function rcPrepara(D) {
+  const salvate = {}; (D.proposte || []).forEach(r => { salvate[rcChiave({ ...r, mov: r.mov, importo: r.imp })] = r; });
+  D._nuoviAuto = D.decisioni.filter(d => d.azione === 'nuovo' && d.livello === 'auto' && d.tipo !== 'commissione');
+  D._nuoveProposte = D.decisioni.filter(d => (d.azione === 'nuovo' || d.azione === 'correzione') && d.livello !== 'auto' && !d.rifiutata && !salvate[rcChiave(d)]);
+  D._mesi = { ok: 0, prob: 0, ko: 0, aperto: 0, piu: 0 };
+  Object.values(D.conti).forEach(c => c.mesi.forEach(m => {
+    if (m.stato === 'riconciliato') D._mesi.ok++; else if (m.stato === 'probabile') D._mesi.prob++;
+    else if (m.stato === 'eccedente') D._mesi.piu++; else if (m.stato === 'saldo_aperto') D._mesi.aperto++; else if (m.scaduto) D._mesi.ko++;
+  }));
+  D._saldoAperto = Object.values(D.conti).reduce((t, c) => t + Math.max(0, c.saldo), 0);
+  D._pagatoInPiu = Object.values(D.conti).reduce((t, c) => t + Math.max(0, -c.saldo), 0);
+  D._daVerificare = (D.proposte || []).length + D._nuoveProposte.length + D.anomalie.filter(a => a.tipo === 'da_verificare').length;
+}
+// BPM vecchio: avviso a vista
+function rcBancaHtml(D) {
+  const b = D.banca_fino_al || {}, oggi = D.oggi, righe = [];
+  Object.keys(b).sort().forEach(k => {
+    const gg = Math.round((new Date(oggi) - new Date(b[k])) / 864e5);
+    righe.push(`<span class="${gg > 7 ? 'rc-vecchio' : ''}">${esc(k)} fino al ${_rD(b[k])}</span>`);
+  });
+  const vecchie = Object.keys(b).filter(k => (new Date(oggi) - new Date(b[k])) / 864e5 > 7);
+  return `<div class="rc-banca">${ic('banca')}<div>Banca letta: ${righe.join(' · ')}${vecchie.length ? `<div class="rc-banca-w">Importa l'estratto ${vecchie.join(', ')} in Fatture: i pagamenti successivi non sono ancora visibili.</div>` : ''}</div></div>`;
+}
+
+/* ── Apertura ──────────────────────────────────────────────────────── */
+async function rcApri(vista) {
+  if (vista) RC.vista = vista;
+  const body = _sheetDinamico('sh-rc', 'Riconciliazione stipendi');
+  openSheet('sh-rc');
+  if (!RC.dati) body.innerHTML = '<div class="ric-carica"><div class="spinner"></div>Il motore sta leggendo cedolini e banca…</div>';
+  try { await rcCarica(false); } catch (e) { body.innerHTML = `<div class="ric-carica">${esc(e.message)}</div>`; return; }
+  rcDisegna();
+}
+function rcDisegna() {
+  const body = _sheetDinamico('sh-rc', 'Riconciliazione stipendi'), D = RC.dati;
+  const hero = ricHero({
+    eyebrow: 'Stipendi dal ' + _rD(D.dal), pill: Object.keys(D.conti).length + ' persone',
+    lbl: 'Ancora da pagare (saldi aperti)', big: _rE(D._saldoAperto),
+    esito: D._pagatoInPiu < 1 ? { tono: 'ok', txt: 'Nessuno ha ricevuto più dei cedolini' }
+      : { tono: 'info', txt: 'Pagato più dei cedolini: ' + _rE(D._pagatoInPiu) + ' (vedi le persone in blu)' },
+    stats: [
+      { lbl: 'Riconciliati', val: D._mesi.ok, dot: '#30D158', on: "rcVai('persone')" },
+      { lbl: 'Da verificare', val: D._daVerificare, dot: D._daVerificare ? '#FF9F0A' : '#30D158', on: "rcVai('verifica')" },
+      { lbl: 'Da riconciliare', val: D._mesi.ko, dot: D._mesi.ko ? '#FF453A' : '#30D158', on: "rcVai('anomalie')" },
+    ],
+  });
+  const nA = D._nuoviAuto.length, nP = D._nuoveProposte.length;
+  const motore = (nA || nP) ? `<div class="rc-motore">
+      <div class="rc-motore-t"><span>${ic('check')}</span><div>Il motore ha trovato ${nA ? `<b>${nA} collegamenti sicuri</b>` : ''}${nA && nP ? ' e ' : ''}${nP ? `<b>${nP} proposte</b>` : ''}</div></div>
+      <div class="rc-motore-s">${nA ? 'I collegamenti sicuri si applicano da soli; ' : ''}${nP ? 'le proposte restano da confermare, una per una o tutte insieme. ' : ''}Prima viene salvata una copia di sicurezza; ogni collegamento si può annullare.</div>
+      <div class="rc-motore-b"><button class="btn-secondary" onclick="rcAnteprima()">Vedi l'anteprima</button><button class="btn-primary" onclick="rcApplica()">Applica</button></div>
+    </div>` : '';
+  const tabs = [['persone', 'Persone'], ['verifica', 'Da verificare', D._daVerificare], ['altre', 'Altre voci'], ['anomalie', 'Anomalie', D.anomalie.length]];
+  body.innerHTML = hero + rcBancaHtml(D) + motore
+    + `<div class="rc-tabs">${tabs.map(t => `<button class="${RC.vista === t[0] ? 'on' : ''}" onclick="rcVai('${t[0]}')">${t[1]}${t[2] ? ` <span>${t[2]}</span>` : ''}</button>`).join('')}</div>`
+    + `<div id="rc-vista">${rcVista()}</div>`
+    + `<button class="btn-primary ric-cta" onclick="rcExcel()">⬇ Report Dare/Avere (Excel)</button>
+       <div class="rc-piede">Calcolato il ${new Date(RC.quando).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · <a href="#" onclick="event.preventDefault();rcRicarica()">ricalcola</a> · <a href="#" onclick="event.preventDefault();apriStoricoRiconciliazioni()">storico di prima</a></div>`;
+}
+function rcVai(v) { RC.vista = v; const el = $('rc-vista'); if (!el) return rcApri(v); rcDisegna(); }
+async function rcRicarica() { RC.dati = null; await rcApri(); }
+function rcVista() {
+  if (RC.vista === 'verifica') return rcVistaVerifica();
+  if (RC.vista === 'altre') return rcVistaAltre();
+  if (RC.vista === 'anomalie') return rcVistaAnomalie();
+  return rcVistaPersone();
+}
+
+/* ── Persone ───────────────────────────────────────────────────────── */
+function rcVistaPersone() {
+  const D = RC.dati;
+  const ids = Object.keys(D.conti).sort((a, b) => {
+    const pa = D.persone[a] || {}, pb = D.persone[b] || {};
+    return (pa.tipo === 'admin') - (pb.tipo === 'admin') || rcNome(a).localeCompare(rcNome(b));
+  });
+  return ids.map(id => {
+    const c = D.conti[id], p = D.persone[id] || {}, conta = {};
+    c.mesi.forEach(m => { conta[m.stato] = (conta[m.stato] || 0) + 1; });
+    const chips = ['da_riconciliare', 'saldo_aperto', 'probabile', 'eccedente', 'riconciliato'].filter(s => conta[s])
+      .map(s => rcChip(RC_STATO[s].tono, conta[s] + ' ' + RC_STATO[s].t.toLowerCase()));
+    const tono = Math.abs(c.saldo) < 1 ? 'ok' : c.saldo > 0 ? 'warn' : 'info';
+    return `<button class="ric-dcard" onclick="rcPersona('${id}')">
+      <div class="ric-card-h">${ricAv({ id, nome: p.nome, cognome: p.cognome })}<div class="ric-card-n"><b>${esc(rcNome(id))}</b><small>${p.tipo === 'admin' ? 'amministratore' : 'dipendente'} · Dare ${_rEk(c.dare)} · Avere ${_rEk(c.avere)}</small></div>
+        <div class="ric-dsaldo ${tono}">${_rEk(Math.abs(c.saldo))}<small>${tono === 'ok' ? 'in pari' : c.saldo > 0 ? 'da pagare' : 'pagato in più'}</small></div></div>
+      <div class="ric-chips">${chips.join('')}<span class="ric-chev">›</span></div></button>`;
+  }).join('') || '<div class="ric-carica">Nessun cedolino nel periodo.</div>';
+}
+
+async function rcPersona(id) {
+  const D = RC.dati, c = D.conti[id], p = D.persone[id] || {};
+  const body = _sheetDinamico('sh-rc-p', rcNome(id));
+  openSheet('sh-rc-p');
+  RC.personaAperta = id;
+  const ced = {}; (D.cedolini || []).forEach(x => { if (x.persona === id) ced[x.anno + '-' + x.mese] = x; });
+  const tono = Math.abs(c.saldo) < 1 ? 'ok' : c.saldo > 0 ? 'warn' : 'info';
+  const hero = ricHero({
+    eyebrow: (p.tipo === 'admin' ? 'Amministratore' : 'Dipendente') + ' · dal ' + _rD(D.dal), lbl: 'Saldo (Dare − Avere)',
+    big: _rE(Math.abs(c.saldo)), esito: { tono, txt: tono === 'ok' ? 'In pari con i cedolini' : c.saldo > 0 ? 'Ancora da pagare' : 'Pagato più dei cedolini' },
+    stats: [{ lbl: 'Dare', val: _rEk(c.dare), dot: '#64D2FF' }, { lbl: 'Avere', val: _rEk(c.avere), dot: '#30D158' }, { lbl: 'In attesa', val: _rEk(c.proposto), dot: c.proposto ? '#FF9F0A' : '#30D158' }],
+  });
+  let prog = 0;
+  const righe = c.mesi.map(m => {
+    prog += m.dare - m.avere;
+    const cd = ced[m.anno + '-' + m.mese];
+    const quote = m.quote.map(q => rcQuotaHtml(q)).join('') || '<div class="rc-q vuota">Nessun pagamento collegato</div>';
+    return `<details class="rc-mese ${RC_STATO[m.stato] ? RC_STATO[m.stato].tono : ''}"${m.stato !== 'riconciliato' ? ' open' : ''}>
+      <summary><div class="rc-mese-t"><b>${_rPc(m.mese, m.anno)}</b>${rcStatoChip(m.stato)}${cd && cd.inviato === false ? '<span class="rc-info">cedolino in attesa di invio</span>' : ''}</div>
+        <div class="rc-mese-n"><span>Dare ${_rE(m.dare)}</span><span>Avere ${_rE(m.avere)}</span><span class="${Math.abs(m.saldo) < 1 ? '' : m.saldo > 0 ? 'rc-neg' : 'rc-pos'}">Saldo ${_rE(m.saldo)}</span><span class="rc-prog">progressivo ${_rE(prog)}</span></div></summary>
+      ${quote}</details>`;
+  }).join('');
+  const senza = D.decisioni.filter(d => d.persona === id && d.azione !== 'correzione' && (d.senza_cedolino || d.tipo === 'fuori_periodo' || d.tipo === 'finanziamento_soci' || d.tipo === 'rimborso_spese'));
+  const fuoriHtml = senza.length ? ricSez('Fuori dai cedolini', senza.length, '<small>non toccano il saldo del mese</small>')
+    + senza.map(d => rcQuotaHtml(d, true)).join('') : '';
+  body.innerHTML = hero + ricSez('Mese per mese', c.mesi.length) + righe + fuoriHtml
+    + `<button class="btn-secondary ric-cta" onclick="ricQuadro('${id}')">Apri il quadro di prima (cedolini e strumenti)</button>`;
+}
+function rcQuotaHtml(q, conTipo) {
+  const D = RC.dati, mv = rcMov(q.mov), dec = D.decisioni.find(d => d.mov === q.mov && (d.importo === q.importo) && d.azione === (q.azione || d.azione));
+  const reg = (D.registro || []).find(r => r.mov === q.mov && Math.abs(r.imp - q.importo) < 0.01);
+  const liv = q.azione === 'conferma' ? (reg && reg.origine === 'auto' ? ['ok', 'automatico'] : ['ok', 'confermato']) : q.livello === 'auto' ? ['ok', 'automatico (da applicare)'] : ['warn', 'da confermare'];
+  const banca = mv ? `${_rD(mv.data)} · ${esc(mv.banca || '')}` : '';
+  const chi = mv ? esc(mv.benef || (mv.desc || '').slice(0, 60)) : esc(q.mov);
+  const motivi = (dec && dec.motivi) || (reg && reg.motivi) || [];
+  return `<button class="rc-q" onclick="rcMovimento('${esc(q.mov)}')">
+    <div class="rc-q-h"><span>${banca}${conTipo ? ' · ' + esc(RC_TIPO[q.tipo] || q.tipo) : ''}</span><b>${_rE(q.importo)}</b></div>
+    <div class="rc-q-c">${chi}${mv && mv.causale && mv.causale !== mv.benef ? ' — ' + esc(mv.causale) : ''}</div>
+    <div class="rc-q-f">${rcChip(liv[0], liv[1])}${motivi.length ? `<span class="rc-q-m">${esc(motivi.slice(1).join(' · ') || motivi[0])}</span>` : ''}</div></button>`;
+}
+
+/* ── Scheda del movimento: il perché, e cosa puoi fare ─────────────── */
+function rcMovimento(movId) {
+  const D = RC.dati, mv = rcMov(movId);
+  const body = _sheetDinamico('sh-rc-m', 'Movimento');
+  openSheet('sh-rc-m');
+  const reg = (D.registro || []).filter(r => r.mov === movId);
+  const prop = (D.proposte || []).filter(r => r.mov === movId);
+  const dec = D.decisioni.filter(d => d.mov === movId && d.azione !== 'conferma');
+  const riga = (x, imp) => `<div class="rc-coll"><div><b>${x.persona ? esc(rcNome(x.persona)) : x.controparte ? esc(rcNome(x.controparte)) : '—'}</b> · ${esc(RC_TIPO[x.tipo] || x.tipo)}${x.mese ? ' · ' + _rPc(x.mese, x.anno) : ''}</div><b>${_rE(imp)}</b></div>`;
+  const motiviHtml = m => (m || []).length ? `<ul class="rc-motivi">${m.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : '';
+  let h = mv ? ricMovHtml(rcMovPerRic(mv)) : '';
+  if (reg.length) h += ricSez('Collegato a', reg.length) + reg.map(r => `<div class="rc-card">${riga(r, r.imp)}${motiviHtml(r.motivi)}
+      <div class="rc-azioni"><span class="rc-info">${r.origine === 'auto' ? 'deciso dal motore' : r.origine === 'legacy' ? 'collegato a mano' : 'confermato da te'}</span><button class="btn-secondary" onclick="rcAnnulla([${r.id}])">Annulla collegamento</button></div></div>`).join('');
+  if (prop.length) h += ricSez('Proposta da confermare', prop.length) + prop.map(r => `<div class="rc-card warn">${riga(r, r.imp)}${motiviHtml(r.motivi)}
+      ${r.sostituisce ? '<div class="rc-info">È una correzione: sostituisce un collegamento fatto prima.</div>' : ''}
+      <div class="rc-azioni"><button class="btn-secondary" onclick="rcDecidi([${r.id}],'rifiuta')">Non è così</button><button class="btn-primary" onclick="rcDecidi([${r.id}],'conferma')">Conferma</button></div></div>`).join('');
+  else if (dec.length) h += ricSez('Cosa farebbe il motore', dec.length) + dec.map(d => `<div class="rc-card ${d.livello === 'auto' ? '' : 'warn'}">${riga(d, d.importo)}${motiviHtml(d.motivi)}<div class="rc-info">Affidabilità ${d.affidabilita}/100 · ${d.livello === 'auto' ? 'si applica da solo con «Applica»' : 'diventa una proposta con «Applica»'}</div></div>`).join('');
+  if (!reg.length && !prop.length) h += `<div class="rc-azioni"><button class="btn-secondary" onclick="rcNonStipendio('${esc(movId)}')">Non è uno stipendio</button><button class="btn-primary" onclick="rcCollegaManuale('${esc(movId)}')">Collega a mano</button></div>`;
+  body.innerHTML = h;
+}
+
+/* ── Da verificare ─────────────────────────────────────────────────── */
+function rcVistaVerifica() {
+  const D = RC.dati, prop = D.proposte || [];
+  const dubbi = D.anomalie.filter(a => a.tipo === 'da_verificare');
+  if (!prop.length && !dubbi.length && !D._nuoveProposte.length) return ricIntro('Niente da verificare: il motore ha deciso tutto quello che i dati permettono.');
+  let h = '';
+  if (D._nuoveProposte.length) h += ricIntro(`Ci sono ${D._nuoveProposte.length} nuove proposte: tocca <b>Applica</b> in alto per salvarle qui, poi confermale.`, 'info');
+  if (prop.length) {
+    const perP = {};
+    prop.forEach(r => { const k = r.persona || r.controparte || '—'; (perP[k] = perP[k] || []).push(r); });
+    h += ricSez('Proposte', prop.length, `<button class="rc-mini" onclick="rcConfermaTutte()">Conferma tutte</button>`);
+    Object.keys(perP).forEach(k => {
+      h += `<div class="rc-gruppo"><div class="rc-gruppo-t"><b>${esc(rcNome(k))}</b><button class="rc-mini" onclick="rcDecidi([${perP[k].map(r => r.id).join(',')}],'conferma')">Conferma le ${perP[k].length}</button></div>`
+        + perP[k].map(r => {
+          const mv = rcMov(r.mov);
+          return `<div class="rc-card warn"><div class="rc-coll" onclick="rcMovimento('${esc(r.mov)}')"><div>${mv ? _rD(mv.data) + ' · ' + esc(mv.banca || '') : ''} → <b>${esc(RC_TIPO[r.tipo] || r.tipo)}${r.mese ? ' ' + _rPc(r.mese, r.anno) : ''}</b></div><b>${_rE(r.imp)}</b></div>
+            <div class="rc-q-c">${mv ? esc(mv.benef || '') + (mv.causale && mv.causale !== mv.benef ? ' — ' + esc(mv.causale) : '') : ''}</div>
+            <ul class="rc-motivi">${(r.motivi || []).map(t => `<li>${esc(t)}</li>`).join('')}</ul>
+            <div class="rc-azioni"><span class="rc-info">affidabilità ${r.affidabilita || '—'}/100</span><button class="btn-secondary" onclick="rcDecidi([${r.id}],'rifiuta')">Non è così</button><button class="btn-primary" onclick="rcDecidi([${r.id}],'conferma')">Conferma</button></div></div>`;
+        }).join('') + '</div>';
+    });
+  }
+  if (dubbi.length) h += ricSez('Movimenti che il motore non sa attribuire', dubbi.length) + dubbi.map(a => {
+    const mv = rcMov(a.mov);
+    return `<button class="rc-q" onclick="rcMovimento('${esc(a.mov)}')"><div class="rc-q-h"><span>${mv ? _rD(mv.data) + ' · ' + esc(mv.banca || '') : ''}</span><b>${_rE(a.importo)}</b></div><div class="rc-q-c">${esc(a.testo)}</div></button>`;
+  }).join('');
+  return h;
+}
+
+/* ── Altre voci (fuori dal Dare dei cedolini) ──────────────────────── */
+function rcVistaAltre() {
+  const D = RC.dati;
+  const tutte = D.decisioni.filter(d => d.azione !== 'correzione' && ['finanziamento_soci', 'altra_voce', 'altro', 'fuori_periodo', 'rimborso_spese'].includes(d.tipo));
+  const blocco = (titolo, righe, nota) => righe.length ? ricSez(titolo, righe.length, nota ? `<small>${esc(nota)}</small>` : '') + righe.join('') : '';
+  // finanziamento soci: un unico conto della società
+  const fin = tutte.filter(d => d.tipo === 'finanziamento_soci');
+  const entr = fin.filter(d => (rcMov(d.mov) || {}).imp > 0).reduce((t, d) => t + d.importo, 0);
+  const usc = fin.filter(d => (rcMov(d.mov) || {}).imp < 0).reduce((t, d) => t + d.importo, 0);
+  let h = fin.length ? `<div class="rc-card"><div class="rc-coll"><div><b>Finanziamento soci</b> · conto unico della società</div></div>
+     <div class="rc-mese-n"><span>Versato ${_rE(entr)}</span><span>Restituito ${_rE(usc)}</span><span class="rc-neg">Ancora da restituire ${_rE(entr - usc)}</span></div></div>` + fin.map(d => rcQuotaHtml(d, true)).join('') : '';
+  const perC = {};
+  tutte.filter(d => d.tipo === 'altra_voce' || d.tipo === 'altro').forEach(d => { const k = d.controparte || d.persona; (perC[k] = perC[k] || []).push(d); });
+  Object.keys(perC).forEach(k => {
+    const tot = perC[k].reduce((t, d) => t + d.importo, 0);
+    h += blocco(rcNome(k) + ' · ' + _rE(tot), perC[k].map(d => rcQuotaHtml(d, true)), perC[k][0].tipo === 'altra_voce' ? 'ex dipendente, cedolini non caricati' : 'non dipendente');
+  });
+  h += blocco('Stipendi dell\'anno prima pagati nel periodo', tutte.filter(d => d.tipo === 'fuori_periodo').map(d => rcQuotaHtml(d, true)), 'competenza fuori periodo');
+  h += blocco('Rimborsi spese', tutte.filter(d => d.tipo === 'rimborso_spese').map(d => rcQuotaHtml(d, true)));
+  // liquidazioni e contanti registrati in Presenze
+  const liq = (D.altre && D.altre.liquidazioni) || [], acc = ((D.altre && D.altre.acconti) || []).filter(a => a.modalita === 'contanti');
+  const righeL = liq.filter(l => +l.contanti > 0).map(l => `<div class="rc-q"><div class="rc-q-h"><span>${esc(rcNome(l.dipendente_id))} · ${_rPc(l.mese, l.anno)}</span><b>${_rE(l.contanti)}</b></div><div class="rc-q-c">Liquidazione: parte in contanti (bonifico ${_rE(l.bonifico || 0)}, netto ${_rE(l.importo_netto || 0)})</div></div>`);
+  const righeA = acc.map(a => `<div class="rc-q"><div class="rc-q-h"><span>${esc(rcNome(a.dipendente_id))} · ${_rD(a.data)}</span><b>${_rE(a.importo)}</b></div><div class="rc-q-c">Acconto in contanti${a.causale ? ' — ' + esc(a.causale) : ''}</div></div>`);
+  h += blocco('Contanti registrati in Presenze', righeL.concat(righeA), 'non passano dalla banca');
+  return h || ricIntro('Nessuna voce fuori dai cedolini.');
+}
+
+/* ── Anomalie ──────────────────────────────────────────────────────── */
+function rcVistaAnomalie() {
+  const D = RC.dati, g = {};
+  D.anomalie.forEach(a => (g[a.tipo] = g[a.tipo] || []).push(a));
+  const ordine = ['possibile_duplicato', 'cedolino_senza_pagamento', 'da_verificare', 'parziale', 'pagamento_senza_cedolino', 'eccedente'];
+  const h = ordine.filter(t => g[t]).map(t => ricSez(RC_ANOM[t].t, g[t].length) + g[t].map(a => {
+    const chi = a.persona ? rcNome(a.persona) : a.controparte ? rcNome(a.controparte) : '';
+    const click = a.persona ? `rcPersona('${a.persona}')` : a.mov ? `rcMovimento('${esc(a.mov)}')` : '';
+    return `<button class="rc-q" ${click ? `onclick="${click}"` : ''}><div class="rc-q-h"><span>${rcChip(RC_ANOM[t].tono, chi || (a.data ? _rD(a.data) : '—'))}</span>${a.importo ? `<b>${_rE(a.importo)}</b>` : ''}</div><div class="rc-q-c">${esc(a.testo)}</div></button>`;
+  }).join('')).join('');
+  return h || ricIntro('Nessuna anomalia.');
+}
+
+/* ── Azioni ────────────────────────────────────────────────────────── */
+function rcAnteprima() {
+  const D = RC.dati, body = _sheetDinamico('sh-rc-a', 'Anteprima della ricostruzione');
+  openSheet('sh-rc-a');
+  const conf = D.decisioni.filter(d => d.azione === 'conferma' && d.tipo !== 'commissione');
+  const corr = D._nuoveProposte.filter(d => d.azione === 'correzione'), prop = D._nuoveProposte.filter(d => d.azione !== 'correzione');
+  const grp = (t, n, tono, nota, dentro) => `<details class="rc-mese ${tono}"><summary><div class="rc-mese-t"><b>${t}</b>${rcChip(tono, String(n))}</div><div class="rc-mese-n"><span>${esc(nota)}</span></div></summary>${dentro}</details>`;
+  const quote = lista => lista.slice(0, 300).map(d => rcQuotaHtml(d, true)).join('');
+  const aperti = D.anomalie.map(a => `<div class="rc-q"><div class="rc-q-c">${esc((a.persona ? rcNome(a.persona) + ': ' : a.controparte ? rcNome(a.controparte) + ': ' : '') + a.testo)}</div></div>`).join('');
+  body.innerHTML = ricIntro(`Il motore ha riletto tutto dal ${_rD(D.dal)}. Applicando, i <b>nuovi automatici</b> entrano subito; proposte e correzioni restano da confermare. Prima viene salvata una copia di sicurezza di tutti i collegamenti.`)
+    + grp('Già collegati e confermati', conf.length, 'ok', 'restano come sono', quote(conf))
+    + grp('Nuovi automatici', D._nuoviAuto.length, 'ok', 'si applicano da soli', quote(D._nuoviAuto))
+    + grp('Nuove proposte', prop.length, 'warn', 'da confermare', quote(prop))
+    + grp('Correzioni proposte', corr.length, 'warn', 'collegamenti di prima che il motore ritiene sbagliati', quote(corr))
+    + grp('Ancora aperti', D.anomalie.length, 'ko', 'cose che i dati non bastano a decidere', aperti)
+    + `<button class="btn-primary ric-cta" onclick="closeSheet('sh-rc-a');rcApplica()">Applica</button>`;
+}
+async function rcApplica() {
+  if (RC.occupato) return; RC.occupato = true;
+  toast('Applico… (copia di sicurezza in corso)');
+  try {
+    const { data, error } = await sb.functions.invoke('riconciliazione', { body: { azione: 'applica' } });
+    if (error || !data || data.errore) throw new Error((data && data.errore) || (error && error.message) || 'errore');
+    const c = data.conteggi || {};
+    toast(`Fatto: ${c.automatici || 0} collegamenti automatici, ${c.proposte || 0} proposte da confermare`);
+    await rcRidisegna();
+  } catch (e) { toast('Non riuscito: ' + e.message); }
+  finally { RC.occupato = false; }
+}
+async function rcDecidi(ids, scelta) {
+  if (!ids.length) return;
+  const { data, error } = await sb.rpc('ric_decidi', { p_ids: ids, p_scelta: scelta });
+  if (error) { toast('Non riuscito: ' + error.message); return; }
+  toast(scelta === 'conferma' ? `Confermat${ids.length > 1 ? 'i ' + ids.length : 'o'}` : 'Segnata come sbagliata: non verrà più proposta');
+  closeSheet('sh-rc-m');
+  await rcRidisegna();
+}
+async function rcRidisegna() {
+  await rcCarica(true); rcDisegna();
+  if (RC.personaAperta && $('sh-rc-p') && $('sh-rc-p').classList.contains('on') && RC.dati.conti[RC.personaAperta]) rcPersona(RC.personaAperta);
+}
+async function rcConfermaTutte() {
+  const ids = (RC.dati.proposte || []).map(r => r.id);
+  if (!ids.length) return;
+  if (!confirm(`Confermare tutte le ${ids.length} proposte? Ognuna resta annullabile dalla sua scheda.`)) return;
+  await rcDecidi(ids, 'conferma');
+}
+async function rcAnnulla(ids) {
+  if (!confirm('Annullare questo collegamento? Resta nello storico e il movimento torna da riconciliare.')) return;
+  const { data, error } = await sb.functions.invoke('riconciliazione', { body: { azione: 'annulla', ids } });
+  if (error || !data || data.errore) { toast('Non riuscito: ' + ((data && data.errore) || (error && error.message))); return; }
+  toast('Collegamento annullato');
+  closeSheet('sh-rc-m');
+  await rcRidisegna();
+}
+async function rcNonStipendio(movId) {
+  const motivo = prompt('Perché questo movimento non è uno stipendio? (facoltativo)', '');
+  if (motivo === null) return;
+  const { error } = await sb.from('presenze_riconciliazione_eccezioni').insert({ tipo: 'non_stipendio', movimento_banca_id: movId, motivo: motivo || null });
+  if (error) { toast('Non riuscito: ' + error.message); return; }
+  toast('Fatto: il motore non lo proporrà più come stipendio');
+  closeSheet('sh-rc-m'); await rcRidisegna();
+}
+async function rcCollegaManuale(movId) {
+  const D = RC.dati, mv = rcMov(movId);
+  const body = _sheetDinamico('sh-rc-c', 'Collega a mano');
+  openSheet('sh-rc-c');
+  const ids = Object.keys(D.persone).filter(id => D.persone[id].kind === 'profilo').sort((a, b) => rcNome(a).localeCompare(rcNome(b)));
+  const oggi = new Date(D.oggi), mesi = [];
+  for (let i = 0; i < 12; i++) { const d = new Date(oggi.getFullYear(), oggi.getMonth() - i, 1); mesi.push([d.getFullYear(), d.getMonth() + 1]); }
+  const mvD = mv ? new Date(mv.data) : oggi, sugg = new Date(mvD.getFullYear(), mvD.getMonth() - 1, 1);
+  const dp = D.decisioni.find(d => d.mov === movId && d.persona && D.persone[d.persona] && D.persone[d.persona].kind === 'profilo');
+  body.innerHTML = (mv ? ricMovHtml(rcMovPerRic(mv)) : '')
+    + `<label class="rc-lbl">Persona<select id="rc-c-p">${ids.map(id => `<option value="${id}"${dp && dp.persona === id ? ' selected' : ''}>${esc(rcNome(id))}</option>`).join('')}</select></label>
+       <label class="rc-lbl">Mese del cedolino<select id="rc-c-m">${mesi.map(([a, m]) => `<option value="${a}-${m}"${a === sugg.getFullYear() && m === sugg.getMonth() + 1 ? ' selected' : ''}>${_rPc(m, a)}</option>`).join('')}</select></label>
+       <label class="rc-lbl">Importo<input id="rc-c-i" type="text" inputmode="decimal" value="${mv ? String(Math.abs(mv.imp)).replace('.', ',') : ''}"></label>
+       <button class="btn-primary ric-cta" onclick="rcCollegaSalva('${esc(movId)}')">Collega</button>`;
+}
+async function rcCollegaSalva(movId) {
+  const persona = $('rc-c-p').value, [anno, mese] = $('rc-c-m').value.split('-').map(Number);
+  const importo = parseFloat(String($('rc-c-i').value).replace(/\./g, '').replace(',', '.'));
+  if (!(importo > 0)) { toast('Importo non valido'); return; }
+  const tipo = (RC.dati.persone[persona] || {}).tipo === 'admin' ? 'compenso_admin' : 'cedolino';
+  const { data, error } = await sb.functions.invoke('riconciliazione', { body: { azione: 'collega', mov: movId, persona, anno, mese, importo, tipo } });
+  if (error || !data || data.errore) { toast('Non riuscito: ' + ((data && data.errore) || (error && error.message))); return; }
+  toast('Collegato');
+  closeSheet('sh-rc-c'); closeSheet('sh-rc-m');
+  await rcRidisegna();
+}
+
+/* ── Report Excel Dare/Avere ───────────────────────────────────────── */
+async function rcExcel() {
+  try { await rcCarica(false); } catch (e) { toast(e.message); return; }
+  const D = RC.dati, wb = XLSX.utils.book_new();
+  const H = { font: { bold: true, color: { rgb: 'FFFFFF' } }, fill: { fgColor: { rgb: '1F2937' } }, alignment: { vertical: 'center', wrapText: true } };
+  const EUR = '#,##0.00 €;[Red]-#,##0.00 €';
+  function foglio(nome, intest, righe, larg, colEuro) {
+    const ws = XLSX.utils.aoa_to_sheet([intest].concat(righe));
+    intest.forEach((_, c) => { const r = XLSX.utils.encode_cell({ r: 0, c }); if (ws[r]) ws[r].s = H; });
+    (colEuro || []).forEach(c => { for (let r = 1; r <= righe.length; r++) { const ref = XLSX.utils.encode_cell({ r, c }); if (ws[ref] && typeof ws[ref].v === 'number') ws[ref].z = EUR; } });
+    ws['!cols'] = larg.map(w => ({ wch: w }));
+    ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: righe.length, c: intest.length - 1 } }) };
+    XLSX.utils.book_append_sheet(wb, ws, nome);
+  }
+  const conti = Object.values(D.conti).sort((a, b) => rcNome(a.persona).localeCompare(rcNome(b.persona)));
+  const tot = conti.reduce((t, c) => ({ dare: t.dare + c.dare, avere: t.avere + c.avere, prop: t.prop + c.proposto }), { dare: 0, avere: 0, prop: 0 });
+  const reg = D.registro || [], nAuto = reg.filter(r => r.origine === 'auto').length, nMano = reg.length - nAuto;
+  const ced = (D.cedolini || []).filter(c => c.anno * 100 + c.mese >= +D.dal.slice(0, 4) * 100 + +D.dal.slice(5, 7));
+  // 1. Riepilogo
+  foglio('Riepilogo', ['Voce', 'Valore'], [
+    ['Periodo', _rD(D.dal) + ' → ' + _rD(D.oggi)],
+    ['Banca letta fino al', Object.keys(D.banca_fino_al || {}).map(k => k + ' ' + _rD(D.banca_fino_al[k])).join(' · ')],
+    ['Totale Dare (netto cedolini)', tot.dare], ['Totale Avere (bonifici collegati)', tot.avere], ['Saldo (Dare − Avere)', tot.dare - tot.avere],
+    ['In attesa di conferma', tot.prop],
+    ['Cedolini nel periodo', ced.length], ['Pagamenti collegati', reg.length],
+    ['di cui automatici', nAuto], ['di cui confermati a mano', nMano],
+    ['Proposte da confermare', (D.proposte || []).length], ['Anomalie', D.anomalie.length],
+  ], [36, 44], [1]);
+  // 2. Per persona
+  foglio('Per persona', ['Persona', 'Ruolo', 'Dare', 'Avere', 'Saldo', 'Da confermare', 'Stato'], conti.map(c => {
+    const p = D.persone[c.persona] || {};
+    const st = Math.abs(c.saldo) < 1 ? 'Riconciliato' : c.mesi.some(m => m.stato === 'probabile') ? 'Probabile — verifica' : c.saldo > 0 ? 'Saldo aperto' : 'Pagato in più';
+    return [rcNome(c.persona), p.tipo === 'admin' ? 'Amministratore' : 'Dipendente', c.dare, c.avere, c.saldo, c.proposto, st];
+  }), [26, 15, 13, 13, 13, 14, 20], [2, 3, 4, 5]);
+  // 3. Dettaglio per cedolino
+  const cedK = {}; (D.cedolini || []).forEach(c => { cedK[c.persona + '|' + c.anno + '|' + c.mese] = c; });
+  const det = [];
+  conti.forEach(c => c.mesi.forEach(m => {
+    const cd = cedK[c.persona + '|' + m.anno + '|' + m.mese] || {};
+    const movs = m.quote.map(q => { const mv = rcMov(q.mov); return mv ? _rD(mv.data) + ' ' + _rE(q.importo) : _rE(q.importo); }).join('; ');
+    const aff = m.quote.length ? (m.quote.every(q => q.azione === 'conferma' || q.livello === 'auto') ? 'alta' : 'da verificare') : '—';
+    det.push([rcNome(c.persona), _rPc(m.mese, m.anno), m.dare, cd.inviato === false ? 'in attesa di invio' : 'inviato', m.quote.length, movs, m.avere, m.saldo, (RC_STATO[m.stato] || {}).t || m.stato, aff, m.dare - m.avere]);
+  }));
+  foglio('Dettaglio', ['Persona', 'Periodo', 'Cedolino (netto)', 'Invio cedolino', 'N. pagamenti', 'Pagamenti', 'Avere', 'Saldo', 'Stato', 'Affidabilità', 'Differenza'], det,
+    [24, 15, 14, 16, 11, 40, 13, 13, 20, 13, 13], [2, 6, 7, 10]);
+  // 4. Movimenti
+  const movR = [];
+  const aggiungi = (x, origine, motivi, stato) => {
+    const mv = rcMov(x.mov) || {};
+    movR.push([mv.data ? _rD(mv.data) : '', mv.imp != null ? mv.imp : null, mv.banca || '', mv.benef || '', mv.causale || '', mv.iban || '', mv.rif || '', x.mov,
+      x.persona ? rcNome(x.persona) : x.controparte ? rcNome(x.controparte) : '', x.mese ? _rPc(x.mese, x.anno) : '', RC_TIPO[x.tipo] || x.tipo, x.imp != null ? x.imp : x.importo, origine, stato, (motivi || []).join(' · '), mv.desc || '']);
+  };
+  reg.forEach(r => aggiungi(r, r.origine === 'auto' ? 'automatico' : r.origine === 'legacy' ? 'collegato a mano' : 'confermato', r.motivi, 'Riconciliato'));
+  (D.proposte || []).forEach(r => aggiungi(r, 'proposta', r.motivi, 'Probabile — verifica'));
+  D._nuoviAuto.concat(D._nuoveProposte).forEach(d => aggiungi(d, d.livello === 'auto' ? 'automatico (da applicare)' : 'proposta (da applicare)', d.motivi, d.livello === 'auto' ? 'Riconciliato' : 'Probabile — verifica'));
+  movR.sort((a, b) => String(a[7]).localeCompare(String(b[7])));
+  foglio('Movimenti', ['Data', 'Importo movimento', 'Banca', 'Beneficiario', 'Causale', 'IBAN', 'Riferimento', 'ID movimento', 'Collegato a', 'Mese', 'Tipo', 'Quota', 'Origine', 'Stato', 'Perché', 'Testo della banca'], movR,
+    [11, 14, 8, 26, 30, 29, 14, 30, 22, 14, 16, 12, 18, 18, 50, 60], [1, 11]);
+  // 5. Altre voci
+  const alt = D.decisioni.filter(d => d.azione !== 'correzione' && ['finanziamento_soci', 'altra_voce', 'altro', 'fuori_periodo', 'rimborso_spese'].includes(d.tipo)).map(d => {
+    const mv = rcMov(d.mov) || {};
+    return [RC_TIPO[d.tipo] || d.tipo, rcNome(d.persona || d.controparte), mv.data ? _rD(mv.data) : '', mv.imp > 0 ? 'entrata' : 'uscita', d.importo, mv.benef || '', mv.causale || '', (d.motivi || []).join(' · ')];
+  });
+  ((D.altre && D.altre.liquidazioni) || []).filter(l => +l.contanti > 0).forEach(l => alt.push(['Liquidazione in contanti', rcNome(l.dipendente_id), _rPc(l.mese, l.anno), 'contanti', +l.contanti, '', 'netto ' + _rE(l.importo_netto || 0) + ', bonifico ' + _rE(l.bonifico || 0), 'registrato in Presenze']));
+  ((D.altre && D.altre.acconti) || []).filter(a => a.modalita === 'contanti').forEach(a => alt.push(['Acconto in contanti', rcNome(a.dipendente_id), _rD(a.data), 'contanti', +a.importo, '', a.causale || '', 'registrato in Presenze']));
+  foglio('Altre voci', ['Voce', 'Persona', 'Data', 'Verso', 'Importo', 'Beneficiario', 'Causale', 'Note'], alt, [22, 24, 13, 10, 13, 26, 34, 50], [4]);
+  // 6. Anomalie
+  foglio('Anomalie', ['Tipo', 'Persona', 'Mese', 'Data', 'Importo', 'Descrizione', 'ID movimento'], D.anomalie.map(a => [
+    (RC_ANOM[a.tipo] || {}).t || a.tipo, a.persona ? rcNome(a.persona) : a.controparte ? rcNome(a.controparte) : '', a.mese ? _rPc(a.mese, a.anno) : '', a.data ? _rD(a.data) : '', a.importo != null ? a.importo : null, a.testo, a.mov || '',
+  ]), [26, 24, 14, 12, 13, 70, 30], [4]);
+  XLSX.writeFile(wb, 'Riconciliazione stipendi ' + D.oggi + '.xlsx');
+}
+
+/* ── Ingressi: i tasti di prima aprono la nuova riconciliazione ────── */
+ricPanoramica = function () { return rcApri('persone'); };
+apriRiconciliazioneBonifici = function () { return rcApri('verifica'); };
+apriEsportaRiconciliazione = function () { return rcExcel(); };
 </script>
 </body>
 </html>
