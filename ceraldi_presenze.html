@@ -3292,7 +3292,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     <button class="hdr-btn" id="tb-back" style="display:none" aria-label="Indietro"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
     <div class="tb-titles">
       <h1 id="tb-title">Presenze</h1>
-      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v69</span></p>
+      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v70</span></p>
     </div>
     <span class="topbar-badge" id="role-badge"></span>
     <div class="hdr-actions">
@@ -32342,6 +32342,87 @@ if (typeof apriControlloMensile === 'function') {
 
 try { if (KIOSK) { const c = $('md-home-card'); if (c) c.remove(); } } catch (e) {}
 try { if (navigator.serviceWorker && navigator.serviceWorker.startMessages) navigator.serviceWorker.startMessages(); } catch (e) {}
+
+/* ══════════════════════════════════════════════════════════════════
+   07/10/2026 — STIPENDI SENZA SCORRIMENTO INFINITO
+   • Una scheda aperta alla volta: aprendone una, l'altra si chiude e la
+     pagina si porta in cima alla scheda appena aperta.
+   • Nella scheda aperta la testata (nome, importo) resta FISSA in alto
+     mentre scorri, con ‹ › per passare al dipendente precedente/
+     successivo e ▴ per chiudere, senza tornare su.
+   • Pagamenti e acconti: si vedono gli ultimi 3, gli altri con
+     "Mostra tutti" (il totale è sempre in testa alla sezione).
+   ══════════════════════════════════════════════════════════════════ */
+(function () {
+  if (typeof toggleStipCard !== 'function') return;
+  const _togUno = toggleStipCard;
+  toggleStipCard = function (id) {
+    const det = $('stip-det-' + id);
+    const apre = !!det && det.style.display === 'none';
+    if (apre) [...ST26.aperte].forEach(o => { if (o !== id) { const d2 = $('stip-det-' + o); if (d2 && d2.style.display !== 'none') _togUno(o); } });
+    _togUno.apply(this, arguments);
+    if (apre) { stCompattaMovimenti(id); requestAnimationFrame(() => stPortaInCima(id)); }
+  };
+})();
+function stPortaInCima(id) {
+  const card = $('stc-' + id), pg = $('pg-stipendi'); if (!card || !pg) return;
+  const y = card.getBoundingClientRect().top - pg.getBoundingClientRect().top + pg.scrollTop - 8;
+  pg.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+}
+function stSchedeVisibili() { return [...document.querySelectorAll('#stipendi-list .st-card')].filter(c => c.offsetParent !== null); }
+function stVai(id, dir, ev) {
+  if (ev) ev.stopPropagation();
+  const lista = stSchedeVisibili(), i = lista.findIndex(c => c.id === 'stc-' + id), alt = lista[i + dir];
+  if (!alt) { toast(dir > 0 ? 'È l\'ultimo dipendente' : 'È il primo dipendente'); return; }
+  toggleStipCard(alt.id.slice(4));
+}
+function stChiudi(id, ev) { if (ev) ev.stopPropagation(); const det = $('stip-det-' + id); if (det && det.style.display !== 'none') toggleStipCard(id); stPortaInCima(id); }
+// pulsanti ‹ ▴ › nella testata di ogni scheda (visibili solo da aperta)
+function stAggiungiNav() {
+  document.querySelectorAll('#stipendi-list .st-card').forEach(card => {
+    const top = card.querySelector('.st-top'); if (!top || top.querySelector('.st-nav')) return;
+    const id = card.id.slice(4);
+    top.insertAdjacentHTML('beforeend', `<div class="st-nav"><button type="button" title="Dipendente precedente" onclick="stVai('${id}',-1,event)">‹</button><button type="button" title="Chiudi" onclick="stChiudi('${id}',event)">▴</button><button type="button" title="Dipendente successivo" onclick="stVai('${id}',1,event)">›</button></div>`);
+  });
+}
+// movimenti lunghi: restano visibili gli ultimi 3
+function stCompattaMovimenti(id) {
+  const card = $('stc-' + id); if (!card) return;
+  const gruppi = [];
+  card.querySelectorAll('.st-sez').forEach(sez => { const m = [...sez.children].filter(x => x.classList && x.classList.contains('st-mov')); if (m.length) gruppi.push(m); });
+  card.querySelectorAll('.st-aparte').forEach(ap => { const m = [...ap.children].filter(x => x.classList && x.classList.contains('st-mov')); if (m.length) gruppi.push(m); });
+  gruppi.forEach(m => {
+    if (m.length <= 4 || m[0].parentNode.querySelector(':scope > .st-piu')) return;
+    const nasc = m.slice(0, m.length - 3);
+    nasc.forEach(x => x.classList.add('st-mov-nasc'));
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'st-piu';
+    b.textContent = 'Mostra tutti i ' + m.length + ' movimenti (' + nasc.length + ' più vecchi) ▾';
+    b.onclick = (e) => {
+      e.stopPropagation();
+      const aperto = b.dataset.aperto === '1';
+      nasc.forEach(x => x.classList.toggle('st-mov-nasc', aperto));
+      b.dataset.aperto = aperto ? '' : '1';
+      b.textContent = aperto ? 'Mostra tutti i ' + m.length + ' movimenti (' + nasc.length + ' più vecchi) ▾' : 'Nascondi i più vecchi ▴';
+    };
+    m[0].parentNode.insertBefore(b, m[0]);
+  });
+}
+(function () {
+  const lista = document.getElementById('stipendi-list'); if (!lista || typeof MutationObserver === 'undefined') return;
+  new MutationObserver(() => { stAggiungiNav(); [...ST26.aperte].forEach(stCompattaMovimenti); }).observe(lista, { childList: true });
+  const st = document.createElement('style');
+  st.textContent = `.st-card.aperta{overflow:visible}
+  .st-card.aperta .st-top{position:sticky;top:-14px;z-index:6;background:var(--card,var(--surface));border-radius:16px 16px 0 0;box-shadow:0 6px 14px -10px rgba(0,0,0,.35)}
+  .st-nav{display:none;gap:4px;flex-shrink:0}
+  .st-card.aperta .st-nav{display:flex}
+  .st-card.aperta .st-dx span,.st-card.aperta .st-dx small{display:none}
+  .st-nav button{width:32px;height:32px;border-radius:10px;border:0;background:var(--surface2);color:var(--text);font-size:17px;font-weight:800;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center}
+  .st-nav button:active{transform:scale(.94)}
+  .st-mov-nasc{display:none!important}
+  .st-piu{width:100%;margin:2px 0 6px;padding:9px;border-radius:10px;border:1px dashed var(--border);background:none;color:var(--accent);font:inherit;font-size:13px;font-weight:700;cursor:pointer}
+  @media (max-width:380px){.st-card.aperta .st-av{display:none}}`;
+  document.head.appendChild(st);
+})();
 
 /* ══════════════════════════════════════════════════════════════════
    07/10/2026 — FACE ID / IMPRONTA PER ENTRARE (solo amministratori)
