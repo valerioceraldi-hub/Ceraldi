@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.15.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.16.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -18837,7 +18837,7 @@ function _riconSezHeader(key, iconaTitolo, colore){
 //    Da dicembre 2025 Leasys è pagata con bonifici, non più con SDD: la regola vale solo per gli addebiti SDD.
 var _REGOLE_ADDEBITO = [
   {k:'ald',    nome:'Ayvens (ALD Automotive)', re:/ald\s+automotive|ayvens/i, mesi:2, ecc:[]},
-  {k:'arval',  nome:'Arval',                   re:/arval/i,                   mesi:2, ecc:[{re:/^FT/i, mesi:1}]},
+  {k:'arval',  nome:'Arval',                   re:/arval/i,                   mesi:1, ecc:[]},   // 10/10: come scritto in fattura (scadenza il 1° del mese dopo)
   {k:'leasys', nome:'Leasys',                  re:/leasys/i,                  mesi:2, ecc:[]}
 ];
 function _regolaAddebito(testo){ var t=String(testo||''); for(var i=0;i<_REGOLE_ADDEBITO.length;i++) if(_REGOLE_ADDEBITO[i].re.test(t)) return _REGOLE_ADDEBITO[i]; return null; }
@@ -18850,8 +18850,9 @@ function _dataAddebitoAttesa(fornitore, numero, dataFattura){
   return _ceIso(_fsLavorativo(t));
 }
 // L'addebito del giorno dataMov è quello previsto per questa fattura? (tolleranza: 6 giorni)
-function _addebitoCoerente(fornitore, numero, dataFattura, dataMov){
-  var att=_dataAddebitoAttesa(fornitore, numero, dataFattura); if(!att || !dataMov) return true;
+// Se la fattura ha la sua scadenza (letta dall'XML), vale quella: la regola serve solo quando manca.
+function _addebitoCoerente(fornitore, numero, dataFattura, dataMov, scadenza){
+  var att=(scadenza && /^\d{4}-\d{2}-\d{2}/.test(String(scadenza))) ? String(scadenza).slice(0,10) : _dataAddebitoAttesa(fornitore, numero, dataFattura); if(!att || !dataMov) return true;
   return Math.abs(new Date(att+'T12:00:00')-new Date(String(dataMov).slice(0,10)+'T12:00:00'))/86400000 <= 6;
 }
 // Alla registrazione di una nuova fattura di questi fornitori: metodo SDD, da pagare, scadenza attesa
@@ -19378,7 +19379,7 @@ function renderRiconciliazione(){
     if(isSDD){
       var _rgM=_regolaAddebito(m.descrizione);
       if(_rgM){
-        var _setR=fattCandidatiMov.filter(function(x){ return !fattIdUsate.has(x.id) && x.tipo!=='nota_credito' && _regolaAddebito(x.fornitore)===_rgM && _addebitoCoerente(x.fornitore,x.numero,x.data,m.data); });
+        var _setR=fattCandidatiMov.filter(function(x){ return !fattIdUsate.has(x.id) && x.tipo!=='nota_credito' && _regolaAddebito(x.fornitore)===_rgM && _addebitoCoerente(x.fornitore,x.numero,x.data,m.data,x.scadenza); });
         var _sommaR=Math.round(_setR.reduce(function(t,x){ return t+nettoFattura(x); },0)*100)/100;
         if(_setR.length && Math.abs(_sommaR-imp)<=0.02){
           if(_setR.length===1){ matchCerto=_setR[0]; verificato=false; }
@@ -34128,7 +34129,8 @@ async function ricvCaricaContesto(forza){
     }catch(e){}
     rows.forEach(function(r){
       var mid = String(r.movimento_id);
-      if(r.ambito === 'fatture'){ if(r.stato === 'rifiutato') ctx.rif[mid + '|' + r.evento_ref] = r.id; return; }
+      if(r.stato === 'rifiutato'){ ctx.rif[mid + '|' + r.evento_ref] = r.id; return; }
+      if(r.ambito === 'fatture') return;
       if(r.stato !== 'attivo') return;
       if(r.ambito === 'stipendi'){ (ctx.stip[mid] = ctx.stip[mid] || []).push({ nome: ctx.nomi[r.persona_id] || 'dipendente', mese: r.mese, anno: r.anno, importo: +r.importo || 0, tipo: r.evento_tipo }); return; }
       var cat = null, mot = Array.isArray(r.motivi) ? r.motivi : [];
@@ -34139,6 +34141,7 @@ async function ricvCaricaContesto(forza){
   }catch(e){ ctx.pronto = false; console.warn('ric v2 contesto:', e); }
   try{ var rg = await sbFetch('ceraldi_stato_condiviso?id=eq.ric_regole_categorie&select=data'); ctx.regole = (rg && rg[0] && rg[0].data && rg[0].data.regole) || {}; }catch(e){}
   try{ if(!window._rcPronto && typeof _rcCarica === 'function') await _rcCarica(); }catch(e){}
+  try{ ctx.paghe = await ricvCaricaPaghe(); }catch(e){ ctx.paghe = null; }
   RICV.ctx = ctx; RICV.inCarica = false; RICV.memo = null; ricInvalida();
   return ctx;
 }
@@ -34397,7 +34400,13 @@ function ricvProposte(M, idx, ctx){
     var rif = (rata && rata.data) || f.scadenza || f.data, gg = rif ? ricvGiorni(rif, M.data) : 0, ggDoc = f.data ? ricvGiorni(f.data, M.data) : 0;
     var tip = I.ritardi[fk], scarto = Math.abs(gg - (tip != null ? tip : 20));
     if(tipo === 'sdd' && ggDoc < -1 && !(tip != null && tip < 0 && ggDoc >= tip - 10)) return;   // un addebito non arriva prima della fattura (salvo fornitori che addebitano prima)
-    if(tipo === 'sdd' && typeof _regolaAddebito === 'function' && _regolaAddebito(f.fornitore)){
+    // data di pagamento scritta in fattura (vince sempre); se manca, la regola del contratto
+    var scadF = /^\d{4}-\d{2}-\d{2}/.test(String(f.scadenza || '')) ? String(f.scadenza).slice(0, 10) : '';
+    if(scadF && !rata){
+      var dsc = Math.abs(ricvGiorni(scadF, M.data));
+      if(dsc <= 6){ punti += 20; motivi.push('Pagato alla scadenza scritta in fattura (' + ricGg(scadF) + ')'); }
+      else if(tipo === 'sdd' && dsc > 20){ punti -= 20; motivi.push('In fattura la scadenza è il ' + ricGg(scadF)); }
+    } else if(tipo === 'sdd' && typeof _regolaAddebito === 'function' && _regolaAddebito(f.fornitore)){
       var regola = _regolaAddebito(f.fornitore), attesa = _dataAddebitoAttesa(f.fornitore, f.numero, f.data);
       if(_addebitoCoerente(f.fornitore, f.numero, f.data, M.data)){ punti += 15; motivi.push('Addebito nel mese previsto per ' + regola.nome + ' (' + ricGg(attesa) + ')'); }
       else { punti -= 15; motivi.push('Per ' + regola.nome + ' l\'addebito di questa fattura era atteso il ' + ricGg(attesa)); }
@@ -34492,6 +34501,17 @@ function ricvClassifica(M, idx, ctx, extra){
           // il resto corrisponde a una fattura citata nella causale ma già pagata con un altro movimento: pagata due volte
           var I2 = ricvImpara(idx), doppia = null;
           (M.descrizione.match(/[A-Za-z0-9][A-Za-z0-9\/_-]*\d[A-Za-z0-9\/_-]*/g) || []).forEach(function(tok){ ricvNormNum(tok).forEach(function(kk){ (I2.numeri[kk] || []).forEach(function(f){ if(!doppia && !gia[String(f.id)] && Math.abs(Math.abs(+f.importo || 0) - q.libero) <= A && !ricvAperti(idx).bis[String(f.id)]) doppia = f; }); }); });
+          // numeri citati nella causale che non sono a registro: la fattura mancante
+          if(!doppia && /fatt|\bft\.?\s|\bfatture\b|\bsaldo\b/i.test(M.descrizione)){
+            var tuttiNum = Object.keys(I2.numeri);
+            var mancanti = [];
+            (M.descrizione.match(/\b[A-Za-z]{0,4}\d[\w\/-]{4,}\b/g) || []).forEach(function(tok){ if(/^(mb0b|mbvt|it\d\d)/i.test(tok) || /^\d{2}[\/.-]\d{2}[\/.-]\d{2,4}$/.test(tok)) return; var nn = ricvNormNum(tok); if(!nn.length || nn.some(function(kk){ return I2.numeri[kk] || (kk.length >= 8 && tuttiNum.some(function(t){ return t.indexOf(kk) === 0; })); })) return; if(mancanti.indexOf(tok) < 0) mancanti.push(tok); });
+            var giaNum = {}; S.docs.forEach(function(x){ ricvNormNum(x.f.numero).forEach(function(kk){ giaNum[kk] = 1; }); });
+            mancanti = mancanti.filter(function(tok){ return !ricvNormNum(tok).some(function(kk){ return giaNum[kk]; }) && /\d{4,}/.test(tok) && !/^\d{1,3}$/.test(tok) && ricvNormNum(tok)[0].length >= 5 && !/^20\d\d$/.test(tok) && !/contr|cod/i.test(tok); });
+            var contratti = (M.descrizione.match(/contr\.?\s*(\d+)/i) || [])[1];
+            if(contratti) mancanti = mancanti.filter(function(t){ return t !== contratti; });
+            if(mancanti.length) S.avvisi.forEach(function(a){ if(a.cod === 'movimento_avanza'){ a.t = mancanti.length === 1 ? 'Manca la fattura n° ' + mancanti[0] : 'Mancano ' + mancanti.length + ' fatture citate nella causale'; a.s = 'La causale cita ' + (mancanti.length === 1 ? 'la n° ' + mancanti[0] : 'le n° ' + mancanti.join(', ')) + ', che non ' + (mancanti.length === 1 ? 'è' : 'sono') + ' a registro: ' + (mancanti.length === 1 ? 'probabilmente è lei' : 'probabilmente sono loro') + ' i ' + ricEur(q.libero) + ' senza documento. Caricala dal cassetto fiscale: la collego io.'; } });
+          }
           if(doppia){ var pr = (ricConti(doppia).prove || []).filter(function(p){ return p.importo > 0.009; })[0];
             S.avvisi.forEach(function(a){ if(a.cod === 'movimento_avanza'){ a.liv = 'ko'; a.t = 'Fattura n° ' + doppia.numero + ' pagata due volte?'; a.s = 'La causale cita anche la n° ' + doppia.numero + ' (' + ricEur(q.libero) + '), che risulta già pagata' + (pr && pr.data ? ' il ' + ricGg(pr.data) : '') + '. Se è così, ' + ricEur(q.libero) + ' vanno chiesti indietro a ' + ricvBello(doppia.fornitore || '') + ' o scalati dalla prossima fattura.'; } }); }
         }
@@ -34506,6 +34526,11 @@ function ricvClassifica(M, idx, ctx, extra){
     var st = ctx.stip[String(M.id)];
     S.gruppo = 'non'; S.cat = 'stipendio';
     S.perche = 'Collegato in Presenze: ' + st.map(function(x){ return x.nome + (x.mese ? ' (' + (PN_MESI_L[x.mese - 1] || x.mese) + ')' : ''); }).join(', ');
+    return S;
+  }
+  // 2b) stipendio riconosciuto in Presenze (busta, acconto o saldo con lo stesso importo)
+  if(extra.stip && extra.stip[M.key]){
+    S.gruppo = 'conferma'; S.cat = 'stipendio'; S.proposte = extra.stip[M.key]; S.liv = S.proposte[0].livello; S.perche = S.proposte[0].motivi.join(' · ');
     return S;
   }
   // 3) categoria scelta (o agganciata dal registro: commissioni del bonifico)
@@ -34666,7 +34691,22 @@ function ricvCalcola(){
     if(ok.length < prop[k].length){ ok = ok.slice(); var l0 = ok[0]; if(l0.livello === 'certo' && prop[k][0] !== l0) l0.livello = 'probabile'; }
     risolte[k] = ok;
   });
-  var extra = { rimborsi: rimborsi, senzaFattura: senzaFattura, restituzioni: restituzioni, proposte: risolte, contesi: contesi, ncDoppia: ncDoppia };
+  // stipendi: un pagamento atteso in Presenze va a un solo bonifico (vince il più convincente)
+  var stipP = {};
+  if(ctx.paghe && ctx.paghe.ok){
+    var codaS = [];
+    tutti.forEach(function(M){
+      if(!(M.importo < 0) || M.fonte !== 'banca' || !liberoE(M) || ctx.stip[String(M.id)] || restituzioni[M.key]) return;
+      var cc0 = ctx.cat[String(M.id)]; if(cc0 && cc0.cat !== 'stipendio') return;
+      if(risolte[M.key] && risolte[M.key][0].livello === 'certo') return;
+      var ca0 = ricvCatM(M, ctx); if(ca0 && ca0.cat !== 'stipendio') return;
+      var Ps = ricvStipProposte(M, ctx); if(Ps.length) codaS.push({ k: M.key, P: Ps });
+    });
+    codaS.sort(function(a, b){ return b.P[0].punti - a.P[0].punti; });
+    var presaS = {};
+    codaS.forEach(function(x){ var ok = x.P.filter(function(P){ return !presaS[P.stip.attesa.id]; }); if(!ok.length) return; presaS[ok[0].stip.attesa.id] = 1; stipP[x.k] = ok; });
+  }
+  var extra = { rimborsi: rimborsi, senzaFattura: senzaFattura, restituzioni: restituzioni, proposte: risolte, contesi: contesi, ncDoppia: ncDoppia, stip: stipP };
   var stati = {};
   tutti.forEach(function(M){ try{ stati[M.key] = ricvClassifica(M, idx, ctx, extra); }catch(e){ stati[M.key] = { M: M, gruppo: 'capire', titolo: ricvTitolo(M), tipo: ricvTipo(M), perche: 'Errore nel calcolo: ' + (e.message || e), docs: [], proposte: [], avvisi: [] }; } });
   // impara dalle scelte: lo stesso beneficiario finisce nella stessa categoria
@@ -34781,6 +34821,7 @@ async function ricvCollega(key, docs, opz){
 async function ricvConfermaProposta(key, i){
   var S = ricvCalcola().stati[key]; if(!S || !S.proposte[i]) return;
   var P = S.proposte[i], prima = RICV.annulla.length;
+  if(P.stip){ var okS = await ricvCollegaStipendio(key, P.stip); if(okS){ pnChiudi('ricvMov'); ricvRidisegna(); } return; }
   var ok = await ricvCollega(key, P.docs, { muto: !!P.spostaDa });
   if(ok && P.spostaDa){
     // la nota era collegata per errore a un'uscita: tolgo quel collegamento (un solo «Annulla» per tutto)
@@ -34806,11 +34847,11 @@ async function ricvCompleta(key){
   if(ok){ pnChiudi('ricvMov'); ricvRidisegna(); }
 }
 async function ricvConfermaCerti(){
-  var st = ricvCalcola().stati, F = ricvFiltri(), L = Object.keys(st).map(function(k){ return st[k]; }).filter(function(S){ return S.gruppo === 'conferma' && S.liv === 'certo' && ricvNelFiltro(S.M, F); });
+  var st = ricvCalcola().stati, F = ricvFiltri(), L = Object.keys(st).map(function(k){ return st[k]; }).filter(function(S){ return S.gruppo === 'conferma' && S.liv === 'certo' && !(S.proposte[0] && S.proposte[0].stip) && ricvNelFiltro(S.M, F); });
   if(!L.length) return;
   if(!confirm('Collego ' + L.length + (L.length === 1 ? ' movimento sicuro' : ' movimenti sicuri') + ' ai documenti trovati?\n\nOgni collegamento si può annullare.')) return;
   var ok = 0, prima = RICV.annulla.length;
-  for(var i = 0; i < L.length; i++){ if(await ricvCollega(L[i].M.key, L[i].proposte[0].docs, { muto: true })) ok++; }
+  for(var i = 0; i < L.length; i++){ var P0 = L[i].proposte[0]; if(P0.stip ? await ricvCollegaStipendio(L[i].M.key, P0.stip, { muto: true }) : await ricvCollega(L[i].M.key, P0.docs, { muto: true })) ok++; }
   // un solo «Annulla» per tutto il blocco
   var blocco = RICV.annulla.splice(prima);
   if(blocco.length) ricvPushAnnulla(blocco.length + ' collegamenti sicuri', async function(){ for(var j = blocco.length - 1; j >= 0; j--) await blocco[j].fn(); });
@@ -34821,6 +34862,12 @@ async function ricvConfermaCerti(){
 async function ricvRifiuta(key, i){
   var S = ricvCalcola().stati[key]; if(!S || !S.proposte[i]) return;
   var M = S.M, ids = [];
+  if(S.proposte[i].stip){
+    var at = S.proposte[i].stip.attesa;
+    try{ var rs = await sbFetch('ric_collegamenti', { method: 'POST', headers: { 'Prefer': 'return=representation' }, body: JSON.stringify({ ambito: 'banca', movimento_id: String(M.id), movimento_fonte: 'banca', movimento_data: M.data || null, evento_tipo: 'cedolino', evento_ref: 'stip:' + at.id, importo: Math.abs(M.importo), livello: 'proposta', origine: 'manuale', stato: 'rifiutato', motivi: ['stipendio proposto e rifiutato in Fatture'] }) });
+      if(rs && rs[0] && rs[0].id) ids.push(rs[0].id); if(RICV.ctx) RICV.ctx.rif[String(M.id) + '|stip:' + at.id] = (rs && rs[0] && rs[0].id) || 1; }
+    catch(e){ toast('❌ Non salvato: ' + (e.message || e), { forza: true }); return; }
+  }
   for(var j = 0; j < S.proposte[i].docs.length; j++){
     var f = S.proposte[i].docs[j].f;
     try{
@@ -34984,9 +35031,15 @@ function ricvRender(){
   var G = RICV_GRUPPI.find(function(x){ return x.k === g; });
   h += '<div class="rv-lista-h"><h3>' + G.t + '</h3>' + ({ conferma: '<small>il più sicuro in cima</small>', sistemare: '<small>una decisione per riga</small>', capire: '<small>manca il documento?</small>', non: '<small>raggruppati da soli</small>', fatto: '<small>i più recenti</small>' })[g] + '</div>';
   if(g === 'conferma'){
-    var certi = per.conferma.filter(function(S){ return S.liv === 'certo'; }).length;
+    var confDoc = per.conferma.filter(function(S){ return !(S.proposte[0] && S.proposte[0].stip); }), confSt = per.conferma.filter(function(S){ return S.proposte[0] && S.proposte[0].stip; });
+    var certi = confDoc.filter(function(S){ return S.liv === 'certo'; }).length;
     if(certi > 1) h += '<button class="sk-btn prim big" onclick="ricvConfermaCerti()">Conferma i ' + certi + ' sicuri</button>';
-    h += ricvRighe(per.conferma);
+    if(confDoc.length || !confSt.length) h += ricvRighe(confDoc);
+    if(confSt.length){
+      var stCerti = confSt.filter(function(S){ return S.liv === 'certo'; }).length;
+      h += '<details class="rv-det"' + (confDoc.length ? '' : ' open') + '><summary><b>Stipendi da collegare in Presenze · ' + confSt.length + '</b><small>Dipendente e mese riconosciuti dal nome nella causale, dall\'importo della busta o dell\'acconto.</small></summary>' +
+        (stCerti > 1 ? '<button class="sk-btn prim big" onclick="ricvConfermaStipendi()">Collega i ' + stCerti + ' sicuri in Presenze</button>' : '') + ricvRighe(confSt) + '</details>';
+    }
   } else if(g === 'sistemare'){
     var nMeta = per.sistemare.filter(function(S){ return S.avvisi.some(function(a){ return a.cod === 'meta'; }); }).length;
     if(nMeta > 1) h += '<button class="sk-btn big" onclick="ricvSistemaTutteMeta()">Sistema i ' + nMeta + ' collegamenti scritti a metà</button>';
@@ -35032,12 +35085,13 @@ function ricvRiga(S, compatta){
   if(compatta){ h += '<div class="rv-perche">' + esc(S.perche || '') + '</div></div>'; return h; }
   var P = S.proposte && S.proposte[0];
   var docsBox = function(docs, chip){ return '<div class="rv-doc">' + docs.slice(0, 4).map(function(x){ return '<span><b>' + esc((x.f.tipo === 'nota_credito' ? 'Nota ' : 'Fatt. ') + 'n° ' + (x.f.numero || '—')) + '</b> ' + esc(ricvBello(x.f.fornitore || '').slice(0, 26)) + ' · ' + fmt(Math.abs(x.quota)) + '</span>'; }).join('') + (docs.length > 4 ? '<span>+ altri ' + (docs.length - 4) + '</span>' : '') + (chip || '') + '</div>'; };
-  if(P) h += docsBox(P.docs, ricvChip(P.livello));
+  if(P && P.stip) h += '<div class="rv-doc"><span><b>Stipendio</b> ' + esc(P.stip.nome) + ' · ' + esc(ricvMeseNome(P.stip.mese, P.stip.anno)) + '</span>' + ricvChip(P.livello) + '</div>';
+  else if(P) h += docsBox(P.docs, ricvChip(P.livello));
   else if(S.docs && S.docs.length) h += docsBox(S.docs);
   var testo = P ? P.motivi.join(' · ') : (S.avvisi && S.avvisi[0] ? S.avvisi[0].t + ' — ' + S.avvisi[0].s : S.perche);
   h += '<div class="rv-perche">' + esc(testo || '') + '</div>';
   var az = '';
-  if(S.gruppo === 'conferma' && P) az = '<button class="sk-btn prim" onclick="ricvConfermaProposta(' + k + ',0)">' + (P.spostaDa ? 'Sposta qui la nota' : P.rimborso ? 'Collega il rimborso' : (P.docs.length > 1 ? 'Conferma le ' + P.docs.length : 'Conferma')) + '</button><button class="sk-btn" onclick="ricvRifiuta(' + k + ',0)">Non è questa</button>';
+  if(S.gruppo === 'conferma' && P) az = '<button class="sk-btn prim" onclick="ricvConfermaProposta(' + k + ',0)">' + (P.stip ? 'Collega a ' + esc(P.stip.nome.split(' ')[0]) : P.spostaDa ? 'Sposta qui la nota' : P.rimborso ? 'Collega il rimborso' : (P.docs.length > 1 ? 'Conferma le ' + P.docs.length : 'Conferma')) + '</button><button class="sk-btn" onclick="ricvRifiuta(' + k + ',0)">Non è questa</button>';
   else if(S.gruppo === 'sistemare' && S.avvisi && S.avvisi.some(function(a){ return a.cod === 'meta'; })) az = '<button class="sk-btn prim" onclick="ricvSistemaMeta(' + k + ')">Sistema</button>';
   else if(S.gruppo === 'sistemare' && S.completa) az = '<button class="sk-btn prim" onclick="ricvCompleta(' + k + ')">Aggiungi ' + (S.completa.docs.length > 1 ? 'le ' + S.completa.docs.length + ' fatture' : 'la n° ' + esc(S.completa.docs[0].f.numero || '')) + '</button><button class="sk-btn" onclick="ricvApri(' + k + ')">Vedi</button>';
   else if(S.gruppo === 'sistemare' && S.avvisi && S.avvisi[0] && S.avvisi[0].cod === 'nc_e_rimborso') az = '<button class="sk-btn prim" onclick="ricvScollega(' + k + ',' + pnIdJs(S.avvisi[0].f.id) + ')">Scollega dalla nota</button><button class="sk-btn" onclick="ricvApri(' + k + ')">Vedi</button>';
@@ -35111,6 +35165,7 @@ function ricvApri(key){
   // proposte con il perché
   if(S.proposte && S.proposte.length){
     h += pnSez(S.proposte.length === 1 ? 'Ho trovato' : 'Ho trovato ' + S.proposte.length + ' possibilità', S.proposte.map(function(P, i){
+      if(P.stip) return '<div class="ric-prop ' + P.livello + '"><div class="ric-prop-h"><div><b>' + esc('Stipendio di ' + P.stip.nome) + '</b><small>' + esc(ricvMeseNome(P.stip.mese, P.stip.anno) + ' · ' + fmt(P.stip.importo)) + '</small></div>' + ricvChip(P.livello) + '</div><ul class="ric-motivi">' + P.motivi.map(function(t){ return '<li>' + esc(t) + '</li>'; }).join('') + '</ul><div class="sk-btns"><button class="sk-btn prim sm" onclick="ricvConfermaProposta(' + k + ',' + i + ')">Collega in Presenze</button><button class="sk-btn sm" onclick="ricvRifiuta(' + k + ',' + i + ')">Non è lui</button></div></div>';
       return '<div class="ric-prop ' + P.livello + '"><div class="ric-prop-h"><div><b>' + esc(P.docs.length > 1 ? P.docs.length + ' documenti di ' + ricvBello(P.docs[0].f.fornitore || '') : (P.docs[0].f.tipo === 'nota_credito' ? 'Rimborso della nota n° ' : 'Fattura n° ') + (P.docs[0].f.numero || '—') + ' · ' + ricvBello(P.docs[0].f.fornitore || '')) + '</b><small>' + P.docs.map(function(x){ return 'n° ' + esc(x.f.numero || '—') + ' ' + fmt(Math.abs(x.quota)); }).join(' + ') + '</small></div>' + ricvChip(P.livello) + '</div>' +
         '<ul class="ric-motivi">' + P.motivi.map(function(t){ return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>' +
         '<div class="sk-btns"><button class="sk-btn prim sm" onclick="ricvConfermaProposta(' + k + ',' + i + ')">' + (P.spostaDa ? 'Sposta qui la nota' : P.rimborso ? 'Collega il rimborso' : 'Conferma') + '</button><button class="sk-btn sm" onclick="ricvRifiuta(' + k + ',' + i + ')">Non è questa</button></div></div>';
@@ -35125,8 +35180,12 @@ function ricvApri(key){
   // categoria
   if(S.cat){
     var cc = RICV.ctx && RICV.ctx.cat[String(M.id)];
-    h += pnSez('Perché qui', '<div class="sk-nota">' + esc(S.perche || '') + '</div>' + (S.imparato ? '<div class="sk-nota">L\'ho dedotto dagli altri movimenti con lo stesso beneficiario. Se è sbagliato, scegli qui sotto.</div>' : '') + (cc && cc.origine === 'manuale' ? '<div class="sk-btns"><button class="sk-btn sm" onclick="ricvTogliCategoria(' + k + ')">Togli questa categoria</button></div>' : '') + (S.cat === 'stipendio' && S.daPresenze ? '<div class="sk-nota">Gli stipendi si collegano in Ceraldi Presenze (Stipendi → bonifici): lì c\'è il dipendente e il mese.</div>' : ''));
+    h += pnSez('Perché qui', '<div class="sk-nota">' + esc(S.perche || '') + '</div>' + (S.imparato ? '<div class="sk-nota">L\'ho dedotto dagli altri movimenti con lo stesso beneficiario. Se è sbagliato, scegli qui sotto.</div>' : '') + (cc && cc.origine === 'manuale' ? '<div class="sk-btns"><button class="sk-btn sm" onclick="ricvTogliCategoria(' + k + ')">Togli questa categoria</button></div>' : '') + '');
   }
+  // stipendio non ancora collegato (o bonifico a una persona): si collega a Presenze da qui
+  var giaStip = RICV.ctx && RICV.ctx.stip[String(M.id)];
+  if(!giaStip && M.fonte === 'banca' && M.importo < 0 && !(S.docs && S.docs.length) && !(S.proposte && S.proposte.some(function(P){ return P.stip; })) && (S.cat === 'stipendio' || (S.gruppo === 'capire' && ricvPersona(ricvPulisciNome(ricBeneficiario({ descrizione: M.descrizione })))))) h += ricvStipSezione(S, k);
+  if(giaStip) h += pnSez('In Presenze', '<div class="sk-nota">' + esc(giaStip.map(function(x){ return x.nome + (x.mese ? ' · ' + ricvMeseNome(x.mese, x.anno) : ''); }).join(', ')) + '. Si modifica da Ceraldi Presenze (Stipendi → bonifici).</div>');
   // cosa posso fare
   var az = [];
   if(!S.docs || !S.docs.length){
@@ -35158,6 +35217,191 @@ function ricvSchedaFatturaHtml(f){
     var M = x.S.M;
     return '<div class="ric-prop ' + x.P.livello + '"><div class="ric-prop-h"><div><b>' + (M.importo > 0 ? '+' : '−') + fmt(Math.abs(M.importo)) + ' · ' + ricGg(M.data) + ' · ' + esc(M.conto) + '</b><small>' + esc(x.S.titolo) + (x.P.docs.length > 1 ? ' · paga ' + x.P.docs.length + ' documenti' : '') + '</small></div>' + ricvChip(x.P.livello) + '</div><ul class="ric-motivi">' + x.P.motivi.map(function(t){ return '<li>' + esc(t) + '</li>'; }).join('') + '</ul><div class="sk-btns"><button class="sk-btn prim sm" onclick="ricvConfermaProposta(' + ricvJs(M.key) + ',' + x.i + ')">Conferma</button><button class="sk-btn sm" onclick="ricvApri(' + ricvJs(M.key) + ')">Vedi il movimento</button></div></div>';
   }).join(''));
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   STIPENDI CON PRESENZE (v10.16.0)
+   Ogni bonifico a un dipendente si collega alla sua busta paga in Presenze,
+   nella stessa tabella condivisa (presenze_bonifici_stipendio): quello che
+   colleghi qui lo vede subito anche Presenze, e viceversa.
+   Cosa sa l'app dei pagamenti attesi (solo per l'amministratore):
+     · acconti registrati in Presenze (importo e giorno esatti)
+     · saldi di fine mese (quota pagata con bonifico)
+     · buste paga lette dal consulente (netto del mese)
+     · compensi dei soci
+   Un bonifico «Beneficiari vari» non dice il nome: lo riconosce dall'importo
+   esatto e dal giorno, e lo spiega. Un'attesa va a un solo bonifico.
+   ══════════════════════════════════════════════════════════════════════ */
+function ricvMeseDi(d){ d = String(d || ''); return d.length >= 7 ? { anno: +d.slice(0, 4), mese: +d.slice(5, 7) } : null; }
+function ricvMeseNome(m, a){ return (PN_MESI_L[(m || 1) - 1] || m) + (a ? ' ' + a : ''); }
+async function ricvCaricaPaghe(){
+  var P = { prof: {}, attesi: [], pbs: [], ok: false };
+  var leggi = async function(q){ try{ return await sbFetchAll(q) || []; }catch(e){ return null; } };
+  var r = await Promise.all([
+    leggi('presenze_profili?select=id,nome,cognome,ruolo,attivo,percepisce_stipendio'),
+    leggi('presenze_documenti?select=dipendente_id,anno,mese,netto_busta,categoria&netto_busta=not.is.null'),
+    leggi('presenze_acconti?select=id,dipendente_id,importo,data,modalita,mese_riferimento,anno_riferimento'),
+    leggi('presenze_liquidazioni?select=dipendente_id,anno,mese,bonifico,liquidato_il&bonifico=not.is.null'),
+    leggi('presenze_compensi_soci?select=dipendente_id,anno,mese,netto'),
+    leggi('presenze_bonifici_stipendio?select=id,dipendente_id,movimento_banca_id,mese_riferimento,anno_riferimento,importo,data_movimento')
+  ]);
+  if(!r[0] || !r[0].length) return P;            // niente accesso ai dati di Presenze: si lavora a mano
+  P.ok = true;
+  r[0].forEach(function(p){ P.prof[p.id] = { id: p.id, nome: ricvBello(((p.nome || '') + ' ' + (p.cognome || '')).trim()), cognome: String(p.cognome || ''), nomeP: String(p.nome || ''), attivo: p.attivo !== false, socio: p.ruolo === 'admin', stip: p.percepisce_stipendio !== false }; });
+  var A = [];
+  var metti = function(o){ if(!P.prof[o.dip] || !(o.importo > 0.009)) return; o.importo = ricR2(o.importo); A.push(o); };
+  (r[2] || []).forEach(function(a){
+    if(/contant/i.test(a.modalita || '')) return;
+    var m = a.mese_riferimento ? { anno: a.anno_riferimento || +String(a.data).slice(0, 4), mese: a.mese_riferimento } : ricvMeseDi(a.data);
+    metti({ dip: a.dipendente_id, anno: m && m.anno, mese: m && m.mese, importo: +a.importo, data: String(a.data || '').slice(0, 10), fonte: 'acconto', certa: /bonif/i.test(a.modalita || ''), id: 'a' + a.id });
+  });
+  (r[3] || []).forEach(function(l){ metti({ dip: l.dipendente_id, anno: l.anno, mese: l.mese, importo: +l.bonifico, data: String(l.liquidato_il || '').slice(0, 10), fonte: 'saldo', certa: true, id: 'l' + l.dipendente_id + l.anno + l.mese }); });
+  (r[1] || []).forEach(function(d){ if(d.categoria && !/busta/i.test(d.categoria)) return; metti({ dip: d.dipendente_id, anno: d.anno, mese: d.mese, importo: +d.netto_busta, data: '', fonte: 'busta', id: 'b' + d.dipendente_id + d.anno + d.mese + d.netto_busta }); });
+  (r[4] || []).forEach(function(c){ metti({ dip: c.dipendente_id, anno: c.anno, mese: c.mese, importo: +c.netto, data: '', fonte: 'compenso', id: 'c' + c.dipendente_id + c.anno + c.mese + c.netto }); });
+  // la stessa somma vista da due parti (busta e acconto/saldo dello stesso mese) è un solo pagamento
+  var chiave = function(o){ return o.dip + '|' + o.anno + '|' + o.mese + '|' + o.importo.toFixed(2); };
+  var conData = {}; A.forEach(function(o){ if(o.data) conData[chiave(o)] = 1; });
+  var visti = {};
+  P.attesi = A.filter(function(o){ var k = chiave(o); if(!o.data && conData[k]) return false; if(visti[k + o.fonte + o.data]) return false; visti[k + o.fonte + o.data] = 1; return true; });
+  // già collegati in Presenze: quelle attese sono coperte
+  P.pbs = r[5] || [];
+  P.pbs.forEach(function(b){ var imp = Math.abs(+b.importo || 0); var a = P.attesi.find(function(o){ return !o.coperto && o.dip === b.dipendente_id && o.anno === b.anno_riferimento && o.mese === b.mese_riferimento && Math.abs(o.importo - imp) <= 1; }); if(a) a.coperto = true; });
+  return P;
+}
+
+// Per un bonifico in uscita: di quale dipendente e di quale mese?
+function ricvStipProposte(M, ctx){
+  var P = ctx && ctx.paghe; if(!P || !P.ok || !(M.importo < 0)) return [];
+  var imp = ricR2(Math.abs(M.importo)), d = ' ' + M.descrizione.toLowerCase().replace(/[^a-zà-ù0-9 ]/g, ' ') + ' ', out = [];
+  var cands = P.attesi.filter(function(o){ return !o.coperto && Math.abs(o.importo - imp) <= 0.01 && !(ctx.rif && ctx.rif[String(M.id) + '|stip:' + o.id]); });
+  cands.forEach(function(o){
+    var p = P.prof[o.dip], punti = 50, motivi = [], identita = 0;
+    var cosa = { acconto: 'acconto', saldo: 'saldo del mese', busta: 'netto in busta', compenso: 'compenso' }[o.fonte];
+    motivi.push('Importo identico al ' + cosa + ' di ' + p.nome + ' per ' + ricvMeseNome(o.mese, o.anno) + ' (' + ricEur(o.importo) + ')');
+    var cg = p.cognome.toLowerCase(), nm = p.nomeP.toLowerCase();
+    if(cg.length >= 3 && d.indexOf(' ' + cg + ' ') >= 0){ punti += 40; identita++; motivi.push('La causale cita «' + ricvBello(p.cognome) + '»'); }
+    else if(nm.length >= 4 && d.indexOf(' ' + nm + ' ') >= 0){ punti += 20; motivi.push('La causale cita «' + ricvBello(p.nomeP) + '»'); }
+    if(o.data){
+      var gg = Math.abs(ricvGiorni(o.data, M.data));
+      if(gg <= 3){ punti += 35; identita++; motivi.push('Stesso giorno registrato in Presenze (' + ricGg(o.data) + ')'); }
+      else if(gg <= 12) punti += 15;
+      else if(gg > 45) punti -= 30;
+    } else if(o.anno && o.mese){
+      var dopo = (+M.data.slice(0, 4)) * 12 + (+M.data.slice(5, 7)) - (o.anno * 12 + o.mese);
+      if(dopo === 1){ punti += 20; motivi.push('Pagato il mese dopo la busta di ' + ricvMeseNome(o.mese)); }
+      else if(dopo === 0) punti += 5;
+      else if(dopo < 0) return;                       // pagato prima del mese a cui si riferisce: non è lui
+      else if(dopo > 2) punti -= 40;
+    }
+    if(cands.length === 1){ punti += 15; motivi.push('Nessun altro pagamento atteso con questo importo'); }
+    out.push({ stip: { dip: o.dip, nome: p.nome, anno: o.anno, mese: o.mese, importo: imp, fonte: o.fonte, attesa: o }, docs: [], punti: punti, identita: identita, motivi: motivi });
+  });
+  // nessun importo atteso: ma la causale dice il nome del dipendente
+  if(!out.length){
+    var chi = ricvStipChi(M, P);
+    if(chi){
+      var p = P.prof[chi.dip], m = ricvStipMeseProbabile(M, P, chi.dip), gia = P.pbs.filter(function(b){ return b.dipendente_id === chi.dip && b.anno_riferimento === m.anno && b.mese_riferimento === m.mese; });
+      var mot = ['La causale cita ' + chi.come, 'Mese di competenza: ' + ricvMeseNome(m.mese, m.anno) + ' (' + m.come + ')'];
+      var busta = P.attesi.find(function(o){ return o.dip === chi.dip && o.anno === m.anno && o.mese === m.mese && o.fonte === 'busta'; });
+      var pti = chi.pieno ? (m.storico ? 95 : 75) : 55;
+      if(busta){ var r = imp / busta.importo; if(r > 0.3 && r < 1.3){ pti += 5; mot.push('Busta di ' + ricvMeseNome(m.mese) + ': netto ' + ricEur(busta.importo) + (r < 0.97 ? ' (questo è una parte: il resto in contanti o con un altro bonifico)' : '')); } }
+      if(gia.length) mot.push('Per ' + ricvMeseNome(m.mese) + ' c\'è già ' + (gia.length === 1 ? 'un bonifico collegato' : gia.length + ' bonifici collegati') + ' (' + gia.map(function(b){ return ricEur(Math.abs(+b.importo || 0)); }).join(', ') + '): questo si aggiunge');
+      out.push({ stip: { dip: chi.dip, nome: p.nome, anno: m.anno, mese: m.mese, importo: imp, fonte: 'nome', attesa: { id: 'n' + chi.dip + m.anno + m.mese + M.id } }, docs: [], punti: pti, identita: 1, motivi: mot });
+    }
+  }
+  out.sort(function(a, b){ return b.punti - a.punti; });
+  out.forEach(function(o, i){ var s = out[i === 0 ? 1 : 0], stacco = i === 0 ? (s ? o.punti - s.punti : 99) : -1; o.livello = (o.punti >= 95 && o.identita >= 1 && stacco >= 20) ? 'certo' : (o.punti >= 65 ? 'probabile' : (o.punti >= 45 ? 'possibile' : null)); });
+  return out.filter(function(o){ return o.livello; }).slice(0, 3);
+}
+
+// chi è il dipendente citato nella causale? (nome e cognome, o un cognome che hanno in pochi)
+function ricvStipChi(M, P){
+  var d = ' ' + M.descrizione.toLowerCase().replace(/[^a-zà-ù0-9 ]/g, ' ').replace(/\s+/g, ' ') + ' ', trovati = [];
+  Object.keys(P.prof).forEach(function(id){
+    var p = P.prof[id], cg = p.cognome.toLowerCase().trim(), nm = p.nomeP.toLowerCase().trim(); if(cg.length < 3) return;
+    var hasC = d.indexOf(' ' + cg + ' ') >= 0, hasN = nm.length >= 3 && d.indexOf(' ' + nm + ' ') >= 0;
+    if(hasC) trovati.push({ dip: id, pieno: hasN, come: hasN ? '«' + p.nome + '»' : '«' + ricvBello(p.cognome) + '»' });
+  });
+  var pieni = trovati.filter(function(t){ return t.pieno; });
+  if(pieni.length === 1) return pieni[0];
+  if(!pieni.length && trovati.length === 1) return trovati[0];
+  return null;                                   // ambiguo (es. due Ceraldi senza il nome): meglio scegliere a mano
+}
+// il mese a cui si riferisce: come gli altri bonifici dello stesso dipendente, altrimenti il mese prima (se pagato entro il 20)
+function ricvStipMeseProbabile(M, P, dip){
+  var conta = {}, d0 = ricvMeseDi(M.data), g = +M.data.slice(8, 10);
+  P.pbs.forEach(function(b){ if(b.dipendente_id !== dip || !b.data_movimento) return; var m = ricvMeseDi(b.data_movimento); var sc = (m.anno * 12 + m.mese) - (b.anno_riferimento * 12 + b.mese_riferimento); if(sc >= 0 && sc <= 2) conta[sc] = (conta[sc] || 0) + 1; });
+  var tot = Object.keys(conta).reduce(function(s, k){ return s + conta[k]; }, 0), sc = null, come = '';
+  var storico = false;
+  if(tot >= 2 && ricvMax(conta) >= 0.7){ sc = +ricvPiu(conta); come = 'come gli altri suoi bonifici'; storico = true; }
+  else { sc = g <= 20 ? 1 : 0; come = g <= 20 ? 'pagato nei primi giorni del mese dopo' : 'pagato a fine mese'; }
+  var t = d0.anno * 12 + (d0.mese - 1) - sc;
+  return { anno: Math.floor(t / 12), mese: t % 12 + 1, come: come, storico: storico };
+}
+// Collega il bonifico in Presenze (tabella condivisa); annullabile
+async function ricvCollegaStipendio(key, s, opz){
+  opz = opz || {};
+  var R = ricvTrovaRaw(key); if(!R || R.fonte !== 'banca') return false;
+  var M = ricvMov(R.m, 'banca'), id = null;
+  try{
+    var r = await sbFetch('presenze_bonifici_stipendio', { method: 'POST', headers: { 'Prefer': 'return=representation' }, body: JSON.stringify({ dipendente_id: s.dip, movimento_banca_id: String(M.id), mese_riferimento: s.mese, anno_riferimento: s.anno, importo: Math.abs(M.importo), confermato: true, fonte_copertura: 'bonifico', descrizione_movimento: M.descrizione, data_movimento: M.data }) });
+    id = r && r[0] && r[0].id;
+  }catch(e){ toast('❌ Non salvato: ' + (e.message || e), { forza: true }); return false; }
+  if(RICV.ctx){ (RICV.ctx.stip[String(M.id)] = RICV.ctx.stip[String(M.id)] || []).push({ nome: s.nome, mese: s.mese, anno: s.anno, importo: Math.abs(M.importo), tipo: 'cedolino', pbs: id }); if(s.attesa) s.attesa.coperto = true; }
+  RICV.memo = null;
+  ricvPushAnnulla('stipendio di ' + s.nome, async function(){
+    if(id){ await sbFetch('presenze_bonifici_stipendio?id=eq.' + id, { method: 'DELETE', headers: { 'Prefer': 'return=minimal' } });
+      try{ await sbFetch('ric_collegamenti?legacy_ref->>pbs=eq.' + id, { method: 'PATCH', headers: { 'Prefer': 'return=minimal' }, body: JSON.stringify({ stato: 'annullato' }) }); }catch(e){} }
+    if(RICV.ctx){ delete RICV.ctx.stip[String(M.id)]; if(s.attesa) s.attesa.coperto = false; }
+  });
+  if(!opz.muto) toast('✓ Collegato a ' + s.nome + ' · ' + ricvMeseNome(s.mese, s.anno) + ' — lo vede anche Presenze', { forza: true });
+  return true;
+}
+// scelta a mano dal foglio del movimento
+async function ricvStipManuale(key){
+  var dip = (document.getElementById('ricvStDip') || {}).value, mm = (document.getElementById('ricvStMese') || {}).value;
+  if(!dip){ toast('Scegli il dipendente', { forza: true }); return; }
+  if(!mm){ toast('Scegli il mese', { forza: true }); return; }
+  var p = RICV.ctx && RICV.ctx.paghe && RICV.ctx.paghe.prof[dip];
+  var ok = await ricvCollegaStipendio(key, { dip: dip, nome: p ? p.nome : 'dipendente', anno: +mm.slice(0, 4), mese: +mm.slice(5, 7) });
+  if(ok){ pnChiudi('ricvMov'); ricvRidisegna(); }
+}
+function ricvStipScegli(id){ var s = document.getElementById('ricvStDip'); if(s) s.value = id; document.querySelectorAll('.rv-dip').forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-id') === id); }); }
+function ricvStipMese(v){ var s = document.getElementById('ricvStMese'); if(s) s.value = v; document.querySelectorAll('.rv-mese').forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-m') === v); }); }
+// sezione del foglio: «Collega in Presenze»
+function ricvStipSezione(S, k){
+  var P = RICV.ctx && RICV.ctx.paghe, M = S.M;
+  if(!P || !P.ok) return pnSez('Collega in Presenze', '<div class="sk-nota">Solo l\'amministratore vede i dati di Presenze. Da qui puoi comunque segnarlo come stipendio.</div><div class="sk-btns"><button class="sk-btn" onclick="pnChiudi(\'ricvMov\');apriRiconciliaStipendioSingolo(' + ricvJs(M.id) + ',' + ricvJs(M.data) + ',' + Math.abs(M.importo) + ',' + ricvJs(M.descrizione) + ')">Scegli il dipendente</button></div>');
+  var d = ' ' + M.descrizione.toLowerCase().replace(/[^a-zà-ù0-9 ]/g, ' ') + ' ', imp = Math.abs(M.importo);
+  // chi: prima chi è citato, poi chi ha attese o pagamenti vicini a questo importo
+  var vicino = {};
+  P.attesi.forEach(function(o){ var v = Math.abs(o.importo - imp); if(vicino[o.dip] == null || v < vicino[o.dip]) vicino[o.dip] = v; });
+  P.pbs.forEach(function(b){ var v = Math.abs(Math.abs(+b.importo || 0) - imp); if(vicino[b.dipendente_id] == null || v < vicino[b.dipendente_id]) vicino[b.dipendente_id] = v; });
+  var L = Object.keys(P.prof).map(function(id){ var p = P.prof[id]; return { p: p, cit: p.cognome.length >= 3 && d.indexOf(' ' + p.cognome.toLowerCase() + ' ') >= 0, v: vicino[id] == null ? 1e9 : vicino[id] }; })
+    .filter(function(x){ return x.p.attivo || x.cit || x.v < 1e9; })
+    .sort(function(a, b){ return (b.cit ? 1 : 0) - (a.cit ? 1 : 0) || a.v - b.v || a.p.nome.localeCompare(b.p.nome); });
+  var pre = L[0] && (L[0].cit || L[0].v <= 1) ? L[0].p.id : '';
+  var m0 = ricvMeseDi(M.data), mesi = [];
+  for(var i = 2; i >= 0; i--){ var t = m0.anno * 12 + (m0.mese - 1) - i; mesi.push({ v: Math.floor(t / 12) + '-' + String(t % 12 + 1).padStart(2, '0'), t: ricvMeseNome(t % 12 + 1) }); }
+  var meseDef = (+M.data.slice(8, 10) <= 20) ? mesi[1].v : mesi[2].v;
+  var h = '<div class="sk-nota">Tocca chi l\'ha ricevuto e il mese a cui si riferisce. Il collegamento lo vede subito anche Presenze.</div>';
+  h += '<div class="rv-cats">' + L.slice(0, 12).map(function(x){ return '<button class="rv-catb rv-dip' + (x.p.id === pre ? ' on' : '') + '" data-id="' + esc(x.p.id) + '" onclick="ricvStipScegli(\'' + esc(x.p.id) + '\')">' + esc(x.p.nome) + (x.cit ? ' ✓' : '') + '</button>'; }).join('') + '</div>';
+  h += '<div class="rv-cats" style="margin-top:10px">' + mesi.map(function(m){ return '<button class="rv-catb rv-mese' + (m.v === meseDef ? ' on' : '') + '" data-m="' + m.v + '" onclick="ricvStipMese(\'' + m.v + '\')">' + esc(m.t) + '</button>'; }).join('') + '</div>';
+  h += '<input type="hidden" id="ricvStDip" value="' + esc(pre) + '"><input type="hidden" id="ricvStMese" value="' + meseDef + '">';
+  h += '<div class="sk-btns"><button class="sk-btn prim" onclick="ricvStipManuale(' + k + ')">Collega in Presenze</button></div>';
+  return pnSez('Collega in Presenze', h);
+}
+
+async function ricvConfermaStipendi(){
+  var st = ricvCalcola().stati, F = ricvFiltri(), L = Object.keys(st).map(function(k){ return st[k]; }).filter(function(S){ return S.gruppo === 'conferma' && S.proposte[0] && S.proposte[0].stip && (S.liv === 'certo') && ricvNelFiltro(S.M, F); });
+  if(!L.length) return;
+  if(!confirm('Collego in Presenze ' + L.length + (L.length === 1 ? ' stipendio' : ' stipendi') + ' con il nome nella causale e il mese come gli altri bonifici della stessa persona?\n\nSi annulla con un tocco.')) return;
+  var ok = 0, prima = RICV.annulla.length;
+  for(var i = 0; i < L.length; i++){ if(await ricvCollegaStipendio(L[i].M.key, L[i].proposte[0].stip, { muto: true })) ok++; }
+  var blocco = RICV.annulla.splice(prima);
+  if(blocco.length) ricvPushAnnulla(blocco.length + ' stipendi collegati', async function(){ for(var j = blocco.length - 1; j >= 0; j--) await blocco[j].fn(); });
+  toast('✓ Collegati ' + ok + ' stipendi — li vede anche Presenze', { forza: true });
+  ricvRidisegna();
 }
 
 /* ── navigazione: porta alla riconciliazione, sul gruppo giusto, tutti i mesi ── */
