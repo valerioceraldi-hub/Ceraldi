@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.17.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.18.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -1206,6 +1206,14 @@ html[data-theme="dark"] .reg-import-link{border-color:rgba(255,255,255,.08)}
         <button class="fil-btn" id="ftf-fattura" onclick="setTipoFiltro('fattura',this)">&#129534; Fatture</button>
         <button class="fil-btn" id="ftf-ddt" onclick="setTipoFiltro('ddt',this)">&#128230; DDT</button>
         <button class="fil-btn" id="ftf-nota_credito" onclick="setTipoFiltro('nota_credito',this)">&#128203; N/Credito</button>
+      </div>
+      <!-- Origine (v10.17): da dove arriva il documento -->
+      <div style="font-size:11px;font-weight:600;color:var(--ink3);margin-bottom:6px">Da dove arriva</div>
+      <div class="filtri" style="margin-bottom:10px">
+        <button class="fil-btn active" id="fof-tutte" onclick="setOrigineFiltro('tutte',this)">Tutte</button>
+        <button class="fil-btn" id="fof-xml" onclick="setOrigineFiltro('xml',this)">XML <span class="fof-n" data-orig="xml"></span></button>
+        <button class="fil-btn" id="fof-foto" onclick="setOrigineFiltro('foto',this)">Foto <span class="fof-n" data-orig="foto"></span></button>
+        <button class="fil-btn" id="fof-manuale" onclick="setOrigineFiltro('manuale',this)">A mano <span class="fof-n" data-orig="manuale"></span></button>
       </div>
       <!-- Date -->
       <div style="display:flex;gap:8px;margin-bottom:10px">
@@ -4550,6 +4558,7 @@ function _renderActiveChips(){
     const fmtD = d => d?new Date(d).toLocaleDateString('it-IT',{day:'2-digit',month:'short'}):'—';
     chips.push({label:`📅 ${fmtD(lDal)} → ${fmtD(lAl)}`, onClick:`document.getElementById('lDal').value='';document.getElementById('lAl').value='';renderLista();`});
   }
+  if(typeof origineFiltroL!=='undefined' && origineFiltroL!=='tutte') chips.push({label:({xml:'📄 Da XML',foto:'📷 Da foto',manuale:'✍️ Registrate a mano'})[origineFiltroL], onClick:`setOrigineFiltro('tutte',document.getElementById('fof-tutte'));`});
   const lForn=gv('lForn'); if(lForn) chips.push({label:`🏢 ${lForn}`, onClick:`document.getElementById('lForn').value='';renderLista();`});
   const lMin=gv('lImpMin'), lMax=gv('lImpMax');
   if(lMin||lMax) chips.push({label:`💰 ${lMin||'0'} - ${lMax||'∞'} €`, onClick:`document.getElementById('lImpMin').value='';document.getElementById('lImpMax').value='';renderLista();`});
@@ -6170,6 +6179,17 @@ function setTipoFiltro(tipo,btn){
   tipoFiltroL=tipo;
   ['ftf-tutti','ftf-fattura','ftf-ddt','ftf-nota_credito'].forEach(id=>{const b=document.getElementById(id);if(b)b.classList.remove('active');});
   btn.classList.add('active'); renderLista();
+}
+var origineFiltroL = 'tutte';
+function setOrigineFiltro(o, btn){
+  origineFiltroL = o;
+  ['fof-tutte','fof-xml','fof-foto','fof-manuale'].forEach(function(id){ var b = document.getElementById(id); if(b) b.classList.remove('active'); });
+  if(btn) btn.classList.add('active'); renderLista();
+}
+function _contaOrigini(){
+  var c = { xml: 0, foto: 0, manuale: 0 };
+  (fatture || []).forEach(function(f){ if(f && !f.deleted_at) c[ricOrigine(f).cod]++; });
+  document.querySelectorAll('.fof-n').forEach(function(el){ el.textContent = c[el.getAttribute('data-orig')] || ''; });
 }
 function toggleLFiltri(){
   const p=document.getElementById('lFPanel'),a=document.getElementById('lFArrow');
@@ -32961,7 +32981,7 @@ function pnCtxDate(){
   var iso = function(x){ return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0'); };
   return { oggi: oggi, mese: oggi.slice(0, 8) + '01', trenta: iso(t), sette: iso(s) };
 }
-function renderLista(){ return pnConIndici(_renderListaVero); }
+function renderLista(){ try{ _contaOrigini(); }catch(e){} return pnConIndici(_renderListaVero); }
 function _renderListaVero(){
   aggiornaDL();
   var s = (gv('searchInp') || '').toLowerCase().trim();
@@ -32972,6 +32992,7 @@ function _renderListaVero(){
   var filt = fatture.filter(function(f){
     if(!(filtroL === 'tutti' || f.pagamento === filtroL)) return false;
     if(!(tipoFiltroL === 'tutti' || f.tipo === tipoFiltroL)) return false;
+    if(origineFiltroL !== 'tutte' && ricOrigine(f).cod !== origineFiltroL) return false;
     if(s){
       var ok = [f.fornitore, f.numero, pnNoteLibere(f), f.bonIban, f.assegno, f.assInt, f.bonCaus, f.denominazioneXml, f.piva].some(function(x){ return String(x || '').toLowerCase().indexOf(s) >= 0; });
       if(!ok && isNum) ok = Math.abs(Math.abs(f.importo || 0) - numR) < 1;
@@ -35713,6 +35734,62 @@ function ricdRender(){
   renderRiepilogo = function(){ var r = orig.apply(this, arguments); try{ ricdRender(); }catch(e){ console.warn('situazione:', e); if(typeof _registraErrore === 'function') _registraErrore('js', 'Situazione: ' + (e.message || e)); } return r; };
 })();
 
+/* ══════════════════════════════════════════════════════════════════════
+   EXCEL LEGGIBILI (v10.17.0) — vale per TUTTE le esportazioni dell'app:
+   prima di aggiungere un foglio al file, l'app lo sistema da sola:
+     · date vere (gg/mm/aaaa), che Excel ordina e filtra come date
+     · importi in euro con i separatori (1.234,56) nelle colonne di soldi
+     · larghezza delle colonne in base al contenuto
+     · filtro automatico sulla riga dei titoli
+   Niente cambia nei dati: cambia solo come si leggono.
+   ══════════════════════════════════════════════════════════════════════ */
+var RICV_XLSX_SOLDI = /importo|totale|imponibile|\biva\b|imposta|pagat|residuo|saldo|dare|avere|netto|lordo|euro|€|prezzo|costo|incass|spesa|credito|debito|quota|rata|corrispettiv|cassa|pos|contanti|bonifico|assegno|valore|ammontare|resta/i;
+function ricvXlsxSistema(ws){
+  if(!ws || !ws['!ref'] || typeof XLSX === 'undefined') return ws;
+  var R = XLSX.utils.decode_range(ws['!ref']);
+  var cella = function(r, c){ return ws[XLSX.utils.encode_cell({ r: r, c: c })]; };
+  // riga dei titoli: la prima con almeno 2 testi (o 1 se il foglio ha una colonna)
+  var hr = -1;
+  for(var r = R.s.r; r <= Math.min(R.e.r, R.s.r + 8) && hr < 0; r++){
+    var testi = 0; for(var c = R.s.c; c <= R.e.c; c++){ var x = cella(r, c); if(x && x.t === 's' && String(x.v).trim()) testi++; }
+    if(testi >= Math.min(2, R.e.c - R.s.c + 1)) hr = r;
+  }
+  var titoli = {}; if(hr >= 0) for(var c2 = R.s.c; c2 <= R.e.c; c2++){ var h = cella(hr, c2); titoli[c2] = h ? String(h.v || '') : ''; }
+  var larghe = {};
+  for(var r2 = R.s.r; r2 <= R.e.r; r2++){
+    for(var c3 = R.s.c; c3 <= R.e.c; c3++){
+      var k = XLSX.utils.encode_cell({ r: r2, c: c3 }), x2 = ws[k]; if(!x2) continue;
+      if(x2.t === 's' && /\s{2,}|^\s|\s$/.test(String(x2.v))){ x2.v = String(x2.v).replace(/\s+/g, ' ').trim(); delete x2.w; delete x2.h; delete x2.r; }
+      if(r2 > hr && x2.t === 's'){
+        var sv = String(x2.v).trim(), m;
+        if((m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(sv)) || (m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(sv))){
+          var yy = m[1].length === 4 ? +m[1] : +m[3], mm = +m[2], gg = m[1].length === 4 ? +m[3] : +m[1];
+          if(mm >= 1 && mm <= 12 && gg >= 1 && gg <= 31){ ws[k] = { t: 'd', v: new Date(Date.UTC(yy, mm - 1, gg, 12)), z: 'dd/mm/yyyy' }; x2 = ws[k]; }
+        }
+      }
+      if(r2 > hr && x2.t === 'n' && !x2.z){
+        var soldi = RICV_XLSX_SOLDI.test(titoli[c3] || '') && !/n[°º.]|numero|anno|mese|giorn|conteggio|quant|pezzi|%/i.test(titoli[c3] || '');
+        if(soldi || Math.round(x2.v * 100) !== Math.round(x2.v) * 100) x2.z = '#,##0.00';
+      }
+      var len = x2.t === 'd' ? 10 : x2.t === 'n' ? String(Math.round(x2.v * 100) / 100).length + 4 : String(x2.v == null ? '' : x2.v).length;
+      if(r2 === hr) len = Math.min(len, 28);
+      larghe[c3] = Math.max(larghe[c3] || 6, Math.min(60, len + 2));
+    }
+  }
+  if(!ws['!cols']){ var cols = []; for(var c4 = R.s.c; c4 <= R.e.c; c4++) cols.push({ wch: larghe[c4] || 10 }); ws['!cols'] = cols; }
+  if(hr >= 0 && !ws['!autofilter'] && R.e.r > hr) ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: hr, c: R.s.c }, e: { r: R.e.r, c: R.e.c } }) };
+  return ws;
+}
+(function(){
+  var aggancia = function(){
+    if(typeof XLSX === 'undefined' || !XLSX.utils || XLSX.utils.__ricvLeggibile) return !!(typeof XLSX !== 'undefined' && XLSX.utils && XLSX.utils.__ricvLeggibile);
+    var orig = XLSX.utils.book_append_sheet;
+    XLSX.utils.book_append_sheet = function(wb, ws){ try{ ricvXlsxSistema(ws); }catch(e){ console.warn('excel leggibile:', e); } return orig.apply(this, arguments); };
+    XLSX.utils.__ricvLeggibile = true; return true;
+  };
+  if(!aggancia()){ var n = 0, t = setInterval(function(){ if(aggancia() || ++n > 40) clearInterval(t); }, 500); }
+})();
+
 /* ── navigazione: porta alla riconciliazione, sul gruppo giusto, tutti i mesi ── */
 function ricvVaiA(gruppo){
   RICV.gruppo = gruppo || null; RICV.mostra = 40; RICV.soloClassica = false;
@@ -35776,6 +35853,99 @@ var RICV_AN_BANCA = /^(beneficiario|pagamento_.*|riferimenti_disallineati|pagata
       '<div class="an-item-txt">' + esc(a.testo) + '</div>' +
       '<button class="an-fix" style="margin-top:10px;width:100%;padding:11px" onclick="ricvVaiA(\'sistemare\')">Apri la riconciliazione</button></div>';
   };
+})();
+
+/* ══════════════════════════════════════════════════════════════════════
+   COLLEGAMENTI DIRETTI (v10.18.0) — un avviso porta dove serve.
+   Funziona in tre casi: app chiusa (si apre già sul punto giusto), app
+   aperta (il telefono passa il collegamento e l'app ci va senza ricaricare),
+   tocco su un avviso dentro l'app.
+     #scadenze               registro, da pagare, per scadenza
+     #fattura=ID             apre il documento della fattura
+     #scheda=ID              apre la scheda della fattura
+     #riconciliazione[=g]    riconciliazione (g: conferma, sistemare, capire)
+     #stipendi               stipendi da collegare in Presenze
+     #movimento=ID           riconciliazione, sul movimento
+     #riepilogo, #anomalie, #incassi, #registro
+   ══════════════════════════════════════════════════════════════════════ */
+function ricvLinkPronto(fn, giri){
+  giri = giri || 0;
+  if(typeof fatture !== 'undefined' && fatture && fatture.length) return fn();
+  if(giri > 60){ if(typeof toast === 'function') toast('Dati non ancora caricati: riprova tra poco'); return; }
+  setTimeout(function(){ ricvLinkPronto(fn, giri + 1); }, 500);
+}
+function ricvLinkHash(link){
+  var s = String(link || ''), i = s.indexOf('#');
+  if(i < 0) return '';
+  // solo collegamenti di questa app (o senza pagina)
+  var pagina = s.slice(0, i).split('?')[0].split('/').pop();
+  if(pagina && !/^primanota\.html$/i.test(pagina)) return null;
+  return s.slice(i + 1);
+}
+// true se il collegamento è stato gestito qui, senza ricaricare la pagina
+function ricvVaiLink(link){
+  var h = ricvLinkHash(link);
+  if(h === null || !h) return false;
+  var m = /^([a-z]+)(?:=([^&]*))?/i.exec(h); if(!m) return false;
+  var cosa = m[1].toLowerCase(), val = m[2] ? decodeURIComponent(m[2]) : '';
+  try{ var o = document.getElementById('ntfOv'); if(o) o.remove(); }catch(e){}
+  var fid = function(){ return (typeof fatture !== 'undefined' ? fatture : []).find(function(x){ return String(x.id) === String(val); }); };
+  switch(cosa){
+    case 'scadenze':
+      ricvLinkPronto(function(){ try{ goTab('lista', document.querySelector('.tab-item[onclick*="\'lista\'"]')); PNA.ord = 'scadenza'; setPresetRegistro('da_pagare', document.querySelector('#lPresetRow [data-preset="da_pagare"]')); }catch(e){} });
+      return true;
+    case 'fattura':
+      ricvLinkPronto(function(){ var f = fid(); if(f) aprifatturaAllegata(f.id); else toast('Fattura non trovata'); });
+      return true;
+    case 'scheda':
+      ricvLinkPronto(function(){ var f = fid(); if(!f){ toast('Fattura non trovata'); return; } try{ goTab('lista', document.querySelector('.tab-item[onclick*="\'lista\'"]')); }catch(e){} apriScheda(f.id); });
+      return true;
+    case 'riconciliazione': case 'stipendi':
+      ricvLinkPronto(function(){ ricvVaiA(cosa === 'stipendi' ? 'conferma' : (/^(conferma|sistemare|capire|non|fatto)$/.test(val) ? val : null)); });
+      return true;
+    case 'movimento':
+      ricvLinkPronto(function(){ ricvVaiA(null); setTimeout(function(){ try{ ricvApri(ricMovKey(val)); }catch(e){} }, 500); });
+      return true;
+    case 'anomalie':
+      ricvLinkPronto(function(){ try{ _anApri(); }catch(e){} });
+      return true;
+    case 'riepilogo': case 'incassi': case 'registro':
+      ricvLinkPronto(function(){ ricvTab(cosa === 'registro' ? 'lista' : cosa); });
+      return true;
+  }
+  return false;
+}
+(function(){
+  // arrivo con il collegamento nell'indirizzo (app chiusa) o cambio di #
+  var nuovi = /^#(scheda|riconciliazione|stipendi|movimento|anomalie|riepilogo|incassi|registro)\b/i;
+  function daIndirizzo(){
+    var h = String(location.hash || '');
+    if(!nuovi.test(h)) return;   // #scadenze e #fattura hanno già i loro gestori
+    try{ history.replaceState(null, '', location.pathname + location.search); }catch(e){}
+    ricvVaiLink(h);
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', daIndirizzo); else setTimeout(daIndirizzo, 0);
+  window.addEventListener('hashchange', daIndirizzo);
+  // app già aperta: il telefono passa il collegamento dell'avviso toccato
+  try{
+    if(navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', function(e){
+      var d = e.data || {};
+      if(d.tipo !== 'ceraldi-notifica') return;
+      var ok = false; try{ ok = ricvVaiLink(d.link); }catch(err){ console.warn('collegamento:', err); }
+      if(ok && e.ports && e.ports[0]) e.ports[0].postMessage('ok');
+    });
+  }catch(e){}
+  // avviso toccato dentro l'app: niente ricarica se il posto è in questa app
+  if(typeof _ntfTocca === 'function'){
+    var orig = _ntfTocca;
+    _ntfTocca = async function(id, link){
+      if(link && ricvLinkHash(link)){
+        try{ await _ntfSegnaLette([id]); }catch(e){}
+        if(ricvVaiLink(link)) return;
+      }
+      return orig.apply(this, arguments);
+    };
+  }
 })();
 
 </script>
