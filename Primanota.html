@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.19.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.20.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -32082,6 +32082,17 @@ body.pn-foglio-aperto #aiAssistBtn,body.pn-foglio-aperto #scriptableBtn,body:has
 .rd-cosa{display:flex;flex-direction:column;align-items:flex-start;text-align:left;border:none;border-left:3px solid var(--pn-info);background:var(--pn-info-bg);border-radius:12px;padding:9px 12px;font:inherit;color:var(--ink);cursor:pointer}
 .rd-cosa.ko{border-left-color:var(--pn-ko);background:var(--pn-ko-bg)}.rd-cosa.warn{border-left-color:var(--pn-warn);background:var(--pn-warn-bg)}
 .rd-cosa b{font-size:13.5px;font-weight:750}.rd-cosa span{font-size:12px;color:var(--ink2)}
+/* v10.20 — impara come paghi */
+.rv-imp-banner{width:100%;display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;border:none;border-left:3px solid var(--pn-info);background:var(--pn-info-bg);color:var(--ink);font:inherit;padding:10px 12px;border-radius:12px;margin:0 0 10px;cursor:pointer}
+.rv-imp-banner b{font-size:13.5px;font-weight:750}.rv-imp-banner span{font-size:12px;color:var(--ink2)}.rv-imp-banner i{font-style:normal;font-size:12.5px;font-weight:700;color:var(--pn-info)}
+.rv-imp{background:var(--surface);border:1px solid var(--sep);border-radius:14px;padding:12px 13px;margin-bottom:10px}
+.rv-imp-t{font-size:14px;line-height:1.4;color:var(--ink)}.rv-imp-s{font-size:12.5px;line-height:1.45;color:var(--ink2);margin-top:4px}
+.rv-imp-b{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}.rv-imp-b .sk-btn{flex:1 1 auto}
+.rv-imp-fm{display:flex;align-items:center;gap:5px;font-size:13px;color:var(--ink2)}
+.rv-imp-ok{font-size:13.5px;font-weight:700;color:var(--pn-ok)}.rv-imp-no{font-size:13px;color:var(--ink3)}
+.rv-imp-nota{font-size:12.5px;color:var(--ink2);margin-top:6px;line-height:1.45}
+.rv-imp-salta{border:none;background:none;color:var(--ink3);font:inherit;font-size:12.5px;padding:8px 0 0;cursor:pointer;text-decoration:underline}
+.rv-imp-piede{font-size:12px;color:var(--ink3);text-align:center;padding:4px 0 8px}
 /* v10.13 — controllo dei conti e rimborsi */
 .sk-tre .ko b{color:var(--pn-ko)}
 .sk-avviso{background:var(--pn-warn-bg);color:var(--pn-warn);line-height:1.4}
@@ -33169,7 +33180,7 @@ async function pnaProssimi(){
    (mai al ribasso in automatico: se le prove dicono meno di quanto
    registrato, l'app lo segnala invece di cambiare da sola).
    ══════════════════════════════════════════════════════════════════════ */
-var RIC = { cache: null, ver: 0, pn: null, pnInCarica: false, timer: null, ARROT: 0.5, ncNote: {} };
+var RIC = { cache: null, ver: 0, pn: null, pnInCarica: false, timer: null, ARROT: 0.011, ncNote: {} };
 function ricR2(n){ return Math.round((+n || 0) * 100) / 100; }
 function ricMovKey(id){ return String(id == null ? '' : id).replace(/^carta:/, ''); }
 function ricInvalida(){ RIC.ver++; RIC.cache = null; }
@@ -34104,27 +34115,39 @@ function ricRileggiSumUpUnaVolta(){
 
 
 /* ══════════════════════════════════════════════════════════════════════
-   RICONCILIAZIONE v2 (v10.15.0) — un movimento, un posto
+   RICONCILIAZIONE — LE REGOLE (versione definitiva, v10.20.0)
    ──────────────────────────────────────────────────────────────────────
-   Ogni movimento di banca, SumUp e carta finisce in UNO solo di cinque gruppi:
-     · Da confermare  — l'app ha trovato il documento, con il perché
-     · Da sistemare   — qualcosa non torna e serve una decisione
-     · Da capire      — nessun documento e nessuna categoria (manca la fattura?)
-     · Non sono fatture — stipendi, tasse, giroconti, commissioni, incassi POS…
-     · A posto        — collegato e coerente
-   Il motore ragiona per SEGNALI, ognuno spiegato a parole: numero citato
-   nella causale, IBAN, beneficiario, mandato SDD, come la banca chiama il
-   fornitore (es. «Worldpay» = HP), numero d'assegno, importo (anche rata del
-   piano o differenza di pochi euro), metodo, regola d'addebito del contratto,
-   tempi abituali del fornitore. Impara dai collegamenti già fatti, ma MAI da
-   quelli sbagliati (beneficiario diverso). Cerca le combinazioni di più
-   fatture, e un documento va a un solo movimento (vince il più convincente,
-   a parità il più vicino nel tempo). Riconosce stipendi (anche dai dipendenti
-   di Presenze e dagli altri bonifici allo stesso beneficiario), tasse, mutuo,
-   giroconti, incassi POS, clienti, pagamenti poi restituiti, movimenti di
-   prima dell'archivio fatture. Non scrive mai da solo: propone, e ogni azione
-   si annulla con un tocco. Prova cieca sull'archivio reale (370 pagamenti):
-   90% ritrovati, 98,8% giusti, «sicuro» giusto 139 su 139.
+   1. UN MOVIMENTO, UN POSTO. Ogni movimento di banca, SumUp e carta sta in
+      uno solo di cinque gruppi: Da confermare · Da sistemare · Da capire ·
+      Non sono fatture · A posto. Un documento va a un solo movimento.
+   2. AL CENTESIMO. Un collegamento è proposto come «sicuro» o «probabile»
+      solo se l'importo torna esatto al centesimo (una fattura, una rata del
+      piano, o la somma di più fatture). Se c'è anche solo un centesimo di
+      differenza è un'indicazione «da verificare», con la differenza scritta:
+      decidi tu. Una differenza non diventa mai «arrotondamento» da sola.
+   3. COME SI RICONOSCE (per tutti i modi di pagamento: l'app non sa in
+      anticipo se è addebito, bonifico, assegno o carta). Segnali, ognuno
+      spiegato a parole: fornitore (IBAN, nome come lo scrive la banca,
+      mandato SDD, numero d'assegno), numero di fattura citato nella causale,
+      importo, data. Per la data vale quello che c'è scritto in fattura (la
+      scadenza); se manca, i termini del fornitore; se mancano, i tempi
+      abituali imparati dai pagamenti già collegati.
+   4. IMPARA DALLO STORICO, MAI DAGLI ERRORI. Dai collegamenti fatti impara
+      IBAN, nomi, mandati, tempi e modo di pagamento di ogni fornitore; un
+      collegamento con il beneficiario sbagliato non insegna nulla. Quando un
+      fornitore viene pagato in un modo nuovo chiede se usarlo d'ora in poi
+      e, per l'addebito in conto senza scadenza in fattura, quando addebita
+      (proponendo quello che ha visto). Vedi «Impara come paghi».
+   5. NON SCRIVE MAI DA SOLO. Propone; collegare, confermare i sicuri,
+      scegliere una categoria sono tocchi tuoi, e ogni azione si annulla.
+   6. QUELLO CHE NON TORNA SI VEDE. In «Da sistemare» con la soluzione, e nel
+      Controllo anomalie (addebiti non arrivati, doppi, senza fattura, in un
+      giorno diverso dal solito, più alti della fattura; estratto fermo).
+   Riconosce anche stipendi (collegati a Presenze), tasse, mutuo, giroconti,
+   incassi POS, clienti, pagamenti poi restituiti, movimenti di prima
+   dell'archivio fatture.
+   Prova cieca sull'archivio reale (370 pagamenti tolti e ricercati): 90%
+   ritrovati; «sicuro» giusto 161 su 161, «probabile» 19 su 19.
    ══════════════════════════════════════════════════════════════════════ */
 var RICV = { ctx: null, inCarica: false, gruppo: null, mostra: 40, annulla: [], aperte: {}, memo: null, soloClassica: false };
 var RICV_CAT = {
@@ -34422,13 +34445,12 @@ function ricvProposte(M, idx, ctx){
     if(chiFk[fk]){ punti += chiFk[fk].peso; identita++; motivi.push('Riconosciuto: ' + chiFk[fk].come); }
     if(ass && f.assegno){ var a2 = String(f.assegno).replace(/\D/g, ''); if(a2.length >= 4 && ass.slice(-6) === a2.slice(-6)){ punti += 60; identita++; motivi.push('Stesso numero di assegno (' + f.assegno + ')'); } }
     // importo
-    var dImp = Math.abs(bis - imp), dTot = Math.abs(Math.abs(+f.importo || 0) - imp), parziale = false;
-    var rata = (ap.rate[fid] || []).find(function(r){ return Math.abs(r.residuo - imp) <= A; });
-    if(dImp <= 0.01){ punti += 35; motivi.push('Importo identico (' + ricEur(imp) + ')'); if(unici === 1){ punti += 15; motivi.push('È l\'unica fattura da pagare con questo importo esatto'); } }
-    else if(dImp <= Math.min(A, Math.max(0.02, imp * 0.01))){ punti += 25; motivi.push('Importo uguale a meno di ' + ricEur(dImp)); }
+    var dImp = Math.abs(bis - imp), dTot = Math.abs(Math.abs(+f.importo || 0) - imp), parziale = false, esatto = true;
+    var rata = (ap.rate[fid] || []).find(function(r){ return Math.abs(r.residuo - imp) <= 0.005; });
+    if(dImp <= 0.005){ punti += 35; motivi.push('Importo identico (' + ricEur(imp) + ')'); if(unici === 1){ punti += 15; motivi.push('È l\'unica fattura da pagare con questo importo esatto'); } }
     else if(rata){ punti += 30; parziale = true; quota = imp; motivi.push('È la ' + (rata.saldo ? 'rata di saldo' : 'rata n° ' + rata.n + ' di ' + rata.tot) + ' (scadenza ' + ricGg(rata.data) + ')'); }
-    else if(dTot <= A && identita){ punti += 15; motivi.push('Importo uguale al totale della fattura, ma ne restavano da pagare ' + ricEur(bis)); }
-    else if(dImp <= Math.max(A, Math.min(5, bis * 0.01)) && identita){ punti += 15; motivi.push('Importo quasi uguale: differenza di ' + ricEur(dImp) + ' (spese, sconto o arrotondamento)'); }
+    else if(dTot <= 0.005 && identita){ punti += 15; esatto = false; motivi.push('Importo uguale al totale della fattura, ma ne restavano da pagare ' + ricEur(bis) + ': decidi tu'); }
+    else if(dImp <= Math.max(0.02, Math.min(5, bis * 0.01)) && identita){ punti += 15; esatto = false; motivi.push('Non torna al centesimo: differenza di ' + ricEur(dImp) + ' (spese, sconto o arrotondamento?) — decidi tu'); }
     else if(imp < bis - A && cit){ parziale = true; quota = imp; punti += 5; motivi.push('Paga ' + ricEur(imp) + ' di ' + ricEur(bis) + ': acconto'); }
     else return;   // importo diverso senza ragioni: non è lei (le somme di più fatture si cercano dopo)
     // metodo
@@ -34456,7 +34478,7 @@ function ricvProposte(M, idx, ctx){
     if(tip != null){ if(scarto <= 10){ punti += 15 - scarto; motivi.push('Pagata nei tempi soliti del fornitore (' + (tip <= 0 ? 'alla scadenza' : 'circa ' + tip + ' giorni') + ')'); } else if(scarto > 45) punti -= 10; }
     else if(ggDoc >= 0 && ggDoc <= 75) punti += 5;
     if(ggDoc > 240) punti -= 15;
-    oggetti.push({ docs: [{ f: f, quota: ricR2(quota) }], punti: punti, identita: identita, motivi: motivi, parziale: parziale, data: String(f.scadenza || f.data || ''), scarto: scarto });
+    oggetti.push({ docs: [{ f: f, quota: ricR2(quota) }], punti: punti, identita: identita, motivi: motivi, parziale: parziale, esatto: esatto, data: String(f.scadenza || f.data || ''), scarto: scarto });
   });
   // più fatture insieme: stesso fornitore riconosciuto (o citato), somma esatta
   var gruppi = {};
@@ -34500,13 +34522,17 @@ function ricvProposte(M, idx, ctx){
     var punti = gruppi[fk].peso + 35 + nc * 15 + (nc === sel.length ? 15 : 0);
     if(ambiguo && nc < sel.length){ punti -= 25; motivi.push('Attenzione: anche un\'altra combinazione di fatture dà la stessa somma'); }
     if(migliore.span > 120 && !nc){ punti -= 10; motivi.push('Fatture lontane tra loro (' + migliore.span + ' giorni)'); }
-    oggetti.push({ docs: sel.map(function(x){ return { f: x.f, quota: x.v }; }), punti: punti, identita: 1 + (nc ? 1 : 0), motivi: motivi, gruppo: true, tuttiCitati: nc === sel.length, data: String(sel[0].f.data || ''), scarto: 999 });
+    var esattoG = Math.abs(sel.reduce(function(s, x){ return s + x.v; }, 0) - imp) <= 0.005;
+    if(!esattoG) motivi.push('Non torna al centesimo: differenza di ' + ricEur(Math.abs(sel.reduce(function(s, x){ return s + x.v; }, 0) - imp)) + ' — decidi tu');
+    oggetti.push({ docs: sel.map(function(x){ return { f: x.f, quota: x.v }; }), punti: punti, identita: 1 + (nc ? 1 : 0), motivi: motivi, gruppo: true, esatto: esattoG, tuttiCitati: nc === sel.length, data: String(sel[0].f.data || ''), scarto: 999 });
   });
   oggetti.sort(function(a, b){ return b.punti - a.punti || a.scarto - b.scarto; });
   // livelli: "certo" solo con un'identità e un distacco netto dal secondo
   oggetti.forEach(function(o, i){
     var secondo = oggetti[i === 0 ? 1 : 0];
     var stacco = i === 0 ? (secondo ? o.punti - secondo.punti : 99) : -1;
+    // regola del centesimo: se l'importo non torna esatto, è solo un'indicazione e decidi tu
+    if(o.esatto === false){ o.livello = o.punti >= 45 ? 'possibile' : null; return; }
     o.livello = (o.punti >= 95 && o.identita >= 1 && stacco >= 20 && !o.parziale && !(o.gruppo && !o.tuttiCitati)) ? 'certo' : (o.punti >= 65 && o.identita >= 1 ? 'probabile' : (o.punti >= 45 ? 'possibile' : null));
   });
   return oggetti.filter(function(o){ return o.livello; }).slice(0, 4);
@@ -35820,7 +35846,7 @@ function ricvBancaFino(){
   });
   return fino;
 }
-function ricvSddFattura(f){ return /^(sdd|rid)$/i.test(String(f.pagamento || '')); }
+function ricvSddFattura(f){ return /^(sdd|rid)$/i.test(String(f.pagamento || '')) || (!f.pagamento && typeof ricvMetodoAbituale === 'function' && ricvMetodoAbituale(f.fornitore, f.piva) === 'sdd'); }
 function ricvSddControllo(){
   var C = ricvCalcola();
   if(RICV._sdd && RICV._sdd.C === C) return RICV._sdd.R;
@@ -35928,6 +35954,232 @@ function ricvSddVoceHtml(a, ignorata){
     '<div class="an-item-txt">' + esc(a.testo) + '</div>' + (righe ? '<div class="an-rows">' + righe + '</div>' : '') + (ignorata ? '' : azione) +
     (ignorata ? '<button class="an-ign" data-k="' + esc(a.chiave) + '" onclick="_anIgnora(this.dataset.k,false)">↺ Ripristina</button>'
               : '<button class="an-ign" data-k="' + esc(a.chiave) + '" onclick="_anIgnora(this.dataset.k,true)">' + esc(a.etichettaOk || '✓ Va bene così') + '</button>') + '</div>';
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   IMPARA COME PAGHI (v10.20.0)
+   L'app non sa in anticipo se un fornitore si paga con addebito in conto,
+   bonifico, assegno o carta: lo impara dai pagamenti collegati.
+     · Quando colleghi un pagamento fatto in un modo diverso dal solito (o
+       la prima volta), chiede: «Vuoi che le prossime fatture di questo
+       fornitore siano segnate così?»
+     · Se sì e il modo è l'addebito in conto: se le sue fatture hanno la
+       scadenza scritta, vale quella; altrimenti chiede quando addebita,
+       proponendo quello che ha visto finora (es. «20 giorni dopo la fattura»).
+     · Le risposte valgono per tutti i dispositivi (anagrafica fornitori) e
+       per le fatture che arriveranno; «No» non viene richiesto di nuovo.
+   ══════════════════════════════════════════════════════════════════════ */
+var RICI = { termini: null, chiesti: null, coda: [], blocco: false, timer: null };
+var RICI_KT = 'ceraldi_termini_forn_v1', RICI_KC = 'ceraldi_metodi_chiesti_v1';
+var RICI_NOME = { sdd: 'addebito in conto (SDD)', bonifico: 'bonifico', assegno: 'assegno', carta: 'carta' };
+(function(){ try{ RICI.termini = cacheGet(RICI_KT, null); RICI.chiesti = cacheGet(RICI_KC, null); }catch(e){} })();
+async function ricvCaricaTermini(){
+  try{
+    var r = await sbFetchAll('fornitori?select=nome,piva,metodo_pagamento,termini_giorni,termini_fine_mese');
+    var T = {};
+    (r || []).forEach(function(x){
+      if(!x.metodo_pagamento && x.termini_giorni == null) return;
+      var o = { nome: x.nome, metodo: x.metodo_pagamento || '', giorni: x.termini_giorni, fm: !!x.termini_fine_mese };
+      T['n' + _sfKey(x.nome)] = o; var p = String(x.piva || '').replace(/\D/g, ''); if(p.length >= 9) T['p' + p] = o;
+    });
+    RICI.termini = T; try{ cacheSet(RICI_KT, T); }catch(e){}
+  }catch(e){ RICI.termini = RICI.termini || {}; }
+  try{ RICI.chiesti = await sbLoadImpostazione(RICI_KC, {}) || {}; }catch(e){ RICI.chiesti = RICI.chiesti || {}; }
+}
+function ricvTerminiDi(nome, piva){ var T = RICI.termini || {}, p = String(piva || '').replace(/\D/g, ''); return (p.length >= 9 && T['p' + p]) || (nome && T['n' + _sfKey(nome)]) || null; }
+function ricvMetodoAbituale(nome, piva){
+  var t = ricvTerminiDi(nome, piva); if(t && t.metodo) return t.metodo;
+  var d = typeof getPagDefault === 'function' ? getPagDefault(nome) : null; return (d && d.pagamento) || '';
+}
+function ricvChiaveMetodo(fk, tipo){ return fk + '|' + tipo; }
+
+/* ── la storia dei pagamenti di ogni fornitore (dai collegamenti) ── */
+function ricvStoriaPagamenti(idx){
+  idx = idx || ricIndice();
+  if(idx.storiaPag) return idx.storiaPag;
+  var H = {};
+  Object.keys(idx.quoteMov).forEach(function(key){
+    var q = idx.quoteMov[key], mv = idx.mov[key]; if(!mv || !q.docs || !q.docs.length) return;
+    var fonte = mv.tipo === 'carta' ? 'carta' : 'banca';
+    var M = ricvMov(fonte === 'carta' ? Object.assign({}, mv, { importo: -Math.abs(mv.importo) }) : mv, fonte), tipo = ricvTipo(M);
+    if(!RICI_NOME[tipo]) return;
+    var visti = {};
+    q.docs.forEach(function(x){
+      var f = idx.doc[x.fid]; if(!f || f.tipo !== 'fattura') return;
+      if(ricBeneficiarioCoerente(mv, f) === false) return;
+      var fk = ricvFk(f); if(!fk || visti[fk]) return; visti[fk] = 1;
+      var h = H[fk] = H[fk] || { nome: f.fornitore, piva: f.piva || '', pag: [] };
+      h.pag.push({ data: String(mv.data).slice(0, 10), tipo: tipo, f: f, gg: f.data ? ricvGiorni(f.data, mv.data) : null });
+    });
+  });
+  Object.keys(H).forEach(function(fk){ H[fk].pag.sort(function(a, b){ return a.data < b.data ? -1 : a.data > b.data ? 1 : 0; }); });
+  idx.storiaPag = H;
+  return H;
+}
+// fornitori che pagano sempre nello stesso modo, diverso da quello segnato
+function ricvSuggerimentiMetodo(){
+  var H = ricvStoriaPagamenti(), C = RICI.chiesti || {}, un = ricvIso(new Date(Date.now() - 400 * 86400000)), out = [];
+  Object.keys(H).forEach(function(fk){
+    var h = H[fk], ult = h.pag.filter(function(p){ return p.data >= un; }).slice(-3);
+    if(ult.length < 2) return;
+    var T = ult[ult.length - 1].tipo;
+    if(!ult.every(function(p){ return p.tipo === T; })) return;
+    if(ricvMetodoAbituale(h.nome, h.piva) === T || C[ricvChiaveMetodo(fk, T)]) return;
+    out.push({ fk: fk, nome: h.nome, piva: h.piva, tipo: T, n: h.pag.filter(function(p){ return p.tipo === T; }).length });
+  });
+  return out.sort(function(a, b){ return b.n - a.n; });
+}
+// quando addebita: il modello che spiega meglio gli addebiti visti (N giorni dopo la fattura, o fine mese)
+function ricvTerminiImparati(fk){
+  var H = ricvStoriaPagamenti(), h = H[fk]; if(!h) return null;
+  var L = h.pag.filter(function(p){ return p.tipo === 'sdd' && p.gg != null && p.gg >= 0 && p.gg < 200; }).slice(-8);
+  if(L.length < 2) return null;
+  var errore = function(g, fm){ return L.reduce(function(s, p){ return s + Math.abs(ricvGiorni(_sfCalcScadenza(p.f.data, g, fm), p.data)); }, 0) / L.length; };
+  var med = ricvMediana(L.map(function(p){ return p.gg; })), best = { giorni: med, fm: false, err: errore(med, false) };
+  [0, 30, 60, 90].forEach(function(g){ var e = errore(g, true); if(e < best.err - 1) best = { giorni: g, fm: true, err: e }; });
+  best.n = L.length;
+  best.testo = best.fm ? (best.giorni ? best.giorni + ' giorni fine mese' : 'a fine mese') : best.giorni + ' giorni dopo la data della fattura';
+  return best;
+}
+function ricvHaScadenzeInFattura(nome, piva){
+  var fk = ricvFk({ fornitore: nome, piva: piva }), L = (fatture || []).filter(function(f){ return f.tipo === 'fattura' && ricvFk(f) === fk; }).sort(function(a, b){ return String(b.data).localeCompare(String(a.data)); }).slice(0, 4);
+  return L.length > 0 && L.filter(function(f){ return /^\d{4}-\d{2}-\d{2}/.test(String(f.scadenza || '')) && f.pagamentoOrigine !== 'regola'; }).length >= Math.ceil(L.length / 2);
+}
+
+/* ── dopo un collegamento: è un modo nuovo di pagare questo fornitore? ── */
+function ricvDopoCollegamento(key, docs){
+  try{
+    var R = ricvTrovaRaw(key); if(!R) return;
+    var M = ricvMov(R.fonte === 'carta' ? Object.assign({}, R.m, { importo: -Math.abs(R.m.importo) }) : R.m, R.fonte), T = ricvTipo(M);
+    if(!RICI_NOME[T]) return;
+    (docs || []).forEach(function(x){
+      var f = x.f; if(!f || f.tipo !== 'fattura') return;
+      var fk = ricvFk(f); if(!fk) return;
+      if(ricvMetodoAbituale(f.fornitore, f.piva) === T || (RICI.chiesti || {})[ricvChiaveMetodo(fk, T)]) return;
+      if(RICI.coda.some(function(c){ return c.fk === fk; })) return;
+      RICI.coda.push({ fk: fk, nome: f.fornitore, piva: f.piva || '', tipo: T, prima: ricvMetodoAbituale(f.fornitore, f.piva) });
+    });
+    if(RICI.coda.length && !RICI.blocco){ clearTimeout(RICI.timer); RICI.timer = setTimeout(ricvChiediMetodi, 450); }
+  }catch(e){ console.warn('impara metodo:', e); }
+}
+function ricvChiediMetodi(lista){
+  var L = lista || RICI.coda.splice(0); if(!L.length) return;
+  RICI.aperti = L;
+  var mo = pnFoglio('ricvMetodo', { titolo: L.length === 1 ? 'Come paghi ' + ricvBello(L[0].nome) + '?' : 'Come paghi questi fornitori?', sotto: 'Lo imparo dai pagamenti: rispondi una volta sola' });
+  ricvMetodoDisegna();
+}
+function ricvMetodoDisegna(){
+  var mo = document.getElementById('ricvMetodo'); if(!mo) return;
+  var bd = mo.querySelector('.pn-sh-bd'), L = RICI.aperti || [], daFare = L.filter(function(x){ return !x.fatto; }).length;
+  bd.innerHTML = (daFare > 2 ? '<button class="sk-btn prim big" style="width:100%;margin-bottom:10px" onclick="ricvMetodoSiTutti()">Sì per tutti (' + daFare + ')</button>' : '') + L.map(function(x, i){
+    var nome = esc(ricvBello(x.nome)), modo = RICI_NOME[x.tipo];
+    var h = '<div class="rv-imp" id="rvImp' + i + '">';
+    if(x.fatto === 'si') h += '<div class="rv-imp-ok">✓ ' + nome + ': d\'ora in poi ' + esc(modo) + '</div>' + (x.passo === 'scadenza' ? ricvMetodoScadenzaHtml(x, i) : (x.nota ? '<div class="rv-imp-nota">' + esc(x.nota) + '</div>' : ''));
+    else if(x.fatto === 'no') h += '<div class="rv-imp-no">' + nome + ': lascio com\'è, non lo chiedo più</div>';
+    else h += '<div class="rv-imp-t">' + nome + ' è stato pagato con <b>' + esc(modo) + '</b>' + (x.n ? ' (' + x.n + (x.n === 1 ? ' volta' : ' volte') + ')' : '') + '.</div>' +
+      '<div class="rv-imp-s">' + (x.prima ? 'Finora era segnato «' + esc(RICI_NOME[x.prima] || x.prima) + '».' : 'Finora non era segnato come lo paghi.') + ' Vuoi che le prossime fatture di ' + nome + ' siano segnate «' + esc(modo) + '»?</div>' +
+      '<div class="rv-imp-b"><button class="sk-btn prim" onclick="ricvMetodoSi(' + i + ')">Sì, d\'ora in poi</button><button class="sk-btn" onclick="ricvMetodoNo(' + i + ')">No</button></div>';
+    return h + '</div>';
+  }).join('') + '<div class="rv-imp-piede">Puoi cambiarlo quando vuoi dalla scheda del fornitore.</div>';
+}
+function ricvMetodoScadenzaHtml(x, i){
+  var I = x.imparati;
+  return '<div class="rv-imp-t" style="margin-top:10px">Le fatture di ' + esc(ricvBello(x.nome)) + ' non hanno la scadenza scritta. Quando addebita?</div>' +
+    (I ? '<div class="rv-imp-s">Dagli ultimi ' + I.n + ' addebiti: <b>' + esc(I.testo) + '</b>.</div><div class="rv-imp-b"><button class="sk-btn prim" onclick="ricvMetodoTermini(' + i + ',' + I.giorni + ',' + (I.fm ? 1 : 0) + ')">Sì, ' + esc(I.testo) + '</button></div>' : '') +
+    '<div class="rv-imp-s" style="margin-top:8px">' + (I ? 'Oppure scrivilo tu:' : 'Scrivi dopo quanti giorni dalla fattura:') + '</div>' +
+    '<div class="rv-imp-b"><input id="rvImpG' + i + '" type="number" inputmode="numeric" min="0" max="365" placeholder="giorni" style="width:90px;padding:9px 10px;font-size:14px"><label class="rv-imp-fm"><input type="checkbox" id="rvImpF' + i + '"> fine mese</label><button class="sk-btn" onclick="ricvMetodoTermini(' + i + ')">Salva</button></div>' +
+    '<button class="rv-imp-salta" onclick="ricvMetodoSalta(' + i + ')">Non lo so, lo vedo dopo</button>';
+}
+async function ricvSalvaFornitore(nome, piva, campi){
+  var rec = Object.assign({ nome: nome, updated_at: new Date().toISOString() }, campi);
+  if(piva) rec.piva = piva;
+  await sbFetch('fornitori?on_conflict=nome', { method: 'POST', headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(rec) });
+  var T = RICI.termini = RICI.termini || {}, k = 'n' + _sfKey(nome), o = T[k] = Object.assign({ nome: nome, metodo: '', giorni: null, fm: false }, T[k] || {});
+  if('metodo_pagamento' in campi) o.metodo = campi.metodo_pagamento || '';
+  if('termini_giorni' in campi){ o.giorni = campi.termini_giorni; o.fm = !!campi.termini_fine_mese; }
+  var p = String(piva || '').replace(/\D/g, ''); if(p.length >= 9) T['p' + p] = o;
+  try{ cacheSet(RICI_KT, T); }catch(e){}
+}
+async function ricvMetodoSi(i){
+  var x = (RICI.aperti || [])[i]; if(!x) return;
+  try{
+    await ricvSalvaFornitore(x.nome, x.piva, { metodo_pagamento: x.tipo });
+    // lo stesso default che l'app usa già quando registra le fatture nuove
+    try{ var db = cacheGet(KDP, {}), prec = typeof getPagDefault === 'function' ? getPagDefault(x.nome) : null; db[x.nome] = { pagamento: x.tipo, stato: (prec && prec.stato) || 'da_pagare' }; sbSaveImpostazione(KDP, db).catch(function(){}); }catch(e){}
+  }catch(e){ toast('❌ Non salvato: ' + (e.message || e), { forza: true }); return; }
+  RICI.chiesti = RICI.chiesti || {}; RICI.chiesti[ricvChiaveMetodo(x.fk, x.tipo)] = 'si'; sbSaveImpostazione(RICI_KC, RICI.chiesti).catch(function(){});
+  // le fatture ancora da pagare senza modo di pagamento prendono questo
+  var aperte = (fatture || []).filter(function(f){ return f.tipo === 'fattura' && ricvFk(f) === x.fk && scStato(f) !== 'pagata' && !f.pagamento; });
+  for(var j = 0; j < aperte.length; j++){ aperte[j].pagamento = x.tipo; try{ await dbUpdate(aperte[j]); }catch(e){} }
+  x.fatto = 'si';
+  if(x.tipo === 'sdd'){
+    var t = ricvTerminiDi(x.nome, x.piva);
+    if(ricvHaScadenzeInFattura(x.nome, x.piva)) x.nota = 'Per il giorno dell\'addebito userò la scadenza scritta in fattura.';
+    else if(t && t.giorni != null) x.nota = 'Per il giorno dell\'addebito uso i termini già salvati: ' + t.giorni + ' giorni' + (t.fm ? ' fine mese' : '') + '.';
+    else { x.passo = 'scadenza'; x.imparati = ricvTerminiImparati(x.fk); }
+  }
+  RICV.memo = null; ricvMetodoDisegna();
+}
+async function ricvMetodoSiTutti(){ var L = RICI.aperti || []; for(var i = 0; i < L.length; i++){ if(!L[i].fatto) await ricvMetodoSi(i); } }
+async function ricvMetodoNo(i){
+  var x = (RICI.aperti || [])[i]; if(!x) return;
+  RICI.chiesti = RICI.chiesti || {}; RICI.chiesti[ricvChiaveMetodo(x.fk, x.tipo)] = 'no'; sbSaveImpostazione(RICI_KC, RICI.chiesti).catch(function(){});
+  x.fatto = 'no'; ricvMetodoDisegna(); ricvAggiornaBannerMetodi();
+}
+function ricvMetodoSalta(i){ var x = (RICI.aperti || [])[i]; if(!x) return; x.passo = ''; x.nota = 'Va bene: quando vuoi, i termini si impostano dalla scheda del fornitore.'; ricvMetodoDisegna(); }
+async function ricvMetodoTermini(i, giorni, fm){
+  var x = (RICI.aperti || [])[i]; if(!x) return;
+  if(giorni == null){ var gi = document.getElementById('rvImpG' + i); giorni = gi && gi.value !== '' ? parseInt(gi.value, 10) : null; fm = !!(document.getElementById('rvImpF' + i) || {}).checked; }
+  if(giorni == null || isNaN(giorni) || giorni < 0 || giorni > 365){ toast('Scrivi i giorni (da 0 a 365)'); return; }
+  try{ await ricvSalvaFornitore(x.nome, x.piva, { termini_giorni: giorni, termini_fine_mese: !!fm }); }catch(e){ toast('❌ Non salvato: ' + (e.message || e), { forza: true }); return; }
+  // scadenza alle fatture aperte che non ce l'hanno (si vede nello storico della fattura)
+  var aperte = (fatture || []).filter(function(f){ return f.tipo === 'fattura' && ricvFk(f) === x.fk && scStato(f) !== 'pagata' && !f.scadenza && f.data; }), n = 0;
+  for(var j = 0; j < aperte.length; j++){ aperte[j].scadenza = _sfCalcScadenza(aperte[j].data, giorni, !!fm); try{ await dbUpdate(aperte[j]); n++; }catch(e){} }
+  x.passo = ''; x.nota = 'Addebito ' + giorni + ' giorni' + (fm ? ' fine mese' : ' dopo la fattura') + (n ? ': scadenza messa a ' + n + (n === 1 ? ' fattura aperta' : ' fatture aperte') : '') + '. Vale anche per le prossime.';
+  RICV.memo = null; ricInvalida(); ricvMetodoDisegna();
+}
+
+/* ── fatture nuove: modo di pagamento e scadenza dai termini imparati ── */
+(function(){
+  if(typeof _regolaNuovaFattura !== 'function') return;
+  var orig = _regolaNuovaFattura;
+  _regolaNuovaFattura = function(fornitore, numero, dataFattura){
+    var r = orig.apply(this, arguments); if(r) return r;
+    var t = ricvTerminiDi(fornitore); if(!t || !t.metodo) return null;
+    var d = typeof getPagDefault === 'function' ? getPagDefault(fornitore) : null;
+    return { pagamento: t.metodo, stato: (d && d.stato) || 'da_pagare', scadenza: (t.giorni != null && dataFattura) ? _sfCalcScadenza(dataFattura, t.giorni, t.fm) : '' };
+  };
+})();
+
+/* ── aggancio: dopo ogni collegamento, e dopo «Conferma i sicuri» una domanda sola ── */
+(function(){
+  if(typeof ricvCollega === 'function'){
+    var o1 = ricvCollega;
+    ricvCollega = async function(key, docs){ var ok = await o1.apply(this, arguments); if(ok) ricvDopoCollegamento(key, docs); return ok; };
+  }
+  if(typeof ricvConfermaCerti === 'function'){
+    var o2 = ricvConfermaCerti;
+    ricvConfermaCerti = async function(){ RICI.blocco = true; try{ return await o2.apply(this, arguments); } finally { RICI.blocco = false; if(RICI.coda.length) setTimeout(ricvChiediMetodi, 300); } };
+  }
+  if(typeof ricvCaricaContesto === 'function'){
+    var o3 = ricvCaricaContesto;
+    ricvCaricaContesto = async function(){ var r = await o3.apply(this, arguments); try{ await ricvCaricaTermini(); }catch(e){} return r; };
+  }
+  if(typeof ricvRender === 'function'){
+    var o4 = ricvRender;
+    ricvRender = function(){ var r = o4.apply(this, arguments); try{ ricvAggiornaBannerMetodi(); }catch(e){} return r; };
+  }
+})();
+// in cima alla riconciliazione: «ho imparato come paghi N fornitori»
+function ricvAggiornaBannerMetodi(){
+  var v = document.getElementById('ricvVista'); if(!v) return;
+  var b = document.getElementById('rvImpBanner'); if(b) b.remove();
+  if(!RICI.chiesti) return;
+  var S = ricvSuggerimentiMetodo(); if(!S.length) return;
+  b = document.createElement('button'); b.id = 'rvImpBanner'; b.className = 'rv-imp-banner';
+  b.innerHTML = '<b>Ho imparato come paghi ' + (S.length === 1 ? ricvBello(S[0].nome) : S.length + ' fornitori') + '</b><span>' + S.slice(0, 3).map(function(x){ return ricvBello(x.nome).slice(0, 22) + ' → ' + (x.tipo === 'sdd' ? 'addebito' : RICI_NOME[x.tipo]); }).join(' · ') + (S.length > 3 ? '…' : '') + '</span><i>Controlla ›</i>';
+  b.onclick = function(){ ricvChiediMetodi(ricvSuggerimentiMetodo()); };
+  var g = v.querySelector('.rv-gruppi'); if(g) g.parentNode.insertBefore(b, g.nextSibling); else v.insertBefore(b, v.firstChild);
 }
 
 /* ── navigazione: porta alla riconciliazione, sul gruppo giusto, tutti i mesi ── */
