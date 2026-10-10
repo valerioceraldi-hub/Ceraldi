@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.12.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.13.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -7540,6 +7540,8 @@ function _openEditDdtManuale(id){
 // vale anche per le note vecchie che non toccarono il parzPagato.
 function residuoFattura(f){
   if(!f) return 0;
+  // v10.13: per le fatture il residuo viene dal motore dei conti (prove reali)
+  if(f.tipo !== 'nota_credito' && f.tipo !== 'ddt' && typeof ricConti === 'function'){ var _R = ricConti(f); if(_R) return _R.residuo; }
   if(f.stato==='pagata' || f.stato==='annullata') return 0;
   var lordo = Math.abs(f.importo||0) - (f.parzPagato||0);
   var netto = nettoFattura(f);
@@ -14948,7 +14950,7 @@ async function _esportaXlsxPeriodo(fatt, chMese, versMese, meseLbl, filename, so
       f.data || '', f.fornitore || '', f.numero || '', tipoLbl,
       f.importo || 0, f.totaleImponibile || '', f.totaleImposta || '',
       aliq, f.pagamento || '', statoLbl, f.dataPag || '',
-      f.source==='aruba'?'Aruba/XML':(f.source==='xml_import'?'XML import':'Manuale'),
+      ricOrigine(f).t,
       f.note || ''
     ];
   });
@@ -21096,6 +21098,9 @@ function renderRiconciliazione(){
   // ── Barra dei tab — UNA sola (16/09: prima ce n'era anche una seconda,
   // aggiunta il 15/09 sopra questo contenuto e rimossa oggi perché
   // duplicava lo stesso lavoro — vedi nota a inizio funzione). ──
+  // v10.13: un solo posto per tutto quello che non torna nei conti
+  html += '<div id="ricBannerConti"></div>';
+  setTimeout(function(){ try{ if(typeof ricBannerConti === 'function') ricBannerConti(); }catch(_rcE){ console.warn('controllo conti:', _rcE); } }, 0);
   var _tabAttivo = window._reconTabAttiva || 'fare';
   var _nVerifiche = (typeof nuoviVers!=='undefined' && nuoviVers ? nuoviVers.length : 0)
     + posManutenzioneNumia.length + posScostamentoFiscale.length + posDiscrepanze.length;
@@ -30119,7 +30124,7 @@ async function _movSchedaApri(movId){
     + riga('Tipo', esc((m.tipo||'')+(m.sottotipo?' · '+m.sottotipo:'')||'—'))
     + (m.note ? riga('Note', esc(m.note)) : '')
     + riga('Codice', '<span style="font-size:12px;color:var(--ink3)">'+esc(m.id)+'</span>')
-    + '<div style="font-size:13px;font-weight:700;color:var(--ink3);margin-top:14px;text-transform:uppercase;letter-spacing:.3px">Collegato a</div>' + coll
+    + '<div style="font-size:13px;font-weight:700;color:var(--ink3);margin-top:14px;text-transform:uppercase;letter-spacing:.3px">Collegato a</div>' + coll + (typeof ricMovSchedaHtml === 'function' ? ricMovSchedaHtml(m) : '')
     + (!stip.length ? '<button id="movSchedaAbb" style="margin-top:14px;width:100%;padding:13px;border:none;border-radius:12px;background:var(--sep);font-weight:700;font-size:15px">✏️ Gestisci abbinamento fattura</button>' : '');
   var b = document.getElementById('movSchedaAbb');
   if(b) b.onclick = function(){ mo.remove(); if(!(_bancaMovimenti||[]).some(function(x){ return x.id===m.id; })) _bancaMovimenti = (_bancaMovimenti||[]).concat([m]); apriCambioAbbinamentoMov(m.id); };
@@ -31912,6 +31917,24 @@ body.pn-foglio-aperto #aiAssistBtn,body.pn-foglio-aperto #scriptableBtn,body:has
 .rc-esito.ok{background:var(--pn-ok-bg);color:var(--pn-ok)}.rc-esito.ok .rc-esito-ico{background:var(--pn-ok)}
 .rc-esito.warn{background:var(--pn-warn-bg);color:var(--pn-warn)}.rc-esito.warn .rc-esito-ico{background:var(--pn-warn)}
 .rc-esito.ko{background:var(--pn-ko-bg);color:var(--pn-ko)}.rc-esito.ko .rc-esito-ico{background:var(--pn-ko)}
+/* v10.13 — controllo dei conti e rimborsi */
+.sk-tre .ko b{color:var(--pn-ko)}
+.sk-avviso{background:var(--pn-warn-bg);color:var(--pn-warn);line-height:1.4}
+.sk-avviso b{font-weight:750}
+.ric-prop{background:var(--surface);border:.5px solid var(--ds-hair,var(--sep));border-left:3px solid var(--pn-warn);border-radius:14px;padding:10px 12px;margin-bottom:8px}
+.ric-prop.certo{border-left-color:var(--pn-ok)}.ric-prop.probabile{border-left-color:var(--pn-info)}
+.ric-prop-h{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.ric-prop-h b{display:block;font-size:14px;font-weight:700}.ric-prop-h small{display:block;font-size:12px;color:var(--ink3)}
+.ric-prop-m{margin-top:6px}.ric-prop-m span{display:block;font-size:14px;font-weight:700}.ric-prop-m small{display:block;font-size:11.5px;color:var(--ink3);word-break:break-word;margin-top:2px}
+.ric-prop-m em{font-style:normal;margin-left:6px;vertical-align:1px}
+.ric-motivi{margin:6px 0 0;padding:0 0 0 18px;font-size:12.5px;line-height:1.45;color:var(--ink2)}
+.ric-an.ko{border-left:3px solid var(--pn-ko)}.ric-an.warn{border-left:3px solid var(--pn-warn)}
+.ric-an .sk-riga-m small+small{margin-top:3px}
+.ric-banner{width:100%;display:flex;align-items:center;gap:11px;padding:11px 13px;margin-bottom:12px;border:none;border-radius:14px;background:var(--pn-warn-bg);color:var(--pn-warn);font:inherit;text-align:left;cursor:pointer}
+.ric-banner-i{width:28px;height:28px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:var(--pn-warn);color:#fff;font-weight:900}
+.ric-banner-t{flex:1;min-width:0}.ric-banner-t b{display:block;font-size:14px;font-weight:800}.ric-banner-t small{display:block;font-size:12px;font-weight:500;opacity:.9}
+.ric-banner-c{font-size:20px;font-weight:700}
+
 /* ── scadenze e rate ── */
 .pr-lista{border:.5px solid var(--ds-hair,var(--sep));border-radius:16px;overflow:hidden}
 .pr-it{display:flex;align-items:center;gap:11px;padding:11px 13px;border-bottom:.5px solid var(--ds-hair,var(--sep))}
@@ -32001,7 +32024,11 @@ function scNcUsi(nc){
   return out;
 }
 function scNcUsato(nc){ return scR2(scNcUsi(nc).reduce(function(s, u){ return s + u.imp; }, 0)); }
-function scNcCredito(nc){ return scR2(Math.max(0, Math.abs(+(nc && nc.importo) || 0) - scNcUsato(nc))); }
+function scNcCredito(nc){
+  // v10.13: se il fornitore l'ha già rimborsata col bonifico, non c'è più credito da scalare
+  if(nc && nc.tipo === 'nota_credito' && typeof ricConti === 'function'){ var R = ricConti(nc); if(R && R.tipo === 'nota_credito') return R.liberoDopoRimborsi; }
+  return scR2(Math.max(0, Math.abs(+(nc && nc.importo) || 0) - scNcUsato(nc)));
+}
 // Note di credito usate su una fattura: [{nc, imp, pagata}]
 function scNcSuFattura(fid, tutte){
   var out = [];
@@ -32016,6 +32043,12 @@ function scStato(f){ var s = f && f.stato; return (s && typeof s === 'object') ?
 function scParz(f){ return +(f.parzPagato != null ? f.parzPagato : f.parz_pagato) || 0; }
 // Conti di una fattura: lordo, note di credito, dovuto, pagato con soldi veri, residuo
 function scConti(f, tutte){
+  // v10.13: i conti arrivano dal motore unico (prove: movimenti, contanti, note di credito)
+  if(typeof ricConti === 'function' && f && f.tipo !== 'nota_credito' && f.tipo !== 'ddt' && (!tutte || tutte === fatture)){
+    var R = ricConti(f);
+    if(R) return { lordo: R.lordo, nc: R.nc.map(function(x){ return { nc: x.nc, imp: x.imp, pagata: x.daRimborsare > 0.009, compensata: x.compensata, daRimborsare: x.daRimborsare }; }),
+      ncTot: R.ncComp, ncTutte: R.ncTot, ncRimb: R.ncRimb, dovuto: R.dovuto, pagato: R.pagato, residuo: R.residuo, stato: R.stato, statoDichiarato: R.statoDichiarato, ric: R };
+  }
   var lordo = scR2(Math.abs(+f.importo || 0));
   var nc = scNcSuFattura(f.id, tutte);
   var ncTot = scR2(nc.reduce(function(s, x){ return s + x.imp; }, 0));
@@ -32267,22 +32300,23 @@ function pnLeggiBanca(desc){
   return out;
 }
 function pnPagamenti(f){
-  var out = [], visti = {};
-  var add = function(p){ var k = p.movId ? String(p.movId) : null; if(k && visti[k]) return; if(k) visti[k] = 1; out.push(p); };
-  (Array.isArray(f.riconciliazioneStorico) ? f.riconciliazioneStorico : []).forEach(function(r){ if(r && (r.movId || r.importo)) add({ movId: r.movId || null, data: r.data || '', importo: Math.abs(+r.importo || 0), conto: r.banca || 'BPM', descr: r.descrizione || '', tipo: 'banca', parziale: !!r.parziale }); });
-  if(f.riconciliazione && f.riconciliazione.importo) add({ movId: f.riconciliazione.movId || null, data: f.riconciliazione.data || '', importo: Math.abs(+f.riconciliazione.importo || 0), conto: f.riconciliazione.banca || 'BPM', descr: f.riconciliazione.descrizione || '', tipo: 'banca', parziale: !!f.riconciliazione.parziale });
-  (PNA.idx ? (PNA.idx.mv[String(f.id)] || []) : (typeof _movimentiPerFattura === 'function' ? _movimentiPerFattura(f.id) : [])).forEach(function(m){ add({ movId: m.id, data: m.data, importo: Math.abs(+m.importo || 0), conto: m.banca || 'BPM', descr: m.descrizione || '', tipo: 'banca' }); });
-  (typeof _cartaMovimenti !== 'undefined' ? _cartaMovimenti : []).forEach(function(c){ if(String(c.fatturaId || '') === String(f.id)) add({ movId: c.id, data: c.data, importo: Math.abs(+c.importo || 0), conto: 'Carta' + (c.cartaUltime4 ? ' ••' + c.cartaUltime4 : ''), descr: c.descrizione || '', tipo: 'carta' }); });
-  (Array.isArray(f.pagamentiManuali) ? f.pagamentiManuali : []).forEach(function(p, i){ if(p && !p.mov) add({ movId: null, data: p.data, importo: Math.abs(+p.importo || 0), conto: pnMetodo(p.metodo), descr: p.assegno ? 'assegno n° ' + p.assegno : '', tipo: 'manuale', metodo: p.metodo }); });
-  (PNA.schedaPn[String(f.id)] || []).forEach(function(p){ add({ movId: 'pn' + p.id, data: p.data, importo: Math.abs(+p.importo || 0), conto: p.fonte === 'fondo' ? 'Fondo cassa' : 'Cassetto', descr: p.descrizione || '', tipo: 'contanti' }); });
-  return out.sort(function(a, b){ return String(a.data).localeCompare(String(b.data)); });
+  // v10.13: le prove arrivano dal motore dei conti. Prima un pagamento con carta
+  // Nexi era contato due volte (codice "carta:nexi_…" e "nexi_…" visti come due
+  // movimenti diversi) e un assegno che pagava tre fatture valeva intero su ognuna.
+  if(typeof ricConti === 'function'){
+    var R = ricConti(f);
+    if(R && R.prove) return R.prove.map(function(p){ return { movId: p.movId, data: p.data || '', importo: p.importo, totale: p.totale, conto: p.conto, descr: p.descr || '', tipo: p.tipo, metodo: p.metodo, parziale: p.condiviso && p.totale != null && p.importo < p.totale - 0.009, condiviso: p.condiviso, entrata: p.entrata }; });
+  }
+  return [];
 }
 // Esito della riconciliazione: tono + frase
 function pnEsito(f, C, pag){
-  var trovato = scR2(pag.reduce(function(s, p){ return s + p.importo; }, 0));
-  var atteso = C.stato === 'pagata' ? C.dovuto : C.pagato;
+  var R = (typeof ricConti === 'function') ? ricConti(f) : null;
+  var trovato = R ? R.denaro : scR2(pag.reduce(function(s, p){ return s + p.importo; }, 0));
+  var r = { trovato: trovato, atteso: C.dovuto, diff: scR2(trovato - C.dovuto) };
   var bancario = /^(bonifico|assegno|carta|sdd|rid)$/i.test(f.pagamento || '');
-  var r = { trovato: trovato, atteso: atteso, diff: scR2(trovato - atteso) };
+  var ko = R && R.anomalie.filter(function(a){ return a.liv === 'ko'; })[0];
+  if(ko) return Object.assign(r, { tono: 'ko', t: ko.t, s: ko.s });
   if(!pag.length){
     if(C.stato === 'pagata') return Object.assign(r, bancario
       ? { tono: 'warn', t: 'Pagata, ma senza movimento collegato', s: 'Segnata come pagata con ' + pnMetodo(f.pagamento).toLowerCase() + ': collega il movimento della banca con «Riconcilia» per esserne certo.' }
@@ -32290,14 +32324,15 @@ function pnEsito(f, C, pag){
     if(C.stato === 'parziale') return Object.assign(r, { tono: 'nd', t: 'Pagato ' + fmt(C.pagato) + ' (senza movimento collegato)', s: 'Restano ' + fmt(C.residuo) + '.' });
     return Object.assign(r, { tono: 'nd', t: 'Ancora nessun pagamento', s: 'Da pagare ' + fmt(C.residuo) + '.' });
   }
-  var doppio = pag.length > 1 && pag.some(function(p, i){ return pag.some(function(q, j){ return j > i && Math.abs(p.importo - q.importo) < 0.01; }); });
-  // un pagamento che nella causale cita più fatture (es. "Pagamento Fatture 386, 738, 1436")
-  var cumul = null; pag.some(function(p){ var m = String(p.descr || '').match(/fattur[ae]?\s*(?:n[°r.]*\s*)?([A-Z0-9\/_-]+(?:\s*(?:,|e|\+)\s*[A-Z0-9\/_-]+)+)/i); if(m){ cumul = { p: p, nums: m[1].split(/\s*(?:,|\be\b|\+)\s*/).filter(Boolean) }; return true; } return false; });
-  if(r.diff > 0.5) return Object.assign(r, { tono: 'ko', t: 'Pagato ' + fmt(r.diff) + ' in più', s: cumul ? 'Il pagamento del ' + pnGg(cumul.p.data) + ' cita ' + cumul.nums.length + ' fatture (' + cumul.nums.join(', ') + '): probabilmente copre anche le altre e non va contato tutto qui. Controllalo con «Apri il movimento».' : doppio ? 'Lo stesso importo risulta pagato due volte: controlla se uno dei movimenti appartiene a un\'altra fattura.' : 'I movimenti collegati superano il dovuto: forse un movimento copre più fatture.' });
-  if(C.stato === 'da_pagare') return Object.assign(r, { tono: 'warn', t: 'Risultano pagamenti per ' + fmt(trovato), s: 'Ma la fattura è segnata «da pagare»: aggiorna lo stato con Modifica.' });
-  if(r.diff < -0.5) return Object.assign(r, { tono: 'warn', t: 'Mancano ' + fmt(-r.diff), s: C.stato === 'pagata' ? 'È segnata pagata ma i movimenti collegati coprono ' + fmt(trovato) + ' su ' + fmt(atteso) + '.' : 'Pagati ' + fmt(trovato) + ' su ' + fmt(C.dovuto) + '.' });
+  var warn = R && R.anomalie.filter(function(a){ return a.liv === 'warn'; })[0];
+  if(warn) return Object.assign(r, { tono: 'warn', t: warn.t, s: warn.s });
   var attesa = pag.filter(function(p){ return p.tipo === 'manuale' && /^(bonifico|assegno|sdd|rid|carta)$/i.test(p.metodo || ''); });
-  return Object.assign(r, { tono: attesa.length ? 'info' : 'ok', t: C.stato === 'pagata' ? 'I conti tornano' : 'Pagamenti in regola', s: 'Pagati ' + fmt(trovato) + (C.ncTot ? ' + note di credito ' + fmt(C.ncTot) : '') + ' su ' + fmt(C.lordo) + '.' + (attesa.length ? ' ' + (attesa.length === 1 ? 'Un pagamento registrato a mano aspetta' : attesa.length + ' pagamenti registrati a mano aspettano') + ' il movimento in banca.' : '') });
+  var piu = attesa.length ? ' ' + (attesa.length === 1 ? 'Un pagamento registrato a mano aspetta' : attesa.length + ' pagamenti registrati a mano aspettano') + ' il movimento in banca.' : '';
+  var arr = R && R.arrot ? ' Differenza di ' + fmt(Math.abs(R.arrot)) + ' considerata arrotondamento.' : '';
+  var rimb = R && R.ncRimb > 0.009 ? ' La nota di credito arrivata dopo il pagamento va incassata: ' + fmt(R.ncRimb) + ' da farsi rimborsare.' : '';
+  if(C.stato === 'pagata') return Object.assign(r, { tono: attesa.length ? 'info' : 'ok', t: 'I conti tornano', s: 'Pagati ' + fmt(Math.max(0, trovato)) + (C.ncTot > 0.009 ? ' + note di credito ' + fmt(C.ncTot) : '') + ' su ' + fmt(C.lordo) + '.' + arr + rimb + piu });
+  if(C.stato === 'parziale') return Object.assign(r, { tono: 'warn', t: 'Mancano ' + fmt(C.residuo), s: 'Pagati ' + fmt(C.pagato) + ' su ' + fmt(C.dovuto) + '.' + piu });
+  return Object.assign(r, { tono: 'warn', t: 'Risultano pagamenti per ' + fmt(trovato), s: 'Ma non coprono ancora nulla del dovuto: controlla i movimenti collegati.' });
 }
 // Riquadri in stile Presenze: documento → pagato con → movimenti → esito
 var PN_ICO = {
@@ -32319,7 +32354,7 @@ function pnBoxPagamento(p){
   if(L.causale) righe.push(['Causale', esc(L.causale)]);
   if(p.tipo === 'contanti' && p.descr) righe.push(['Descrizione', esc(p.descr)]);
   var apri = (p.tipo === 'banca' && p.movId && typeof _movSchedaApri === 'function') ? '<button class="rc-link" onclick="_movSchedaApri(' + esc(JSON.stringify(String(p.movId))).replace(/"/g, '&quot;') + ')">Apri il movimento ›</button>' : '';
-  return '<div class="rc-box mov ' + p.tipo + '"><div class="rc-box-h"><div class="rc-ico ' + p.tipo + '">' + (PN_ICO[p.tipo] || PN_ICO.banca) + '</div><div class="rc-box-t"><div class="rc-lbl">' + esc(fonte) + (p.parziale ? ' · parziale' : '') + '</div><b>' + pnGg(p.data) + '</b></div><div class="rc-imp">' + fmt(p.importo) + '<small>' + (p.tipo === 'contanti' ? 'dalla cassa' : 'uscito dal conto') + '</small></div></div>' +
+  return '<div class="rc-box mov ' + p.tipo + '"><div class="rc-box-h"><div class="rc-ico ' + p.tipo + '">' + (PN_ICO[p.tipo] || PN_ICO.banca) + '</div><div class="rc-box-t"><div class="rc-lbl">' + esc(fonte) + (p.parziale ? ' · parziale' : '') + '</div><b>' + pnGg(p.data) + '</b></div><div class="rc-imp">' + fmt(p.importo) + '<small>' + (p.tipo === 'contanti' ? 'dalla cassa' : (p.condiviso && p.totale != null && p.importo < p.totale - 0.009 ? 'quota di ' + fmt(p.totale) : (p.entrata ? 'entrato sul conto' : 'uscito dal conto'))) + '</small></div></div>' +
     (righe.length ? '<dl class="rc-dl">' + righe.map(function(r){ return '<dt>' + r[0] + '</dt><dd>' + r[1] + '</dd>'; }).join('') + '</dl>' : '') +
     (p.descr && p.tipo !== 'contanti' ? '<details class="rc-orig"><summary>Testo originale della banca</summary><div>' + esc(p.descr) + '</div></details>' : '') + apri + '</div>';
 }
@@ -32327,7 +32362,7 @@ function pnRiconciliazioneHtml(f, C, pag){
   var E = pnEsito(f, C, pag);
   var h = '<div class="rc-flow"><div class="rc-box doc"><div class="rc-box-h"><div class="rc-ico doc">' + PN_ICO.doc + '</div><div class="rc-box-t"><div class="rc-lbl">' + esc(pnTipo(f)) + '</div><b>n° ' + esc(f.numero || '—') + ' · ' + pnGg(f.data) + '</b></div><div class="rc-imp">' + fmt(C.lordo) + '<small>totale documento</small></div></div></div>';
   C.nc.forEach(function(x){
-    h += '<div class="rc-link-v"><span>ridotta da</span></div><button class="rc-box ncb" onclick="apriScheda(' + pnIdJs(x.nc.id) + ')"><div class="rc-box-h"><div class="rc-ico nc">' + PN_ICO.nc + '</div><div class="rc-box-t"><div class="rc-lbl">Nota di credito</div><b>n° ' + esc(x.nc.numero || '—') + ' · ' + pnGg(x.nc.data) + '</b></div><div class="rc-imp neg">−' + fmt(x.imp) + '<small>' + (x.pagata ? 'credito da recuperare' : 'tolto dal dovuto') + '</small></div></div></button>';
+    h += '<div class="rc-link-v"><span>ridotta da</span></div><button class="rc-box ncb" onclick="apriScheda(' + pnIdJs(x.nc.id) + ')"><div class="rc-box-h"><div class="rc-ico nc">' + PN_ICO.nc + '</div><div class="rc-box-t"><div class="rc-lbl">Nota di credito</div><b>n° ' + esc(x.nc.numero || '—') + ' · ' + pnGg(x.nc.data) + '</b></div><div class="rc-imp neg">−' + fmt(x.imp) + '<small>' + (x.daRimborsare > 0.009 ? (x.compensata > 0.009 ? fmt(x.compensata) + ' tolti dal dovuto, ' + fmt(x.daRimborsare) + ' da farsi rimborsare' : 'arrivata dopo il pagamento: da farsi rimborsare') : 'tolto dal dovuto') + '</small></div></div></button>';
   });
   pag.forEach(function(p, i){ h += '<div class="rc-link-v"><span>' + (i ? '+ un altro pagamento' : 'pagata con') + '</span></div>' + pnBoxPagamento(p); });
   h += '</div><div class="rc-esito ' + E.tono + '"><div class="rc-esito-ico">' + ({ ok: '✓', warn: '!', ko: '!', nd: 'i', info: '…' })[E.tono] + '</div><div><b>' + esc(E.t) + '</b><small>' + esc(E.s) + '</small></div></div>';
@@ -32336,7 +32371,7 @@ function pnRiconciliazioneHtml(f, C, pag){
 
 /* ══ SCHEDA DELLA FATTURA (sola lettura) ══ */
 function pnStatoChip(f, C, prox){
-  if(f.tipo === 'nota_credito'){ var cr = scNcCredito(f); return cr > 0.01 ? (scNcUsi(f).length ? ['warn', 'Usata in parte'] : ['warn', 'Da usare']) : ['ok', 'Usata']; }
+  if(f.tipo === 'nota_credito'){ if(typeof ricConti === 'function'){ var Rn = ricConti(f); if(Rn && Rn.tipo === 'nota_credito') return ricNcEtichetta(Rn); } var cr = scNcCredito(f); return cr > 0.01 ? (scNcUsi(f).length ? ['warn', 'Usata in parte'] : ['warn', 'Da usare']) : ['ok', 'Usata']; }
   if(f.tipo === 'ddt') return f.fattNum ? ['ok', 'Fatturato'] : ['warn', 'Fattura mancante'];
   if(C.stato === 'pagata') return ['ok', 'Pagata'];
   if(prox && prox.data < pnOggi()) return ['ko', 'Scaduta'];
@@ -32435,7 +32470,7 @@ function _pnDisegnaSchedaVero(){
     h += pnSez('Dati fiscali', fis);
   }
   // ── note e origine
-  var nl = pnNoteLibere(f), ori = f.source === 'aruba' ? 'Arrivata dallo SDI (Aruba)' : ((f.foto || f.hasFoto) ? 'Registrata da foto' : 'Registrata a mano');
+  var nl = pnNoteLibere(f), ori = ricOrigine(f).lungo;
   h += pnSez('Altre informazioni', pnKv([['Note', nl ? esc(nl) : ''], ['Origine', esc(ori) + (f.pecVerificata ? ' · <span class="sk-ok">verificata PEC ✓</span>' : '')], ['Ultima modifica', f.ts ? new Date(+f.ts).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '']]));
   bd.innerHTML = h;
   bd.scrollTop = scroll;
@@ -32459,14 +32494,21 @@ function pnScadenzeHtml(f, C){
 }
 function pnSchedaNc(f){
   var usi = scNcUsi(f), tot = Math.abs(f.importo || 0), libero = scNcCredito(f), h = '';
-  var corpo = '<div class="sk-tre"><div><small>Credito</small><b>' + fmt(tot) + '</b></div><div><small>Usato</small><b>' + fmt(tot - libero) + '</b></div><div class="' + (libero > 0.01 ? 'warn' : 'ok') + '"><small>Libero</small><b>' + fmt(libero) + '</b></div></div>';
+  var Rn = (typeof ricConti === 'function') ? ricConti(f) : null;
+  var corpo = Rn && Rn.tipo === 'nota_credito'
+    ? '<div class="sk-tre"><div><small>Credito</small><b>' + fmt(tot) + '</b></div><div><small>Scalato / rimborsato</small><b>' + fmt(Rn.compensato + Rn.rimborsato) + '</b></div><div class="' + (Rn.residuo > 0.5 ? 'warn' : 'ok') + '"><small>' + (Rn.daRimborsare > 0.5 ? 'Da incassare' : 'Ancora libero') + '</small><b>' + fmt(Rn.residuo) + '</b></div></div>'
+    : '<div class="sk-tre"><div><small>Credito</small><b>' + fmt(tot) + '</b></div><div><small>Usato</small><b>' + fmt(tot - libero) + '</b></div><div class="' + (libero > 0.01 ? 'warn' : 'ok') + '"><small>Libero</small><b>' + fmt(libero) + '</b></div></div>';
   if(usi.length) corpo += usi.map(function(u){
     var x = pnF(u.fid);
-    return '<div class="sk-riga"><button class="sk-riga-m tap" onclick="apriScheda(' + pnIdJs(u.fid) + ')"><b>' + esc(x ? (x.fornitore || '') + ' · n° ' + (x.numero || '—') : u.label || 'Fattura non più a registro') + '</b><small>' + (x ? pnGg(x.data) + ' · ' : '') + (u.pagata ? 'era già pagata: credito da recuperare' : 'scalato da quanto dovevi') + '</small></button><span class="sk-riga-v neg">−' + fmt(u.imp) + '</span><button class="sk-mini" title="Togli" aria-label="Togli da questa fattura" onclick="pnTogliUso(' + pnIdJs(f.id) + ',\'' + u.fid + '\')">✕</button></div>';
+    var dU = Rn && Rn.usi ? Rn.usi.find(function(z){ return String(z.fid) === String(u.fid); }) : null;
+    var frU = dU ? (dU.daRimborsare > 0.009 ? (dU.compensata > 0.009 ? fmt(dU.compensata) + ' scalati, ' + fmt(dU.daRimborsare) + ' da farsi rimborsare' : 'era già pagata: da farsi rimborsare') : 'scalato da quanto dovevi') : (u.pagata ? 'era già pagata: credito da recuperare' : 'scalato da quanto dovevi');
+    return '<div class="sk-riga"><button class="sk-riga-m tap" onclick="apriScheda(' + pnIdJs(u.fid) + ')"><b>' + esc(x ? (x.fornitore || '') + ' · n° ' + (x.numero || '—') : u.label || 'Fattura non più a registro') + '</b><small>' + (x ? pnGg(x.data) + ' · ' : '') + frU + '</small></button><span class="sk-riga-v neg">−' + fmt(u.imp) + '</span><button class="sk-mini" title="Togli" aria-label="Togli da questa fattura" onclick="pnTogliUso(' + pnIdJs(f.id) + ',\'' + u.fid + '\')">✕</button></div>';
   }).join('');
-  else corpo += '<div class="sk-nota">Non ancora usata: finché non la colleghi, il credito non scala quanto devi al fornitore.</div>';
+  else if(Rn && Rn.rimborsato > 0.009) corpo += '<div class="sk-nota">Non scalata da nessuna fattura: il fornitore l\'ha rimborsata con un bonifico (vedi «Rimborso»).</div>';
+  else corpo += '<div class="sk-nota">Non ancora usata: finché non la colleghi a una fattura o al bonifico di rimborso, il credito resta aperto.</div>';
   corpo += '<div class="sk-btns"><button class="sk-btn prim" onclick="apriCollegaNC(' + pnIdJs(f.id) + ')">' + (usi.length ? (libero > 0.01 ? 'Usa il credito libero su altre fatture' : 'Cambia le fatture') : 'Collega a una o più fatture') + '</button></div>';
   h += pnSez('Dove è stata usata', corpo);
+  if(typeof ricSchedaNcRimborsoHtml === 'function') h += ricSchedaNcRimborsoHtml(f);
   var rif = (String(f.note || '').match(/\[RIF-NC:([^·\]]+)/) || [])[1] || ((window._ncRif && window._ncRif[String(f.id)]) ? window._ncRif[String(f.id)].num : '');
   if(rif) h += pnSez('Riferimento nell\'XML', '<div class="sk-nota">Il documento dice che storna la fattura <b>n° ' + esc(rif) + '</b>.</div>');
   return h;
@@ -32854,7 +32896,12 @@ function pnRiga(f, oggi){
   var meta = [f.numero ? 'n° ' + esc(f.numero) : '', pnData(f.data), (!isNc && !isDdt && f.pagamento) ? pnMetodo(f.pagamento) : ''].filter(Boolean).join(' · ');
   var info = '', infoCl = '', az = '';
   if(f.incompleta && f.incompleta.length){ info = 'Mancano: ' + f.incompleta.join(', '); infoCl = 'ko'; }
-  else if(isNc){ var lib = scNcCredito(f), n = scNcUsi(f).length; info = lib > 0.01 ? 'Credito da usare ' + fmt(lib) : 'Usata su ' + (n === 1 ? '1 fattura' : n + ' fatture'); infoCl = lib > 0.01 ? 'warn' : ''; if(lib > 0.01) az = '<button class="rg-az" onclick="event.stopPropagation();apriCollegaNC(' + pnIdJs(f.id) + ')">Usa</button>'; }
+  else if(isNc){ var lib = scNcCredito(f), n = scNcUsi(f).length, Rq = (typeof ricConti === 'function') ? ricConti(f) : null;
+    if(Rq && Rq.tipo === 'nota_credito'){
+      info = Rq.stato === 'rimborsata' ? 'Rimborsata ' + fmt(Rq.rimborsato) : Rq.stato === 'chiusa' ? 'Chiusa' : Rq.stato === 'compensata' ? 'Scalata su ' + (n === 1 ? '1 fattura' : n + ' fatture') : Rq.stato === 'da_incassare' ? 'Da incassare ' + fmt(Rq.residuo) : Rq.stato === 'rimborso_parziale' ? 'Rimborso parziale · mancano ' + fmt(Rq.residuo) : 'Credito da usare ' + fmt(Rq.residuo);
+      infoCl = Rq.residuo > 0.5 ? 'warn' : '';
+    } else { info = lib > 0.01 ? 'Credito da usare ' + fmt(lib) : 'Usata su ' + (n === 1 ? '1 fattura' : n + ' fatture'); infoCl = lib > 0.01 ? 'warn' : ''; }
+    if(lib > 0.01) az = '<button class="rg-az" onclick="event.stopPropagation();apriCollegaNC(' + pnIdJs(f.id) + ')">Usa</button>'; }
   else if(isDdt){ info = f.fattNum ? 'Fattura n° ' + f.fattNum : ''; infoCl = ''; if(!f.fattNum) az = '<button class="rg-az" onclick="event.stopPropagation();openEditDdt(' + pnIdJs(f.id) + ')">Aggancia</button>'; }
   else if(st !== 'pagata'){
     if(prox){ var g = scGiorni(oggi, prox.data); info = (g < 0 ? 'Scaduta ' + pnQuando(g) : g === 0 ? 'Scade oggi' : g <= 30 ? 'Scade ' + pnQuando(g) : 'Scade il ' + pnGg(prox.data)) + (prox.tot > 1 ? ' · rata ' + prox.n + '/' + prox.tot : ''); infoCl = g < 0 ? 'ko' : g <= 7 ? 'warn' : ''; }
@@ -32932,6 +32979,901 @@ async function pnaProssimi(){
     var l = j.prossimi || [];
     el.innerHTML = !j.attivo ? '<span class="sk-dim">Avvisi spenti.</span>' : l.length ? l.map(function(g){ return '<div class="pa-g"><b>' + esc(new Date(g.data + 'T12:00:00').toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long' })) + '</b>' + g.voci.map(function(v){ return '<div class="pa-v ' + v.tipo + '">' + esc(v.frase) + '</div>'; }).join('') + '</div>'; }).join('') : '<span class="sk-dim">Nessun avviso nei prossimi 14 giorni.</span>';
   }catch(e){ el.innerHTML = '<span style="color:var(--red);font-size:13px">Anteprima non disponibile (' + esc(e.message || e) + ')</span>'; }
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
+   MOTORE DEI CONTI (v10.13.0) — una sola verità per pagato, residuo e stato
+   ──────────────────────────────────────────────────────────────────────
+   Prima "pagato" (parzPagato) e "stato" erano numeri che ogni funzione
+   cambiava a mano: + quando colleghi, − quando scolleghi. Bastava un
+   percorso che sbagliava (es. spostare una nota di credito da una fattura
+   all'altra) perché il numero restasse sporco per sempre: è il residuo di
+   9,51 € della Europa 23 n.1258 (14,43 € tolti e mai rimessi, poi +4,92).
+   Ora i conti si RICALCOLANO dalle prove, ogni volta:
+     · movimenti di banca, SumUp e carta collegati — con la QUOTA giusta
+       quando un movimento paga più fatture (assegno SIRO da 1.082,52 €
+       su tre fatture: prima ognuna risultava pagata 1.082,52 €);
+     · contanti della Prima Nota collegati;
+     · pagamenti registrati a mano in attesa della banca;
+     · note di credito: compensate o da rimborsare, lo decidono i numeri
+       (non un'etichetta messa a mano).
+   parzPagato e stato restano salvati solo come copia, riallineata qui
+   (mai al ribasso in automatico: se le prove dicono meno di quanto
+   registrato, l'app lo segnala invece di cambiare da sola).
+   ══════════════════════════════════════════════════════════════════════ */
+var RIC = { cache: null, ver: 0, pn: null, pnInCarica: false, timer: null, ARROT: 0.5, ncNote: {} };
+function ricR2(n){ return Math.round((+n || 0) * 100) / 100; }
+function ricMovKey(id){ return String(id == null ? '' : id).replace(/^carta:/, ''); }
+function ricInvalida(){ RIC.ver++; RIC.cache = null; }
+function ricDoc(f){ return !!f && !f.deleted_at && !f.deletedAt; }
+function ricGg(d){ d = String(d || '').slice(0, 10); return d ? d.slice(8, 10) + '/' + d.slice(5, 7) + '/' + d.slice(0, 4) : '—'; }
+function ricEur(n){ return (typeof fmt === 'function') ? fmt(n) : ('€ ' + ricR2(n).toFixed(2)); }
+
+// Contanti della Prima Nota collegati alle fatture: una sola lettura leggera
+// (poche righe), poi i conti si ridisegnano da soli.
+function ricCaricaContanti(forza){
+  if(RIC.pnInCarica || (RIC.pn && !forza) || typeof sbFetchAll !== 'function') return;
+  RIC.pnInCarica = true;
+  sbFetchAll('prima_nota_movimenti?select=id,data,importo,fonte,descrizione,fattura_id,deleted_at&fattura_id=not.is.null')
+    .then(function(r){
+      var m = {};
+      (r || []).forEach(function(x){ if(!x.deleted_at && x.fattura_id != null) (m[String(x.fattura_id)] = m[String(x.fattura_id)] || []).push(x); });
+      RIC.pn = m; ricInvalida();
+      try{ if(typeof _schedaAggiorna === 'function') _schedaAggiorna(); }catch(e){}
+    })
+    .catch(function(){ RIC.pn = RIC.pn || null; })
+    .then(function(){ RIC.pnInCarica = false; });
+}
+function ricContantiDi(fid){
+  var k = String(fid);
+  if(typeof PNA !== 'undefined' && PNA.schedaPn && PNA.schedaPn[k]) return PNA.schedaPn[k];
+  return (RIC.pn && RIC.pn[k]) || [];
+}
+
+/* ── Indice di tutti i collegamenti (costruito una volta per disegno) ── */
+function ricIndice(){
+  var F = (typeof fatture !== 'undefined' && fatture) || [];
+  var B = (typeof _bancaMovimenti !== 'undefined' && _bancaMovimenti) || [];
+  var K = (typeof _cartaMovimenti !== 'undefined' && _cartaMovimenti) || [];
+  var c = RIC.cache;
+  if(c && c.F === F && c.nF === F.length && c.B === B && c.nB === B.length && c.K === K && c.nK === K.length && c.ver === RIC.ver && c.pn === RIC.pn) return c;
+  if(!RIC.pn) ricCaricaContanti();
+  c = { F: F, nF: F.length, B: B, nB: B.length, K: K, nK: K.length, ver: RIC.ver, pn: RIC.pn,
+        doc: {}, mov: {}, link: {}, prove: {}, legacy: {}, arrot: {}, ncSu: {}, ncTot: {}, rimb: {}, versoNc: {}, quoteMov: {}, conti: {} };
+  F.forEach(function(f){ if(ricDoc(f)) c.doc[String(f.id)] = f; });
+  B.forEach(function(m){ if(m && m.id != null) c.mov[ricMovKey(m.id)] = { id: m.id, data: m.data, importo: +m.importo || 0, descrizione: m.descrizione || '', banca: m.banca || 'BPM', fatturaId: m.fatturaId, tipo: 'banca', ignorata: !!m.ignorata, abbinata: !!m.abbinata }; });
+  K.forEach(function(m){ if(m && m.id != null) c.mov[ricMovKey(m.id)] = { id: m.id, data: m.data, importo: -Math.abs(+m.importo || 0), descrizione: m.descrizione || '', banca: 'Carta' + (m.cartaUltime4 ? ' ••' + m.cartaUltime4 : ''), fatturaId: m.fatturaId, tipo: 'carta' }; });
+
+  // note di credito usate su ogni fattura (dai legami scritti nella nota)
+  F.forEach(function(n){
+    if(!ricDoc(n) || n.tipo !== 'nota_credito') return;
+    if(RIC.ncNote[String(n.id)] === undefined) RIC.ncNote[String(n.id)] = String(n.note || '');
+    scNcUsi(n).forEach(function(u){
+      var k = String(u.fid);
+      (c.ncSu[k] = c.ncSu[k] || []).push({ nc: n, imp: u.imp, flagP: u.pagata });
+      c.ncTot[k] = ricR2((c.ncTot[k] || 0) + u.imp);
+    });
+  });
+
+  // legami dichiarati documento → movimento (una voce per movimento per documento)
+  var giaDoc = {};
+  function lega(fid, key, dich, voce, implicito){
+    var g = giaDoc[fid] = giaDoc[fid] || {};
+    if(g[key]) return; g[key] = 1;
+    (c.link[key] = c.link[key] || []).push({ fid: fid, dich: ricR2(Math.abs(+dich || 0)), voce: voce || null, implicito: !!implicito });
+  }
+  Object.keys(c.doc).forEach(function(fid){
+    var f = c.doc[fid];
+    if(f.tipo === 'ddt') return;
+    var voci = (Array.isArray(f.riconciliazioneStorico) ? f.riconciliazioneStorico.slice() : []);
+    if(f.riconciliazione && (f.riconciliazione.movId || f.riconciliazione.importo)) voci.push(f.riconciliazione);
+    voci.forEach(function(r){
+      if(!r) return;
+      if(!r.movId){
+        // vecchio collegamento senza codice movimento: vale come prova a sé
+        if(+r.importo) (c.legacy[fid] = c.legacy[fid] || []).push({ tipo: 'banca', movId: null, data: r.data || '', importo: ricR2(Math.abs(+r.importo)), totale: null, conto: r.banca || 'BPM', descr: r.descrizione || '', condiviso: false, senzaCodice: true });
+        return;
+      }
+      var key = ricMovKey(r.movId), mv = c.mov[key];
+      lega(fid, key, (+r.importo) || (mv ? Math.abs(mv.importo) : 0), r, false);
+    });
+  });
+  // il movimento dice "sono di questa fattura" ma la fattura non lo sa (vecchi dati)
+  Object.keys(c.mov).forEach(function(key){
+    var mv = c.mov[key];
+    if(mv.fatturaId == null || !c.doc[String(mv.fatturaId)]) return;
+    lega(String(mv.fatturaId), key, Math.abs(mv.importo), null, true);
+  });
+
+  // ── QUOTE: quanto di ogni movimento va a ogni documento ──
+  // I collegamenti salvati non sono sempre "puliti": vecchi pagamenti di gruppo
+  // salvati con l'importo intero su ogni fattura (assegno SIRO da 1.082,52 €
+  // su tre fatture), un movimento che punta a una fattura che non lo sa
+  // (ARTECARTA: due assegni, due fatture), note di credito scalate dentro un
+  // bonifico cumulativo (Leasys). Le quote si ricostruiscono per GRUPPI:
+  // movimenti e documenti collegati tra loro, anche indirettamente.
+  var A_ = RIC.ARROT;
+  var lordoDi = function(fid){ var f = c.doc[fid]; return f ? ricR2(Math.abs(+f.importo || 0)) : 0; };
+  var netto = function(fid){ return ricR2(Math.max(0, lordoDi(fid) - (c.ncTot[fid] || 0))); };
+  c.ncNettoLibero = {}; c.ncNettoUsato = {};
+  // 1) note di credito dentro un pagamento (uscita): si scalano dalle fatture su cui sono usate
+  Object.keys(c.link).forEach(function(key){
+    var L = c.link[key], mv = c.mov[key];
+    if(mv && mv.importo > 0) return;                                  // entrate: rimborsi, gestiti a parte
+    var ncL = L.filter(function(l){ var f = c.doc[l.fid]; return f && f.tipo === 'nota_credito'; });
+    if(!ncL.length) return;
+    var fatL = L.filter(function(l){ var f = c.doc[l.fid]; return f && f.tipo !== 'nota_credito'; });
+    ncL.forEach(function(l){
+      if(!fatL.length){ l.soloNc = true; return; }                     // nc da sola su un'uscita: anomalia
+      var resto = l.dich;
+      fatL.forEach(function(fl){
+        if(resto <= 0.009) return;
+        (c.ncSu[fl.fid] || []).forEach(function(u){
+          if(String(u.nc.id) !== l.fid || resto <= 0.009) return;
+          var q = ricR2(Math.min(u.imp, resto, fl.dich));
+          fl.dich = ricR2(fl.dich - q); resto = ricR2(resto - q);
+          c.ncNettoUsato[l.fid] = ricR2((c.ncNettoUsato[l.fid] || 0) + q);
+        });
+      });
+      l.netta = true; l.negativo = resto;
+      if(resto > 0.009) c.ncNettoLibero[l.fid] = ricR2((c.ncNettoLibero[l.fid] || 0) + resto);
+    });
+  });
+  // 2) gruppi (union-find su movimenti e fatture)
+  var padre = {};
+  var trova = function(x){ while(padre[x] !== x){ padre[x] = padre[padre[x]]; x = padre[x]; } return x; };
+  var unisci = function(a, b){ if(padre[a] === undefined) padre[a] = a; if(padre[b] === undefined) padre[b] = b; var ra = trova(a), rb = trova(b); if(ra !== rb) padre[ra] = rb; };
+  Object.keys(c.link).forEach(function(key){
+    var mv = c.mov[key]; if(mv && mv.importo > 0) return;
+    c.link[key].forEach(function(l){ var f = c.doc[l.fid]; if(f && f.tipo !== 'nota_credito') unisci('m:' + key, 'f:' + l.fid); });
+  });
+  var gruppi = {};
+  Object.keys(padre).forEach(function(x){ var r = trova(x); (gruppi[r] = gruppi[r] || { mov: [], fat: [] })[x.charAt(0) === 'm' ? 'mov' : 'fat'].push(x.slice(2)); });
+  var quota = {};   // quota[key][fid]
+  var qAdd = function(key, fid, q, inferita){ if(q <= 0.0049) return; var k = quota[key] = quota[key] || {}; var o = k[fid] = k[fid] || { q: 0, inferita: !!inferita }; o.q = ricR2(o.q + q); if(!inferita) o.inferita = false; };
+  c.doppi = {}; c.avanzi = {};
+  Object.keys(gruppi).forEach(function(r){
+    var G = gruppi[r];
+    var dataDi = function(fid){ var f = c.doc[fid]; return String((f && f.data) || ''); };
+    G.fat.sort(function(a, b){ return dataDi(a).localeCompare(dataDi(b)) || (lordoDi(a) - lordoDi(b)); });
+    G.mov.sort(function(a, b){ return String((c.mov[a] || {}).data || '').localeCompare(String((c.mov[b] || {}).data || '')); });
+    var tuttiNoti = G.mov.every(function(k){ return !!c.mov[k]; });
+    var negativi = 0;
+    G.mov.forEach(function(k){ c.link[k].forEach(function(l){ if(l.netta) negativi = ricR2(negativi + (l.negativo || 0)); }); });
+    var soldi = ricR2(G.mov.reduce(function(s, k){ return s + (c.mov[k] ? Math.abs(c.mov[k].importo) : 0); }, 0));
+    var serveMin = ricR2(G.fat.reduce(function(s, f){ return s + netto(f); }, 0)), serveMax = ricR2(G.fat.reduce(function(s, f){ return s + lordoDi(f); }, 0));
+    var disponibile = ricR2(soldi + negativi), tol = A_ + 0.01 * G.fat.length;
+    var restaMov = {}; G.mov.forEach(function(k){ restaMov[k] = c.mov[k] ? ricR2(Math.abs(c.mov[k].importo)) : Infinity; });
+    // le note di credito scalate dentro il pagamento riducono quello che il movimento porta
+    G.mov.forEach(function(k){ c.link[k].forEach(function(l){ if(l.netta && l.negativo > 0.009 && restaMov[k] !== Infinity){ restaMov[k] = ricR2(restaMov[k] + l.negativo); } }); });
+    var serve = {}; G.fat.forEach(function(f){ serve[f] = lordoDi(f); });
+    var fatLinks = function(k){ return c.link[k].filter(function(l){ var f = c.doc[l.fid]; return f && f.tipo !== 'nota_credito'; }); };
+    if(tuttiNoti && G.fat.length > 1 && disponibile >= serveMin - tol && disponibile <= serveMax + tol){
+      // GRUPPO SALDATO: i soldi del gruppo coprono esattamente le sue fatture
+      // (es. due assegni per due fatture, anche se collegati "storti")
+      var obiettivo = {}; G.fat.forEach(function(f){ obiettivo[f] = netto(f); });
+      var extra = ricR2(disponibile - serveMin);
+      G.fat.forEach(function(f){ if(extra > 0.009){ var spazio = ricR2(lordoDi(f) - obiettivo[f]); var q = Math.min(spazio, extra); obiettivo[f] = ricR2(obiettivo[f] + q); extra = ricR2(extra - q); } });
+      // prima le coppie dichiarate, poi il resto dove serve
+      G.mov.forEach(function(k){ fatLinks(k).forEach(function(l){ var q = ricR2(Math.min(l.dich, restaMov[k], obiettivo[l.fid])); if(q > 0){ qAdd(k, l.fid, q); restaMov[k] = ricR2(restaMov[k] - q); obiettivo[l.fid] = ricR2(obiettivo[l.fid] - q); } }); });
+      G.fat.forEach(function(f){ G.mov.forEach(function(k){ if(obiettivo[f] > 0.009 && restaMov[k] > 0.009){ var q = ricR2(Math.min(obiettivo[f], restaMov[k])); qAdd(k, f, q, true); restaMov[k] = ricR2(restaMov[k] - q); obiettivo[f] = ricR2(obiettivo[f] - q); } }); });
+      G.saldato = true;
+    } else {
+      // GRUPPO NON QUADRATO: ogni movimento va ai suoi documenti, mai oltre il totale di ognuno
+      G.mov.forEach(function(k){
+        fatLinks(k).forEach(function(l){
+          var prima = serve[l.fid];
+          var q = ricR2(Math.max(0, Math.min(l.dich, restaMov[k], serve[l.fid])));
+          qAdd(k, l.fid, q); restaMov[k] = restaMov[k] === Infinity ? Infinity : ricR2(restaMov[k] - q); serve[l.fid] = ricR2(serve[l.fid] - q);
+          var tolto = ricR2(l.dich - q);
+          // "pagata due volte" solo se ALTRI movimenti l'avevano già coperta;
+          // un movimento più grande della fattura è un altro caso (vedi avanzi)
+          if(tolto > A_ && serve[l.fid] <= 0.009 && prima < lordoDi(l.fid) - A_) (c.doppi[l.fid] = c.doppi[l.fid] || []).push({ key: k, tolto: tolto });
+        });
+      });
+    }
+    G.mov.forEach(function(k){
+      if(restaMov[k] === Infinity) return;
+      var primo = fatLinks(k)[0]; if(!primo) return;
+      if(restaMov[k] > A_) (c.avanzi[primo.fid] = c.avanzi[primo.fid] || []).push({ key: k, avanzo: restaMov[k] });
+      else if(restaMov[k] > 0.009) c.arrot[primo.fid] = ricR2((c.arrot[primo.fid] || 0) + restaMov[k]);   // pochi centesimi in più: arrotondamento
+    });
+  });
+  // 3) quote finali per movimento e prove per documento
+  Object.keys(c.link).forEach(function(key){
+    var L = c.link[key], mv = c.mov[key];
+    var A = mv ? ricR2(Math.abs(mv.importo)) : null, entrata = mv ? mv.importo > 0 : false;
+    var qk = quota[key] || {};
+    // documenti con quota dedotta ma senza legame dichiarato (gruppo saldato)
+    Object.keys(qk).forEach(function(fid){ if(!L.some(function(l){ return l.fid === fid; })) L.push({ fid: fid, dich: 0, voce: null, implicito: true, dedotta: true }); });
+    L.forEach(function(l){
+      var f = c.doc[l.fid];
+      if(!f) return;
+      if(f.tipo === 'nota_credito' || entrata) l.quota = l.netta ? 0 : l.dich;
+      else l.quota = qk[l.fid] ? qk[l.fid].q : 0;
+    });
+    var assegnato = ricR2(L.reduce(function(s, l){ var f = c.doc[l.fid]; return s + (f && f.tipo !== 'nota_credito' ? (l.quota || 0) : 0); }, 0));
+    var nette = ricR2(L.reduce(function(s, l){ return s + (l.netta ? (l.negativo || 0) : 0); }, 0));
+    c.quoteMov[key] = { totale: A, assegnato: entrata ? ricR2(L.reduce(function(s, l){ return s + (l.quota || 0); }, 0)) : assegnato, nette: nette, libero: A != null ? ricR2(Math.max(0, A + nette - assegnato)) : null, docs: L.filter(function(l){ return l.quota > 0.009; }).map(function(l){ return { fid: l.fid, quota: l.quota, dedotta: !!l.dedotta }; }) };
+    var condiviso = L.filter(function(l){ return l.quota > 0.009; }).length > 1;
+    L.forEach(function(l){
+      var f = c.doc[l.fid]; if(!f) return;
+      var p = { tipo: mv ? mv.tipo : (/^nexi_|^carta:/.test(key) ? 'carta' : 'banca'), movId: mv ? mv.id : (l.voce && l.voce.movId) || key, data: mv ? mv.data : (l.voce && l.voce.data) || '',
+        importo: l.quota || 0, totale: A, conto: mv ? mv.banca : ((l.voce && l.voce.banca) || 'BPM'), descr: mv ? mv.descrizione : ((l.voce && l.voce.descrizione) || ''),
+        condiviso: condiviso, dedotta: !!l.dedotta || !!(qk[l.fid] && qk[l.fid].inferita), implicito: l.implicito, entrata: entrata, mancante: !mv };
+      if(f.tipo === 'nota_credito'){
+        if(entrata) (c.rimb[l.fid] = c.rimb[l.fid] || []).push(p);
+        else if(l.soloNc) (c.versoNc[l.fid] = c.versoNc[l.fid] || []).push(p);
+      } else if(p.importo > 0.009 || !mv) {
+        (c.prove[l.fid] = c.prove[l.fid] || []).push(p);
+      }
+    });
+  });
+
+  // vecchi collegamenti senza codice movimento: valgono solo se nessun movimento
+  // collegato alla stessa fattura ha la stessa data e lo stesso importo (sarebbe lui)
+  Object.keys(c.legacy).forEach(function(fid){
+    c.legacy[fid].forEach(function(p){
+      var gia = (c.prove[fid] || []).some(function(q){
+        if(!q.data || !p.data) return false;
+        var gg = Math.abs((new Date(String(q.data).slice(0, 10)) - new Date(String(p.data).slice(0, 10))) / 86400000);
+        return gg <= 3 && (Math.abs(q.importo - p.importo) <= RIC.ARROT || (q.totale != null && Math.abs(q.totale - p.importo) <= RIC.ARROT));
+      });
+      if(!gia) (c.prove[fid] = c.prove[fid] || []).push(p);
+    });
+  });
+  // contanti della Prima Nota e pagamenti a mano in attesa della banca
+  Object.keys(c.doc).forEach(function(fid){
+    var f = c.doc[fid];
+    if(f.tipo === 'nota_credito' || f.tipo === 'ddt') return;
+    ricContantiDi(fid).forEach(function(p){ (c.prove[fid] = c.prove[fid] || []).push({ tipo: 'contanti', movId: 'pn' + p.id, data: p.data, importo: ricR2(Math.abs(+p.importo || 0)), totale: null, conto: p.fonte === 'fondo' ? 'Fondo cassa' : 'Cassetto', descr: p.descrizione || '', condiviso: false }); });
+    (Array.isArray(f.pagamentiManuali) ? f.pagamentiManuali : []).forEach(function(p){
+      if(p && !p.mov && +p.importo) (c.prove[fid] = c.prove[fid] || []).push({ tipo: 'manuale', movId: null, data: p.data, importo: ricR2(Math.abs(+p.importo || 0)), totale: null, conto: (typeof pnMetodo === 'function' ? pnMetodo(p.metodo) : p.metodo), descr: p.assegno ? 'assegno n° ' + p.assegno : '', metodo: p.metodo, condiviso: false });
+    });
+  });
+
+  RIC.cache = c;
+  if(!RIC.timer) RIC.timer = setTimeout(function(){ RIC.timer = null; RIC.cache = null; }, 0);
+  return c;
+}
+
+/* ── Chi ha ricevuto il bonifico? (SumUp e BPM lo scrivono) ── */
+function ricParole(s){
+  return String(s || '').toLowerCase()
+    .replace(/\b(s\.?r\.?l\.?s?|s\.?p\.?a\.?|s\.?n\.?c\.?|s\.?a\.?s\.?|soc\.?|societa|società|unipersonale|sede|secondaria|italia|italy|europe|eu|it|branch|cons|coop|di|del|della|e|c|nv|sarl|gmbh|ltd)\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ').split(' ').filter(function(w){ return w.length >= 4; });
+}
+function ricBeneficiario(m){
+  if(!m || !m.descrizione) return '';
+  var L = (typeof pnLeggiBanca === 'function') ? pnLeggiBanca(m.descrizione) : { beneficiario: '' };
+  return String(L.beneficiario || '').trim();
+}
+// true / false / null (non si può dire)
+function ricBeneficiarioCoerente(m, f){
+  var b = ricBeneficiario(m); if(!b || !f) return null;
+  var pb = ricParole(b); if(!pb.length) return null;
+  var tf = ricParole((f.fornitore || '') + ' ' + (f.denominazioneXml || ''));
+  var unito = tf.join('');
+  if(!tf.length) return null;
+  var ok = pb.some(function(w){
+    var p = w.slice(0, 5);
+    return tf.some(function(t){ return t.slice(0, 5) === p || t.indexOf(w) === 0 || w.indexOf(t) === 0; }) || unito.indexOf(w) >= 0;
+  });
+  if(!ok){ var bU = pb.join(''); ok = bU.length >= 5 && (unito.indexOf(bU.slice(0, 6)) >= 0 || bU.indexOf(unito.slice(0, 6)) >= 0); }
+  return ok;
+}
+
+/* ── I CONTI DI UN DOCUMENTO ── */
+function ricConti(f){
+  if(!f) return null;
+  var idx = ricIndice(), k = String(f.id);
+  if(idx.conti[k]) return idx.conti[k];
+  var R = f.tipo === 'nota_credito' ? ricContiNc(f, idx) : ricContiFattura(f, idx);
+  idx.conti[k] = R;
+  return R;
+}
+function ricContiFattura(f, idx){
+  var A = RIC.ARROT, k = String(f.id);
+  var lordo = ricR2(Math.abs(+f.importo || 0));
+  var st = scStato(f);
+  var prove = (idx.prove[k] || []).slice().sort(function(a, b){ return String(a.data || '').localeCompare(String(b.data || '')); });
+  var nc = (idx.ncSu[k] || []).slice().sort(function(a, b){ return String(b.nc.data || '').localeCompare(String(a.nc.data || '')); });
+  var ncTot = ricR2(nc.reduce(function(s, x){ return s + x.imp; }, 0));
+  var denaro = ricR2(prove.reduce(function(s, p){ return s + (p.entrata ? -p.importo : p.importo); }, 0));
+  var R = { id: f.id, tipo: f.tipo || 'fattura', lordo: lordo, prove: prove, nc: [], ncTot: ncTot, ncComp: 0, ncRimb: 0, dovuto: lordo,
+            denaro: denaro, pagato: 0, residuo: 0, eccedenza: 0, arrot: 0, nonDocumentato: 0, stato: st, statoDichiarato: st,
+            fonte: prove.length ? 'prove' : 'dichiarato', anomalie: [], spiegazione: '' };
+  if(st === 'annullata'){ R.dovuto = 0; R.spiegazione = 'Documento annullato.'; return R; }
+
+  // quanto delle note di credito è "da rimborsare" (credito arrivato dopo aver pagato tutto)
+  var E = 0;
+  if(prove.length){
+    E = Math.min(ncTot, Math.max(0, ricR2(denaro + ncTot - lordo)));
+    if(E <= A) E = 0;
+  } else {
+    // senza movimenti vale l'etichetta messa quando la nota è stata usata ("era già pagata")
+    E = ricR2(nc.filter(function(x){ return x.flagP; }).reduce(function(s, x){ return s + x.imp; }, 0));
+  }
+  var restoE = E;
+  nc.forEach(function(x){
+    var rimb = ricR2(Math.min(x.imp, restoE)); restoE = ricR2(restoE - rimb);
+    R.nc.push({ nc: x.nc, imp: x.imp, compensata: ricR2(x.imp - rimb), daRimborsare: rimb, pagata: rimb > 0.009 });
+  });
+  R.ncRimb = ricR2(E); R.ncComp = ricR2(ncTot - E);
+  R.dovuto = ricR2(Math.max(0, lordo - R.ncComp));
+
+  // pagato registrato a mano (parzPagato). Convenzione storica: dentro ci sono anche le
+  // note di credito scalate, mentre quelle arrivate "dopo il pagamento" ne sono state tolte.
+  var parzDich = 0;
+  if(st === 'parziale'){
+    var sP = ricR2(nc.filter(function(x){ return x.flagP; }).reduce(function(s, x){ return s + x.imp; }, 0));
+    parzDich = ricR2(Math.max(0, scParz(f) - (ncTot - sP) + sP));
+    if(prove.length && nc.length) parzDich = 0;   // con movimenti e note insieme il numero salvato non è affidabile: contano le prove
+  }
+
+  if(prove.length){
+    var pagato = Math.max(denaro, parzDich);
+    if(parzDich > denaro + A) R.anomalie.push({ liv: 'info', cod: 'manuale_non_collegato', t: 'Pagato registrato ' + ricEur(parzDich) + ', collegati ' + ricEur(denaro), s: 'Una parte del pagamento è stata segnata a mano ma non ha ancora un movimento collegato.' });
+    var diff = ricR2(pagato - R.dovuto);
+    if(diff >= -A){
+      R.stato = 'pagata'; R.residuo = 0; R.pagato = ricR2(Math.min(pagato, R.dovuto));
+      if(diff > A){
+        R.eccedenza = diff; R.pagato = R.dovuto;
+        var due = prove.length > 1 && prove.some(function(p, i){ return prove.some(function(q, j){ return j > i && Math.abs(p.importo - q.importo) < 0.01; }); });
+        if(!idx.doppi[k]) R.anomalie.push({ liv: 'ko', cod: 'pagata_in_piu', t: (due ? 'Risulta pagata due volte: ' : 'Pagati ') + ricEur(diff) + ' in più', s: due ? 'Due pagamenti dello stesso importo (' + prove.map(function(p){ return ricGg(p.data); }).join(' e ') + '). Uno dei due appartiene probabilmente a un\'altra fattura: aprilo e spostalo.' : 'I pagamenti collegati superano il dovuto di ' + ricEur(diff) + '. Se il fornitore deve restituirli, aspetta una nota di credito; altrimenti uno dei movimenti è di un\'altra fattura.' });
+      } else if(Math.abs(diff) > 0.009) R.arrot = diff;
+      if(!R.arrot && idx.arrot[k]) R.arrot = idx.arrot[k];
+    } else {
+      R.pagato = ricR2(Math.max(0, pagato)); R.residuo = ricR2(-diff);
+      if(st === 'pagata'){
+        R.stato = 'pagata'; R.nonDocumentato = R.residuo; R.residuo = 0; R.pagato = R.dovuto;
+        R.anomalie.push({ liv: 'warn', cod: 'pagata_non_documentata', t: 'Segnata pagata, ma i movimenti collegati coprono ' + ricEur(R.dovuto - R.nonDocumentato) + ' su ' + ricEur(R.dovuto), s: 'Mancano ' + ricEur(R.nonDocumentato) + ' di prove: collega gli altri pagamenti (assegni, bonifici o contanti) per chiuderla davvero.' });
+      } else R.stato = R.pagato > 0.009 ? 'parziale' : 'da_pagare';
+    }
+  } else {
+    if(st === 'pagata'){ R.pagato = R.dovuto; R.residuo = 0; }
+    else if(st === 'parziale'){ R.pagato = parzDich; R.residuo = ricR2(Math.max(0, R.dovuto - R.pagato)); if(R.residuo <= 0.009 && R.dovuto > 0) R.stato = 'pagata'; }
+    else { R.pagato = 0; R.residuo = R.dovuto; if(R.dovuto <= 0.009 && ncTot > 0) R.stato = 'pagata'; }
+  }
+
+  // controlli sulle prove: bonifico intestato a qualcun altro, movimento sparito
+  prove.forEach(function(p){
+    if(p.mancante && p.tipo === 'banca' && p.movId && !/^pn/.test(String(p.movId))) return;
+    var mv = idx.mov[ricMovKey(p.movId)];
+    if(mv && mv.tipo === 'banca' && ricBeneficiarioCoerente(mv, f) === false){
+      R.anomalie.push({ liv: 'ko', cod: 'beneficiario_diverso', movId: mv.id, t: 'Il pagamento del ' + ricGg(mv.data) + ' è intestato a «' + ricBeneficiario(mv) + '»', s: 'Non a ' + (f.fornitore || 'questo fornitore') + ': probabilmente è stato collegato solo perché l\'importo era simile. Aprilo e scollegalo se non è di questa fattura.' });
+    }
+    if(p.entrata) R.anomalie.push({ liv: 'info', cod: 'entrata_su_fattura', movId: p.movId, t: 'C\'è un incasso collegato (' + ricEur(p.importo) + ' del ' + ricGg(p.data) + ')', s: 'Vale come soldi restituiti dal fornitore e riduce il pagato.' });
+  });
+  (idx.doppi[k] || []).forEach(function(d){
+    var mv = idx.mov[d.key];
+    var stesso = mv && Math.abs(Math.abs(mv.importo) - lordo) <= A;
+    if(!R.anomalie.some(function(a){ return a.cod === 'pagata_in_piu'; }))
+      R.anomalie.push({ liv: 'ko', cod: 'collegato_in_piu', movId: mv ? mv.id : d.key, t: stesso ? 'Risulta pagata due volte' : 'Collegati ' + ricEur(d.tolto) + ' in più della fattura', s: (mv ? 'Il pagamento del ' + ricGg(mv.data) + ' (' + ricEur(Math.abs(mv.importo)) + ')' : 'Un pagamento') + ' è collegato, ma la fattura era già coperta dagli altri. ' + (stesso ? 'Probabilmente è di un\'altra fattura dello stesso importo: aprilo e spostalo.' : 'Probabilmente paga anche altre fatture: collegale insieme con «Più fatture».') });
+  });
+  (idx.avanzi[k] || []).forEach(function(d){
+    var mv = idx.mov[d.key]; if(!mv) return;
+    if((idx.doppi[k] || []).length){
+      // stessa storia del "collegato in più": un solo avviso, con tutti e due i pagamenti
+      var a0 = R.anomalie.find(function(a){ return a.cod === 'collegato_in_piu'; });
+      if(a0){ var altri = (idx.prove[k] || []).filter(function(p){ return p.movId !== mv.id; }).map(function(p){ return ricGg(p.data) + ' (' + ricEur(p.totale != null ? p.totale : p.importo) + ')'; });
+        a0.t = 'Risulta pagata due volte'; a0.s = 'Pagamento del ' + ricGg(mv.data) + ' (' + ricEur(Math.abs(mv.importo)) + ')' + (altri.length ? ' e del ' + altri.join(', ') : '') + ': la fattura risulta coperta due volte. Se il fornitore ha incassato due volte, chiedi rimborso o nota di credito; altrimenti uno dei pagamenti è di un\'altra fattura: aprilo e spostalo.'; return; }
+    }
+    R.anomalie.push({ liv: 'warn', cod: 'movimento_avanza', movId: mv.id, t: 'Il pagamento del ' + ricGg(mv.data) + ' (' + ricEur(Math.abs(mv.importo)) + ') copre ' + ricEur(d.avanzo) + ' in più', s: 'Quei soldi non risultano su nessuna fattura collegata: manca una fattura (cercala nel cassetto fiscale) oppure il movimento paga anche altre fatture da collegare.' });
+  });
+  if(R.prove.some(function(p){ return p.dedotta; })) R.anomalie.push({ liv: 'info', cod: 'cumulativo', t: 'Pagata con un pagamento cumulativo', s: 'I movimenti del gruppo coprono esattamente le sue fatture: le quote sono state ricostruite dall\'app.' });
+  if(R.arrot) R.anomalie.push({ liv: 'info', cod: 'arrotondamento', t: 'Differenza di ' + ricEur(Math.abs(R.arrot)) + ' considerata arrotondamento', s: 'Sotto ' + ricEur(A) + ' non si tiene aperto nulla.' });
+
+  // frase che spiega il conto, in italiano semplice
+  var pz = [];
+  pz.push('Totale ' + ricEur(lordo));
+  if(R.ncComp > 0.009) pz.push('− note di credito ' + ricEur(R.ncComp) + ' = da pagare ' + ricEur(R.dovuto));
+  if(R.fonte === 'prove') pz.push('Pagati ' + ricEur(Math.max(0, denaro)) + ' (' + prove.length + (prove.length === 1 ? ' pagamento collegato' : ' pagamenti collegati') + ')');
+  else if(st === 'pagata') pz.push('Segnata pagata (nessun movimento collegato)');
+  else if(st === 'parziale') pz.push('Pagati ' + ricEur(R.pagato) + ' (registrati a mano)');
+  if(R.residuo > 0.009) pz.push('Restano ' + ricEur(R.residuo));
+  if(R.ncRimb > 0.009) pz.push('Credito da farsi rimborsare ' + ricEur(R.ncRimb));
+  R.spiegazione = pz.join(' · ');
+  return R;
+}
+function ricContiNc(n, idx){
+  var A = RIC.ARROT, k = String(n.id);
+  var credito = ricR2(Math.abs(+n.importo || 0));
+  var usi = scNcUsi(n), compensato = 0, daRimb = 0, usato = 0, dettagli = [];
+  usi.forEach(function(u){
+    usato = ricR2(usato + u.imp);
+    var f = idx.doc[String(u.fid)], part = null;
+    if(f){
+      var C = ricConti(f);
+      part = (C.nc || []).find(function(x){ return String(x.nc.id) === k; });
+    }
+    var comp = part ? part.compensata : (u.pagata ? 0 : u.imp), rimb = part ? part.daRimborsare : (u.pagata ? u.imp : 0);
+    compensato = ricR2(compensato + comp); daRimb = ricR2(daRimb + rimb);
+    dettagli.push({ fid: u.fid, f: f || null, label: u.label, imp: u.imp, compensata: comp, daRimborsare: rimb });
+  });
+  var netta = ricR2(idx.ncNettoLibero[k] || 0);
+  if(netta > 0.009){ compensato = ricR2(compensato + netta); usato = ricR2(usato + netta); dettagli.push({ fid: null, f: null, label: 'scalata dentro un pagamento cumulativo', imp: netta, compensata: netta, daRimborsare: 0, netta: true }); }
+  var libero = ricR2(Math.max(0, credito - usato));
+  var rimborsi = (idx.rimb[k] || []).slice().sort(function(a, b){ return String(a.data || '').localeCompare(String(b.data || '')); });
+  var rimborsato = ricR2(rimborsi.reduce(function(s, p){ return s + p.importo; }, 0));
+  var atteso = ricR2(daRimb + libero);
+  var residuo = ricR2(Math.max(0, atteso - rimborsato));
+  // il rimborso consuma prima la parte "da rimborsare", poi il credito libero
+  var liberoDopo = ricR2(Math.max(0, libero - Math.max(0, rimborsato - daRimb)));
+  var R = { id: n.id, tipo: 'nota_credito', credito: credito, usi: dettagli, usato: usato, compensato: compensato, daRimborsare: daRimb, libero: libero, liberoDopoRimborsi: liberoDopo,
+            rimborsi: rimborsi, rimborsato: rimborsato, atteso: atteso, residuo: residuo, stato: '', anomalie: [], spiegazione: '' };
+  if(residuo <= A) R.stato = rimborsato > 0.009 ? (compensato > 0.009 ? 'chiusa' : 'rimborsata') : (usato > 0.009 ? 'compensata' : 'chiusa');
+  else if(rimborsato > 0.009) R.stato = 'rimborso_parziale';
+  else if(daRimb > A) R.stato = 'da_incassare';
+  else R.stato = 'credito_libero';
+  if(rimborsato > atteso + A) R.anomalie.push({ liv: 'warn', cod: 'rimborso_in_piu', t: 'Rimborsati ' + ricEur(rimborsato - atteso) + ' più del credito', s: 'Controlla se la nota è stata anche scalata da una fattura: in quel caso il credito è stato usato due volte.' });
+  (idx.versoNc[k] || []).forEach(function(p){
+    var cand = dettagli.length === 1 && dettagli[0].f ? dettagli[0].f : null;
+    R.anomalie.push({ liv: 'ko', cod: 'nc_su_uscita', movId: p.movId, verso: cand ? cand.id : null,
+      t: 'Collegata a un\'uscita (' + ricEur(p.importo) + ' del ' + ricGg(p.data) + ')', s: 'Una nota di credito si incassa, non si paga.' + (cand ? ' Quel movimento è probabilmente il pagamento della fattura n° ' + (cand.numero || '—') + ': spostalo lì.' : ' Scollegalo e collegalo alla fattura che ha pagato.') });
+  });
+  var pz = ['Credito ' + ricEur(credito)];
+  if(compensato > 0.009) pz.push('scalato da fatture ' + ricEur(compensato));
+  if(rimborsato > 0.009) pz.push('rimborsato ' + ricEur(rimborsato));
+  if(residuo > A) pz.push((daRimb > A ? 'da incassare ' : 'ancora libero ') + ricEur(residuo));
+  R.spiegazione = pz.join(' · ');
+  return R;
+}
+// Per l'elenco: frase breve sullo stato di una nota di credito
+function ricNcEtichetta(R){
+  return ({ chiusa: ['ok', 'Chiusa'], rimborsata: ['ok', 'Rimborsata'], compensata: ['ok', 'Scalata da fattura'], rimborso_parziale: ['info', 'Rimborso parziale'], da_incassare: ['warn', 'Da incassare'], credito_libero: ['warn', 'Credito da usare'] })[R.stato] || ['nd', R.stato];
+}
+
+/* ── Rimborsi: bonifici in entrata che possono chiudere una nota di credito ── */
+// Quanto è credibile che il bonifico m sia il rimborso della nota n? (null = per niente)
+function ricValutaRimborso(n, m, C, idx){
+  if(!m || m.tipo !== 'banca' || !(m.importo > 0)) return null;
+  var key = ricMovKey(m.id), q = idx.quoteMov[key];
+  if(q && q.assegnato > 0.009) return null;                 // già collegato a qualcosa
+  if(m.fatturaId != null && String(m.fatturaId) !== String(n.id)) return null;
+  var d = String(m.descrizione || '');
+  if(/numia|sumup|versament|vers\.?\s*contanti|inc\.?\s*pos|giroconto|ceraldi\s+group/i.test(d)) return null;
+  var serve = C.residuo, imp = ricR2(m.importo);
+  if(imp > serve + RIC.ARROT) return null;
+  var dNc = new Date(String(n.data || '').slice(0, 10) + 'T12:00:00'), dM = new Date(String(m.data || '').slice(0, 10) + 'T12:00:00');
+  var gg = Math.round((dM - dNc) / 86400000);
+  if(gg < -15 || gg > 240) return null;
+  var fTok = ricParole((n.fornitore || '') + ' ' + (n.denominazioneXml || ''));
+  var punti = 0, motivi = [];
+  var numOk = !!(n.numero && _numeroFatturaNelTesto(n.numero, d));
+  if(numOk){ punti += 60; motivi.push('La causale cita la nota di credito n° ' + n.numero); }
+  var nomeOk = fTok.length && ricParole(d).some(function(w){ return fTok.some(function(t){ return t.slice(0, 5) === w.slice(0, 5); }); });
+  if(nomeOk){ punti += 30; motivi.push('Il bonifico arriva da ' + (n.fornitore || 'questo fornitore')); }
+  if(Math.abs(imp - serve) <= 0.01){ punti += 30; motivi.push('Importo identico al credito da incassare (' + ricEur(serve) + ')'); }
+  else if(C.daRimborsare > 0 && Math.abs(imp - C.daRimborsare) <= RIC.ARROT){ punti += 20; motivi.push('Importo uguale alla parte da rimborsare'); }
+  else { punti += 5; motivi.push('Copre ' + ricEur(imp) + ' di ' + ricEur(serve)); }
+  if(/rimbors|storno|nota\s*(di\s*)?credito|\bn\.?\s*c\.?\b|\bnc\b|refund/i.test(d)){ punti += 10; motivi.push('La causale parla di rimborso'); }
+  if(gg >= -3 && gg <= 20){ punti += 10; motivi.push(gg <= 0 ? 'Arrivato lo stesso giorno della nota' : 'Arrivato ' + gg + (gg === 1 ? ' giorno' : ' giorni') + ' dopo la nota'); }
+  if(!nomeOk && !numOk) punti -= 30;                       // senza nome né numero è solo una coincidenza d'importo
+  if(punti < 40) return null;
+  return { mov: m, punti: punti, livello: punti >= 90 ? 'certo' : (punti >= 60 ? 'probabile' : 'possibile'), motivi: motivi };
+}
+function ricCandidatiRimborso(n, opz){
+  opz = opz || {};
+  var idx = ricIndice(), C = ricConti(n); if(!C || C.tipo !== 'nota_credito') return [];
+  if(C.residuo <= RIC.ARROT && !opz.tutti) return [];
+  var out = [];
+  Object.keys(idx.mov).forEach(function(key){ var v = ricValutaRimborso(n, idx.mov[key], C, idx); if(v) out.push(v); });
+  return out.sort(function(a, b){ return b.punti - a.punti || String(a.mov.data).localeCompare(String(b.mov.data)); });
+}
+// Per un bonifico in entrata: di quale nota di credito potrebbe essere il rimborso?
+function ricRimborsiPerMovimento(movId){
+  var idx = ricIndice(), m = idx.mov[ricMovKey(movId)], out = [];
+  if(!m || !(m.importo > 0)) return out;
+  (fatture || []).forEach(function(n){
+    if(!ricDoc(n) || n.tipo !== 'nota_credito') return;
+    var C = ricConti(n); if(C.residuo <= RIC.ARROT) return;
+    var v = ricValutaRimborso(n, m, C, idx); if(v) out.push({ nc: n, c: v });
+  });
+  return out.sort(function(a, b){ return b.c.punti - a.c.punti; });
+}
+// Tutte le proposte di rimborso dell'archivio, senza dare lo stesso bonifico a due note
+function ricProposteRimborsi(){
+  var tutte = [];
+  (fatture || []).forEach(function(n){
+    if(!ricDoc(n) || n.tipo !== 'nota_credito') return;
+    ricCandidatiRimborso(n).forEach(function(c){ tutte.push({ nc: n, c: c }); });
+  });
+  tutte.sort(function(a, b){ return b.c.punti - a.c.punti; });
+  var movUsati = {}, ncServe = {}, out = [];
+  tutte.forEach(function(x){
+    var mk = String(x.c.mov.id), nk = String(x.nc.id);
+    if(movUsati[mk]) return;
+    if(ncServe[nk] == null) ncServe[nk] = ricConti(x.nc).residuo;
+    if(ncServe[nk] <= RIC.ARROT) return;
+    if(x.c.mov.importo > ncServe[nk] + RIC.ARROT) return;
+    movUsati[mk] = 1; ncServe[nk] = ricR2(ncServe[nk] - x.c.mov.importo);
+    out.push(x);
+  });
+  return out;
+}
+
+/* ── Collega / scollega un rimborso (bonifico in entrata ↔ nota di credito) ── */
+async function ricCollegaRimborso(ncId, movId, opz){
+  opz = opz || {};
+  var n = pnF(ncId), m = (_bancaMovimenti || []).find(function(x){ return String(x.id) === String(movId); });
+  if(!n || n.tipo !== 'nota_credito' || !m) return false;
+  if(!(m.importo > 0)){ if(!opz.muto) toast('Questo movimento è un\'uscita: non può essere un rimborso'); return false; }
+  var prima = { mov: { abbinata: m.abbinata, fatturaId: m.fatturaId, fatturaLabel: m.fatturaLabel }, ric: n.riconciliazione ? JSON.parse(JSON.stringify(n.riconciliazione)) : null, sto: JSON.parse(JSON.stringify(n.riconciliazioneStorico || [])) };
+  m.abbinata = true; m.fatturaId = n.id; m.fatturaLabel = 'Rimborso nota di credito ' + (n.fornitore || '') + ' N°' + (n.numero || '');
+  _impostaDatiRiconciliazione(n, m, false, Math.abs(m.importo));
+  n.riconciliazione.rimborso = true;
+  if(Array.isArray(n.riconciliazioneStorico) && n.riconciliazioneStorico.length) n.riconciliazioneStorico[n.riconciliazioneStorico.length - 1].rimborso = true;
+  n.riconciliata = true;
+  ricInvalida();
+  try{
+    await salvaMovimentoBanca(m);
+    await dbUpdate(n);
+  }catch(e){
+    m.abbinata = prima.mov.abbinata; m.fatturaId = prima.mov.fatturaId; m.fatturaLabel = prima.mov.fatturaLabel;
+    n.riconciliazione = prima.ric; n.riconciliazioneStorico = prima.sto; ricInvalida();
+    if(!opz.muto) toast('❌ Non salvato: ' + (e.message || e));
+    return false;
+  }
+  try{ _salvaBancaLocale(); }catch(e){}
+  if(!opz.muto){ toast('🔗 Rimborso di ' + ricEur(m.importo) + ' collegato alla nota n° ' + (n.numero || '—')); ricRidisegna(); }
+  return true;
+}
+async function ricScollegaRimborso(ncId, movId){
+  var n = pnF(ncId), m = (_bancaMovimenti || []).find(function(x){ return String(x.id) === String(movId); });
+  if(!n) return;
+  n.riconciliazioneStorico = (n.riconciliazioneStorico || []).filter(function(r){ return !r || ricMovKey(r.movId) !== ricMovKey(movId); });
+  if(n.riconciliazione && ricMovKey(n.riconciliazione.movId) === ricMovKey(movId)) n.riconciliazione = n.riconciliazioneStorico.length ? Object.assign({}, n.riconciliazioneStorico[n.riconciliazioneStorico.length - 1]) : null;
+  n.riconciliata = !!(n.riconciliazione && n.riconciliazione.movId);
+  if(m && String(m.fatturaId) === String(n.id)){ m.abbinata = false; m.fatturaId = null; m.fatturaLabel = ''; try{ await salvaMovimentoBanca(m); _salvaBancaLocale(); }catch(e){} }
+  ricInvalida();
+  await dbUpdate(n);
+  toast('↩️ Rimborso scollegato'); ricRidisegna();
+}
+// Sposta un movimento collegato per errore a una nota di credito sulla fattura che ha pagato
+async function ricSpostaSuFattura(ncId, movId, fid){
+  var n = pnF(ncId), f = pnF(fid), m = (_bancaMovimenti || []).find(function(x){ return String(x.id) === String(movId); });
+  if(!n || !f || !m) return;
+  n.riconciliazioneStorico = (n.riconciliazioneStorico || []).filter(function(r){ return !r || ricMovKey(r.movId) !== ricMovKey(movId); });
+  if(n.riconciliazione && ricMovKey(n.riconciliazione.movId) === ricMovKey(movId)) n.riconciliazione = null;
+  n.riconciliata = false;
+  m.abbinata = true; m.fatturaId = f.id; m.fatturaLabel = (f.fornitore || '') + ' N°' + (f.numero || '');
+  _impostaDatiRiconciliazione(f, m, false, Math.abs(m.importo));
+  ricInvalida();
+  await salvaMovimentoBanca(m); try{ _salvaBancaLocale(); }catch(e){}
+  await dbUpdate(n); await dbUpdate(f);
+  await ricAllineaDoc(f, { muto: true });
+  toast('✓ Movimento spostato sulla fattura n° ' + (f.numero || '—')); ricRidisegna();
+}
+
+/* ── Riallineamento della copia salvata (stato, pagato) dalle prove ── */
+// Restituisce le modifiche che servono, senza applicarle. Mai al ribasso.
+function ricAllineamento(f){
+  if(!f || f.tipo === 'nota_credito' || f.tipo === 'ddt' || !ricDoc(f)) return null;
+  var st = scStato(f); if(st === 'annullata') return null;
+  var C = ricConti(f); if(!C) return null;
+  var nuovo = {};
+  var rango = { da_pagare: 0, parziale: 1, pagata: 2 };
+  if(C.stato !== st && (rango[C.stato] || 0) > (rango[st] || 0)) nuovo.stato = C.stato;
+  var statoFin = nuovo.stato || st;
+  var parzNuovo = ricR2((statoFin === 'pagata' ? C.dovuto : C.pagato) + C.ncComp);
+  var parzOra = ricR2(scParz(f));
+  if(statoFin === 'parziale' && parzNuovo > parzOra + 0.009) nuovo.parzPagato = parzNuovo;
+  if(nuovo.stato === 'pagata' && Math.abs(parzOra - parzNuovo) > 0.009 && parzOra > 0.009) nuovo.parzPagato = parzNuovo;
+  if(nuovo.stato === 'pagata' && !f.dataPagamento){
+    var ult = C.prove.filter(function(p){ return p.data; }).map(function(p){ return String(p.data).slice(0, 10); }).sort().pop();
+    if(ult) nuovo.dataPagamento = ult;
+  }
+  if(!Object.keys(nuovo).length) return null;
+  var motivo = [];
+  if(nuovo.stato) motivo.push((({ pagata: 'Pagata', parziale: 'Pagata in parte', da_pagare: 'Da pagare' })[st] || st) + ' → ' + (({ pagata: 'pagata', parziale: 'pagata in parte' })[nuovo.stato] || nuovo.stato));
+  if(nuovo.parzPagato != null) motivo.push('pagato ' + ricEur(Math.max(0, parzOra - C.ncComp)) + ' → ' + ricEur(Math.max(0, nuovo.parzPagato - C.ncComp)));
+  return { f: f, nuovo: nuovo, motivo: motivo.join(' · '), spiegazione: C.spiegazione };
+}
+async function ricAllineaDoc(f, opz){
+  opz = opz || {};
+  var a = ricAllineamento(f); if(!a) return false;
+  Object.keys(a.nuovo).forEach(function(k){ f[k] = a.nuovo[k]; });
+  if(a.nuovo.stato === 'pagata' && f.riconciliazione && f.riconciliazione.movId) f.riconciliata = true;
+  ricInvalida();
+  await dbUpdate(f);
+  if(!opz.muto) toast('✓ Conti di ' + (f.fornitore || '') + ' n° ' + (f.numero || '') + ' sistemati');
+  return true;
+}
+// Dopo un cambio sulle note di credito: riallinea le fatture toccate (vecchie e nuove)
+async function ricAllineaFatture(ids){
+  var visti = {}, n = 0;
+  for(var i = 0; i < (ids || []).length; i++){
+    var k = String(ids[i]); if(visti[k]) continue; visti[k] = 1;
+    var f = pnF(k); if(f && await ricAllineaDoc(f, { muto: true })) n++;
+  }
+  return n;
+}
+
+/* ── Un solo punto di passaggio: ogni salvataggio invalida i conti, e se
+   cambia una nota di credito si riallineano TUTTE le fatture che toccava
+   prima e che tocca adesso — qualunque funzione l'abbia cambiata. ── */
+function ricFidsNc(note){ var out = [], m; var re = /\[NC→(\d+)·/g; while((m = re.exec(String(note || '')))) out.push(m[1]); return out; }
+function ricFotografaNc(){ (fatture || []).forEach(function(n){ if(n && n.tipo === 'nota_credito') RIC.ncNote[String(n.id)] = String(n.note || ''); }); }
+if(typeof dbUpdate === 'function' && !dbUpdate._ric){
+  var _ricDbUpdateBase = dbUpdate;
+  dbUpdate = async function(f){
+    ricInvalida();
+    var r = await _ricDbUpdateBase.apply(this, arguments);
+    ricInvalida();
+    try{
+      if(f && f.tipo === 'nota_credito'){
+        var k = String(f.id), prima = RIC.ncNote[k] !== undefined ? RIC.ncNote[k] : '', ora = String(f.note || '');
+        RIC.ncNote[k] = ora;
+        if(prima !== ora){
+          var toccate = ricFidsNc(prima).concat(ricFidsNc(ora));
+          if(toccate.length) setTimeout(function(){ ricAllineaFatture(toccate).catch(function(){}); }, 0);
+        }
+      }
+    }catch(e){}
+    return r;
+  };
+  dbUpdate._ric = true;
+}
+if(typeof salvaMovimentoBanca === 'function' && !salvaMovimentoBanca._ric){
+  var _ricSalvaMovBase = salvaMovimentoBanca;
+  salvaMovimentoBanca = async function(){ ricInvalida(); var r = await _ricSalvaMovBase.apply(this, arguments); ricInvalida(); return r; };
+  salvaMovimentoBanca._ric = true;
+}
+
+function ricRidisegna(){
+  try{ if(typeof renderLista === 'function') renderLista(); }catch(e){}
+  try{ if(typeof aggiornaHeroCard === 'function') aggiornaHeroCard(); }catch(e){}
+  try{ if(typeof _schedaAggiorna === 'function') _schedaAggiorna(); }catch(e){}
+  try{ if(document.getElementById('ricControllo')) ricControlloDisegna(); }catch(e){}
+}
+
+/* ══ CONTROLLO DEI CONTI: tutto quello che non torna, in un posto solo ══ */
+function ricControlloDati(){
+  return pnConIndici(function(){
+    var R = { allinea: [], anomalie: [], rimborsi: [], ncAperte: [], senzaFattura: [] };
+    (fatture || []).forEach(function(f){
+      if(!ricDoc(f) || f.tipo === 'ddt') return;
+      var C = ricConti(f); if(!C) return;
+      if(f.tipo !== 'nota_credito'){ var a = ricAllineamento(f); if(a) R.allinea.push(a); }
+      else if(C.residuo > RIC.ARROT && (C.daRimborsare > RIC.ARROT)) R.ncAperte.push({ f: f, C: C });
+      C.anomalie.forEach(function(x){ if(x.liv !== 'info') R.anomalie.push({ f: f, C: C, a: x }); });
+    });
+    R.rimborsi = ricProposteRimborsi();
+    try{ R.senzaFattura = ricPagamentiSenzaFattura(); }catch(e){ R.senzaFattura = []; }
+    var peso = { ko: 0, warn: 1 };
+    R.anomalie.sort(function(a, b){ return (peso[a.a.liv] - peso[b.a.liv]) || String(b.f.data || '').localeCompare(String(a.f.data || '')); });
+    R.allinea.sort(function(a, b){ return String(b.f.data || '').localeCompare(String(a.f.data || '')); });
+    return R;
+  });
+}
+function ricControlloApri(){
+  pnFoglio('ricControllo', { titolo: 'Controllo dei conti', sotto: 'Pagamenti, note di credito e rimborsi verificati dalle prove', alto: true, z: 300 });
+  ricControlloDisegna();
+}
+RIC.vista = { sez: null };
+function ricControlloDisegna(){
+  var mo = document.getElementById('ricControllo'); if(!mo) return;
+  var bd = mo.querySelector('.pn-sh-bd'), sc = bd.scrollTop;
+  var D = ricControlloDati(), h = '';
+  var nKo = D.anomalie.filter(function(x){ return x.a.liv === 'ko'; }).length, nWarn = D.anomalie.length - nKo;
+  var nSf = D.senzaFattura.filter(function(x){ return x.liv !== 'info'; }).length;
+  var tutto = !D.allinea.length && !D.anomalie.length && !D.rimborsi.length && !nSf;
+  h += '<div class="sk-tre"><div class="' + (D.allinea.length ? 'warn' : 'ok') + '"><small>Da riallineare</small><b>' + D.allinea.length + '</b></div><div class="' + (D.rimborsi.length ? 'warn' : 'ok') + '"><small>Rimborsi trovati</small><b>' + D.rimborsi.length + '</b></div><div class="' + (nKo ? 'ko' : (nWarn || nSf ? 'warn' : 'ok')) + '"><small>Da controllare</small><b>' + (D.anomalie.length + nSf) + '</b></div></div>';
+  if(tutto) h += '<div class="rc-esito ok" style="margin-top:12px"><div class="rc-esito-ico">✓</div><div><b>Tutti i conti tornano</b><small>Pagamenti, note di credito e rimborsi sono coerenti con i movimenti collegati.</small></div></div>';
+
+  if(D.allinea.length){
+    var c1 = '<div class="sk-nota">I pagamenti collegati chiudono già queste fatture, ma lo stato salvato è rimasto indietro (es. Europa 23 n° 1258). Sistemarle non tocca i movimenti: aggiorna solo «pagata/parziale» e il pagato. Ogni modifica resta nello storico.</div>';
+    c1 += D.allinea.slice(0, 60).map(function(a){
+      return '<div class="sk-riga"><button class="sk-riga-m tap" onclick="apriScheda(' + pnIdJs(a.f.id) + ')"><b>' + esc(a.f.fornitore || '—') + ' · n° ' + esc(a.f.numero || '—') + '</b><small>' + esc(a.motivo) + '</small><small class="sk-dim">' + esc(a.spiegazione) + '</small></button><button class="sk-btn sm" onclick="ricAllineaUno(' + pnIdJs(a.f.id) + ')">Sistema</button></div>';
+    }).join('');
+    if(D.allinea.length > 1) c1 += '<div class="sk-btns"><button class="sk-btn prim" onclick="ricAllineaTutti()">Sistema tutte (' + D.allinea.length + ')</button></div>';
+    h += pnSez('Conti da riallineare', c1);
+  }
+  if(D.rimborsi.length){
+    var c2 = '<div class="sk-nota">Bonifici in entrata che sembrano il rimborso di una nota di credito. Per ognuno trovi il perché: conferma solo quelli giusti.</div>';
+    c2 += D.rimborsi.map(function(x){
+      var m = x.c.mov, n = x.nc;
+      return '<div class="ric-prop ' + x.c.livello + '"><div class="ric-prop-h"><div><b>' + esc(n.fornitore || '—') + '</b><small>Nota di credito n° ' + esc(n.numero || '—') + ' del ' + ricGg(n.data) + ' · da incassare ' + ricEur(ricConti(n).residuo) + '</small></div><span class="pn-chip ' + (x.c.livello === 'certo' ? 'ok' : (x.c.livello === 'probabile' ? 'info' : 'warn')) + '">' + x.c.livello + '</span></div>' +
+        '<div class="ric-prop-m"><span>+' + ricEur(m.importo) + ' · ' + ricGg(m.data) + ' · ' + esc(m.banca) + '</span><small>' + esc(String(m.descrizione || '').slice(0, 140)) + '</small></div>' +
+        '<ul class="ric-motivi">' + x.c.motivi.map(function(t){ return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>' +
+        '<div class="sk-btns"><button class="sk-btn prim sm" onclick="ricCollegaRimborso(' + pnIdJs(n.id) + ',' + esc(JSON.stringify(String(m.id))).replace(/"/g, '&quot;') + ')">Collega il rimborso</button><button class="sk-btn sm" onclick="apriScheda(' + pnIdJs(n.id) + ')">Apri la nota</button></div></div>';
+    }).join('');
+    var certi = D.rimborsi.filter(function(x){ return x.c.livello === 'certo'; }).length;
+    if(certi > 1) c2 += '<div class="sk-btns"><button class="sk-btn prim" onclick="ricCollegaRimborsiCerti()">Collega i ' + certi + ' certi</button></div>';
+    h += pnSez('Rimborsi da collegare', c2);
+  }
+  if(D.anomalie.length){
+    var c3 = '<div class="sk-nota">Cose che non tornano e che l\'app non sistema da sola, perché serve la tua decisione. Tocca una riga per aprire il documento.</div>';
+    c3 += D.anomalie.slice(0, 80).map(function(x){
+      var az = '';
+      var mJs = x.a.movId != null ? esc(JSON.stringify(String(x.a.movId))).replace(/"/g, '&quot;') : '';
+      if(x.a.cod === 'nc_su_uscita' && x.a.verso) az = '<button class="sk-btn sm" onclick="ricSpostaSuFattura(' + pnIdJs(x.f.id) + ',' + mJs + ',' + pnIdJs(x.a.verso) + ')">Sposta sulla fattura</button>';
+      else if(x.a.cod === 'movimento_avanza' && mJs) az = '<button class="sk-btn sm" onclick="ricApriMovimento(' + mJs + ',true)">Collega le altre</button>';
+      else if((x.a.cod === 'beneficiario_diverso' || x.a.cod === 'collegato_in_piu') && mJs) az = '<button class="sk-btn sm" onclick="ricApriMovimento(' + mJs + ')">Apri il movimento</button>';
+      return '<div class="sk-riga ric-an ' + x.a.liv + '"><button class="sk-riga-m tap" onclick="apriScheda(' + pnIdJs(x.f.id) + ')"><b>' + esc(x.f.fornitore || '—') + ' · ' + esc(pnTipo(x.f).toLowerCase()) + ' n° ' + esc(x.f.numero || '—') + '</b><small>' + esc(x.a.t) + '</small><small class="sk-dim">' + esc(x.a.s) + '</small></button>' + az + '</div>';
+    }).join('');
+    h += pnSez('Da controllare', c3);
+  }
+  if(D.senzaFattura.length){
+    var c4 = '<div class="sk-nota">Bonifici a fornitori conosciuti (dal nome o dall\'IBAN) che non sono collegati a nessuna fattura. Stipendi, giroconti e finanziamenti non sono qui.</div>';
+    c4 += D.senzaFattura.slice(0, 60).map(function(x){
+      var mJs = esc(JSON.stringify(String(x.mov.id))).replace(/"/g, '&quot;');
+      var az = x.f && x.cod !== 'pagamento_doppio' ? '<button class="sk-btn sm" onclick="ricApriMovimento(' + mJs + ',true)">Collega</button>' : '<button class="sk-btn sm" onclick="ricApriMovimento(' + mJs + ')">Apri</button>';
+      return '<div class="sk-riga ric-an ' + x.liv + '"><button class="sk-riga-m tap" onclick="' + (x.f ? 'apriScheda(' + pnIdJs(x.f.id) + ')' : 'ricApriMovimento(' + mJs + ')') + '"><b>' + esc(x.fornitore) + ' · −' + ricEur(Math.abs(x.mov.importo)) + ' del ' + ricGg(x.mov.data) + ' · ' + esc(x.mov.banca) + '</b><small>' + esc(x.t) + '</small><small class="sk-dim">' + esc(x.s) + (x.come ? ' (riconosciuto: ' + esc(x.come) + ')' : '') + '</small></button>' + az + '</div>';
+    }).join('');
+    h += pnSez('Pagamenti senza fattura', c4);
+  }
+  bd.innerHTML = h; bd.scrollTop = sc;
+}
+function ricApriMovimento(movId, abbina){
+  if(abbina && typeof apriCambioAbbinamentoMov === 'function' && (_bancaMovimenti || []).some(function(x){ return String(x.id) === String(movId); })){ apriCambioAbbinamentoMov(movId); return; }
+  if(typeof _movSchedaApri === 'function') _movSchedaApri(movId);
+}
+// Sul foglio del movimento: «potrebbe essere il rimborso di…»
+function ricMovSchedaHtml(m){
+  if(!m) return '';
+  var h = '';
+  if(m.abbinata && m.fatturaId != null){
+    var n = pnF(m.fatturaId);
+    if(n && n.tipo === 'nota_credito') h += '<div style="margin-top:8px;font-size:13px;color:var(--ink3)">È il rimborso della nota di credito: si toglie da «Scollega» nella scheda della nota.</div>';
+    return h;
+  }
+  if(!(m.importo > 0)) return '';
+  var L = ricRimborsiPerMovimento(m.id);
+  if(!L.length) return '';
+  h += '<div style="font-size:13px;font-weight:700;color:var(--ink3);margin-top:14px;text-transform:uppercase;letter-spacing:.3px">Potrebbe essere il rimborso di</div>';
+  h += L.slice(0, 3).map(function(x){
+    return '<div class="ric-prop ' + x.c.livello + '" style="margin-top:8px"><div class="ric-prop-h"><div><b>' + esc(x.nc.fornitore || '—') + '</b><small>Nota di credito n° ' + esc(x.nc.numero || '—') + ' del ' + ricGg(x.nc.data) + ' · da incassare ' + ricEur(ricConti(x.nc).residuo) + '</small></div><span class="pn-chip ' + (x.c.livello === 'certo' ? 'ok' : (x.c.livello === 'probabile' ? 'info' : 'warn')) + '">' + x.c.livello + '</span></div><ul class="ric-motivi">' + x.c.motivi.map(function(t){ return '<li>' + esc(t) + '</li>'; }).join('') + '</ul><div class="sk-btns"><button class="sk-btn prim sm" onclick="ricCollegaRimborso(' + pnIdJs(x.nc.id) + ',' + esc(JSON.stringify(String(m.id))).replace(/"/g, '&quot;') + ').then(function(ok){ if(ok){ var e = document.getElementById(\'movSchedaMo\'); if(e) e.remove(); } })">Collega il rimborso</button></div></div>';
+  }).join('');
+  return h;
+}
+async function ricAllineaUno(id){ var f = pnF(id); if(f){ await ricAllineaDoc(f); ricRidisegna(); } }
+async function ricAllineaTutti(){
+  var L = ricControlloDati().allinea; if(!L.length) return;
+  if(!confirm('Sistemo lo stato di ' + L.length + (L.length === 1 ? ' fattura' : ' fatture') + ' in base ai pagamenti collegati?\n\nI movimenti non vengono toccati e ogni modifica resta nello storico.')) return;
+  var ok = 0, ko = 0;
+  for(var i = 0; i < L.length; i++){ try{ if(await ricAllineaDoc(L[i].f, { muto: true })) ok++; }catch(e){ ko++; } }
+  toast(ko ? '⚠️ Sistemate ' + ok + ', non riuscite ' + ko : '✓ Sistemate ' + ok + (ok === 1 ? ' fattura' : ' fatture'), { forza: true });
+  ricRidisegna();
+}
+async function ricCollegaRimborsiCerti(){
+  var L = ricControlloDati().rimborsi.filter(function(x){ return x.c.livello === 'certo'; });
+  var ok = 0;
+  for(var i = 0; i < L.length; i++){ if(await ricCollegaRimborso(L[i].nc.id, L[i].c.mov.id, { muto: true })) ok++; }
+  toast('🔗 Collegati ' + ok + ' rimborsi', { forza: true }); ricRidisegna();
+}
+
+/* ── Scheda della nota di credito: sezione «Rimborso» ── */
+function ricSchedaNcRimborsoHtml(n){
+  var C = ricConti(n); if(!C) return '';
+  var et = ricNcEtichetta(C), h = '';
+  h += '<div class="rc-esito ' + ({ ok: 'ok', info: 'info', warn: 'warn' })[et[0]] + '"><div class="rc-esito-ico">' + (et[0] === 'ok' ? '✓' : (et[0] === 'info' ? '…' : '!')) + '</div><div><b>' + esc(et[1]) + '</b><small>' + esc(C.spiegazione) + '</small></div></div>';
+  C.rimborsi.forEach(function(p){
+    h += '<div class="sk-riga"><button class="sk-riga-m tap" onclick="_movSchedaApri(' + esc(JSON.stringify(String(p.movId))).replace(/"/g, '&quot;') + ')"><b>Rimborso del ' + ricGg(p.data) + ' · ' + esc(p.conto || 'BPM') + '</b><small>' + esc(String(p.descr || '').slice(0, 120)) + '</small></button><span class="sk-riga-v">+' + ricEur(p.importo) + '</span><button class="sk-mini" aria-label="Scollega rimborso" onclick="ricScollegaRimborso(' + pnIdJs(n.id) + ',' + esc(JSON.stringify(String(p.movId))).replace(/"/g, '&quot;') + ')">✕</button></div>';
+  });
+  C.anomalie.forEach(function(a){
+    h += '<div class="sk-avviso ' + (a.liv === 'ko' ? 'ko' : '') + '"><b>' + esc(a.t) + '</b><br>' + esc(a.s) + (a.cod === 'nc_su_uscita' && a.verso ? '<div class="sk-btns"><button class="sk-btn sm" onclick="ricSpostaSuFattura(' + pnIdJs(n.id) + ',' + esc(JSON.stringify(String(a.movId))).replace(/"/g, '&quot;') + ',' + pnIdJs(a.verso) + ')">Sposta sulla fattura</button></div>' : '') + '</div>';
+  });
+  if(C.residuo > RIC.ARROT){
+    var cand = ricCandidatiRimborso(n);
+    if(cand.length){
+      h += '<div class="sk-nota">' + (cand.length === 1 ? 'Ho trovato un bonifico che sembra il rimborso:' : 'Ho trovato ' + cand.length + ' bonifici che potrebbero essere il rimborso:') + '</div>';
+      h += cand.slice(0, 4).map(function(x){
+        return '<div class="ric-prop ' + x.livello + '"><div class="ric-prop-m"><span>+' + ricEur(x.mov.importo) + ' · ' + ricGg(x.mov.data) + ' · ' + esc(x.mov.banca) + ' <em class="pn-chip ' + (x.livello === 'certo' ? 'ok' : (x.livello === 'probabile' ? 'info' : 'warn')) + '">' + x.livello + '</em></span><small>' + esc(String(x.mov.descrizione || '').slice(0, 140)) + '</small></div><ul class="ric-motivi">' + x.motivi.map(function(t){ return '<li>' + esc(t) + '</li>'; }).join('') + '</ul><div class="sk-btns"><button class="sk-btn prim sm" onclick="ricCollegaRimborso(' + pnIdJs(n.id) + ',' + esc(JSON.stringify(String(x.mov.id))).replace(/"/g, '&quot;') + ')">Collega il rimborso</button></div></div>';
+      }).join('');
+    } else if(C.daRimborsare > RIC.ARROT){
+      h += '<div class="sk-nota">Nessun bonifico in entrata compatibile negli estratti caricati. Quando il fornitore rimborsa, comparirà qui da solo.</div>';
+    }
+  }
+  return pnSez('Rimborso', h);
+}
+
+/* ── Origine del documento: XML, foto o a mano (una sola regola, ovunque) ── */
+function ricOrigine(f){
+  if(!f) return { cod: 'manuale', t: 'Manuale', lungo: 'Registrata a mano' };
+  var xml = f.source === 'xml_import' || f.source === 'aruba' || f.source === 'pec' || !!f.xmlGithubPath || /\.(xml|p7m)$/i.test(String(f.fatturaAllegataName || ''));
+  if(xml) return { cod: 'xml', t: 'XML', lungo: f.source === 'aruba' ? 'Importata da XML (SDI via Aruba)' : 'Importata da XML' + ((f.foto || f.hasFoto) ? ' · con foto allegata' : '') };
+  if(f.foto || f.hasFoto) return { cod: 'foto', t: 'Foto', lungo: 'Registrata da foto' };
+  return { cod: 'manuale', t: 'Manuale', lungo: 'Registrata a mano' };
+}
+
+document.addEventListener('DOMContentLoaded', function(){ setTimeout(function(){ try{ ricFotografaNc(); }catch(e){} }, 3000); });
+
+function ricBannerConti(){
+  var el = document.getElementById('ricBannerConti'); if(!el) return;
+  var D = ricControlloDati(), nSf = D.senzaFattura.filter(function(x){ return x.liv !== 'info'; }).length, n = D.allinea.length + D.rimborsi.length + D.anomalie.length + nSf;
+  if(!n){ el.innerHTML = ''; return; }
+  el.innerHTML = '<button class="ric-banner" onclick="ricControlloApri()"><span class="ric-banner-i">!</span><span class="ric-banner-t"><b>Controllo dei conti · ' + n + (n === 1 ? ' cosa da vedere' : ' cose da vedere') + '</b><small>' +
+    [D.allinea.length ? D.allinea.length + ' da riallineare' : '', D.rimborsi.length ? D.rimborsi.length + (D.rimborsi.length === 1 ? ' rimborso trovato' : ' rimborsi trovati') : '', (D.anomalie.length + nSf) ? (D.anomalie.length + nSf) + ' da controllare' : ''].filter(Boolean).join(' · ') +
+    '</small></span><span class="ric-banner-c">›</span></button>';
+}
+
+/* ══ PAGAMENTI SENZA FATTURA ══
+   Bonifici in uscita (banca e SumUp) che non sono collegati a niente ma che,
+   da nome o IBAN del beneficiario, vanno a un FORNITORE conosciuto. Sono i
+   casi che oggi restano in «Da classificare» senza spiegazione:
+     · la causale cita una fattura già pagata da un altro bonifico → pagamento doppio?
+       (L. Morelli 1469/FE: due bonifici da 404 € il 21/07 con riferimenti diversi)
+     · la causale cita una fattura che non è in archivio → manca la fattura
+       (F.lli Fiorentino «fattura 11358» via SumUp)
+     · la causale cita un DDT → pagato prima della fattura, che arriverà
+     · la causale cita una fattura aperta → basta collegarla */
+var RIC_STOP = /^(group|gruppo|service|servizi|food|foods|trading|international|napoli|roma|milano|commerciale|distribuzion[ei]|industri[ae]|fratelli|flli|general[ei]|nuova|caffe|bar|ditta|impresa|azienda|amministrazione)$/;
+function ricChiaveNome(s){ var p = ricParole(s).filter(function(w){ return !RIC_STOP.test(w) && !/^\d+$/.test(w); }); return p.length ? p[0].slice(0, 5) : ''; }
+function ricIbanDi(s){ var m = String(s || '').toUpperCase().replace(/\s+/g, '').match(/IT\d{2}[A-Z]\d{10}[0-9A-Z]{12}/); return m ? m[0] : ''; }
+function ricFornitoriIndice(idx){
+  if(idx.forn) return idx.forn;
+  var perNome = {}, perIban = {};
+  Object.keys(idx.doc).forEach(function(fid){
+    var f = idx.doc[fid]; if(!f.fornitore) return;
+    var k = ricChiaveNome(f.fornitore); if(k){ var o = perNome[k] = perNome[k] || {}; o[f.fornitore] = (o[f.fornitore] || 0) + 1; }
+    var ib = ricIbanDi(f.bonIban); if(ib){ var o2 = perIban[ib] = perIban[ib] || {}; o2[f.fornitore] = (o2[f.fornitore] || 0) + 1; }
+  });
+  idx.forn = { nome: perNome, iban: perIban };
+  return idx.forn;
+}
+function ricCitazioni(d){
+  var out = [], re = /\b(fatt(?:ura|ure)?|ft|fatt\.|ddt|d\.d\.t\.?)\b\.?\s*(?:n[°r.o]*\s*)?([A-Z0-9][A-Z0-9\/_-]{1,20}(?:\s*(?:,|e|\+)\s*[A-Z0-9][A-Z0-9\/_-]{1,20})*)/gi, m;
+  while((m = re.exec(String(d || '')))){
+    var tipo = /^d/i.test(m[1]) ? 'ddt' : 'fattura';
+    m[2].split(/\s*(?:,|\be\b|\+)\s*/).forEach(function(n){ n = n.trim(); if(n && /\d/.test(n) && !/^(del|dd)$/i.test(n)) out.push({ tipo: tipo, num: n }); });
+  }
+  return out;
+}
+function ricPagamentiSenzaFattura(){
+  var idx = ricIndice(), F = ricFornitoriIndice(idx), out = [];
+  var oggi = new Date(), limite = new Date(oggi.getTime() - 400 * 86400000).toISOString().slice(0, 10);
+  Object.keys(idx.mov).forEach(function(key){
+    var m = idx.mov[key];
+    if(m.tipo !== 'banca' || !(m.importo < 0) || m.ignorata || m.fatturaId != null) return;
+    if(String(m.data || '') < limite) return;
+    var q = idx.quoteMov[key]; if(q && (q.assegnato > 0.009 || q.nette > 0.009)) return;
+    var d = String(m.descrizione || '');
+    if(!/vs\.?disp|favore|bonifico/i.test(d) && m.banca !== 'SumUp') return;
+    if(/comm\.?\s*su\s*bonif|commission|beneficiari\s+vari|stipend|\bstip\b|tfr|giroconto|finanziament|f24|ceraldi\s+group/i.test(d)) return;
+    var benef = ricBeneficiario(m) || d.split(/\s+IT\d{2}/)[0];
+    var ib = ricIbanDi(d), forn = null, come = '';
+    var piuUsato = function(o){ return Object.keys(o).sort(function(x, y){ return o[y] - o[x]; })[0]; };
+    if(ib && F.iban[ib]){ forn = piuUsato(F.iban[ib]); come = 'IBAN già visto sulle sue fatture'; }
+    if(!forn){ var k = ricChiaveNome(benef); if(k && F.nome[k]){ forn = piuUsato(F.nome[k]); come = 'stesso nome del fornitore'; } }
+    if(!forn) return;
+    var stesso = function(f){ return f.fornitore === forn || ricChiaveNome(f.fornitore) === ricChiaveNome(forn); };
+    var cit = ricCitazioni(d), esito = null;
+    cit.some(function(c){
+      var doc = Object.keys(idx.doc).map(function(fid){ return idx.doc[fid]; }).filter(function(f){ return stesso(f) && f.tipo !== 'nota_credito' && (c.tipo === 'ddt' ? (f.tipo === 'ddt' || _numeroFatturaNelTesto(c.num, f.numDdt || '')) : true) && (c.tipo === 'ddt' ? true : (_numeroFatturaNelTesto(f.numero, c.num) || _numeroFatturaNelTesto(c.num, f.numero))); })[0];
+      if(c.tipo === 'ddt'){
+        esito = doc && doc.tipo !== 'ddt'
+          ? { liv: 'info', cod: 'ddt_fatturato', f: doc, t: 'Pagamento del DDT ' + c.num + ', già nella fattura n° ' + (doc.numero || '—'), s: 'Collegalo a quella fattura: il DDT è compreso lì.' }
+          : { liv: 'info', cod: 'ddt_prima_della_fattura', t: 'Pagamento del DDT ' + c.num + ', la fattura non è ancora arrivata', s: 'Quando arriva la fattura che comprende questo DDT, lo ritrovi qui pronto da collegare.' };
+        return true;
+      }
+      if(doc){
+        var C = ricConti(doc);
+        if(C.residuo <= RIC.ARROT && C.fonte === 'prove'){
+          var altro = C.prove.filter(function(p){ return p.tipo !== 'manuale'; }).map(function(p){ return ricGg(p.data) + ' (' + ricEur(p.totale != null ? p.totale : p.importo) + ')'; }).join(', ');
+          esito = { liv: 'ko', cod: 'pagamento_doppio', f: doc, t: 'Possibile pagamento doppio della fattura n° ' + doc.numero, s: 'La causale cita la fattura n° ' + doc.numero + ', che risulta già pagata' + (altro ? ' il ' + altro : '') + '. Se è un doppio, chiedi il rimborso al fornitore; altrimenti collegalo alla fattura giusta.' };
+        } else {
+          esito = { liv: 'warn', cod: 'fattura_da_collegare', f: doc, t: 'Cita la fattura n° ' + doc.numero + ' (da pagare ' + ricEur(C.residuo) + ')', s: 'Collegalo a quella fattura: importo pagato ' + ricEur(Math.abs(m.importo)) + '.' };
+        }
+        return true;
+      }
+      esito = { liv: 'warn', cod: 'fattura_mancante', t: 'Manca la fattura n° ' + c.num + ' di ' + forn, s: 'Il pagamento c\'è, il documento no: cercalo nel cassetto fiscale o chiedilo al fornitore.' };
+      return true;
+    });
+    if(!esito){
+      // nessuna citazione: c'è una fattura aperta dello stesso fornitore con lo stesso importo?
+      var aperta = Object.keys(idx.doc).map(function(fid){ return idx.doc[fid]; }).filter(function(f){ return stesso(f) && f.tipo !== 'nota_credito' && f.tipo !== 'ddt' && Math.abs(ricConti(f).residuo - Math.abs(m.importo)) <= RIC.ARROT; })[0];
+      esito = aperta
+        ? { liv: 'warn', cod: 'fattura_da_collegare', f: aperta, t: 'Probabilmente paga la fattura n° ' + aperta.numero, s: 'Stesso fornitore e stesso importo da pagare (' + ricEur(Math.abs(m.importo)) + ').' }
+        : { liv: 'info', cod: 'senza_fattura', t: 'Pagamento a ' + forn + ' senza fattura collegata', s: 'Nessuna fattura aperta di questo importo: forse manca il documento, oppure paga più fatture insieme.' };
+    }
+    esito.mov = m; esito.fornitore = forn; esito.come = come;
+    out.push(esito);
+  });
+  var peso = { ko: 0, warn: 1, info: 2 };
+  return out.sort(function(a, b){ return (peso[a.liv] - peso[b.liv]) || String(b.mov.data).localeCompare(String(a.mov.data)); });
 }
 
 </script>
