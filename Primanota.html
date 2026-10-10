@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.20.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.21.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -12789,7 +12789,13 @@ async function _eseguiSyncIncrementale(){
     // mostrava come se non lo fosse. "Sincronizza ora" aveva già l'ordine
     // corretto — corretto qui per farlo coincidere.
     await caricaIncassi();
-    if(document.getElementById('view-banca') && document.getElementById('view-banca').classList.contains('active')){
+    // 10/10: la riconciliazione vive in Incassi › Banca: prima, con la sync in
+    // background, restava ferma alla versione vecchia (e senza i collegamenti
+    // fatti da un altro dispositivo) finché non si cambiava schermata
+    var _secBanca = document.getElementById('inc-banca');
+    if(_secBanca && _secBanca.offsetParent !== null && !document.querySelector('.pn-mo')){
+      try{ if(typeof ricvCaricaContesto==='function') await ricvCaricaContesto(true); }catch(_){}
+      if(typeof RICV!=='undefined') RICV.memo = null;
       renderRiconciliazione();
     }
     aggiornaSaldoCassa();
@@ -12833,6 +12839,7 @@ async function avviaSyncAutomatico(){
 // meccanismo — nessun errore, nessun danno.
 let _realtimeChannel = null;
 let _realtimeDebounce = null;
+var _realtimeClient = null;
 function _avviaRealtimeSync(){
   try{
     if(typeof supabase === 'undefined' || !supabase.createClient){
@@ -12840,7 +12847,13 @@ function _avviaRealtimeSync(){
       return;
     }
     if(_realtimeChannel) return; // già attivo
-    const client = supabase.createClient(SB_URL, SB_KEY);
+    // 10/10 (BUG REALE): il client era anonimo. Da quando il database accetta
+    // solo chi ha fatto l'accesso, il canale non riceveva più nessun evento e
+    // restava solo il controllo ogni 60 secondi. Ora usa il token dell'accesso
+    // (aggiornato a ogni rinnovo in _authApplica).
+    const client = supabase.createClient(SB_URL, SB_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+    _realtimeClient = client;
+    try{ if(_authSess && _authSess.access_token && client.realtime) client.realtime.setAuth(_authSess.access_token); }catch(_){}
     _realtimeChannel = client
       .channel('fatture-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'fatture' }, (payload)=>{
@@ -25429,7 +25442,7 @@ function _anCreditiNC(F, entrate){
     var pagTxt = pag.map(function(p){ var mv = idx[p.movId] || {}; var mm = Object.assign({data:p.data, importo:p.importo}, mv, {descrizione:(_anDescrizioneMov(p.movId)||'')}); return /^carta:/.test(p.movId) ? 'carta del '+_anData(p.data) : (/^paypal:/.test(p.movId) ? 'PayPal del '+_anData(p.data) : _anDescPag(mm)); }).join(' + ');
     out.push({chiave:'credito|'+f.id+'|'+note.map(function(x){ return x.nc.id; }).sort().join(','), tipo:'credito_nc', gravita: daAvere >= 50 ? 'alta' : 'media',
       titolo:'Credito da riavere da '+f.fornitore+': '+fmt(daAvere),
-      testo:'La fattura N° '+(f.numero||'—')+' di '+fmt(lordo)+' è stata pagata per intero ('+pagTxt+'). Poi è arrivata '+(note.length===1?'la nota di credito N° '+(note[0].nc.numero||'—')+' del '+_anData(note[0].nc.data):note.length+' note di credito')+' per '+fmt(ncTot)+'. '+
+      testo:'La fattura N° '+(f.numero||'—')+' di '+fmt(lordo)+' è stata pagata per intero ('+pagTxt+'). Poi '+(note.length===1?'è arrivata ':'sono arrivate ')+(note.length===1?'la nota di credito N° '+(note[0].nc.numero||'—')+' del '+_anData(note[0].nc.data):note.length+' note di credito')+' per '+fmt(ncTot)+'. '+
         (rientrato > 0 ? 'Ne sono rientrati solo '+fmt(rientrato)+'. ' : 'Quei soldi non risultano rientrati: nessun bonifico in entrata dal fornitore e nessun pagamento successivo più basso di quella cifra. ')+
         'Chiedi a '+f.fornitore+' il rimborso, oppure di scalarlo dalla prossima fattura.',
       fatture:[f].concat(note.map(function(x){ return x.nc; })), movimenti:rimborsi, rischio:daAvere,
@@ -27093,15 +27106,15 @@ var _CE_REGOLE=[
   {c:'utenze',      p:'luce, acqua, gas o telefono',       r:/enel|acqua bene|\babc\b|\btim\b|telecom|vodafone|fastweb|wind|iliad|edison|hera|a2a|plenitude|\bgas\b|energia|iren|sorgenia|acea/},
   {c:'auto',        p:'auto, noleggio o carburante',       r:/leasys|ald automotive|arval|ayvens|leasing|noleggio|autostrad|telepass|carburant|kuwait|petrol|\bq8\b|tamoil|esso\b/},
   {c:'edili',       p:'lavori edili o ristrutturazione',   r:/costruzion|edil|levigazion|marmi|sbordone|serrament|ceramich|pittur|ristruttur|cartongess|santamaria import/},
-  {c:'arredi',      p:'arredi, macchinari o attrezzature', r:/arred|master frost|frigor|attrezzatur|macchin|zecchini|hotellerie|electronics|tecmarket|elettrodomest|berkel|vidoelettronica|any lamp|lampad/},
-  {c:'lavori',      p:'manutenzione o riparazione',        r:/manutenz|ascensor|timas|climari|climatizz|termoidr|idraul|elettric|refriger|fire solution|antincend|riparaz|chiavi|impiant|fabbro|vetr|leroy|brico|ricambi|barbetta|vdm |\bgto\b|romana tecnologie/},
+  {c:'arredi',      p:'arredi, macchinari o attrezzature', r:/arred|master frost|frigor(?!oc)|attrezzatur|macchin|zecchini|hotellerie|electronics|tecmarket|elettrodomest|berkel|vidoelettronica|any lamp|lampad/},
+  {c:'lavori',      p:'manutenzione o riparazione',        r:/manutenz|frigoc|ascensor|timas|climari|climatizz|termoidr|idraul|elettric|refriger|fire solution|antincend|riparaz|chiavi|impiant|fabbro|vetr|leroy|brico|ricambi|barbetta|vdm |\bgto\b|romana tecnologie/},
   {c:'pulizia',     p:'pulizia, igiene o disinfestazione', r:/rentokil|anthirat|disinfest|derattizz|detersiv|pulizi|igien|sanific|\bgtm\b/},
   {c:'personale',   p:'buoni pasto o divise',              r:/edenred|buoni pasto|ticket|skechers|divise|abbigliamento|pellegrini|day ristoservice/},
   {c:'digitale',    p:'software o servizi online',         r:/aruba|infocert|tinexta|namirial|software|informatic|pick solutions|hp italy|microsoft|google|apple|rekordata|cromo|microtecnica|register spa|\bwix\b|openapi|fattura24|subito\.it|cloud|hosting|\bpec\b/},
   {c:'pubblicita',  p:'stampa, grafica o sponsor',         r:/grafich|tipograf|pubblicit|stampa|paraiso|sponsor|volantin|insegn|\basd\b|f\.c\./},
   {c:'servizi',     p:'consulenze e servizi',              r:/ferrantini|studio |consulen|commercialist|avvocat|notai|eureka|cooperativa|onlus|assicuraz|sicurezza|today service|agenzia|servizi\b/},
   {c:'consumo',     p:'imballaggi e materiale di consumo', r:/amazon|\bcarta\b|packaging|imball|plast|artecarta|party|ristosubito|ristopanno|monouso|idea casa|sanson|italesse|2m italia|alfa service|bicchier|tovagl/},
-  {c:'merce',       p:'alimentari e ingrosso',             r:/ingross|food|aliment|market|fiorentino|cozzolino|scaramuzza|duegi|top spina|big food|me\.pa|carpino|martellozzo|di cosmo|ge\.fi\.al|fla s|frutta|ortofrut|cofrut|turcofrutta|carni|salum|agricol|zuccher|granzuccheri|naturissime|langellotti|morelli|miraglia|galasso|glutine|euromercato|g\.i\.a\.l|\bgial\b|rondinella|anatrella|nasti|sommella|napolitano|laricogar|distribuzion|commerciale|europa 23|amodio/}
+  {c:'merce',       p:'alimentari e ingrosso',             r:/ingross|food|aliment|market|fiorentino|cozzolino|scaramuzza|duegi|top spina|big food|me\.pa|carpino|martellozzo|di cosmo|ge\.fi\.al|fla s|frutta|ortofrut|cofrut|turcofrutta|carni|salum|agricol|zuccher|granzuccheri|naturissime|langellotti|morelli|miraglia|galasso|glutine|euromercato|\bmetro\b|g\.i\.a\.l|\bgial\b|rondinella|anatrella|nasti|sommella|napolitano|laricogar|distribuzion|commerciale|europa 23|amodio/}
 ];
 function _ceIndovina(nome){
   var n=' '+String(nome||'').toLowerCase()+' ';
@@ -29892,6 +29905,9 @@ function _authApplica(s){
   _authSess = s;
   SB_H.Authorization = 'Bearer ' + (s && s.access_token ? s.access_token : SB_KEY);
   _authScrivi(s);
+  // 10/10: il canale in tempo reale deve usare lo stesso accesso (con le regole
+  // di sicurezza attive, senza il token di chi è collegato non arrivava nulla)
+  try{ if(typeof _realtimeClient!=='undefined' && _realtimeClient && _realtimeClient.realtime && s && s.access_token) _realtimeClient.realtime.setAuth(s.access_token); }catch(_){}
 }
 function _authDaRisposta(j, prec){
   var ora = Math.floor(Date.now()/1000);
@@ -32016,7 +32032,7 @@ body.pn-foglio-aperto #aiAssistBtn,body.pn-foglio-aperto #scriptableBtn,body:has
 .rv-lista-h h3{margin:0;font-size:17px;font-weight:750;color:var(--ink)}
 .rv-lista-h small{font-size:12px;color:var(--ink3)}
 #ricvVista .sk-btn.big{width:100%;flex:none;margin-bottom:10px;padding:12px}
-.rv-riga{background:var(--surface);border:.5px solid var(--ds-hair,var(--sep));border-left:3px solid var(--sep);border-radius:14px;padding:10px 12px;margin-bottom:8px}
+.rv-riga{background:var(--surface);border:.5px solid var(--ds-hair,var(--sep));border-left:3px solid var(--sep);box-shadow:var(--ds-shadow,none);border-radius:16px;padding:10px 12px;margin-bottom:8px}
 .rv-riga.rv-conferma{border-left-color:var(--rv-info)}.rv-riga.rv-conferma.rv-certo{border-left-color:var(--rv-ok)}.rv-riga.rv-conferma.rv-possibile{border-left-color:var(--rv-warn)}
 .rv-riga.rv-sistemare{border-left-color:var(--rv-ko)}.rv-riga.rv-capire{border-left-color:var(--rv-warn)}.rv-riga.rv-fatto{border-left-color:var(--rv-ok)}.rv-riga.rv-non{border-left-color:var(--ink3)}
 .rv-riga-m{display:block;width:100%;border:none;background:none;padding:0;font:inherit;color:var(--ink);text-align:left;cursor:pointer}
@@ -32068,7 +32084,7 @@ body.pn-foglio-aperto #aiAssistBtn,body.pn-foglio-aperto #scriptableBtn,body:has
 .rv-prev-ric>div{display:flex;align-items:baseline;gap:8px;font-size:13px;padding:5px 2px;border-bottom:.5px solid var(--ds-hair,var(--sep))}
 .rv-prev-ric span{flex:1;min-width:0;color:var(--ink)}.rv-prev-ric em{font-style:normal;color:var(--ink3);font-size:12px}.rv-prev-ric b{font-weight:700;font-variant-numeric:tabular-nums}
 /* v10.17 — Situazione */
-.rd-card{background:var(--surface);border-radius:var(--radius,18px);box-shadow:var(--shadow);padding:16px;margin-bottom:12px}
+.rd-card{background:var(--surface);border:.5px solid var(--ds-hair,var(--sep));border-radius:var(--ds-r-card,20px);box-shadow:var(--ds-shadow,var(--shadow));padding:16px;margin-bottom:12px}
 .rd-t{font-size:19px;font-weight:800;letter-spacing:-.3px}.rd-s{font-size:12.5px;color:var(--ink3);margin-top:1px}
 .rd-chips{margin:10px 0 12px;flex-wrap:nowrap;overflow-x:auto}
 .rd-kpi{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
@@ -32085,7 +32101,7 @@ body.pn-foglio-aperto #aiAssistBtn,body.pn-foglio-aperto #scriptableBtn,body:has
 /* v10.20 — impara come paghi */
 .rv-imp-banner{width:100%;display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;border:none;border-left:3px solid var(--pn-info);background:var(--pn-info-bg);color:var(--ink);font:inherit;padding:10px 12px;border-radius:12px;margin:0 0 10px;cursor:pointer}
 .rv-imp-banner b{font-size:13.5px;font-weight:750}.rv-imp-banner span{font-size:12px;color:var(--ink2)}.rv-imp-banner i{font-style:normal;font-size:12.5px;font-weight:700;color:var(--pn-info)}
-.rv-imp{background:var(--surface);border:1px solid var(--sep);border-radius:14px;padding:12px 13px;margin-bottom:10px}
+.rv-imp{background:var(--surface);border:.5px solid var(--ds-hair,var(--sep));box-shadow:var(--ds-shadow,none);border-radius:16px;padding:12px 13px;margin-bottom:10px}
 .rv-imp-t{font-size:14px;line-height:1.4;color:var(--ink)}.rv-imp-s{font-size:12.5px;line-height:1.45;color:var(--ink2);margin-top:4px}
 .rv-imp-b{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}.rv-imp-b .sk-btn{flex:1 1 auto}
 .rv-imp-fm{display:flex;align-items:center;gap:5px;font-size:13px;color:var(--ink2)}
