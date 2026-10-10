@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.16.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.17.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -32044,6 +32044,24 @@ body.pn-foglio-aperto #aiAssistBtn,body.pn-foglio-aperto #scriptableBtn,body:has
 .rv-det[open]>summary::after{content:'▾'}
 .rv-doc-az{flex-direction:row;flex-wrap:wrap;justify-content:flex-end;max-width:46%}
 .rv-det-cat{margin-top:14px}.rv-det-cat>summary{border-left-color:var(--sep)}
+.rv-prev-ric{display:flex;flex-direction:column;gap:2px;margin:2px 0 8px}
+.rv-prev-ric>div{display:flex;align-items:baseline;gap:8px;font-size:13px;padding:5px 2px;border-bottom:.5px solid var(--ds-hair,var(--sep))}
+.rv-prev-ric span{flex:1;min-width:0;color:var(--ink)}.rv-prev-ric em{font-style:normal;color:var(--ink3);font-size:12px}.rv-prev-ric b{font-weight:700;font-variant-numeric:tabular-nums}
+/* v10.17 — Situazione */
+.rd-card{background:var(--surface);border-radius:var(--radius,18px);box-shadow:var(--shadow);padding:16px;margin-bottom:12px}
+.rd-t{font-size:19px;font-weight:800;letter-spacing:-.3px}.rd-s{font-size:12.5px;color:var(--ink3);margin-top:1px}
+.rd-chips{margin:10px 0 12px;flex-wrap:nowrap;overflow-x:auto}
+.rd-kpi{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.rd-k{display:flex;flex-direction:column;align-items:flex-start;gap:1px;text-align:left;border:none;background:var(--surface2);border-radius:14px;padding:11px 12px;font:inherit;color:var(--ink);cursor:pointer;min-width:0}
+.rd-k span{font-size:12px;font-weight:650;color:var(--ink3)}
+.rd-k b{font-size:19px;font-weight:800;letter-spacing:-.4px;font-variant-numeric:tabular-nums;line-height:1.2}
+.rd-k b.pos{color:var(--pn-ok)}.rd-k b.neg,.rd-k i.neg{color:var(--pn-ko);font-style:normal}
+.rd-k small{font-size:11.5px;color:var(--ink3);line-height:1.3}
+.rd-d{font-style:normal;font-size:11.5px;font-weight:700;color:var(--ink3)}.rd-d.su{color:var(--pn-ok)}.rd-d.giu{color:var(--pn-ko)}
+.rd-cose{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.rd-cosa{display:flex;flex-direction:column;align-items:flex-start;text-align:left;border:none;border-left:3px solid var(--pn-info);background:var(--pn-info-bg);border-radius:12px;padding:9px 12px;font:inherit;color:var(--ink);cursor:pointer}
+.rd-cosa.ko{border-left-color:var(--pn-ko);background:var(--pn-ko-bg)}.rd-cosa.warn{border-left-color:var(--pn-warn);background:var(--pn-warn-bg)}
+.rd-cosa b{font-size:13.5px;font-weight:750}.rd-cosa span{font-size:12px;color:var(--ink2)}
 /* v10.13 — controllo dei conti e rimborsi */
 .sk-tre .ko b{color:var(--pn-ko)}
 .sk-avviso{background:var(--pn-warn-bg);color:var(--pn-warn);line-height:1.4}
@@ -34142,6 +34160,7 @@ async function ricvCaricaContesto(forza){
   try{ var rg = await sbFetch('ceraldi_stato_condiviso?id=eq.ric_regole_categorie&select=data'); ctx.regole = (rg && rg[0] && rg[0].data && rg[0].data.regole) || {}; }catch(e){}
   try{ if(!window._rcPronto && typeof _rcCarica === 'function') await _rcCarica(); }catch(e){}
   try{ ctx.paghe = await ricvCaricaPaghe(); }catch(e){ ctx.paghe = null; }
+  try{ if(typeof ricvCaricaSaldoSU === 'function') await ricvCaricaSaldoSU(); }catch(e){}
   RICV.ctx = ctx; RICV.inCarica = false; RICV.memo = null; ricInvalida();
   return ctx;
 }
@@ -35404,6 +35423,296 @@ async function ricvConfermaStipendi(){
   ricvRidisegna();
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+   PREVISIONE DEL SALDO (v10.17.0) — giorno per giorno, con le uscite vere
+   Non più una media settimanale uguale per tutte le settimane: l'app
+   riconosce le uscite che si ripetono ogni mese (stipendi, F24, mutuo,
+   addebiti SDD di noleggi e utenze, carta Nexi, commissioni) con il loro
+   giorno e il loro importo, mette le fatture da pagare alla loro scadenza
+   e gli incassi del giorno della settimana (il sabato non è il lunedì).
+   Così vedi QUANDO il conto scende e PERCHÉ.
+   Conto: Banco BPM (quello del saldo).
+   ══════════════════════════════════════════════════════════════════════ */
+function ricvIso(d){ return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function ricvMed(a){ if(!a.length) return 0; var b = a.slice().sort(function(x, y){ return x - y; }), m = Math.floor(b.length / 2); return b.length % 2 ? b[m] : (b[m - 1] + b[m]) / 2; }
+function ricvSerieDi(S){
+  var M = S.M, c = S.cat;
+  if(M.importo >= 0) return null;
+  if(c === 'stipendio') return { k: 'stip', t: 'Stipendi e compensi', agg: true };
+  if(c === 'tributo') return { k: 'trib', t: 'F24, tasse e contributi', agg: true };
+  if(c === 'commissione') return { k: 'comm', t: 'Commissioni e spese bancarie', agg: true };
+  if(c === 'carta') return { k: 'nexi', t: 'Addebito carta Nexi', agg: true };
+  if(c === 'paypal') return { k: 'paypal', t: 'Ricariche PayPal', agg: true };
+  if(c === 'mutuo'){ var n = (M.descrizione.match(/mutuo\s*n\.?\s*([\d\s]{6,})/i) || [])[1]; return { k: 'mutuo|' + String(n || M.importo).replace(/\s/g, ''), t: 'Rata mutuo' + (n ? ' n° ' + n.trim() : '') }; }
+  if(S.tipo === 'sdd'){ var md = typeof _rcMandato === 'function' ? _rcMandato(M.descrizione) : ''; if(md) return { k: 'sdd|' + md, t: 'Addebito ' + (S.titolo || 'SDD'), sdd: true }; }
+  return null;
+}
+function ricvPrevisione(){
+  var Sld = window._ceSaldo; if(!Sld || typeof Sld.saldo !== 'number') return null;
+  var C = ricvCalcola(), oggi = new Date(); oggi.setHours(12, 0, 0, 0); var oggiK = ricvIso(oggi);
+  var SU = window._ceSaldoSU && typeof window._ceSaldoSU.saldo === 'number' ? window._ceSaldoSU : null, unito = !!SU;
+  var bpm = Object.keys(C.stati).map(function(k){ return C.stati[k]; }).filter(function(S){ return S.M.fonte === 'banca' && (S.M.conto === 'BPM' || !S.M.conto || (unito && S.M.conto === 'SumUp')); });
+  bpm.sort(function(a, b){ return a.M.data < b.M.data ? -1 : 1; });
+  var ultima = bpm.length ? bpm[bpm.length - 1].M.data : Sld.al;
+  var saldo = Sld.saldo + (unito ? SU.saldo : 0), dopo = 0;
+  bpm.forEach(function(S){ var al = S.M.conto === 'SumUp' ? SU.al : Sld.al; if(S.M.data > al){ saldo += S.M.importo; dopo++; } });
+  var base = ultima > Sld.al ? ultima : Sld.al;
+  var fineStoria = new Date(base + 'T12:00:00'), iniStoria = new Date(fineStoria); iniStoria.setDate(iniStoria.getDate() - 126);
+  var iniK = ricvIso(iniStoria), recente = new Date(fineStoria); recente.setDate(recente.getDate() - 56); var recK = ricvIso(recente);
+  var giorniRec = 56;
+  // 1) incassi per giorno della settimana (accrediti POS e versamenti: le entrate che si ripetono)
+  var perDow = [0, 0, 0, 0, 0, 0, 0], giorniDow = [0, 0, 0, 0, 0, 0, 0];
+  for(var d = new Date(iniStoria); d <= fineStoria; d.setDate(d.getDate() + 1)) giorniDow[d.getDay()]++;
+  // 2) uscite ricorrenti e uscite verso fornitori
+  var serie = {}, fornTot = 0, giroIn = 0, sociIn = 0;
+  var meseK = function(s){ return s.slice(0, 7); };
+  bpm.forEach(function(S){
+    var M = S.M; if(M.data <= iniK || M.data > base) return;
+    var rec = M.data > recK;
+    if(M.importo > 0){
+      if(!rec) return;
+      if(S.cat === 'incasso' || S.cat === 'versamento' || S.cat === 'cliente') perDow[new Date(M.data + 'T12:00:00').getDay()] += M.importo;
+      else if(S.cat === 'giroconto'){ if(!unito) giroIn += M.importo; } // incassi SumUp girati su BPM (se SumUp non è nel conto)
+      else if(S.cat === 'finanziamento_soci') sociIn += M.importo;     // non si prevedono: si dicono
+      return;
+    }
+    if(/^(giroconto|finanziamento_soci|restituzione|legale|archivio)$/.test(S.cat || '')) return;
+    var sr = ricvSerieDi(S);
+    if(!sr){ if(rec) fornTot += -M.importo; return; }
+    var x = serie[sr.k] = serie[sr.k] || { k: sr.k, t: sr.t, agg: !!sr.agg, sdd: !!sr.sdd, mesi: {}, giorni: [], ultimi: [] };
+    var mk = meseK(M.data), mm = x.mesi[mk] = x.mesi[mk] || { tot: 0, gp: 0 };
+    mm.tot += -M.importo; mm.gp += (+M.data.slice(8, 10)) * (-M.importo);
+    x.giorni.push(+M.data.slice(8, 10)); x.ultimi.push({ d: M.data, v: -M.importo });
+  });
+  var settStoria = 126 / 7, settRec = giorniRec / 7;
+  var dowRec = [0, 0, 0, 0, 0, 0, 0]; for(var dr = new Date(recente); dr <= fineStoria; dr.setDate(dr.getDate() + 1)) dowRec[dr.getDay()]++;
+  var entrDow = perDow.map(function(v, i){ return (dowRec[i] ? v / dowRec[i] : 0) + giroIn / giorniRec; });
+  var fornW = fornTot / settRec;
+  // una serie è «ricorrente» se c'è in almeno 3 degli ultimi 4 mesi
+  var mesiUlt = []; var mb = new Date(base + 'T12:00:00'); mb.setDate(1);
+  for(var i = 1; i <= 4; i++){ var t = new Date(mb); t.setMonth(t.getMonth() - i); mesiUlt.push(ricvIso(t).slice(0, 7)); }
+  var ricorrenti = [];
+  Object.keys(serie).forEach(function(k){
+    var x = serie[k], presenti = mesiUlt.filter(function(m){ return x.mesi[m]; });
+    if(presenti.length < 3) { fornW += presenti.reduce(function(s, m){ return s + x.mesi[m].tot; }, 0) / settStoria; return; }
+    var importo = x.agg ? ricvMed(presenti.map(function(m){ return x.mesi[m].tot; })) : x.ultimi[x.ultimi.length - 1].v;
+    var giorno = Math.round(ricvMed(presenti.map(function(m){ return x.mesi[m].gp / x.mesi[m].tot; })));
+    ricorrenti.push({ k: k, t: x.t, importo: ricR2(importo), giorno: Math.min(28, Math.max(1, giorno)), sdd: x.sdd, mesi: x.mesi });
+  });
+  // 3) fatture da pagare alla loro scadenza (quello che manca davvero; non quelle in contanti né quelle con addebito SDD già previsto)
+  var ap = ricvAperti(C.idx), meno30 = new Date(oggi); meno30.setDate(meno30.getDate() - 30); var meno30K = ricvIso(meno30);
+  var fineH = new Date(oggi); fineH.setDate(fineH.getDate() + 56); var fineK = ricvIso(fineH);
+  var fattDue = {}, senzaScad = 0, vecchie = 0, nFatt = 0;
+  Object.keys(ap.bis).forEach(function(fid){
+    var f = C.idx.doc[fid]; if(!f || f.tipo !== 'fattura') return;
+    var met = String(f.pagamento || '').toLowerCase(); if(met === 'contanti' || met === 'sdd' || met === 'rid') return;
+    if(scStato(f) === 'pagata') return;                                     // segnata pagata (anche a mano): non pesa sul conto
+    var sk = /^\d{4}-\d{2}-\d{2}/.test(String(f.scadenza || '')) ? String(f.scadenza).slice(0, 10) : '';
+    if(!sk){ senzaScad++; return; }
+    if(sk < oggiK){ if(sk < meno30K){ vecchie++; return; } sk = oggiK; }
+    if(sk > fineK) return;
+    (fattDue[sk] = fattDue[sk] || []).push({ f: f, v: ap.bis[fid] }); nFatt++;
+  });
+  // 4) simulazione giorno per giorno: dall'ultimo movimento noto a oggi (stima), poi 8 settimane
+  var giaPagata = function(r, mk){ return r.mesi[mk] && r.mesi[mk].tot >= r.importo * 0.8; };
+  var eventiDel = function(dK){
+    var ev = [], g = +dK.slice(8, 10), mk = dK.slice(0, 7);
+    ricorrenti.forEach(function(r){ if(r.giorno === g && !giaPagata(r, mk)) ev.push({ t: r.t, v: -r.importo, tipo: 'serie' }); });
+    return ev;
+  };
+  var cur = saldo, giorno = new Date(base + 'T12:00:00'); giorno.setDate(giorno.getDate() + 1);
+  var gap = Math.max(0, Math.round((oggi - new Date(base + 'T12:00:00')) / 86400000));
+  for(; giorno <= oggi; giorno.setDate(giorno.getDate() + 1)){
+    var gK = ricvIso(giorno);
+    cur += entrDow[giorno.getDay()] - fornW / 7;
+    eventiDel(gK).forEach(function(e){ cur += e.v; });
+  }
+  var saldoOggi = cur, sett = [], punti = [{ t: oggiK, s: saldoOggi }], minD = { t: oggiK, s: saldoOggi };
+  for(var w = 0; w < 8; w++){
+    var a = new Date(oggi); a.setDate(a.getDate() + 1 + w * 7); var b = new Date(a); b.setDate(b.getDate() + 6);
+    var W = { da: ricvIso(a), a: ricvIso(b), entr: 0, ric: 0, forn: 0, fatt: 0, nF: 0, eventi: [], top: [] };
+    var dueW = []; for(var q = new Date(a); q <= b; q.setDate(q.getDate() + 1)){ (fattDue[ricvIso(q)] || []).forEach(function(x){ dueW.push(x); }); }
+    if(w === 0) (fattDue[oggiK] || []).forEach(function(x){ dueW.push(x); });
+    W.fatt = ricR2(dueW.reduce(function(s, x){ return s + x.v; }, 0)); W.nF = dueW.length;
+    W.top = dueW.sort(function(x, y){ return y.v - x.v; }).slice(0, 4).map(function(x){ return { n: x.f.fornitore, v: x.v, num: x.f.numero, s: x.f.scadenza }; });
+    W.forn = Math.max(fornW, W.fatt); W.daScad = W.fatt > fornW;
+    var fornGiorno = W.forn / 7;
+    for(var g2 = new Date(a); g2 <= b; g2.setDate(g2.getDate() + 1)){
+      var k2 = ricvIso(g2), en = entrDow[g2.getDay()];
+      cur += en - fornGiorno; W.entr += en;
+      eventiDel(k2).forEach(function(e){ cur += e.v; W.ric += -e.v; W.eventi.push({ d: k2, t: e.t, v: e.v }); });
+      if(cur < minD.s) minD = { t: k2, s: cur };
+    }
+    W.saldo = cur; sett.push(W); punti.push({ t: W.a, s: cur });
+  }
+  var entrW = entrDow.reduce(function(s, v){ return s + v; }, 0), ricW = ricorrenti.reduce(function(s, r){ return s + r.importo; }, 0) * 12 / 52;
+  var suAttivo = !unito && Object.keys(C.stati).some(function(k){ var M = C.stati[k].M; return M.conto === 'SumUp' && M.data >= recK; });
+  return { suAttivo: suAttivo, unito: unito, SU: SU, giroW: giroIn / settRec, sociIn: sociIn, saldoBase: Sld.saldo, al: Sld.al, saldoOggi: saldoOggi, gap: gap, dopo: dopo, entrW: entrW, ricW: ricW, fornW: fornW, sett: sett, punti: punti, senzaScad: senzaScad, vecchie: vecchie, ricorrenti: ricorrenti.sort(function(x, y){ return y.importo - x.importo; }), minD: minD, nFatt: nFatt, entrDow: entrDow };
+}
+function ricvPrevHtml(){
+  var P = ricvPrevisione();
+  var head = '<div class="gr-hd"><div><div class="gr-t">Previsione saldo in banca</div><div class="gr-s">' + (window._ceSaldoSU ? 'Banco BPM e SumUp' : 'Banco BPM') + ' · prossime 8 settimane, giorno per giorno</div></div>' + (window._ceSaldo ? '<button class="ce-mini" onclick="_ceSaldoChiedi()">Aggiorna saldo</button>' : '') + '</div>';
+  if(!P) return null;
+  var W = 340, H = 190, padL = 40, padR = 8, padT = 12, padB = 28, iw = W - padL - padR, ih = H - padT - padB;
+  var vals = P.punti.map(function(p){ return p.s; }).concat([P.minD.s]);
+  var lo = Math.min.apply(null, vals.concat([0])), hi = Math.max.apply(null, vals.concat([0]));
+  var sc = _grScala((hi - lo) || 1), passo = sc.passo;
+  var yMin = Math.floor(lo / passo) * passo, yMax = Math.ceil(hi / passo) * passo; if(yMax === yMin) yMax = yMin + passo;
+  var y = function(v){ return padT + ih - (v - yMin) / (yMax - yMin) * ih; }, x = function(i){ return padL + iw * i / (P.punti.length - 1); };
+  var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" class="gr-svg" role="img" aria-label="Saldo previsto per settimana">';
+  for(var v = yMin; v <= yMax + 0.001; v += passo){ var yy = y(v); svg += '<line x1="' + padL + '" x2="' + (W - padR) + '" y1="' + yy + '" y2="' + yy + '" class="gr-grid' + (Math.abs(v) < 0.001 ? ' gr-base' : '') + '"/><text x="' + (padL - 5) + '" y="' + (yy + 3) + '" class="gr-ax" text-anchor="end">' + (v < 0 ? '−' : '') + _grK(Math.abs(v)) + '</text>'; }
+  if(yMin < 0) svg += '<rect x="' + padL + '" y="' + y(0) + '" width="' + iw + '" height="' + (y(yMin) - y(0)) + '" class="ce-neg"/>';
+  var dd = P.punti.map(function(p, i){ return (i ? 'L' : 'M') + x(i).toFixed(1) + ',' + y(p.s).toFixed(1); }).join(' ');
+  svg += '<path d="' + dd + ' L' + x(P.punti.length - 1).toFixed(1) + ',' + y(Math.max(yMin, 0)).toFixed(1) + ' L' + x(0).toFixed(1) + ',' + y(Math.max(yMin, 0)).toFixed(1) + ' Z" class="ce-area"/><path d="' + dd + '" class="ce-line"/>';
+  P.punti.forEach(function(p, i){
+    var cx = x(i), cy = y(p.s), dt = new Date(p.t + 'T12:00:00');
+    if(i === 0 || i === P.punti.length - 1) svg += '<circle cx="' + cx + '" cy="' + cy + '" r="4" class="ce-pt' + (p.s < 0 ? ' ce-pt-neg' : '') + '"/>';
+    if(i % 2 === 0) svg += '<text x="' + cx + '" y="' + (H - 10) + '" class="gr-ax' + (i === 0 ? ' gr-ax-now' : '') + '" text-anchor="middle">' + (i === 0 ? 'oggi' : dt.getDate() + ' ' + _GR_MESI[dt.getMonth()].toLowerCase()) + '</text>';
+    var wk = i > 0 ? P.sett[i - 1] : null;
+    var tip = i === 0 ? '<b>Oggi (stima)</b><div>Saldo <span>' + fmt(p.s) + '</span></div>' + (P.gap > 0 ? '<em>ultimo movimento noto ' + P.gap + ' giorn' + (P.gap === 1 ? 'o' : 'i') + ' fa</em>' : '')
+      : '<b>Settimana fino al ' + dt.toLocaleDateString('it-IT', { day: 'numeric', month: 'short' }) + '</b><div>Incassi previsti <span>+' + fmt(wk.entr) + '</span></div>' + wk.eventi.map(function(e){ return '<div>' + esc(e.t) + ' (' + +e.d.slice(8, 10) + ') <span>−' + fmt(-e.v) + '</span></div>'; }).join('') + '<div>Fornitori' + (wk.daScad ? ' (fatture in scadenza)' : '') + ' <span>−' + fmt(wk.forn) + '</span></div><div>Saldo <span>' + fmt(p.s) + '</span></div>';
+    var hw = iw / (P.punti.length - 1);
+    svg += '<rect class="gr-hit" x="' + (cx - hw / 2) + '" y="' + padT + '" width="' + hw + '" height="' + ih + '" data-tip="' + esc(tip) + '" onclick="_grTip(this,this.dataset.tip)"/>';
+  });
+  // il punto più basso, al giorno
+  var mi = P.minD, mIdx = (new Date(mi.t + 'T12:00:00') - new Date(P.punti[0].t + 'T12:00:00')) / 86400000 / 7;
+  if(mi.t !== P.punti[0].t){ var mx = padL + iw * Math.min(8, Math.max(0, mIdx)) / 8; svg += '<circle cx="' + mx.toFixed(1) + '" cy="' + y(mi.s).toFixed(1) + '" r="4.5" class="ce-pt' + (mi.s < 0 ? ' ce-pt-neg' : '') + '"/>'; }
+  svg += '</svg>';
+  var fin = P.punti[P.punti.length - 1], minDate = new Date(mi.t + 'T12:00:00').toLocaleDateString('it-IT', { day: 'numeric', month: 'long' });
+  // perché scende: le uscite grosse della settimana del minimo
+  var da10 = new Date(mi.t + 'T12:00:00'); da10.setDate(da10.getDate() - 12); da10 = ricvIso(da10);
+  var perche = [];
+  P.sett.forEach(function(w){ w.eventi.forEach(function(e){ if(e.d >= da10 && e.d <= mi.t) perche.push(e); }); if(w.a >= da10 && w.da <= mi.t) w.top.forEach(function(t){ perche.push({ t: ricvBello(t.n).slice(0, 24) + ' n° ' + t.num, v: -t.v }); }); });
+  perche = perche.sort(function(a, b){ return a.v - b.v; }).slice(0, 3);
+  var avviso = mi.s < 0 ? '<div class="ce-alert">Il conto rischia di andare sotto zero il <b>' + minDate + '</b> (−' + fmt(Math.abs(mi.s)) + ')' + (perche.length ? ': pesano ' + perche.map(function(e){ return esc(e.t) + ' ' + fmt(-e.v); }).join(', ') : '') + '.</div>'
+    : (mi.s < Math.max(2000, P.entrW * 0.5) ? '<div class="ce-alert">Il punto più basso è il <b>' + minDate + '</b> (' + fmt(mi.s) + ')' + (perche.length ? ': pesano ' + perche.map(function(e){ return esc(e.t) + ' ' + fmt(-e.v); }).join(', ') : '') + '.</div>' : '');
+  var rTab = P.ricorrenti.length ? '<div class="ce-sez">Uscite che si ripetono ogni mese</div><div class="rv-prev-ric">' + P.ricorrenti.map(function(r){ return '<div><span>' + esc(r.t) + '</span><em>il ' + r.giorno + '</em><b>−' + fmt(r.importo) + '</b></div>'; }).join('') + '</div>' : '';
+  var tab = '<table class="gr-tab"><tr><th>Settimana</th><th>Incassi</th><th>Ricorrenti</th><th>Fornitori</th><th>Saldo</th></tr>' + P.sett.map(function(w){ return '<tr><td>' + new Date(w.da + 'T12:00:00').toLocaleDateString('it-IT', { day: 'numeric', month: 'short' }) + '</td><td>+' + fmt(w.entr) + '</td><td>' + (w.ric ? '−' + fmt(w.ric) : '—') + '</td><td>−' + fmt(w.forn) + '</td><td>' + (w.saldo < 0 ? '−' : '') + fmt(Math.abs(w.saldo)) + '</td></tr>'; }).join('') + '</table>';
+  var alD = new Date(P.al + 'T12:00:00').toLocaleDateString('it-IT', { day: 'numeric', month: 'long' });
+  var boxSU = P.unito ? '' : '<div class="' + (P.suAttivo ? 'ce-alert' : 'gr-nota') + '" style="margin-top:6px">' + (P.suAttivo ? '<b>Manca il conto SumUp.</b> Gli incassi con carta ora arrivano su SumUp e da lì passano a BPM: senza il suo saldo la previsione vede solo una parte delle entrate e il conto sembra scendere più di quanto fa.' : 'Se usi anche il conto SumUp, scrivi il suo saldo: la previsione terrà conto di tutti e due i conti.') + '</div><div class="ce-saldo-in"><input id="ceSaldoSU" type="text" inputmode="decimal" placeholder="Saldo SumUp di oggi"><button class="btn btn-p" onclick="ricvSalvaSaldoSU()">Aggiungi</button></div>';
+  if(P.suAttivo) return '<div class="gr-card">' + head + boxSU + rTab + '<div class="gr-nota">Appena aggiungi il saldo SumUp vedi il saldo previsto giorno per giorno, il punto più basso e cosa lo causa.</div></div>';
+  return '<div class="gr-card">' + head + svg + avviso +
+    '<div class="gr-kpi"><div><span>Oggi (stima)</span><b>' + (P.saldoOggi < 0 ? '−' : '') + fmt(Math.abs(P.saldoOggi)) + '</b></div><div><span>Punto più basso</span><b style="color:' + (mi.s < 0 ? 'var(--red)' : 'inherit') + '">' + (mi.s < 0 ? '−' : '') + fmt(Math.abs(mi.s)) + '</b><em class="ce-dl">' + (mi.t === P.punti[0].t ? 'oggi' : minDate) + '</em></div><div><span>Fra 8 settimane</span><b>' + (fin.s < 0 ? '−' : '') + fmt(Math.abs(fin.s)) + '</b></div></div>' +
+    rTab +
+    '<div class="gr-nota">Parte dal saldo di ' + fmt(P.saldoBase) + ' al ' + alD + (P.dopo ? ' più ' + P.dopo + ' movimenti successivi' : '') + '. Incassi: la media delle ultime 8 settimane per giorno della settimana (in tutto ' + fmt(P.entrW) + ' a settimana' + (P.giroW > 1 ? ', compresi ' + fmt(P.giroW) + ' girati da SumUp e dagli altri tuoi conti' : '') + ').' + (P.sociIn > 1 ? ' Non conto i finanziamenti dei soci (' + fmt(P.sociIn) + ' negli ultimi 4 mesi): se ne arrivano, il saldo sarà più alto.' : '') + ' Le uscite che si ripetono vanno al loro giorno; le fatture da pagare alla loro scadenza (' + P.nFatt + ' nelle prossime 8 settimane), oppure la spesa media verso i fornitori (' + fmt(P.fornW) + ' a settimana) se è di più. Quelle in contanti non passano dalla banca.' + (P.senzaScad ? ' ' + P.senzaScad + ' fatture aperte senza scadenza non sono contate.' : '') + (P.vecchie ? ' Escluse ' + P.vecchie + ' fatture scadute da più di un mese.' : '') + '</div>' +
+    (P.suAttivo || P.unito ? '' : boxSU) + (P.unito ? '<div class="gr-nota">Saldo SumUp: ' + fmt(P.SU.saldo) + ' al ' + ricGg(P.SU.al) + ' · <a href="#" onclick="event.preventDefault();window._ceSaldoSU=null;_ceRender()">cambia</a></div>' : '') +
+    '<details class="gr-det"><summary>Vedi come tabella</summary>' + tab + '</details></div>';
+}
+async function ricvSalvaSaldoSU(){
+  var el = document.getElementById('ceSaldoSU'), v = typeof _ceNumero === 'function' ? _ceNumero(el && el.value) : parseFloat(String(el && el.value).replace(',', '.'));
+  if(!isFinite(v)){ toast('Scrivi il saldo, es. 4.250,00', { forza: true }); return; }
+  var d = { saldo: Math.round(v * 100) / 100, al: ricvIso(new Date()), salvato_il: new Date().toISOString() };
+  window._ceSaldoSU = d;
+  try{ await sbFetch('ceraldi_stato_condiviso?on_conflict=id', { method: 'POST', headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify({ id: 'banca_saldo_sumup', data: d, updated_at: new Date().toISOString() }) }); toast('✓ Saldo SumUp salvato', { forza: true }); }
+  catch(e){ toast('⚠️ Salvato solo su questo dispositivo', { forza: true }); }
+  if(typeof _ceRender === 'function') _ceRender();
+}
+async function ricvCaricaSaldoSU(){ try{ var r = await sbFetch('ceraldi_stato_condiviso?id=eq.banca_saldo_sumup&select=data'); if(r && r[0] && r[0].data) window._ceSaldoSU = r[0].data; }catch(e){} }
+(function(){
+  if(typeof _cePrevHtml !== 'function') return;
+  var orig = _cePrevHtml;
+  _cePrevHtml = function(){ try{ var h = ricvPrevHtml(); if(h) return h; }catch(e){ console.warn('previsione:', e); if(typeof _registraErrore === 'function') _registraErrore('js', 'Previsione: ' + (e.message || e)); } return orig.apply(this, arguments); };
+})();
+// i costi pagati in banca nel conto economico usano le stesse categorie della riconciliazione
+(function(){
+  if(typeof _ceMovCat !== 'function') return;
+  var orig = _ceMovCat, mappa = { stipendio: 'stipendi', tributo: 'f24', mutuo: 'mutuo', commissione: 'spese', carta: 'nexi', paypal: 'paypal', giroconto: 'finsoci', finanziamento_soci: 'finsoci', incasso: 'numia', versamento: 'versamento' };
+  _ceMovCat = function(m){
+    try{ if(m && m.id != null && typeof ricvVistaAttiva === 'function'){ var C = ricvCalcola(), S = C.stati[ricMovKey(m.id)]; if(S && S.gruppo === 'non' && mappa[S.cat]) return mappa[S.cat]; if(S && S.docs && S.docs.length) return 'bonifico'; } }catch(e){}
+    return orig.apply(this, arguments);
+  };
+})();
+
+/* ══════════════════════════════════════════════════════════════════════
+   SITUAZIONE (v10.17.0) — in cima al Riepilogo: i numeri che contano per
+   il periodo scelto, confrontati con il periodo prima, e le cose da fare.
+   Incassi = corrispettivi delle chiusure. Costi = fatture (meno note di
+   credito) più stipendi, tasse, mutuo e commissioni pagati in banca.
+   Da pagare = quello che manca davvero sulle fatture non pagate.
+   ══════════════════════════════════════════════════════════════════════ */
+var RICD = { per: 'mese' };
+function ricvTab(nome){ var b = document.querySelector('.tab-item[onclick*="\'' + nome + '\'"]'); try{ goTab(nome, b); }catch(e){} }
+function ricdPeriodo(per, rif){
+  var o = rif ? new Date(rif) : new Date(); o.setHours(12, 0, 0, 0);
+  var y = o.getFullYear(), m = o.getMonth(), da, a, t;
+  if(per === 'mese'){ da = new Date(y, m, 1, 12); a = new Date(y, m + 1, 0, 12); t = PN_MESI_L[m] + ' ' + y; }
+  else if(per === 'mesePrec'){ da = new Date(y, m - 1, 1, 12); a = new Date(y, m, 0, 12); t = PN_MESI_L[(m + 11) % 12] + ' ' + da.getFullYear(); }
+  else if(per === 'trim'){ var q = Math.floor(m / 3); da = new Date(y, q * 3, 1, 12); a = new Date(y, q * 3 + 3, 0, 12); t = (q + 1) + '° trimestre ' + y; }
+  else if(per === 'anno'){ da = new Date(y, 0, 1, 12); a = new Date(y, 11, 31, 12); t = 'anno ' + y; }
+  else { a = new Date(o); da = new Date(y - 1, m, o.getDate() + 1, 12); t = 'ultimi 12 mesi'; }
+  return { da: ricvIso(da), a: ricvIso(a), t: t };
+}
+function ricdPrima(P){
+  var da = new Date(P.da + 'T12:00:00'), a = new Date(P.a + 'T12:00:00');
+  var giorni = Math.round((a - da) / 86400000) + 1, a2 = new Date(da); a2.setDate(a2.getDate() - 1); var da2 = new Date(a2); da2.setDate(da2.getDate() - giorni + 1);
+  // per mesi/trimestri/anni interi: lo stesso periodo spostato indietro
+  if(/-01$/.test(P.da)){ var mesi = Math.round(giorni / 30.4); if(mesi >= 1){ da2 = new Date(da); da2.setMonth(da2.getMonth() - mesi); a2 = new Date(da); a2.setDate(0); } }
+  return { da: ricvIso(da2), a: ricvIso(a2) };
+}
+function ricdNumeri(P){
+  var oggiK = ricvIso(new Date()), fino = P.a < oggiK ? P.a : oggiK;
+  var inc = 0, giorni = {}, nCh = 0;
+  (typeof chiusure !== 'undefined' ? chiusure : []).forEach(function(c){ var d = String(c.data || '').slice(0, 10); if(c.deleted_at || d < P.da || d > P.a) return; inc += +c.totale_corrispettivi || 0; giorni[d] = 1; nCh++; });
+  var acq = 0, nF = 0;
+  (typeof fatture !== 'undefined' ? fatture : []).forEach(function(f){ if(!ricDoc(f) || f.tipo === 'ddt') return; var d = String(f.data || '').slice(0, 10); if(d < P.da || d > P.a) return; acq += (f.tipo === 'nota_credito' ? -Math.abs(+f.importo || 0) : (+f.importo || 0)); nF++; });
+  var banca = { stipendio: 0, tributo: 0, mutuo: 0, commissione: 0 };
+  try{ var C = ricvCalcola(); Object.keys(C.stati).forEach(function(k){ var S = C.stati[k], M = S.M; if(M.importo >= 0 || M.data < P.da || M.data > P.a || S.gruppo !== 'non') return; if(banca.hasOwnProperty(S.cat)) banca[S.cat] += -M.importo; }); }catch(e){}
+  var costiBanca = banca.stipendio + banca.tributo + banca.mutuo + banca.commissione;
+  // giorni senza chiusura (dal primo giorno con chiusure nell'archivio)
+  var mancano = 0, primo = (typeof chiusure !== 'undefined' ? chiusure : []).reduce(function(m, c){ var d = String(c.data || ''); return !c.deleted_at && d && (!m || d < m) ? d : m; }, '');
+  if(primo){ for(var d = new Date((P.da > primo ? P.da : primo) + 'T12:00:00'); ricvIso(d) <= fino && ricvIso(d) < oggiK; d.setDate(d.getDate() + 1)){ if(!giorni[ricvIso(d)]) mancano++; } }
+  return { inc: inc, nCh: nCh, acq: acq, nF: nF, banca: banca, costi: acq + costiBanca, resta: inc - acq - costiBanca, mancano: mancano };
+}
+function ricdDelta(a, b, inverso){
+  if(!(Math.abs(b) > 1)) return '';
+  var p = Math.round((a - b) / Math.abs(b) * 100); if(!p) return '<em class="rd-d">come prima</em>';
+  var buono = inverso ? p < 0 : p > 0;
+  return '<em class="rd-d ' + (buono ? 'su' : 'giu') + '">' + (p > 0 ? '+' : '−') + Math.abs(p) + '%</em>';
+}
+function ricdSetPer(p){ RICD.per = p; ricdRender(); }
+function ricdRender(){
+  var vista = document.getElementById('view-riepilogo'); if(!vista) return;
+  var box = document.getElementById('rdBox');
+  if(!box){
+    box = document.createElement('div'); box.id = 'rdBox';
+    var tg = vista.querySelector('.tot-grid'); if(tg){ tg.parentNode.insertBefore(box, tg); tg.style.display = 'none'; } else vista.insertBefore(box, vista.firstChild);
+  }
+  var P = ricdPeriodo(RICD.per), Pp = ricdPrima(P), N = ricdNumeri(P), Np = ricdNumeri(Pp);
+  var oggiK = ricvIso(new Date()), inCorso = P.a >= oggiK && P.da <= oggiK;
+  // da pagare: quello che manca davvero, e quanto è già scaduto
+  var dovuto = 0, scaduto = 0, nScad = 0, prossimi = 0, vecchio = 0, nVecchie = 0;
+  try{
+    var idx = ricIndice(), ap = ricvAperti(idx), fra15 = new Date(); fra15.setDate(fra15.getDate() + 15); var fra15K = ricvIso(fra15), m60 = new Date(); m60.setDate(m60.getDate() - 60); var meno60K = ricvIso(m60);
+    Object.keys(ap.bis).forEach(function(fid){ var f = idx.doc[fid]; if(!f || f.tipo !== 'fattura' || scStato(f) === 'pagata') return; var v = ap.bis[fid]; dovuto += v; var sk = String(f.scadenza || '').slice(0, 10); if(sk && sk < meno60K){ vecchio += v; nVecchie++; } else if(sk && sk < oggiK){ scaduto += v; nScad++; } else if(sk && sk <= fra15K) prossimi += v; });
+  }catch(e){}
+  var nConf = 0, nSist = 0;
+  try{ var C = ricvCalcola(); Object.keys(C.stati).forEach(function(k){ var g = C.stati[k].gruppo; if(g === 'conferma') nConf++; else if(g === 'sistemare') nSist++; }); nSist += C.docItems.length; }catch(e){}
+  var chips = [['mese', 'Questo mese'], ['mesePrec', 'Mese scorso'], ['trim', 'Trimestre'], ['anno', 'Anno'], ['12m', '12 mesi']].map(function(c){ return '<button class="chip' + (RICD.per === c[0] ? ' active' : '') + '" onclick="ricdSetPer(\'' + c[0] + '\')">' + c[1] + '</button>'; }).join('');
+  var h = '<div class="rd-card"><div class="rd-hd"><div><div class="rd-t">Situazione</div><div class="rd-s">' + esc(P.t) + (inCorso ? ' · in corso' : '') + ' · confronto con il periodo prima</div></div></div>';
+  h += '<div class="chip-row rd-chips">' + chips + '</div>';
+  h += '<div class="rd-kpi">' +
+    '<button class="rd-k" onclick="ricvTab(\'incassi\')"><span>Incassi</span><b>' + fmt(N.inc) + '</b>' + (inCorso ? '' : ricdDelta(N.inc, Np.inc)) + '<small>' + N.nCh + ' chiusure</small></button>' +
+    '<button class="rd-k" onclick="document.getElementById(\'ceBox\').scrollIntoView({behavior:\'smooth\'})"><span>Costi</span><b>' + fmt(N.costi) + '</b>' + (inCorso ? '' : ricdDelta(N.costi, Np.costi, true)) + '<small>fatture ' + fmt(N.acq) + (N.costi - N.acq > 1 ? ' + banca ' + fmt(N.costi - N.acq) : '') + '</small></button>' +
+    '<div class="rd-k rd-k-resta"><span>Resta</span><b class="' + (N.resta >= 0 ? 'pos' : 'neg') + '">' + (N.resta < 0 ? '−' : '') + fmt(Math.abs(N.resta)) + '</b>' + (N.inc > 0 ? '<small>' + Math.round(N.resta / N.inc * 100) + '% degli incassi</small>' : '<small>&nbsp;</small>') + '</div>' +
+    '<button class="rd-k" onclick="ricvTab(\'lista\')"><span>Da pagare</span><b>' + fmt(dovuto) + '</b><small>' + (scaduto > 1 ? '<i class="neg">' + fmt(scaduto) + ' scaduti da poco</i>' : (vecchio > 1 ? fmt(vecchio) + ' scaduti da tempo' : 'niente di scaduto')) + '</small></button>' +
+    '</div>';
+  // cose da fare, solo se ci sono
+  var cose = [];
+  if(nScad) cose.push('<button class="rd-cosa ko" onclick="ricvTab(\'lista\')"><b>' + nScad + (nScad === 1 ? ' fattura scaduta' : ' fatture scadute') + '</b><span>' + fmt(scaduto) + ' da pagare' + (prossimi > 1 ? ' · altri ' + fmt(prossimi) + ' nei prossimi 15 giorni' : '') + '</span></button>');
+  if(nVecchie) cose.push('<button class="rd-cosa warn" onclick="ricvTab(\'lista\')"><b>' + nVecchie + (nVecchie === 1 ? ' fattura scaduta' : ' fatture scadute') + ' da più di 2 mesi</b><span>' + fmt(vecchio) + ' ancora segnati da pagare: se le hai già pagate segnale pagate, altrimenti sono un debito vecchio</span></button>');
+  if(!nScad && prossimi > 1) cose.push('<button class="rd-cosa" onclick="ricvTab(\'lista\')"><b>In scadenza nei prossimi 15 giorni</b><span>' + fmt(prossimi) + '</span></button>');
+  if(nConf || nSist) cose.push('<button class="rd-cosa" onclick="ricvVaiA(' + (nSist ? '\'sistemare\'' : '\'conferma\'') + ')"><b>Riconciliazione</b><span>' + [nConf ? nConf + ' da confermare' : '', nSist ? nSist + ' da sistemare' : ''].filter(Boolean).join(' · ') + '</span></button>');
+  if(N.mancano >= 2) cose.push('<button class="rd-cosa warn" onclick="ricvTab(\'incassi\')"><b>' + N.mancano + ' giorni senza chiusura di cassa</b><span>gli incassi di quei giorni non sono contati</span></button>');
+  if(cose.length) h += '<div class="rd-cose">' + cose.join('') + '</div>';
+  h += '</div>';
+  box.innerHTML = h;
+}
+(function(){
+  if(typeof renderRiepilogo !== 'function') return;
+  var orig = renderRiepilogo;
+  renderRiepilogo = function(){ var r = orig.apply(this, arguments); try{ ricdRender(); }catch(e){ console.warn('situazione:', e); if(typeof _registraErrore === 'function') _registraErrore('js', 'Situazione: ' + (e.message || e)); } return r; };
+})();
+
 /* ── navigazione: porta alla riconciliazione, sul gruppo giusto, tutti i mesi ── */
 function ricvVaiA(gruppo){
   RICV.gruppo = gruppo || null; RICV.mostra = 40; RICV.soloClassica = false;
@@ -35413,7 +35722,7 @@ function ricvVaiA(gruppo){
   var sec = document.getElementById('inc-banca');
   var vai = function(){ ['bancaMese', 'bancaFiltroDal', 'bancaFiltroAl'].forEach(function(id){ var e = document.getElementById(id); if(e) e.value = ''; }); RICV.gruppo = gruppo || null; renderRiconciliazione(); };
   if(sec && sec.offsetParent !== null){ vai(); return; }
-  try{ goTab('incassi', document.querySelector('.tab-item:nth-child(4)')); }catch(e){}
+  try{ ricvTab('incassi'); }catch(e){}
   setTimeout(function(){ try{ setIncTab('banca', document.getElementById('inctab-banca')); }catch(e){} vai(); }, 220);
 }
 // il vecchio «Controllo dei conti» ora è il gruppo «Da sistemare»
