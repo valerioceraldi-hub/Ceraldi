@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.18.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.19.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -35723,6 +35723,11 @@ function ricdRender(){
   if(nVecchie) cose.push('<button class="rd-cosa warn" onclick="ricvTab(\'lista\')"><b>' + nVecchie + (nVecchie === 1 ? ' fattura scaduta' : ' fatture scadute') + ' da più di 2 mesi</b><span>' + fmt(vecchio) + ' ancora segnati da pagare: se le hai già pagate segnale pagate, altrimenti sono un debito vecchio</span></button>');
   if(!nScad && prossimi > 1) cose.push('<button class="rd-cosa" onclick="ricvTab(\'lista\')"><b>In scadenza nei prossimi 15 giorni</b><span>' + fmt(prossimi) + '</span></button>');
   if(nConf || nSist) cose.push('<button class="rd-cosa" onclick="ricvVaiA(' + (nSist ? '\'sistemare\'' : '\'conferma\'') + ')"><b>Riconciliazione</b><span>' + [nConf ? nConf + ' da confermare' : '', nSist ? nSist + ' da sistemare' : ''].filter(Boolean).join(' · ') + '</span></button>');
+  try{
+    var SD = ricvSddControllo(), sv = SD.voci.filter(function(v){ return v.tipo !== 'sdd_estratto' && !_anIgnorataChiave(v.chiave); });
+    if(sv.length) cose.push('<button class="rd-cosa' + (sv.some(function(v){ return v.gravita === 'alta'; }) ? ' ko' : ' warn') + '" onclick="_anApri()"><b>' + sv.length + (sv.length === 1 ? ' addebito diretto non torna' : ' addebiti diretti non tornano') + '</b><span>' + (function(){ var nomi = { sdd_doppio: ['doppio', 'doppi'], sdd_senza: ['senza fattura', 'senza fattura'], sdd_mancante: ['non arrivato', 'non arrivati'], sdd_data: ['in un giorno diverso', 'in giorni diversi'], sdd_importo: ['più alto della fattura', 'più alti delle fatture'] }, c = {}; sv.forEach(function(v){ c[v.tipo] = (c[v.tipo] || 0) + 1; }); return Object.keys(c).map(function(t){ return c[t] + ' ' + (nomi[t] || [t, t])[c[t] === 1 ? 0 : 1]; }).join(' · '); })() + ' — vedi Controllo anomalie</span></button>');
+    if(SD.fino && ricvGiorni(SD.fino, ricvIso(new Date())) > 10) cose.push('<button class="rd-cosa" onclick="ricvVaiA(null)"><b>Estratto conto fermo al ' + ricGg(SD.fino) + '</b><span>caricalo per controllare gli addebiti e i pagamenti dopo quel giorno</span></button>');
+  }catch(e){}
   if(N.mancano >= 2) cose.push('<button class="rd-cosa warn" onclick="ricvTab(\'incassi\')"><b>' + N.mancano + ' giorni senza chiusura di cassa</b><span>gli incassi di quei giorni non sono contati</span></button>');
   if(cose.length) h += '<div class="rd-cose">' + cose.join('') + '</div>';
   h += '</div>';
@@ -35790,6 +35795,141 @@ function ricvXlsxSistema(ws){
   if(!aggancia()){ var n = 0, t = setInterval(function(){ if(aggancia() || ++n > 40) clearInterval(t); }, 500); }
 })();
 
+/* ══════════════════════════════════════════════════════════════════════
+   ADDEBITI DIRETTI (SDD) SOTTO CONTROLLO (v10.19.0)
+   Regola: vale quello che c'è scritto in fattura. La scadenza in fattura è
+   il giorno in cui il fornitore addebita; ogni fornitore ha poi il suo
+   piccolo ritardo abituale (es. Perfetti: 5 giorni), che l'app impara dagli
+   addebiti già collegati. Quello che non torna finisce nel Controllo anomalie:
+     · addebito non arrivato (la scadenza è passata e l'estratto la copre)
+     · addebito arrivato in un giorno diverso dal solito
+     · addebito di importo diverso dalla fattura
+     · addebito senza fattura
+     · addebito doppio
+     · estratto conto fermo: dopo quel giorno non si può controllare nulla
+   ══════════════════════════════════════════════════════════════════════ */
+var RICV_SDD_TOLL = 7;   // giorni di tolleranza oltre il ritardo abituale
+function ricvMediana(a){ if(!a.length) return null; var b = a.slice().sort(function(x, y){ return x - y; }); var m = b.length >> 1; return b.length % 2 ? b[m] : Math.round((b[m - 1] + b[m]) / 2); }
+// Fin dove l'estratto conto è completo: l'ultimo giorno con movimenti che
+// arrivano solo dall'estratto (addebiti SDD, commissioni, incassi POS…)
+function ricvBancaFino(){
+  var fino = '';
+  (typeof _bancaMovimenti !== 'undefined' ? _bancaMovimenti : []).forEach(function(m){
+    if(m.conto === 'SumUp' || /sumup/i.test(m.descrizione || '')) return;
+    if(/sdd\s*(core|b2b)|addebito\s+diretto|comm\.?\s*sdd|commissioni|competenze|inc\.?\s*pos|accredito\s+pos|numia|imp\.?\s*bollo/i.test(m.descrizione || '') && String(m.data) > fino) fino = String(m.data).slice(0, 10);
+  });
+  return fino;
+}
+function ricvSddFattura(f){ return /^(sdd|rid)$/i.test(String(f.pagamento || '')); }
+function ricvSddControllo(){
+  var C = ricvCalcola();
+  if(RICV._sdd && RICV._sdd.C === C) return RICV._sdd.R;
+  var idx = ricIndice(), ap = ricvAperti(idx), fino = ricvBancaFino(), oggiK = ricvIso(new Date()), voci = [];
+  var primo = (typeof _bancaMovimenti !== 'undefined' ? _bancaMovimenti : []).reduce(function(m, x){ return !m || x.data < m ? String(x.data).slice(0, 10) : m; }, '');
+  var addebiti = [], storia = {};   // fornitore → ritardi dalla scadenza in fattura e dalla data della fattura
+  Object.keys(C.stati).forEach(function(k){
+    var S = C.stati[k]; if(S.tipo !== 'sdd' || !(S.M.importo < 0) || S.M.fonte !== 'banca') return;
+    addebiti.push(S);
+    S.docs.forEach(function(x){
+      var f = x.f, fk = ricvFk(f); if(!fk || f.tipo !== 'fattura') return;
+      var h = storia[fk] = storia[fk] || { sc: [], dt: [], n: 0 }; h.n++;
+      if(/^\d{4}-\d{2}-\d{2}/.test(String(f.scadenza || ''))) h.sc.push(ricvGiorni(f.scadenza, S.M.data));
+      if(f.data) h.dt.push(ricvGiorni(f.data, S.M.data));
+    });
+  });
+  var solito = function(fk){ var h = storia[fk]; return h ? { sc: ricvMediana(h.sc), dt: ricvMediana(h.dt), n: h.n } : { sc: null, dt: null, n: 0 }; };
+  var nomeMov = function(S){ return ricvBello(S.titolo || ricvTitolo(S.M)); };
+  var raw = function(S){ try{ return ricvTrovaRaw(S.M.key).m; }catch(e){ return S.M; } };
+  // 1) addebiti arrivati: data, importo, fattura
+  addebiti.forEach(function(S){
+    var M = S.M, imp = -M.importo, cat = S.cat || ((ricvCatM(M, RICV.ctx || {}) || {}).cat);
+    if(/^(commissione|carta|paypal|tributo|mutuo|giroconto)$/.test(cat || '')) return;
+    var fatt = S.docs.filter(function(x){ return x.f && x.f.tipo !== 'ddt'; });
+    if(!fatt.length){
+      if(S.gruppo === 'non') return;   // spesa senza fattura già spiegata (categoria scelta)
+      voci.push({ chiave: 'sdd_senza|' + M.key, tipo: 'sdd_senza', gravita: 'media', mov: raw(S), S: S,
+        titolo: 'Addebito senza fattura: ' + nomeMov(S) + ' · ' + fmt(imp),
+        testo: nomeMov(S) + ' ha addebitato ' + fmt(imp) + ' il ' + ricGg(M.data) + ', ma nell\'archivio non c\'è una fattura che torni' + (S.proposte && S.proposte[0] ? ' con certezza (la più vicina: n° ' + S.proposte[0].docs.map(function(x){ return x.f.numero; }).join(', ') + ')' : '') + '. Se la fattura esiste, caricala; se è una spesa senza fattura, scegli la categoria nella riconciliazione.' });
+      return;
+    }
+    // importo: quanto dell'addebito resta senza fattura, o quanto delle fatture resta da pagare
+    var coperto = fatt.reduce(function(s, x){ return s + (+x.quota || 0); }, 0);
+    if(imp - coperto > 1){
+      voci.push({ chiave: 'sdd_importo|' + M.key, tipo: 'sdd_importo', gravita: imp - coperto > 50 ? 'alta' : 'media', mov: raw(S), S: S, fatture: fatt.map(function(x){ return x.f; }),
+        titolo: 'Addebito più alto delle fatture: ' + nomeMov(S) + ' · ' + fmt(imp),
+        testo: 'Il ' + ricGg(M.data) + ' ' + nomeMov(S) + ' ha addebitato ' + fmt(imp) + ', ma ' + (fatt.length === 1 ? 'la fattura n° ' + fatt[0].f.numero + ' è di ' : 'le fatture collegate fanno ') + fmt(coperto) + ': mancano ' + fmt(imp - coperto) + ' senza documento. Di solito è una fattura non ancora caricata.' });
+    }
+    // data: confrontata con la scadenza scritta in fattura e con il ritardo abituale del fornitore
+    fatt.forEach(function(x){
+      var f = x.f; if(f.tipo !== 'fattura' || !/^\d{4}-\d{2}-\d{2}/.test(String(f.scadenza || ''))) return;
+      var off = ricvGiorni(f.scadenza, M.data), sol = solito(ricvFk(f)), rif = sol.n >= 3 && sol.sc != null ? sol.sc : 0;
+      if(Math.abs(off - rif) <= RICV_SDD_TOLL) return;
+      var gg = function(n){ return n + (n === 1 ? ' giorno' : ' giorni'); }, quando = off > 0 ? gg(off) + ' dopo' : gg(-off) + ' prima';
+      voci.push({ chiave: 'sdd_data|' + M.key + '|' + f.id, tipo: 'sdd_data', gravita: 'media', mov: raw(S), S: S, fatture: [f],
+        titolo: 'Addebito in un giorno diverso: ' + nomeMov(S) + ' · ' + fmt(imp),
+        testo: 'In fattura n° ' + f.numero + ' la scadenza è il ' + ricGg(f.scadenza) + ', l\'addebito è arrivato il ' + ricGg(M.data) + ' (' + quando + (rif ? '; di solito ' + nomeMov(S) + ' addebita ' + (rif > 0 ? gg(rif) + ' dopo la scadenza' : 'alla scadenza') : '') + '). Controlla che sia la fattura giusta.' });
+    });
+  });
+  // 2) addebiti doppi: stesso importo, stesso mandato (o stesso nome), a pochi giorni
+  var perImp = {};
+  addebiti.forEach(function(S){ var c = S.cat || ((ricvCatM(S.M, RICV.ctx || {}) || {}).cat); if(c === 'commissione' || -S.M.importo < 2) return; var e = (-S.M.importo).toFixed(2); (perImp[e] = perImp[e] || []).push(S); });
+  Object.keys(perImp).forEach(function(e){
+    var L = perImp[e]; if(L.length < 2) return;
+    L.sort(function(a, b){ return a.M.data < b.M.data ? -1 : 1; });
+    for(var i = 1; i < L.length; i++){
+      var A = L[i - 1], B = L[i];
+      if(ricvGiorni(A.M.data, B.M.data) > 3) continue;
+      var ma = _rcMandato(A.M.descrizione), mb = _rcMandato(B.M.descrizione);
+      var stesso = ma && mb ? ma === mb : ricChiaveNome(ricvTitolo(A.M)) === ricChiaveNome(ricvTitolo(B.M));
+      if(!stesso) continue;
+      // due acquisti diversi dello stesso importo, ognuno con la sua fattura: va bene
+      var fa = A.docs.map(function(x){ return String(x.f.id); }), fb = B.docs.map(function(x){ return String(x.f.id); });
+      if(fa.length && fb.length && !fa.some(function(id){ return fb.indexOf(id) >= 0; })) continue;
+      var stessoGiorno = A.M.data === B.M.data, cB = B.cat || ((ricvCatM(B.M, RICV.ctx || {}) || {}).cat);
+      voci.push({ chiave: 'sdd_doppio|' + A.M.key + '|' + B.M.key, tipo: 'sdd_doppio', gravita: stessoGiorno && cB !== 'paypal' ? 'alta' : 'media', movs: [raw(A), raw(B)], S: B,
+        titolo: 'Addebito doppio? ' + nomeMov(B) + ' · 2 × ' + fmt(+e),
+        testo: (stessoGiorno ? 'Lo stesso giorno (' + ricGg(A.M.data) + ')' : 'Il ' + ricGg(A.M.data) + ' e il ' + ricGg(B.M.data)) + ' ' + nomeMov(B) + ' ha addebitato due volte ' + fmt(+e) + (ma && ma === mb ? ' con lo stesso mandato' : '') + '.' + (cB === 'paypal' ? ' Con PayPal possono essere due acquisti uguali: controlla in PayPal.' : '') + ' Guarda l\'estratto conto: se il secondo non c\'è, è stato importato due volte (eliminalo); se c\'è, chiedi il rimborso al fornitore.' });
+    }
+  });
+  // 3) addebiti attesi e non arrivati: fatture SDD scadute che l'estratto conto copre
+  Object.keys(ap.bis).forEach(function(fid){
+    var f = idx.doc[fid]; if(!f || f.tipo !== 'fattura' || scStato(f) === 'pagata' && !ap.bis[fid]) return;
+    if(!ricvSddFattura(f)) return;
+    var resto = ap.bis[fid]; if(resto <= 1) return;
+    var fk = ricvFk(f), sol = solito(fk), att = '', come = '';
+    if(/^\d{4}-\d{2}-\d{2}/.test(String(f.scadenza || ''))){ att = ricvPiuGiorni(f.scadenza, sol.n >= 3 && sol.sc != null ? Math.max(0, sol.sc) : 0); come = 'scadenza in fattura ' + ricGg(f.scadenza); }
+    else if(typeof _dataAddebitoAttesa === 'function' && _dataAddebitoAttesa(f.fornitore, f.numero, f.data)){ att = _dataAddebitoAttesa(f.fornitore, f.numero, f.data); come = 'addebito previsto il ' + ricGg(att); }
+    else if(sol.n >= 3 && sol.dt != null && f.data){ att = ricvPiuGiorni(f.data, sol.dt); come = 'di solito addebita ' + sol.dt + (sol.dt === 1 ? ' giorno' : ' giorni') + ' dopo la fattura'; }
+    if(!att || !fino || (primo && att < primo)) return;
+    var ritardo = ricvGiorni(att, fino);
+    if(ritardo <= RICV_SDD_TOLL) return;   // l'estratto non arriva ancora a quel giorno (o è nei tempi)
+    voci.push({ chiave: 'sdd_manca|' + fid, tipo: 'sdd_mancante', gravita: ritardo > 30 ? 'alta' : 'media', fatture: [f],
+      titolo: 'Addebito non arrivato: ' + ricvBello(f.fornitore) + ' · ' + fmt(resto),
+      testo: 'La fattura n° ' + f.numero + ' del ' + ricGg(f.data) + ' si paga con addebito diretto (' + come + '), ma sull\'estratto conto fino al ' + ricGg(fino) + ' l\'addebito non c\'è. Se l\'hai pagata in un altro modo, collegala al pagamento; se il fornitore non ha addebitato, contattalo.' });
+  });
+  // 4) estratto conto fermo: dopo quel giorno gli addebiti non si possono controllare
+  if(fino && ricvGiorni(fino, oggiK) > 10){
+    var attesi = Object.keys(ap.bis).filter(function(fid){ var f = idx.doc[fid]; if(!f || f.tipo !== 'fattura' || !ricvSddFattura(f)) return false; var d = String(f.scadenza || _dataAddebitoAttesa(f.fornitore, f.numero, f.data) || '').slice(0, 10); return d && d > fino && d <= oggiK; });
+    voci.push({ chiave: 'sdd_estratto|' + fino, tipo: 'sdd_estratto', gravita: 'bassa', fatture: attesi.map(function(fid){ return idx.doc[fid]; }), etichettaOk: 'Lo carico dopo',
+      titolo: 'Estratto conto fermo al ' + ricGg(fino),
+      testo: 'Gli addebiti diretti arrivano solo con l\'estratto conto: dopo il ' + ricGg(fino) + ' l\'app non può controllarli.' + (attesi.length ? ' Nel frattempo ' + (attesi.length === 1 ? 'è scaduta una fattura' : 'sono scadute ' + attesi.length + ' fatture') + ' da pagare con addebito diretto: si sistemano da sole quando carichi l\'estratto.' : '') + ' Carica l\'estratto conto aggiornato nella riconciliazione.' });
+  }
+  var R = { fino: fino, voci: voci };
+  RICV._sdd = { C: C, R: R };
+  return R;
+}
+function ricvSddApriMov(key){ try{ _anChiudi(); }catch(e){} ricvVaiA(null); setTimeout(function(){ try{ ricvApri(key); }catch(e){} }, 500); }
+function ricvSddVoceHtml(a, ignorata){
+  var cls = { alta: 'an-g-alta', media: 'an-g-media', bassa: 'an-g-bassa' }[a.gravita], lab = { alta: 'Importante', media: 'Da verificare', bassa: 'Da fare' }[a.gravita];
+  var movRiga = function(m){ var key = ricMovKey(m.id); return '<button class="an-row" data-k="' + esc(key) + '" onclick="ricvSddApriMov(this.dataset.k)"><span class="an-row-ico">🏦</span><span class="an-row-main"><b>' + _anData(m.data) + ' · ' + fmt(Math.abs(m.importo || 0)) + '</b><span>' + esc(String(m.descrizione || '').slice(0, 110)) + '</span></span><span class="an-row-chev">›</span></button>'; };
+  var righe = (a.fatture || []).map(_anRigaFattura).join('') + (a.movs || (a.mov ? [a.mov] : [])).map(movRiga).join('');
+  var azione = a.tipo === 'sdd_estratto' ? '<button class="an-fix" style="margin-top:10px;width:100%;padding:11px" onclick="_anChiudi();ricvVaiA(null)">Vai alla riconciliazione per caricarlo</button>' : '';
+  return '<div class="an-item' + (ignorata ? ' an-item-ign' : '') + '"><div class="an-item-hd"><span class="an-pill ' + cls + '">' + lab + '</span><span class="an-item-t">' + esc(a.titolo) + '</span></div>' +
+    '<div class="an-item-txt">' + esc(a.testo) + '</div>' + (righe ? '<div class="an-rows">' + righe + '</div>' : '') + (ignorata ? '' : azione) +
+    (ignorata ? '<button class="an-ign" data-k="' + esc(a.chiave) + '" onclick="_anIgnora(this.dataset.k,false)">↺ Ripristina</button>'
+              : '<button class="an-ign" data-k="' + esc(a.chiave) + '" onclick="_anIgnora(this.dataset.k,true)">' + esc(a.etichettaOk || '✓ Va bene così') + '</button>') + '</div>';
+}
+
 /* ── navigazione: porta alla riconciliazione, sul gruppo giusto, tutti i mesi ── */
 function ricvVaiA(gruppo){
   RICV.gruppo = gruppo || null; RICV.mostra = 40; RICV.soloClassica = false;
@@ -35839,6 +35979,7 @@ var RICV_AN_BANCA = /^(beneficiario|pagamento_.*|riferimenti_disallineati|pagata
           testo: (n.ko ? n.ko + (n.ko === 1 ? ' è importante' : ' sono importanti') + ' (bonifico alla fattura sbagliata, fattura pagata due volte…). ' : '') + 'Si vedono uno per uno nella riconciliazione, ognuno con la sua soluzione.' + (n.conferma ? ' Ci sono anche ' + n.conferma + ' movimenti da confermare' + (n.certi ? ', di cui ' + n.certi + ' sicuri' : '') + '.' : ''),
           fatture: [], movimenti: [], rischio: 0, etichettaOk: 'Lo guardo dopo' });
       }
+      try{ ricvSddControllo().voci.forEach(function(v){ resto.push(v); }); }catch(e2){ console.warn('controllo SDD:', e2); }
       return resto;
     }catch(e){ console.warn('ric v2 anomalie:', e); return out; }
   };
@@ -35847,6 +35988,7 @@ var RICV_AN_BANCA = /^(beneficiario|pagamento_.*|riferimenti_disallineati|pagata
   if(typeof _anHtmlVoce !== 'function') return;
   var orig = _anHtmlVoce;
   _anHtmlVoce = function(a, ignorata){
+    if(a && /^sdd_/.test(a.tipo || '')) return ricvSddVoceHtml(a, ignorata);
     if(!a || a.tipo !== 'riconciliazione') return orig.apply(this, arguments);
     var cls = { alta: 'an-g-alta', media: 'an-g-media', bassa: 'an-g-bassa' }[a.gravita], lab = { alta: 'Importante', media: 'Da verificare', bassa: 'Da confermare' }[a.gravita];
     return '<div class="an-item' + (ignorata ? ' an-item-ign' : '') + '"><div class="an-item-hd"><span class="an-pill ' + cls + '">' + lab + '</span><span class="an-item-t">' + esc(a.titolo) + '</span></div>' +
