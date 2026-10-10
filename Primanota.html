@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.13.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.14.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -18577,6 +18577,12 @@ function _parseSumUpBizCSV(testo){
   }
 
   var bonifici = [], entrate = [], payoutPerGiorno = {}, nonRiconosciute = 0;
+  // v10.14: colonne in più che descrivono chi ha incassato (esercente della carta, ecc.)
+  var altre = [], perTipo = {}, scartate = [];
+  var extraIdx = [];
+  header.forEach(function(h, j){ if(j !== iRif && j !== iCausale && j !== iTipo && /descriz|esercente|commerciante|merchant|beneficiar|controparte|nome|dettagl/i.test(h)) extraIdx.push(j); });
+  var numSU = function(v){ var t = String(v == null ? '' : v).trim(); if(/,\d{1,2}$/.test(t)) t = t.replace(/\./g, '').replace(',', '.'); var n = parseFloat(t); return isNaN(n) ? 0 : Math.abs(n); };
+  var hashSU = function(t){ var h = 0x811c9dc5; for(var k = 0; k < t.length; k++){ h ^= t.charCodeAt(k); h = (h * 0x01000193) >>> 0; } return h.toString(36); };
   for(var i=1;i<righe.length;i++){
     var r = righe[i];
     if(!r || r.length<2) continue;
@@ -18619,10 +18625,30 @@ function _parseSumUpBizCSV(testo){
         });
       }
     } else {
-      nonRiconosciute++;
+      // v10.14 (Valerio: «i pagamenti con la carta SumUp non li trovo»): prima
+      // ogni riga di tipo diverso da bonifico in uscita / versamento POS veniva
+      // SCARTATA, e lo diceva solo un messaggio che spariva dopo pochi secondi.
+      // Così i pagamenti fatti con la carta SumUp non arrivavano mai in banca e
+      // le fatture pagate con quella carta non si potevano riconciliare.
+      // Ora ogni riga con un importo diventa un movimento, col tipo scritto.
+      perTipo[tipo || '(senza tipo)'] = (perTipo[tipo || '(senza tipo)'] || 0) + 1;
+      var impU = numSU(r[iImpUscita]), impI = numSU(r[iImpEntrata]);
+      var codA = (r[iCodice] || '').trim();
+      var parti = [(r[iRif] || '').trim(), (r[iCausale] || '').trim()].concat(extraIdx.map(function(j){ return (r[j] || '').trim(); }));
+      var descA = parti.filter(function(x, k, a){ return x && a.indexOf(x) === k; }).join(' — ');
+      descA = (tipo ? tipo + (descA ? ' — ' + descA : '') : descA) || 'Movimento SumUp';
+      var sotto = /carta|card|acquist|pagamento\s+con|pos\b/i.test(tipo) ? 'Carta' : (/commission|tariff|canone|spes[ae]/i.test(tipo) ? 'Commissioni' : (/prelievo|atm/i.test(tipo) ? 'Prelievo' : (/bonifico/i.test(tipo) ? 'Bonifico' : 'Altro')));
+      if(!codA) codA = 'h' + hashSU(data + '|' + tipo + '|' + impU + '|' + impI + '|' + descA);
+      if(impU > 0){
+        altre.push({ id: 'sumupbiz_' + codA, data: data, importo: -impU, descrizione: descA, tipo: 'uscita', sottotipo: sotto, banca: 'SumUp', abbinata: false, fatturaId: null, fatturaLabel: '', ignorata: false });
+      } else if(impI > 0){
+        altre.push({ id: 'sumupbiz_' + codA, data: data, importo: impI, descrizione: descA, tipo: 'entrata', sottotipo: sotto === 'Carta' ? 'Rimborso carta' : (sotto === 'Bonifico' ? 'Bonifico in entrata' : sotto), banca: 'SumUp', abbinata: false, fatturaId: null, fatturaLabel: '', ignorata: false });
+      } else {
+        nonRiconosciute++; scartate.push((i + 1) + ': ' + (tipo || '?') + ' senza importo');
+      }
     }
   }
-  return {bonifici: bonifici, entrate: entrate, payoutPerGiorno: payoutPerGiorno, nonRiconosciute: nonRiconosciute};
+  return {bonifici: bonifici, entrate: entrate, altre: altre, perTipo: perTipo, scartate: scartate, payoutPerGiorno: payoutPerGiorno, nonRiconosciute: nonRiconosciute};
 }
 
 async function onSumUpBizCSVSelected(input){
@@ -18635,7 +18661,7 @@ async function onSumUpBizCSVSelected(input){
   try{
     var testo = await file.text();
     var res = _parseSumUpBizCSV(testo);
-    if(!res.bonifici.length && !res.entrate.length && !Object.keys(res.payoutPerGiorno).length){
+    if(!res.bonifici.length && !res.entrate.length && !(res.altre || []).length && !Object.keys(res.payoutPerGiorno).length){
       throw new Error('Nessun movimento riconosciuto nel file.');
     }
 
@@ -18646,6 +18672,10 @@ async function onSumUpBizCSVSelected(input){
     if(res.entrate.length){
       if(info) info.textContent = '⏳ Salvataggio ' + res.entrate.length + ' payout SumUp...';
       await upsertMovimentiBanca(res.entrate);
+    }
+    if((res.altre || []).length){
+      if(info) info.textContent = '⏳ Salvataggio ' + res.altre.length + ' altri movimenti SumUp (carta, rimborsi…)...';
+      await upsertMovimentiBanca(res.altre);
     }
 
     // Compila pos_banca in automatico dai payout SumUp del giorno (solo per
@@ -18669,17 +18699,21 @@ async function onSumUpBizCSVSelected(input){
     }
 
     try{
-      var _dSu=[].concat(res.bonifici||[], res.entrate||[]).map(function(m){ return m.data; }).filter(Boolean).sort();
-      _esSalvaFile('sumup', file, {dal:_dSu[0]||null, al:_dSu[_dSu.length-1]||null, righe:(res.bonifici||[]).length+(res.entrate||[]).length, note:'estratto SumUp'});
+      var _dSu=[].concat(res.bonifici||[], res.entrate||[], res.altre||[]).map(function(m){ return m.data; }).filter(Boolean).sort();
+      _esSalvaFile('sumup', file, {dal:_dSu[0]||null, al:_dSu[_dSu.length-1]||null, righe:(res.bonifici||[]).length+(res.entrate||[]).length+(res.altre||[]).length, note:'estratto SumUp'});
     }catch(_e){}
     await caricaMovimentiBanca();
     renderRiconciliazione();
 
     var msg = '✓ ' + res.bonifici.length + ' bonifici + ' + res.entrate.length + ' payout SumUp salvati';
+    var _nCarta = (res.altre || []).filter(function(m){ return /^(Carta|Rimborso carta)$/.test(m.sottotipo); }).length;
+    if(_nCarta) msg += ' · ' + _nCarta + ' pagamenti con carta SumUp';
+    if((res.altre || []).length - _nCarta > 0) msg += ' · ' + ((res.altre || []).length - _nCarta) + ' altri movimenti (' + Object.keys(res.perTipo || {}).join(', ') + ')';
     if(giorniPatchati) msg += ' · pos_banca aggiornato per ' + giorniPatchati + ' giorni';
-    if(res.nonRiconosciute) msg += ' · ' + res.nonRiconosciute + ' righe di altro tipo ignorate';
+    if(res.nonRiconosciute) msg += ' · ' + res.nonRiconosciute + ' righe senza importo';
     if(info) info.textContent = msg;
-    toast(msg);
+    toast(msg, {forza:true});
+    if(res.nonRiconosciute) alert('Estratto SumUp: ' + res.nonRiconosciute + ' righe senza importo non sono state importate:\n\n' + (res.scartate || []).slice(0, 15).join('\n'));
   }catch(err){
     if(info) info.textContent = '❌ ' + (err.message||err);
     toast('❌ ' + (err.message||err));
@@ -19404,7 +19438,11 @@ function renderRiconciliazione(){
         var _mFav = m.descrizione.match(/favore\s+([a-zà-ù'.\s]+?)(?:\s+notprovide|\s+not\s+provid|\s+add\.tot|\s*$)/i);
         if(_mFav) _benefEstratto = _mFav[1].trim();
         var _nomeOk = true;
-        if(_benefEstratto && _benefEstratto.length >= 4){
+        // v10.14: SumUp scrive il beneficiario come «Nome IBAN — causale», senza
+        // «FAVORE»: prima il controllo saltava e un bonifico al Comune di Napoli
+        // da 625 € finiva sulla fattura SIRO da 624,99 €. Ora vale per tutti.
+        if(typeof ricBeneficiarioCoerente === 'function' && ricBeneficiarioCoerente(m, _candUnico) === false) _nomeOk = false;
+        else if(_benefEstratto && _benefEstratto.length >= 4){
           var _tok = function(s){ return (s||'').toLowerCase().replace(/[^a-zà-ù\s]/gi,'').split(/\s+/).filter(function(w){ return w.length>=3; }); };
           var _tB = _tok(_benefEstratto), _tF = _tok(_candUnico.fornitore);
           _nomeOk = _tB.some(function(w){ return _tF.indexOf(w) >= 0; }) || _tF.some(function(w){ return _tB.indexOf(w) >= 0; });
@@ -19493,6 +19531,8 @@ function renderRiconciliazione(){
       // (restavano bloccati a 25+15=40 anche con data e metodo corretti).
       if(isAssegno  && f.pagamento==='assegno')  score += 45;
       if(isBonifico && f.pagamento==='bonifico') score += 25;
+      // v10.14: pagamento con la carta SumUp ↔ fattura pagata con carta
+      if(m.sottotipo==='Carta' && f.pagamento==='carta') score += (f.contoPagamento==='SumUp' ? 35 : 20);
 
       var dF   = new Date((f.dataPagamento||f.scadenza||f.data)+'T12:00:00');
       var dM   = new Date(m.data+'T12:00:00');
@@ -33705,6 +33745,7 @@ function ricControlloDisegna(){
     }).join('');
     h += pnSez('Pagamenti senza fattura', c4);
   }
+  h += pnSez('Estratti SumUp', '<div class="sk-nota">Fino alla versione 10.13 i pagamenti fatti con la carta SumUp venivano scartati quando caricavi l\'estratto. Puoi rileggere i file già caricati: aggiungo solo i movimenti che mancano.</div><div class="sk-btns"><button class="sk-btn" onclick="ricRileggiSumUp()">Rileggi gli estratti SumUp</button></div>');
   bd.innerHTML = h; bd.scrollTop = sc;
 }
 function ricApriMovimento(movId, abbina){
@@ -33783,6 +33824,7 @@ document.addEventListener('DOMContentLoaded', function(){ setTimeout(function(){
 
 function ricBannerConti(){
   var el = document.getElementById('ricBannerConti'); if(!el) return;
+  try{ ricRileggiSumUpUnaVolta(); }catch(e){}
   var D = ricControlloDati(), nSf = D.senzaFattura.filter(function(x){ return x.liv !== 'info'; }).length, n = D.allinea.length + D.rimborsi.length + D.anomalie.length + nSf;
   if(!n){ el.innerHTML = ''; return; }
   el.innerHTML = '<button class="ric-banner" onclick="ricControlloApri()"><span class="ric-banner-i">!</span><span class="ric-banner-t"><b>Controllo dei conti · ' + n + (n === 1 ? ' cosa da vedere' : ' cose da vedere') + '</b><small>' +
@@ -33874,6 +33916,49 @@ function ricPagamentiSenzaFattura(){
   });
   var peso = { ko: 0, warn: 1, info: 2 };
   return out.sort(function(a, b){ return (peso[a.liv] - peso[b.liv]) || String(b.mov.data).localeCompare(String(a.mov.data)); });
+}
+
+
+/* ══ RILETTURA DEGLI ESTRATTI SUMUP GIÀ CARICATI (v10.14) ══
+   Gli estratti importati prima di questa versione hanno perso le righe dei
+   pagamenti con carta SumUp (e ogni altro tipo diverso da bonifico/versamento).
+   I file originali sono nell'archivio: li rileggo e aggiungo SOLO i movimenti
+   che mancano, senza toccare quelli già presenti né i loro collegamenti. */
+async function ricRileggiSumUp(opz){
+  opz = opz || {};
+  var righe = [];
+  try{ righe = await sbFetch('estratti_archivio?tipo=eq.sumup&storage_path=not.is.null&select=id,file_name,storage_path,periodo_da,periodo_a&order=periodo_a.asc') || []; }
+  catch(e){ if(!opz.muto) toast('⚠️ Archivio estratti non raggiungibile'); return { file: 0, nuovi: 0, errore: String(e.message || e) }; }
+  var gia = {}; (_bancaMovimenti || []).forEach(function(m){ gia[String(m.id)] = 1; });
+  var nuovi = {}, letti = 0, perTipo = {}, errori = [];
+  for(var i = 0; i < righe.length; i++){
+    try{
+      var res = await fetch(SB_URL + '/storage/v1/object/estratti/' + encodeURI(righe[i].storage_path), { headers: { apikey: SB_KEY, Authorization: SB_H.Authorization } });
+      if(!res.ok) throw new Error('HTTP ' + res.status);
+      var P = _parseSumUpBizCSV(await res.text()); letti++;
+      (P.altre || []).forEach(function(m){ if(!gia[String(m.id)]) nuovi[String(m.id)] = m; });
+      Object.keys(P.perTipo || {}).forEach(function(t){ perTipo[t] = (perTipo[t] || 0) + P.perTipo[t]; });
+    }catch(e){ errori.push((righe[i].file_name || righe[i].storage_path) + ': ' + (e.message || e)); }
+  }
+  var L = Object.keys(nuovi).map(function(k){ return nuovi[k]; });
+  if(L.length){
+    await upsertMovimentiBanca(L);
+    if(typeof caricaMovimentiBanca === 'function') await caricaMovimentiBanca();
+    ricInvalida();
+  }
+  var esito = { file: letti, nuovi: L.length, carta: L.filter(function(m){ return /^(Carta|Rimborso carta)$/.test(m.sottotipo); }).length, perTipo: perTipo, errori: errori };
+  if(!opz.muto || L.length){
+    toast(L.length ? '✓ Estratti SumUp riletti: ' + L.length + ' movimenti recuperati (' + esito.carta + ' con la carta)' : '✓ Estratti SumUp riletti: nessun movimento mancante', { forza: true });
+    ricRidisegna();
+    try{ if(typeof renderRiconciliazione === 'function' && document.getElementById('bancaImportInfo')) renderRiconciliazione(); }catch(e){}
+  }
+  return esito;
+}
+// Una volta per dispositivo, in automatico: chi apre la banca trova già i movimenti recuperati
+function ricRileggiSumUpUnaVolta(){
+  var k = 'ceraldi_sumup_riletti_v1014';
+  try{ if(localStorage.getItem(k)) return; localStorage.setItem(k, new Date().toISOString()); }catch(e){ return; }
+  ricRileggiSumUp({ muto: true }).then(function(r){ if(r && r.errore){ try{ localStorage.removeItem(k); }catch(e){} } }).catch(function(){ try{ localStorage.removeItem(k); }catch(e){} });
 }
 
 </script>
