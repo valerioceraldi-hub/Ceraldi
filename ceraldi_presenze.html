@@ -3989,7 +3989,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
         </label>
         <div style="font-size:11px;color:var(--muted);margin-top:6px">Per soci/admin che ricevono compenso (es. Co.Co.Co): permette di caricare buste paga, registrare acconti/liquidazioni e vedere la Situazione liquidazione come per un dipendente. Se il compenso è fisso mensile (non a presenze), imposta "Compenso netto mensile fisso" qui sotto invece della paga giornaliera.</div>
       </div>
-      <button type="button" class="btn-sm" style="width:100%;margin-bottom:14px;background:rgba(43,74,203,.06);border-color:rgba(43,74,203,.25)" onclick="apriLiquidazioneCompleta()">💰 Situazione liquidazione completa</button>
+      <button type="button" class="btn-sm" style="width:100%;margin-bottom:14px;background:rgba(43,74,203,.06);border-color:rgba(43,74,203,.25)" onclick="apriLiquidazioneCompleta()">💰 Conteggi di fine rapporto (TFR, ferie, 13ª/14ª)</button>
       <button type="button" class="btn-sm" style="width:100%;margin-bottom:14px" onclick="esportaStoricoDipendente()">📤 Esporta storico completo (Excel)</button>
       <div class="field-lbl" style="margin-top:14px">Compenso netto mensile fisso (€)</div>
       <input class="field-inp field-inp last" type="number" id="ana-netto-fisso" placeholder="es. 1500" step="0.01" min="0">
@@ -4029,7 +4029,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
 <div class="overlay" id="sh-liquidazione-completa">
   <div class="sheet">
     <div class="sheet-handle"></div>
-    <div class="sheet-hdr"><span class="sheet-title">Situazione liquidazione</span><button class="sheet-cls" onclick="closeSheet('sh-liquidazione-completa')">✕</button></div>
+    <div class="sheet-hdr"><span class="sheet-title">Conteggi di fine rapporto</span><button class="sheet-cls" onclick="closeSheet('sh-liquidazione-completa')">✕</button></div>
     <div class="sheet-body" id="liqc-body"></div>
   </div>
 </div>
@@ -11194,6 +11194,7 @@ async function chiusuraApri(dipId) {
 async function chiusuraRiepilogo(dipId) {
   const box = $('ch-riep'); if (!box) return;
   const data = $('ch-data').value || todayISO();
+  if ($('ch-data') && !$('ch-data').dataset.liqc) { $('ch-data').dataset.liqc = 1; $('ch-data').addEventListener('change', () => chiusuraRiepilogo(dipId)); }
   const [acc, liq, doc, tur, tim] = await Promise.all([
     sb.from('presenze_acconti').select('importo').eq('dipendente_id', dipId).eq('letto_dip', false),
     sb.from('presenze_liquidazioni').select('mese,anno').eq('dipendente_id', dipId).eq('confermata_dip', false),
@@ -11212,7 +11213,8 @@ async function chiusuraRiepilogo(dipId) {
     ${riga(!n(doc), n(doc) ? `<b>${n(doc)} documenti</b> non ancora letti` : 'Documenti tutti letti')}
     ${riga(!n(tim), n(tim) ? `<b>${n(tim)} timbrature</b> da approvare` : 'Nessuna timbratura in sospeso')}
     <div id="ch-ferie"></div></div>
-    <div class="note-small" style="margin-top:6px">Ferie non godute, TFR e ultima busta li calcola il consulente: qui sotto il residuo ferie registrato nell'app.</div>`;
+    <button class="btn-primary" style="width:100%;margin-top:10px" onclick="apriLiquidazioneCompleta('${dipId}', ($('ch-data') && $('ch-data').value) || todayISO())">💰 Conteggi al ${_dmy(data)}: stipendio, 13ª/14ª, ferie, TFR</button>
+    <div class="note-small" style="margin-top:6px">Calcolati all'ultimo giorno indicato sopra, con il prospetto da consegnare al dipendente. La busta paga finale del consulente fa fede.</div>`;
   try { await caricaFerieAdmin(dipId, $('ch-ferie')); } catch (e) {}
 }
 async function chiusuraConferma(dipId) {
@@ -11394,7 +11396,7 @@ async function ana24Render(dipId) {
       <button class="btn-sm" style="margin-top:8px" onclick="attEditor(null,'${dipId}')">+ Aggiungi attestato</button></div>
     ${p.ruolo === 'admin' ? '' : `<div class="field-lbl" style="margin-top:16px">Fine del rapporto</div>
     <div class="ana24-box">${p.data_fine_rapporto
-      ? `<div class="ch-prog"><b>Ultimo giorno: ${_dmy(p.data_fine_rapporto)}</b><small>${esc(p.motivo_fine_rapporto || '')}${p.eliminato ? ' · accesso chiuso' : ' · l\'accesso si chiude la notte dopo'}</small></div>${p.eliminato ? '' : `<button class="btn-sm" onclick="chiusuraAnnulla('${dipId}')">Annulla la chiusura</button>`}`
+      ? `<div class="ch-prog"><b>Ultimo giorno: ${_dmy(p.data_fine_rapporto)}</b><small>${esc(p.motivo_fine_rapporto || '')}${p.eliminato ? ' · accesso chiuso' : ' · l\'accesso si chiude la notte dopo'}</small></div><button class="btn-sm" onclick="apriLiquidazioneCompleta('${dipId}', '${p.data_fine_rapporto}')">💰 Conteggi di fine rapporto</button>${p.eliminato ? '' : ` <button class="btn-sm" onclick="chiusuraAnnulla('${dipId}')">Annulla la chiusura</button>`}`
       : `<button class="btn-sm ch-btn-apri" onclick="chiusuraApri('${dipId}')">Chiudi il rapporto…</button><div class="note-small" style="margin-top:6px">Riepilogo delle pendenze, materiali da riconsegnare, verbale da firmare, turni futuri tolti e accesso chiuso dopo l'ultimo giorno.</div>`}</div>`}`;
 }
 if (typeof openAnagrafica === 'function') {
@@ -20618,256 +20620,304 @@ async function salvaAnagrafica() {
   await caricaDipendenti();
 }
 
-/* ═══════ SITUAZIONE LIQUIDAZIONE COMPLETA (scheda dipendente) ═══════
-   Riepilogo di tutto ciò che risulterebbe da liquidare a un dipendente in
-   un dato momento: stipendio del mese in corso, arretrati di mesi passati
-   mai liquidati, 13a/14a maturate (con eventuale arretrato di periodi
-   precedenti, stessa logica di maturato1314), ferie non godute, TFR
-   stimato dalle presenze, e il totale storico di quanto già erogato in
-   acconti (informativo). Ricostruita dallo storico presenze/acconti/
-   liquidazioni — è una stima operativa, non sostituisce il consulente. */
-let _liqcUltimoCalcolo = null; // dati dell'ultima Situazione liquidazione calcolata, per l'export
-async function apriLiquidazioneCompleta() {
-  const dipId = _anagraficaId;
+/* ═══════ CONTEGGI DI FINE RAPPORTO / SITUAZIONE LIQUIDAZIONE (12/10/2026) ═══════
+   Richiesta di Valerio: «immagina di trovarmi quel giorno, fare i conteggi e
+   consegnare un documento riepilogativo al dipendente».
+   • Data di fine rapporto (o di calcolo) scelta liberamente: non è per forza oggi.
+   • TFR dalla DATA DI ASSUNZIONE, mese per mese, con la paga in vigore in ogni
+     periodo (storico aumenti). Mesi con presenze in app = giorni lavorati × paga;
+     mesi prima dell'app (o dopo oggi, se la fine è futura) = 26 giorni al mese.
+     Base comprensiva dei ratei di 13ª e 14ª (art. 2120 c.c.), quota = base/13,5
+     meno 0,50% (contributo aggiuntivo), rivalutazione annua ISTAT con imposta
+     sostitutiva 17%, tassazione separata IRPEF all'aliquota media.
+   • Ogni voce dice come è calcolata, il documento è da consegnare e firmare.
+   Resta una stima operativa: la busta paga finale del consulente fa fede. */
+
+// Coefficienti ISTAT di rivalutazione TFR (% maturata nell'anno fino a quel mese). Fonte: ISTAT (L. 297/1982).
+const TFR_COEFF = { '2024-12': 2.320017, '2025-08': 1.998336, '2025-09': 2.060940, '2025-10': 1.998752, '2025-11': 2.061356, '2025-12': 2.311148, '2026-08': 3.710988 };
+function tfrCoeffRival(anno, mese) {
+  const k = anno + '-' + String(mese).padStart(2, '0');
+  if (TFR_COEFF[k] != null) return { pct: TFR_COEFF[k], stimato: false, rif: k };
+  // ultimo coefficiente pubblicato dello stesso anno, portato al mese voluto: 1,5% fisso pro rata + parte ISTAT proporzionale
+  const noti = Object.keys(TFR_COEFF).filter(x => x.startsWith(anno + '-') && +x.slice(5) <= mese).sort();
+  if (noti.length) {
+    const u = noti[noti.length - 1], m0 = +u.slice(5), istat = Math.max(0, TFR_COEFF[u] - 1.5 * m0 / 12);
+    return { pct: 1.5 * mese / 12 + istat * mese / m0, stimato: true, rif: u };
+  }
+  return { pct: 1.5 * mese / 12 + 0.75 * 2 * mese / 12, stimato: true, rif: null }; // nessun dato: inflazione ipotizzata 2%
+}
+// IRPEF a scaglioni dell'anno (2026: 23% fino a 28.000, 33% fino a 50.000, 43% oltre)
+function irpefScaglioni(reddito, anno) {
+  const sc = [[28000, 0.23], [50000, anno >= 2026 ? 0.33 : 0.35], [Infinity, 0.43]];
+  let imp = 0, prec = 0;
+  for (const [lim, al] of sc) { if (reddito <= prec) break; imp += (Math.min(reddito, lim) - prec) * al; prec = lim; }
+  return imp;
+}
+const _lq_isoAdd = (iso, gg) => { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() + gg); return _isoDate(d); };
+const _lq_ultimoGg = (y, m) => new Date(y, m, 0).getDate();
+const _lq_pad2 = n => String(n).padStart(2, '0');
+const _lq_e2 = v => '€ ' + (Math.round((+v || 0) * 100) / 100).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const _lq_dIt = iso => iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4) : '—';
+const _lq_meseIt = (y, m) => new Date(y, m - 1, 1).toLocaleDateString('it-IT', { month: 'long', year: 'numeric' });
+function _lq_anzianita(dalISO, alISO) {
+  const a = new Date(dalISO + 'T12:00:00'), b = new Date(alISO + 'T12:00:00');
+  let anni = b.getFullYear() - a.getFullYear(), mesi = b.getMonth() - a.getMonth(), gg = b.getDate() - a.getDate() + 1;
+  if (gg < 0) { mesi--; gg += new Date(b.getFullYear(), b.getMonth(), 0).getDate(); }
+  if (gg >= _lq_ultimoGg(b.getFullYear(), b.getMonth() + 1)) { mesi++; gg = 0; }
+  if (mesi < 0) { anni--; mesi += 12; }
+  return { anni, mesi, gg, txt: [anni ? anni + (anni === 1 ? ' anno' : ' anni') : '', mesi ? mesi + (mesi === 1 ? ' mese' : ' mesi') : '', gg ? gg + (gg === 1 ? ' giorno' : ' giorni') : ''].filter(Boolean).join(', ') || '0 giorni' };
+}
+
+/* TFR dall'assunzione alla data di fine. dateLav: Set di date con presenza; previsti: Set di date con turno dopo oggi. */
+function tfrDaAssunzione(d, storicoPaga, dateLav, previsti, fineISO, accontiTfr) {
+  const ass = d.data_assunzione;
+  if (!ass || fineISO < ass) return null;
+  const pagaAttuale = parseFloat(d.paga_giornaliera) || 0;
+  const fisso = !pagaAttuale && parseFloat(d.netto_fisso_mensile) ? parseFloat(d.netto_fisso_mensile) : null;
+  const storico = (storicoPaga && storicoPaga.length) ? storicoPaga : [{ paga_giornaliera: pagaAttuale, data_decorrenza: ass }];
+  const oggi = todayISO();
+  const dateApp = [...dateLav].sort(), primoMeseApp = dateApp.length ? dateApp[0].slice(0, 7) : null;
+  const mesi = [], anni = {};
+  let y = +ass.slice(0, 4), m = +ass.slice(5, 7);
+  const yF = +fineISO.slice(0, 4), mF = +fineISO.slice(5, 7);
+  while (y < yF || (y === yF && m <= mF)) {
+    const mk = y + '-' + _lq_pad2(m), dim = _lq_ultimoGg(y, m);
+    const dal = mk === ass.slice(0, 7) ? +ass.slice(8, 10) : 1, al = mk === fineISO.slice(0, 7) ? +fineISO.slice(8, 10) : dim;
+    const ggServ = Math.max(0, al - dal + 1);
+    const paga = parseFloat(_pagaApplicabile(storico, mk + '-15') ?? storico[0].paga_giornaliera) || 0;
+    let base = 0, fonte = 'stima', giorni = null;
+    if (fisso) { base = fisso * ggServ / dim; fonte = 'fisso'; }
+    else if (primoMeseApp && mk >= primoMeseApp && mk <= oggi.slice(0, 7)) {
+      // presenze reali in app; se la fine è dopo oggi, i giorni che mancano sono quelli in turno (o 26 al mese)
+      const lav = dateApp.filter(x => x.startsWith(mk) && x >= ass && x <= fineISO).length;
+      let extra = 0;
+      if (mk === oggi.slice(0, 7) && fineISO > oggi) {
+        const restanti = Math.max(0, al - +oggi.slice(8, 10));
+        const turni = [...previsti].filter(x => x.startsWith(mk) && x > oggi && x <= fineISO).length;
+        extra = turni || Math.round(26 * restanti / dim);
+      }
+      giorni = lav + extra; base = giorni * paga; fonte = extra ? 'presenze+previsti' : 'presenze';
+    } else {
+      giorni = Math.round(26 * ggServ / dim * 10) / 10; base = giorni * paga; fonte = mk > oggi.slice(0, 7) ? 'previsto' : 'stima';
+    }
+    const mensilita = ggServ >= 15 ? 2 * (fisso || paga * 26) / 12 : 0; // ratei 13ª + 14ª nella base TFR
+    const imponibile = base + mensilita;
+    const quota = imponibile / 13.5 - imponibile * 0.005;
+    mesi.push({ mk, paga, giorni, base, mensilita, imponibile, quota, fonte });
+    const A = anni[y] || (anni[y] = { anno: y, imponibile: 0, quota: 0, mesi: 0, stimati: 0 });
+    A.imponibile += imponibile; A.quota += quota; A.mesi++; if (fonte !== 'presenze' && fonte !== 'fisso') A.stimati++;
+    m++; if (m > 12) { m = 1; y++; }
+  }
+  // rivalutazione: il fondo al 31/12 di ogni anno si rivaluta nell'anno dopo (fino al mese di fine), imposta sostitutiva 17%
+  let fondo = 0, quoteTot = 0, rivalTot = 0, impostaRival = 0;
+  const righeAnni = Object.values(anni).sort((a, b) => a.anno - b.anno).map(A => {
+    let rival = 0, coeff = null;
+    if (fondo > 0) {
+      coeff = tfrCoeffRival(A.anno, A.anno === yF ? mF : 12);
+      rival = fondo * coeff.pct / 100;
+    }
+    const imp17 = rival * 0.17;
+    fondo += rival - imp17 + A.quota; quoteTot += A.quota; rivalTot += rival; impostaRival += imp17;
+    return { ...A, rival, imp17, coeff, fondoFine: fondo };
+  });
+  // tassazione separata: aliquota media sul reddito di riferimento (TFR / anni di servizio × 12)
+  const giorniServ = Math.round((new Date(fineISO + 'T12:00:00') - new Date(ass + 'T12:00:00')) / 864e5) + 1;
+  const anniServ = Math.max(giorniServ / 365, 1 / 12);
+  const redditoRif = quoteTot / anniServ * 12;
+  const aliquota = redditoRif > 0 ? irpefScaglioni(redditoRif, yF) / redditoRif : 0;
+  const irpef = quoteTot * aliquota;
+  const netto = quoteTot + rivalTot - impostaRival - irpef;
+  const anticipi = (accontiTfr || []).filter(a => !a.data || a.data <= fineISO).reduce((s, a) => s + (parseFloat(a.importo) || 0), 0);
+  const stimati = mesi.filter(x => x.fonte === 'stima').length, previstiN = mesi.filter(x => x.fonte === 'previsto' || x.fonte === 'presenze+previsti').length;
+  return { mesi, righeAnni, quoteTot, rivalTot, impostaRival, lordo: quoteTot + rivalTot, redditoRif, aliquota, irpef, netto, anticipi, daPagare: Math.max(0, netto - anticipi),
+    stimati, previstiN, primoMeseApp, storicoUsato: !!(storicoPaga && storicoPaga.length), fisso: !!fisso, coeffStimato: righeAnni.some(r => r.coeff && r.coeff.stimato) };
+}
+
+let _liqcUltimoCalcolo = null; // ultimo conteggio, per il documento
+async function apriLiquidazioneCompleta(dipIdArg, dataFineArg) {
+  const dipId = dipIdArg || _anagraficaId;
   if (!dipId) return;
   openSheet('sh-liquidazione-completa');
   const body = $('liqc-body');
   body.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
-
-  const oggi = new Date();
-  const meseCorrente = oggi.getMonth()+1, annoCorrente = oggi.getFullYear();
   const oggiISO = todayISO();
-
-  const [{ data: d }, { data: storicoPaga }, { data: presenzeTutte }, { data: accontiTutti }, { data: restituzioniTutte }, { data: liquidazTutte }, { data: assenzeFerie }] = await Promise.all([
+  const [{ data: d }, { data: storicoPaga }, { data: presenzeTutte }, { data: accontiTutti }, { data: restituzioniTutte }, { data: liquidazTutte }, { data: assenzeFerie }, { data: turni }] = await Promise.all([
     sb.from('presenze_profili').select('*').eq('id', dipId).single(),
-    sb.from('presenze_storico_paga').select('paga_giornaliera,data_decorrenza').eq('dipendente_id', dipId).order('data_decorrenza',{ascending:true}),
+    sb.from('presenze_storico_paga').select('paga_giornaliera,data_decorrenza').eq('dipendente_id', dipId).order('data_decorrenza', { ascending: true }),
     sb.from('presenze').select('data').eq('dipendente_id', dipId),
-    sb.from('presenze_acconti').select('importo,data,causale,mese_riferimento,anno_riferimento,periodo_anno_inizio,saldo_periodo').eq('dipendente_id', dipId),
+    sb.from('presenze_acconti').select('importo,data,causale,modalita,mese_riferimento,anno_riferimento,periodo_anno_inizio,saldo_periodo').eq('dipendente_id', dipId),
     sb.from('presenze_restituzioni').select('importo,data,mese_riferimento,anno_riferimento').eq('dipendente_id', dipId),
     sb.from('presenze_liquidazioni').select('mese,anno').eq('dipendente_id', dipId),
-    sb.from('presenze_assenze').select('data_inizio,data_fine').eq('dipendente_id', dipId).in('stato',['approvata','confermata']).eq('tipo','ferie'),
+    sb.from('presenze_assenze').select('data_inizio,data_fine').eq('dipendente_id', dipId).in('stato', ['approvata', 'confermata']).eq('tipo', 'ferie'),
+    sb.from('presenze_turni').select('data').eq('dipendente_id', dipId).gt('data', oggiISO),
   ]);
   if (!d) { body.innerHTML = '<div class="empty"><div class="empty-txt">Dipendente non trovato</div></div>'; return; }
+  const fineISO = dataFineArg || ($('liqc-fine') && $('liqc-fine').dataset.dip === dipId && $('liqc-fine').value) || d.data_fine_rapporto || oggiISO;
+  const nome = d.nome + (d.cognome ? ' ' + d.cognome : '');
+  const storicoEff = (storicoPaga && storicoPaga.length) ? storicoPaga : [{ paga_giornaliera: parseFloat(d.paga_giornaliera) || 0, data_decorrenza: d.data_assunzione || '2000-01-01' }];
+  const pagaAl = iso => parseFloat(_pagaApplicabile(storicoEff, iso) ?? storicoEff[0].paga_giornaliera) || 0;
+  const pagaFine = pagaAl(fineISO);
+  const dateLav = new Set((presenzeTutte || []).map(p => p.data).filter(x => x <= fineISO));
+  const previsti = new Set((turni || []).map(t => t.data).filter(x => x <= fineISO));
+  const causaliStip = a => !a.causale || a.causale === 'stipendio' || a.causale === 'acconto_stipendio';
+  const yF = +fineISO.slice(0, 4), mF = +fineISO.slice(5, 7);
 
-  const nome = d.nome+(d.cognome?' '+d.cognome:'');
-  const paga = parseFloat(d.paga_giornaliera) || 0;
-  const dateTutte = new Set((presenzeTutte||[]).map(p=>p.data));
-  const giorniLavoratiTotali = dateTutte.size;
-  const causaliStip = a => !a.causale || a.causale==='stipendio' || a.causale==='acconto_stipendio';
-
-  function lordoPeriodo(dateSet, dalP, alP, pagaP, festSet) {
-    const giorni = dateSet.size;
-    const giorniFestivoLav = [...dateSet].filter(dt => festSet.has(dt)).length;
-    const giorniOrdinari = giorni - giorniFestivoLav;
-    const alPClamp = alP < oggiISO ? alP : oggiISO;
-    const festPeriodo = [...festSet].filter(dt => dt >= dalP && dt <= alPClamp);
-    const giorniFestivoNonLav = festPeriodo.filter(dt => !dateSet.has(dt)).length;
-    return giorniOrdinari*pagaP + giorniFestivoLav*pagaP*2 + giorniFestivoNonLav*pagaP;
+  // retribuzione di un mese fino a una data: presenze reali (fino a oggi) + giorni previsti dopo oggi
+  function retribMese(cy, cm, finoISO) {
+    const mk = cy + '-' + _lq_pad2(cm), dalM = mk + '-01', alM = finoISO < mk + '-' + _lq_pad2(_lq_ultimoGg(cy, cm)) ? finoISO : mk + '-' + _lq_pad2(_lq_ultimoGg(cy, cm));
+    const paga = pagaAl(alM), fest = new Set(Object.keys(festivitaItaliane(cy)));
+    const reali = [...dateLav].filter(x => x >= dalM && x <= alM && x <= oggiISO);
+    let futuri = 0, nota = '';
+    if (alM > oggiISO) {
+      const daQui = oggiISO >= dalM ? _lq_isoAdd(oggiISO, 1) : dalM;
+      const tur = [...previsti].filter(x => x >= daQui && x <= alM).length;
+      const ggRest = Math.max(0, Math.round((new Date(alM + 'T12:00:00') - new Date(daQui + 'T12:00:00')) / 864e5) + 1);
+      futuri = tur || Math.round(26 * ggRest / _lq_ultimoGg(cy, cm)); nota = tur ? 'turni già previsti' : 'stima 26 giorni al mese';
+    }
+    const festLav = reali.filter(x => fest.has(x)).length;
+    const festNonLav = [...fest].filter(x => x >= dalM && x <= (alM < oggiISO ? alM : oggiISO) && !dateLav.has(x)).length;
+    const lordo = (reali.length - festLav) * paga + festLav * paga * 2 + festNonLav * paga + futuri * paga;
+    const acc = (accontiTutti || []).filter(a => causaliStip(a) && ((a.mese_riferimento && a.anno_riferimento) ? (a.mese_riferimento === cm && a.anno_riferimento === cy) : (a.data >= dalM && a.data <= mk + '-31'))).reduce((s, a) => s + (parseFloat(a.importo) || 0), 0);
+    const rest = (restituzioniTutte || []).filter(r => (r.mese_riferimento && r.anno_riferimento) ? (r.mese_riferimento === cm && r.anno_riferimento === cy) : (r.data >= dalM && r.data <= mk + '-31')).reduce((s, r) => s + (parseFloat(r.importo) || 0), 0);
+    return { mk, label: _lq_meseIt(cy, cm), paga, giorni: reali.length, festLav, festNonLav, futuri, nota, lordo, acc, rest, netto: lordo - acc + rest };
   }
-
-  // ── Stipendio mese in corso (non ancora liquidato) ──
-  const ultimoGgCorr = new Date(annoCorrente, meseCorrente, 0).getDate();
-  const dalMeseCorr = annoCorrente+'-'+String(meseCorrente).padStart(2,'0')+'-01';
-  const alMeseCorr  = annoCorrente+'-'+String(meseCorrente).padStart(2,'0')+'-'+String(ultimoGgCorr).padStart(2,'0');
-  const festSetAnnoCorr = new Set(Object.keys(festivitaItaliane(annoCorrente)));
-  const dateMeseCorr = new Set([...dateTutte].filter(dt => dt>=dalMeseCorr && dt<=alMeseCorr));
-  const lordoMeseCorr = lordoPeriodo(dateMeseCorr, dalMeseCorr, alMeseCorr, paga, festSetAnnoCorr);
-  const accMeseCorr = (accontiTutti||[]).filter(a => causaliStip(a) && (
-      (a.mese_riferimento && a.anno_riferimento) ? (a.mese_riferimento===meseCorrente && a.anno_riferimento===annoCorrente) : (a.data>=dalMeseCorr && a.data<=alMeseCorr)
-    )).reduce((s,a)=>s+parseFloat(a.importo),0);
-  const restMeseCorr = (restituzioniTutte||[]).filter(r => (
-      (r.mese_riferimento && r.anno_riferimento) ? (r.mese_riferimento===meseCorrente && r.anno_riferimento===annoCorrente) : (r.data>=dalMeseCorr && r.data<=alMeseCorr)
-    )).reduce((s,r)=>s+parseFloat(r.importo),0);
-  const meseCorrenteGiaLiquidato = (liquidazTutte||[]).some(l => l.mese===meseCorrente && l.anno===annoCorrente);
-  const stipendioInCorso = meseCorrenteGiaLiquidato ? 0 : (lordoMeseCorr - accMeseCorr + restMeseCorr);
-
-  // ── Arretrati/crediti: mesi PASSATI non liquidati, dall'assunzione a oggi ──
-  const meseLiquidatoSet = new Set((liquidazTutte||[]).map(l => l.mese+'-'+l.anno));
-  const arretratoDettaglio = [];
-  if (d.data_assunzione) {
-    let cy = annoCorrente, cm = meseCorrente - 1;
-    if (cm === 0) { cm = 12; cy -= 1; }
-    const dataAss = new Date(d.data_assunzione+'T00:00:00');
-    const storicoEff0 = (storicoPaga&&storicoPaga.length) ? storicoPaga : [{ paga_giornaliera: paga, data_decorrenza: d.data_assunzione }];
-    while (new Date(cy, cm-1, 1) >= new Date(dataAss.getFullYear(), dataAss.getMonth(), 1)) {
-      const key = cm+'-'+cy;
-      if (!meseLiquidatoSet.has(key)) {
-        const ultimoGg = new Date(cy, cm, 0).getDate();
-        const dalM = cy+'-'+String(cm).padStart(2,'0')+'-01';
-        const alM  = cy+'-'+String(cm).padStart(2,'0')+'-'+String(ultimoGg).padStart(2,'0');
-        const dateM = new Set([...dateTutte].filter(dt=>dt>=dalM&&dt<=alM));
-        const accM = (accontiTutti||[]).filter(a=>causaliStip(a) && (
-            (a.mese_riferimento && a.anno_riferimento) ? (a.mese_riferimento===cm && a.anno_riferimento===cy) : (a.data>=dalM&&a.data<=alM)
-          )).reduce((s,a)=>s+parseFloat(a.importo),0);
-        const restM = (restituzioniTutte||[]).filter(r=>(
-            (r.mese_riferimento && r.anno_riferimento) ? (r.mese_riferimento===cm && r.anno_riferimento===cy) : (r.data>=dalM&&r.data<=alM)
-          )).reduce((s,r)=>s+parseFloat(r.importo),0);
-        if (dateM.size>0 || accM>0 || restM>0) {
-          const festSetM = new Set(Object.keys(festivitaItaliane(cy)));
-          const pagaM = _pagaApplicabile(storicoEff0, alM) ?? storicoEff0[0].paga_giornaliera;
-          const lordoM = lordoPeriodo(dateM, dalM, alM, pagaM, festSetM);
-          const nettoM = lordoM - accM + restM;
-          if (Math.abs(nettoM) > 0.005) arretratoDettaglio.push({ meseLbl: new Date(cy,cm-1,1).toLocaleDateString('it-IT',{month:'long',year:'numeric'}), netto: nettoM });
-        }
+  const liquidati = new Set((liquidazTutte || []).map(l => l.mese + '-' + l.anno));
+  // ── stipendio: ogni mese non liquidato dall'assunzione (o dal primo dato) al mese di fine ──
+  const mesiStip = [];
+  {
+    // dai mesi registrati in app in poi (prima dell'app gli stipendi non sono tracciati qui)
+    const primaPres = [...dateLav].sort()[0];
+    const inizio = [d.data_assunzione, primaPres].filter(Boolean).sort().pop() || fineISO;
+    let cy = +inizio.slice(0, 4), cm = +inizio.slice(5, 7);
+    while (cy < yF || (cy === yF && cm <= mF)) {
+      if (!liquidati.has(cm + '-' + cy)) {
+        const r = retribMese(cy, cm, fineISO);
+        if (r.giorni || r.futuri || r.acc || r.rest) { if (Math.abs(r.netto) > 0.005) mesiStip.push(r); }
       }
-      cm -= 1; if (cm===0){cm=12;cy-=1;}
+      cm++; if (cm > 12) { cm = 1; cy++; }
     }
   }
-  const arretratoTotale = arretratoDettaglio.reduce((s,a)=>s+a.netto,0);
+  const stipendioTot = mesiStip.reduce((s, r) => s + r.netto, 0);
 
-  // ── 13a / 14a (stessa logica del maturato1314 già usato in Stipendi) ──
-  const ratei = calcolaRatei13a14a(d.data_assunzione, paga, meseCorrente, annoCorrente);
-  const mat13 = maturato1314(ratei, '13', (accontiTutti||[]).filter(a=>a.causale==='acconto_13'));
-  const mat14 = maturato1314(ratei, '14', (accontiTutti||[]).filter(a=>a.causale==='acconto_14'));
+  // ── 13ª / 14ª alla data di fine (stessa regola della pagina Stipendi) ──
+  const ratei = calcolaRatei13a14a(d.data_assunzione, pagaFine, mF, yF, fineISO);
+  const mat13 = maturato1314(ratei, '13', (accontiTutti || []).filter(a => a.causale === 'acconto_13'));
+  const mat14 = maturato1314(ratei, '14', (accontiTutti || []).filter(a => a.causale === 'acconto_14'));
 
-  // ── Ferie non godute ──
-  const cicloFerieIso = _cicloFerieInizioISO();
-  const goduteFerie = (assenzeFerie||[])
-    .filter(a => !cicloFerieIso || a.data_inizio >= cicloFerieIso)
-    .reduce((s,a)=> s + (Math.round((new Date(a.data_fine)-new Date(a.data_inizio))/86400000)+1), 0);
-  const ferieCalc = calcolaFerieMaturate(d.data_assunzione, d.ferie_annuali||26, goduteFerie, d.ferie_godute_extra);
-  const ferieValore = Math.max(0, ferieCalc.residue) * paga;
+  // ── ferie non godute alla data di fine (ferie godute fino a quel giorno) ──
+  const cicloIso = _cicloFerieInizioISO(new Date(fineISO + 'T12:00:00'));
+  const goduteFerie = (assenzeFerie || []).filter(a => (!cicloIso || a.data_fine >= cicloIso) && a.data_inizio <= fineISO).reduce((s, a) => {
+    const di = cicloIso && a.data_inizio < cicloIso ? cicloIso : a.data_inizio, df = a.data_fine > fineISO ? fineISO : a.data_fine;
+    return s + Math.max(0, Math.round((new Date(df) - new Date(di)) / 864e5) + 1);
+  }, 0);
+  const ferieCalc = calcolaFerieMaturate(d.data_assunzione, d.ferie_annuali || 26, goduteFerie, d.ferie_godute_extra, fineISO);
+  const ferieValore = Math.max(0, ferieCalc.residue) * pagaFine;
 
-  // ── TFR maturato (stessa logica di calcolaTfrStoricoDaPresenze, per il solo dipendente aperto) ──
-  const perMeseSet = {};
-  (presenzeTutte||[]).filter(p=>!d.data_assunzione || p.data>=d.data_assunzione).forEach(p => { const k=p.data.slice(0,7); (perMeseSet[k]=perMeseSet[k]||new Set()).add(p.data); });
-  const storicoEffTfr = (storicoPaga&&storicoPaga.length) ? storicoPaga : [{ paga_giornaliera: paga, data_decorrenza: d.data_assunzione }];
-  let tfrTotale = 0;
-  Object.keys(perMeseSet).sort().forEach(meseChiave => {
-    const giorni = perMeseSet[meseChiave].size;
-    const pagaM = _pagaApplicabile(storicoEffTfr, meseChiave+'-28') ?? storicoEffTfr[0].paga_giornaliera;
-    if (!pagaM) return;
-    const retribM = giorni*pagaM;
-    tfrTotale += retribM/13.5 - retribM*0.005;
-  });
-  const erogatoTfr = (accontiTutti||[]).filter(a=>a.causale==='acconto_tfr').reduce((s,a)=>s+parseFloat(a.importo),0);
-  const tfrResiduo = Math.max(0, tfrTotale - erogatoTfr);
+  // ── TFR ──
+  const accTfr = (accontiTutti || []).filter(a => a.causale === 'acconto_tfr');
+  const tfr = tfrDaAssunzione(d, storicoPaga, dateLav, previsti, fineISO, accTfr);
+  const tfrDaPagare = tfr ? tfr.daPagare : 0;
 
-  // ── Acconti erogati per categoria (informativo — già scorporati singolarmente
-  //    sopra, non si sottraggono di nuovo). Spacchettati per tipo: un unico
-  //    totale indistinto che somma stipendio + TFR + 13a + 14a non dice nulla
-  //    di utile a chi legge. Le righe a 0€ (marcatori "periodo saldato") sono
-  //    escluse: non sono denaro, sporcherebbero il totale.
-  const accontiPerCausale = {};
-  (accontiTutti||[]).forEach(a => {
-    const imp = parseFloat(a.importo) || 0;
-    if (imp === 0) return;
-    const k = ({ stipendio:'Stipendio', acconto_stipendio:'Acconto stipendio', acconto_tfr:'Acconto TFR', acconto_13:'Acconto 13ª', acconto_14:'Acconto 14ª', ferie_non_godute:'Ferie non godute', straordinari:'Straordinari', altro:'Altro' }[a.causale] || 'Altro');
-    accontiPerCausale[k] = (accontiPerCausale[k] || 0) + imp;
-  });
-  const accontiTotaliStorico = Object.values(accontiPerCausale).reduce((s,v)=>s+v, 0);
+  const totale = stipendioTot + mat13.residuo + mat14.residuo + ferieValore + tfrDaPagare;
+  _liqcUltimoCalcolo = { d, nome, fineISO, oggiISO, pagaFine, mesiStip, stipendioTot, ratei, mat13, mat14, ferieCalc, goduteFerie, ferieValore, tfr, totale, storicoPaga: storicoPaga || [] };
 
-  const totaleFinale = stipendioInCorso + arretratoTotale + mat13.residuo + mat14.residuo + ferieValore + tfrResiduo;
-
-  // Salvato per l'export (evita ricalcolare tutto al click su "Esporta")
-  _liqcUltimoCalcolo = {
-    nome, dataAssunzione: d.data_assunzione, giorniLavoratiTotali, paga,
-    stipendioInCorso, meseCorrenteGiaLiquidato, arretratoDettaglio, arretratoTotale,
-    mat13, mat14, ferieCalc, ferieValore, tfrTotale, erogatoTfr, tfrResiduo, accontiTotaliStorico, accontiPerCausale, totaleFinale,
-  };
-
-  const riga = (l,v,opts) => '<div style="display:flex;justify-content:space-between;align-items:center;padding:'+(opts&&opts.big?'9px':'6px')+' 0'+(opts&&opts.border?';border-top:1px solid var(--border)':'')+'"><span style="font-size:'+(opts&&opts.big?'14px':'13px')+';font-weight:'+(opts&&opts.big?'800':'600')+'">'+l+'</span><span style="font-size:'+(opts&&opts.big?'16px':'13px')+';font-weight:'+(opts&&opts.big?'800':'700')+';color:'+(v<0?'var(--red)':'var(--text)')+'">€ '+v.toFixed(2)+'</span></div>';
-
-  let html = '<button type="button" class="btn-sm" style="width:100%;margin-bottom:14px" onclick="esportaLiquidazioneCompleta()">📄 Esporta per il dipendente</button>';
-  html += '<div style="font-size:11px;color:var(--muted);background:var(--bg);border-radius:10px;padding:10px 12px;margin-bottom:14px;line-height:1.5">Ricostruita dallo storico di presenze, acconti e liquidazioni registrati in app — è una stima operativa, verifica sempre col consulente prima di una liquidazione reale.</div>';
-
-  html += '<div class="card" style="padding:14px;margin-bottom:12px">'
-    + '<div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">📅 Storico</div>'
-    + '<div style="display:flex;justify-content:space-between;padding:6px 0"><span style="font-size:13px;font-weight:600">Giorni lavorati totali (da sempre)</span><span style="font-size:13px;font-weight:700">'+giorniLavoratiTotali+' gg</span></div>'
-    + (d.data_assunzione ? '<div style="display:flex;justify-content:space-between;padding:6px 0"><span style="font-size:13px;font-weight:600">Assunto il</span><span style="font-size:13px;font-weight:700">'+new Date(d.data_assunzione).toLocaleDateString('it-IT')+'</span></div>' : '')
-    + '</div>';
-
-  html += '<div class="card" style="padding:14px;margin-bottom:12px">'
-    + '<div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">💰 Stipendio</div>'
-    + riga(meseCorrenteGiaLiquidato ? 'Mese in corso (già liquidato)' : 'Mese in corso (non ancora liquidato)', stipendioInCorso)
-    + riga('Arretrati mesi precedenti'+(arretratoDettaglio.length?' ('+arretratoDettaglio.length+')':''), arretratoTotale)
-    + (arretratoDettaglio.length ? '<div style="margin-top:4px;padding-left:8px;border-left:2px solid var(--border)">' + arretratoDettaglio.map(a=>'<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);padding:2px 0;text-transform:capitalize"><span>'+a.meseLbl+'</span><span>€ '+a.netto.toFixed(2)+'</span></div>').join('') + '</div>' : '')
-    + '</div>';
-
-  html += '<div class="card" style="padding:14px;margin-bottom:12px">'
-    + '<div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">🎄☀️ Mensilità aggiuntive</div>'
-    + riga('13ª mensilità — residuo da erogare'+(mat13.haArretrato?' (incl. arretrato)':''), mat13.residuo)
-    + riga('14ª mensilità — residuo da erogare'+(mat14.haArretrato?' (incl. arretrato)':''), mat14.residuo)
-    + '</div>';
-
-  html += '<div class="card" style="padding:14px;margin-bottom:12px">'
-    + '<div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">🌴 Ferie non godute</div>'
-    + riga(ferieCalc.residue.toFixed(1)+' giorni residui × € '+paga.toFixed(2)+'/gg', ferieValore)
-    + '</div>';
-
-  html += '<div class="card" style="padding:14px;margin-bottom:12px">'
-    + '<div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">🏦 TFR</div>'
-    + riga('TFR lordo stimato (maturato)', tfrTotale)
-    + (erogatoTfr > 0.01 ? riga('Acconti TFR già erogati', -erogatoTfr) : '')
-    + riga('Residuo TFR da accantonare', tfrResiduo, {border:true})
-    + '<div style="font-size:10px;color:var(--muted);margin-top:4px">Stima dalle presenze in app.</div>'
-    + '</div>';
-
-  if (accontiTotaliStorico > 0.01) {
-    html += '<div class="card" style="padding:14px;margin-bottom:12px">'
-      + '<div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">📋 Acconti erogati (storico, informativo)</div>'
-      + Object.keys(accontiPerCausale).sort().map(k => riga(k, accontiPerCausale[k])).join('')
-      + riga('Totale erogato in acconti, da sempre', accontiTotaliStorico, {border:true})
-      + '<div style="font-size:10px;color:var(--muted);margin-top:4px">Già scorporati singolarmente nelle voci sopra — questo riquadro è solo un riepilogo, non va sottratto di nuovo dal totale.</div>'
-      + '</div>';
+  // ── schermo ──
+  const sez = (ico, t) => `<div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">${ico} ${t}</div>`;
+  const riga = (l, v, o) => { o = o || {}; return `<div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline;padding:${o.big ? '9px' : '5px'} 0${o.border ? ';border-top:1px solid var(--border)' : ''}"><span style="font-size:${o.big ? '14px' : '13px'};font-weight:${o.big || o.b ? '800' : '600'}">${l}</span><span style="font-size:${o.big ? '17px' : '13px'};font-weight:${o.big || o.b ? '800' : '700'};white-space:nowrap;color:${v < -0.005 ? 'var(--red)' : 'var(--text)'}">${_lq_e2(v)}</span></div>`; };
+  const come = t => `<div style="font-size:11.5px;color:var(--muted);line-height:1.45;margin-top:2px">${t}</div>`;
+  const card = (inner, extra) => `<div class="card" style="padding:14px;margin-bottom:12px${extra || ''}">${inner}</div>`;
+  let h = card(`${sez('📅', 'Data dei conteggi')}
+    <label style="display:block;font-size:12px;color:var(--muted)">Ultimo giorno di lavoro (fine rapporto) o data a cui calcolare
+      <input type="date" id="liqc-fine" data-dip="${dipId}" value="${fineISO}" style="display:block;width:100%;margin-top:6px;font:inherit;font-size:16px;padding:10px 12px;border-radius:12px;border:1px solid var(--border);background:var(--surface);color:var(--text)" onchange="apriLiquidazioneCompleta('${dipId}', this.value)"></label>
+    ${come(d.data_fine_rapporto ? 'Proposta la data di fine rapporto registrata (' + _lq_dIt(d.data_fine_rapporto) + '); puoi cambiarla.' : 'Cambia la data per vedere i conteggi a un giorno diverso da oggi.')}
+    ${fineISO > oggiISO ? come('⚠️ Data futura: i giorni da oggi a quel giorno sono stimati (turni previsti, altrimenti 26 giorni al mese).') : ''}`);
+  if (!d.data_assunzione) {
+    h += card(`${sez('⚠️', 'Manca la data di assunzione')}
+      ${come('Senza la data di assunzione non si possono calcolare TFR, ratei di 13ª/14ª e ferie. Inseriscila qui: viene salvata nella scheda del dipendente.')}
+      <input type="date" id="liqc-ass" style="display:block;width:100%;margin-top:8px;font:inherit;font-size:16px;padding:10px 12px;border-radius:12px;border:1px solid var(--border);background:var(--surface);color:var(--text)">
+      <button class="btn-primary" style="width:100%;margin-top:10px" onclick="liqcSalvaAssunzione('${dipId}')">Salva e ricalcola</button>`, ';border-color:var(--orange)');
   }
-
-  html += '<div class="card" style="padding:16px;background:rgba(47,138,92,.06);border-color:rgba(47,138,92,.3)">'
-    + riga('TOTALE DA LIQUIDARE', totaleFinale, {big:true})
-    + '</div>';
-
-  body.innerHTML = html;
+  h += card(`${sez('👤', esc(nome))}
+    ${d.data_assunzione ? `<div style="font-size:13px;padding:3px 0">Assunto il <b>${_lq_dIt(d.data_assunzione)}</b> · fine <b>${_lq_dIt(fineISO)}</b></div><div style="font-size:13px;padding:3px 0">Anzianità: <b>${_lq_anzianita(d.data_assunzione, fineISO).txt}</b></div>` : ''}
+    <div style="font-size:13px;padding:3px 0">Paga giornaliera alla data: <b>${_lq_e2(pagaFine)}</b>${(storicoPaga || []).length ? ` · ${(storicoPaga || []).length} variazioni registrate` : ''}</div>`);
+  h += card(`${sez('💰', 'Stipendio non ancora pagato')}
+    ${mesiStip.length ? mesiStip.map(r => riga(r.label.charAt(0).toUpperCase() + r.label.slice(1), r.netto) + come(`${r.giorni} giorni lavorati${r.festLav ? ' (di cui ' + r.festLav + (r.festLav === 1 ? ' festivo, pagato doppio)' : ' festivi, pagati doppi)') : ''}${r.festNonLav ? ' + ' + r.festNonLav + ' festività non lavorate' : ''}${r.futuri ? ' + ' + r.futuri + ' giorni fino alla fine (' + r.nota + ')' : ''} × ${_lq_e2(r.paga)} = ${_lq_e2(r.lordo)}${r.acc ? ' − già pagato ' + _lq_e2(r.acc) : ''}${r.rest ? ' + restituito ' + _lq_e2(r.rest) : ''}`)).join('') : come('Nessun mese da pagare: tutti liquidati.')}
+    ${mesiStip.length > 1 ? riga('Totale stipendio', stipendioTot, { border: true, b: true }) : ''}`);
+  const r13 = (lbl, M) => riga(lbl, M.residuo) + come(`${M.ratei} ratei maturati = ${_lq_e2(M.importo)}${M.haArretrato ? ' (compreso il periodo precedente non pagato)' : ''}${M.importo - M.residuo > 0.01 ? ' − già pagato ' + _lq_e2(M.importo - M.residuo) : ''}`);
+  h += card(`${sez('🎄☀️', 'Mensilità aggiuntive')}
+    ${r13('13ª mensilità', mat13)}
+    ${r13('14ª mensilità', mat14)}
+    ${come('Un rateo per ogni mese con almeno 15 giorni di servizio (13ª: gennaio–dicembre, 14ª: luglio–giugno). Importi già al netto delle trattenute.')}`);
+  h += card(`${sez('🌴', 'Ferie non godute')}
+    ${riga(ferieCalc.residue.toFixed(1).replace('.', ',') + ' giorni × ' + _lq_e2(pagaFine), ferieValore)}
+    ${come(`Maturate ${ferieCalc.maturate} (${ferieCalc.mesiMaturati} mesi × ${(ferieCalc.rateoMensile || 0).toFixed(2)} gg) − godute ${ferieCalc.godute} nel ciclo dal ${_lq_dIt(cicloIso || ferieCalc.inizioConteggio)} al ${_lq_dIt(fineISO)}.`)}`);
+  if (tfr) {
+    h += card(`${sez('🏦', 'TFR dall\'assunzione')}
+      ${tfr.righeAnni.map(A => riga(String(A.anno), A.quota + A.rival) + come(`${A.mesi} mesi${A.stimati ? ' (' + A.stimati + ' stimati)' : ''} · retribuzione utile ${_lq_e2(A.imponibile)} → quota ${_lq_e2(A.quota)}${A.rival ? ' + rivalutazione ' + _lq_e2(A.rival) + (A.coeff ? ' (' + A.coeff.pct.toFixed(3).replace('.', ',') + '%' + (A.coeff.stimato ? ', stimata' : '') + ')' : '') : ''}`)).join('')}
+      ${riga('TFR lordo', tfr.lordo, { border: true, b: true })}
+      ${tfr.impostaRival > 0.005 ? riga('Imposta 17% sulla rivalutazione', -tfr.impostaRival) : ''}
+      ${riga('IRPEF tassazione separata (aliquota media ' + (tfr.aliquota * 100).toFixed(1).replace('.', ',') + '%)', -tfr.irpef)}
+      ${riga('TFR netto', tfr.netto, { b: true })}
+      ${tfr.anticipi > 0.005 ? riga('Anticipi TFR già dati', -tfr.anticipi) + riga('TFR da pagare', tfr.daPagare, { b: true }) : ''}
+      ${come(`Mese per mese con la paga in vigore in quel periodo${tfr.storicoUsato ? ' (storico aumenti)' : ' (nessun aumento registrato: paga attuale per tutto il periodo)'}. Base = giorni × paga + ratei di 13ª e 14ª; quota = base ÷ 13,5 − 0,50%.${tfr.stimati ? ' ' + tfr.stimati + ' mesi prima delle presenze in app stimati a 26 giorni.' : ''}${tfr.coeffStimato ? ' Rivalutazione dell\'ultimo anno stimata dall\'ultimo indice ISTAT pubblicato.' : ''}`)}`);
+  }
+  h += `<div class="card" style="padding:16px;margin-bottom:12px;background:rgba(47,138,92,.06);border-color:rgba(47,138,92,.3)">${riga('TOTALE DA PAGARE', totale, { big: true })}${come('Stipendio + 13ª + 14ª + ferie + TFR netto. Già tolto tutto ciò che risulta pagato in app.')}</div>`;
+  h += `<button class="btn-primary" style="width:100%;margin-bottom:8px" onclick="esportaLiquidazioneCompleta()">📄 Prospetto da consegnare al dipendente</button>
+    <div style="font-size:11px;color:var(--muted);line-height:1.5;padding:0 2px 8px">Conteggio indicativo calcolato dai dati in app (presenze, paga, acconti). La busta paga finale del consulente del lavoro fa fede.</div>`;
+  body.innerHTML = h;
+}
+async function liqcSalvaAssunzione(dipId) {
+  const v = $('liqc-ass') && $('liqc-ass').value;
+  if (!v) { toast('Inserisci la data di assunzione'); return; }
+  const { error } = await sb.from('presenze_profili').update({ data_assunzione: v }).eq('id', dipId);
+  if (error) { toast('Non salvato: ' + error.message); return; }
+  toast('Data di assunzione salvata');
+  apriLiquidazioneCompleta(dipId, $('liqc-fine') && $('liqc-fine').value);
 }
 
-// Genera un documento stampabile (via _wrapModello, stesso pattern usato
-// per gli altri modelli scaricabili) con il riepilogo della Situazione
-// liquidazione, da mostrare/consegnare al dipendente.
+// Prospetto stampabile da consegnare (e far firmare) al dipendente
 function esportaLiquidazioneCompleta() {
   const c = _liqcUltimoCalcolo;
-  if (!c) { toast('Calcola prima la situazione'); return; }
-  const oggiLbl = new Date().toLocaleDateString('it-IT',{day:'2-digit',month:'long',year:'numeric'});
-  const rigaDoc = (l,v) => '<div class="campo" style="display:flex;justify-content:space-between;border-bottom:1pt solid #ddd"><span>'+l+'</span><span><b>€ '+v.toFixed(2)+'</b></span></div>';
-  const corpo = '<div class="azienda">Ceraldi Group S.r.l. — Caffetteria Ceraldi<br>Piazza Carità 14, Napoli</div>'
-    + '<h1>SITUAZIONE LIQUIDAZIONE</h1>'
-    + '<div class="campo"><b>Dipendente:</b> '+esc(c.nome)+'</div>'
-    + (c.dataAssunzione ? '<div class="campo"><b>Data assunzione:</b> '+new Date(c.dataAssunzione).toLocaleDateString('it-IT')+'</div>' : '')
-    + '<div class="campo"><b>Giorni lavorati totali (da sempre):</b> '+c.giorniLavoratiTotali+'</div>'
-    + '<div class="campo"><b>Data calcolo:</b> '+oggiLbl+'</div>'
-    + '<h2>Stipendio</h2>'
-    + rigaDoc(c.meseCorrenteGiaLiquidato ? 'Mese in corso (già liquidato)' : 'Mese in corso (non ancora liquidato)', c.stipendioInCorso)
-    + rigaDoc('Arretrati mesi precedenti', c.arretratoTotale)
-    + (c.arretratoDettaglio.length ? '<div class="box" style="margin-top:6pt">' + c.arretratoDettaglio.map(a=>'<div style="display:flex;justify-content:space-between;text-transform:capitalize"><span>'+a.meseLbl+'</span><span>€ '+a.netto.toFixed(2)+'</span></div>').join('') + '</div>' : '')
-    + '<h2>Mensilità aggiuntive</h2>'
-    + rigaDoc('13ª mensilità — residuo da erogare'+(c.mat13.haArretrato?' (incl. arretrato)':''), c.mat13.residuo)
-    + rigaDoc('14ª mensilità — residuo da erogare'+(c.mat14.haArretrato?' (incl. arretrato)':''), c.mat14.residuo)
-    + '<h2>Ferie non godute</h2>'
-    + rigaDoc(c.ferieCalc.residue.toFixed(1)+' giorni residui × € '+c.paga.toFixed(2)+'/gg', c.ferieValore)
-    + '<h2>TFR</h2>'
-    + rigaDoc('TFR lordo stimato (maturato)', c.tfrTotale)
-    + (c.erogatoTfr > 0.01 ? rigaDoc('Acconti TFR già erogati', -c.erogatoTfr) : '')
-    + rigaDoc('Residuo TFR da accantonare', c.tfrResiduo)
-    + (c.accontiTotaliStorico > 0.01 ? ('<h2>Acconti erogati (storico)</h2>'
-        + Object.keys(c.accontiPerCausale||{}).sort().map(k => rigaDoc(k, c.accontiPerCausale[k])).join('')
-        + rigaDoc('Totale erogato in acconti, da sempre (già scorporato sopra)', c.accontiTotaliStorico)) : '')
-    + '<div class="box" style="margin-top:16pt;font-size:13pt"><b>TOTALE DA LIQUIDARE: € '+c.totaleFinale.toFixed(2)+'</b></div>'
-    + '<p class="nota">Ricostruita dallo storico di presenze, acconti e liquidazioni registrati in app. È una stima operativa: verificare sempre col consulente del lavoro prima di una liquidazione reale.</p>';
+  if (!c) { toast('Calcola prima i conteggi'); return; }
+  const d = c.d, t = c.tfr;
+  const tr = (cells, b) => '<tr>' + cells.map((x, i) => '<td' + (i && typeof x === 'number' ? ' style="text-align:right;white-space:nowrap"' : '') + '>' + (b ? '<b>' : '') + (typeof x === 'number' ? _lq_e2(x) : x) + (b ? '</b>' : '') + '</td>').join('') + '</tr>';
+  const tab = (head, rows) => '<table><tr>' + head.map(x => '<th>' + x + '</th>').join('') + '</tr>' + rows.join('') + '</table>';
+  let corpo = '<div class="azienda">' + esc(APP_CONFIG.azienda || 'Ceraldi Group S.r.l.') + '<br>Piazza Carità 14, Napoli</div>'
+    + '<h1>PROSPETTO DI FINE RAPPORTO</h1>'
+    + '<div class="campo"><b>Lavoratore:</b> ' + esc(c.nome) + (d.codice_fiscale ? ' — C.F. ' + esc(d.codice_fiscale) : '') + '</div>'
+    + (d.mansione ? '<div class="campo"><b>Mansione:</b> ' + esc(d.mansione) + (d.livello_ccnl ? ' — livello ' + esc(d.livello_ccnl) : '') + '</div>' : '')
+    + '<div class="campo"><b>Data di assunzione:</b> ' + _lq_dIt(d.data_assunzione) + ' &nbsp; <b>Ultimo giorno:</b> ' + _lq_dIt(c.fineISO) + (d.data_assunzione ? ' &nbsp; <b>Anzianità:</b> ' + _lq_anzianita(d.data_assunzione, c.fineISO).txt : '') + '</div>'
+    + (d.motivo_fine_rapporto ? '<div class="campo"><b>Motivo:</b> ' + esc(d.motivo_fine_rapporto) + '</div>' : '')
+    + '<div class="campo"><b>Paga giornaliera alla data:</b> ' + _lq_e2(c.pagaFine) + '</div>';
+  corpo += '<h2>1. Stipendio non ancora pagato</h2>' + (c.mesiStip.length ? tab(['Mese', 'Giorni', 'Paga', 'Spettante', 'Già pagato', 'Da pagare'],
+    c.mesiStip.map(r => tr([r.label + (r.futuri ? ' (' + r.futuri + ' gg stimati)' : ''), String(r.giorni + r.futuri + r.festNonLav), r.paga, r.lordo, r.acc - r.rest, r.netto])).concat([tr(['Totale', '', '', '', '', c.stipendioTot], true)])) : '<p>Nessun mese da pagare.</p>');
+  const m13 = (lbl, M) => tr([lbl, M.ratei + ' ratei', M.importo, M.importo - M.residuo, M.residuo]);
+  corpo += '<h2>2. Mensilità aggiuntive (importi netti)</h2>' + tab(['Voce', 'Maturato', 'Importo', 'Già pagato', 'Da pagare'], [m13('13ª mensilità', c.mat13), m13('14ª mensilità', c.mat14)]);
+  corpo += '<h2>3. Ferie non godute</h2>' + tab(['Maturate', 'Godute', 'Residue', 'Paga', 'Da pagare'], [tr([String(c.ferieCalc.maturate).replace('.', ','), String(c.ferieCalc.godute).replace('.', ','), String(c.ferieCalc.residue).replace('.', ','), c.pagaFine, c.ferieValore])]);
+  if (t) {
+    corpo += '<h2>4. Trattamento di fine rapporto (TFR)</h2>' + tab(['Anno', 'Mesi', 'Retribuzione utile', 'Quota TFR', 'Rivalutazione', 'Fondo a fine anno'],
+      t.righeAnni.map(A => tr([String(A.anno) + (A.stimati ? ' *' : ''), String(A.mesi), A.imponibile, A.quota, A.rival, A.fondoFine])))
+      + tab(['', 'Importo'], [tr(['TFR lordo (quote + rivalutazioni)', t.lordo]), tr(['Imposta sostitutiva 17% sulle rivalutazioni', -t.impostaRival]),
+        tr(['IRPEF tassazione separata — aliquota media ' + (t.aliquota * 100).toFixed(2).replace('.', ',') + '% (reddito di riferimento ' + _lq_e2(t.redditoRif) + ')', -t.irpef]),
+        tr(['TFR netto', t.netto], true)].concat(t.anticipi > 0.005 ? [tr(['Anticipi TFR già corrisposti', -t.anticipi]), tr(['TFR netto da pagare', t.daPagare], true)] : []))
+      + '<p style="font-size:9pt;color:#555">Quota annua = retribuzione utile ÷ 13,5 meno 0,50% (contributo aggiuntivo, art. 3 L. 297/1982). Retribuzione utile = giorni × paga in vigore nel periodo + ratei di 13ª e 14ª. Rivalutazione del fondo con 1,5% + 75% dell\'aumento ISTAT, al netto dell\'imposta del 17%.'
+      + (t.stimati ? ' * Anni con mesi precedenti alla registrazione delle presenze in app: stimati a 26 giorni al mese.' : '') + '</p>';
+  }
+  corpo += '<div class="box" style="margin-top:16pt;font-size:13pt"><b>TOTALE DA CORRISPONDERE: ' + _lq_e2(c.totale) + '</b></div>'
+    + '<p class="nota">Prospetto indicativo calcolato il ' + _lq_dIt(c.oggiISO) + ' dai dati registrati in app (presenze, paga concordata, acconti e liquidazioni). Gli importi definitivi sono quelli della busta paga di fine rapporto elaborata dal consulente del lavoro; eventuali differenze verranno regolate in quella sede.</p>'
+    + '<div class="firme"><div class="firma-box">Il datore di lavoro<br><br></div><div class="firma-box">Il lavoratore, per presa visione<br><br></div></div>'
+    + '<p style="font-size:10pt;margin-top:20pt">Napoli, ' + _lq_dIt(c.oggiISO) + '</p>';
   try {
-    const htmlDoc = _wrapModello('Situazione liquidazione — '+c.nome, corpo);
+    const htmlDoc = _wrapModello('Prospetto di fine rapporto — ' + c.nome, corpo);
     const w = window.open('', '_blank');
-    if (w) {
-      w.document.write(htmlDoc);
-      w.document.close();
-      toast('✓ Documento aperto — usa Stampa per salvare PDF o condividerlo');
-    } else {
-      const blob = new Blob([htmlDoc], { type: 'text/html;charset=utf-8' });
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement('a');
-      a.href = url; a.download = 'situazione_liquidazione_'+c.nome.replace(/\s+/g,'_')+'.html';
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 3000);
+    if (w) { w.document.write(htmlDoc); w.document.close(); toast('✓ Prospetto aperto — usa Stampa per salvarlo in PDF o condividerlo'); }
+    else {
+      const blob = new Blob([htmlDoc], { type: 'text/html;charset=utf-8' }), url = URL.createObjectURL(blob), a = document.createElement('a');
+      a.href = url; a.download = 'prospetto_fine_rapporto_' + c.nome.replace(/\s+/g, '_') + '.html';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a); setTimeout(() => URL.revokeObjectURL(url), 3000);
       toast('✓ File salvato — aprilo con Safari');
     }
-  } catch(e) { toast('Errore: ' + e.message); }
+  } catch (e) { toast('Errore: ' + e.message); }
 }
 
 // Export storico completo del dipendente (Excel, un foglio per tipo di
@@ -21932,7 +21982,7 @@ async function calcolaTfrStoricoDaPresenze() {
   box.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
 
   const { data: profili } = await sb.from('presenze_profili')
-    .select('id,nome,cognome,data_assunzione,tipo_contratto,paga_giornaliera').eq('attivo',true);
+    .select('id,nome,cognome,data_assunzione,tipo_contratto,paga_giornaliera,netto_fisso_mensile').eq('attivo',true);
   const attendibili = (profili||[]).filter(d => d.tipo_contratto !== 'co.co.co' && d.data_assunzione);
   if (!attendibili.length) { box.innerHTML = '<div class="empty"><div class="empty-txt">Nessun dipendente con data di assunzione impostata</div></div>'; return; }
 
@@ -21941,7 +21991,7 @@ async function calcolaTfrStoricoDaPresenze() {
   // Acconti TFR già erogati (causale "acconto_tfr") — vanno sottratti dal
   // TFR lordo stimato, la stessa voce, non dallo stipendio mensile.
   const { data: accontiTfrTutti } = await sb.from('presenze_acconti')
-    .select('dipendente_id,importo').eq('causale','acconto_tfr');
+    .select('dipendente_id,importo,data').eq('causale','acconto_tfr');
   for (const d of attendibili) {
     const [{ data: storico }, { data: presenze }] = await Promise.all([
       sb.from('presenze_storico_paga').select('paga_giornaliera,data_decorrenza').eq('dipendente_id', d.id).order('data_decorrenza',{ascending:true}),
@@ -21958,16 +22008,9 @@ async function calcolaTfrStoricoDaPresenze() {
     const perMese = {};
     Object.keys(perMeseSet).forEach(k => { perMese[k] = perMeseSet[k].size; });
 
-    let tfrTotale = 0, retribuzioneTotale = 0, mesiConteggiati = 0;
-    for (const meseChiave of Object.keys(perMese).sort()) {
-      const giorni = perMese[meseChiave];
-      const fineMese = meseChiave + '-28'; // basta un giorno qualsiasi dentro il mese per il confronto <=
-      const paga = _pagaApplicabile(storicoEff, fineMese) ?? storicoEff[0].paga_giornaliera;
-      if (!paga) continue;
-      const retribuzioneMese = giorni * paga;
-      const tfrMese = retribuzioneMese/13.5 - retribuzioneMese*0.005;
-      tfrTotale += tfrMese; retribuzioneTotale += retribuzioneMese; mesiConteggiati++;
-    }
+    // 12/10/2026: stesso calcolo dei Conteggi di fine rapporto — dall'assunzione a oggi, mesi prima dell'app stimati a 26 giorni
+    const t = tfrDaAssunzione(d, storico || [], new Set((presenze || []).map(p => p.data)), new Set(), todayISO(), (accontiTfrTutti||[]).filter(a => a.dipendente_id===d.id));
+    const tfrTotale = t ? t.lordo : 0, retribuzioneTotale = t ? t.righeAnni.reduce((x, A) => x + A.imponibile, 0) : 0, mesiConteggiati = t ? t.mesi.length : 0;
     const erogatoTfr = (accontiTfrTutti||[]).filter(a => a.dipendente_id===d.id).reduce((s,a)=>s+parseFloat(a.importo),0);
     totaleGenerale += tfrTotale; totaleErogatoGenerale += erogatoTfr;
     righe.push({ nome: d.nome+(d.cognome?' '+d.cognome:''), tfrTotale, retribuzioneTotale, mesiConteggiati,
@@ -21976,8 +22019,8 @@ async function calcolaTfrStoricoDaPresenze() {
 
   const riga = (l,v,ev) => '<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:'+(ev?'14px':'13px')+';font-weight:'+(ev?'700':'400')+'"><span>'+l+'</span><span>€ '+parseFloat(v).toFixed(2)+'</span></div>';
   let html = '<div class="card" style="padding:14px;background:rgba(43,74,203,.06);border-color:rgba(43,74,203,.3)">'
-    + '<div style="font-size:11px;font-weight:800;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">🏦 TFR lordo storico — stimato dalle presenze in app</div>'
-    + '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">Ricostruito mese per mese dalle presenze registrate × la paga giornaliera in vigore in ogni periodo (non dalle buste paga). È una stima: verifica sempre col consulente prima di usarlo per una liquidazione reale.</div>'
+    + '<div style="font-size:11px;font-weight:800;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">🏦 TFR lordo dall\'assunzione a oggi</div>'
+    + '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">Mese per mese dalla data di assunzione con la paga in vigore in ogni periodo: presenze reali dove registrate in app, 26 giorni al mese prima; base comprensiva di 13ª e 14ª, con rivalutazione ISTAT. Stima: la busta paga del consulente fa fede.</div>'
     + '<div style="border-top:2px solid var(--accent);margin:8px 0 6px"></div>'
     + riga('TFR lordo stimato (maturato)', totaleGenerale)
     + (totaleErogatoGenerale > 0.01 ? riga('Acconti TFR già erogati', -totaleErogatoGenerale) : '')
@@ -30779,14 +30822,15 @@ async function caricaProfiloDip() {
    La quattordicesima ESCLUDE gli scatti di anzianità (art. 184 CCNL 2018/2024).
    Entrambe spettano a tutti i livelli (1°-7°, Quadri A/B) previsti dal CCNL.
 */
-function calcolaRatei13a14a(dataAssunzione, pagaGiornaliera, meseCorrente, annoCorrente) {
+function calcolaRatei13a14a(dataAssunzione, pagaGiornaliera, meseCorrente, annoCorrente, dataRif) {
   const paga = parseFloat(pagaGiornaliera) || 0;
   // Stima paga mensile base: paga giornaliera × 26 gg/anno ÷ 12
   // (compatibile con CCNL che usa divisore 26 per i lavoratori a giornata)
   const pagaMensile = paga * 26;
   const rateo13mese = pagaMensile / 12;
 
-  const oggi = new Date(annoCorrente, meseCorrente - 1, 1);
+  // dataRif (facoltativa): conteggio a una data precisa, es. fine rapporto — il mese di quella data conta se ci sono almeno 15 giorni
+  const oggi = dataRif ? new Date(dataRif + 'T12:00:00') : new Date(annoCorrente, meseCorrente - 1, 1);
 
   // ── 13a: periodo 1° gennaio → 31 dicembre ANNO SOLARE ──
   // FIX (verificato su CCNL FIPE-Confcommercio Pubblici Esercizi art. 183 e
@@ -31187,10 +31231,11 @@ function sommaGiorniFerieGoduti(feriePeriodiDip, dalPeriodo, alPeriodo, riposoFi
   return tot;
 }
 
-function calcolaFerieMaturate(dataAssunzione, ferieAnnuali, ferieGoduteTotali, ferieGoduteExtra) {
+function calcolaFerieMaturate(dataAssunzione, ferieAnnuali, ferieGoduteTotali, ferieGoduteExtra, dataRif) {
   const fAnn = ferieAnnuali || 26;
   const rateoMensile = fAnn / 12;
-  const oggi = new Date();
+  // dataRif (facoltativa): maturato a una data precisa (es. fine rapporto) invece che a oggi
+  const oggi = dataRif ? new Date(dataRif + 'T12:00:00') : new Date();
 
   if (oggi >= _FERIE_CUTOVER) {
     // ── Nuovo sistema: ciclo 1° settembre - 31 agosto, azzerato ogni anno.
