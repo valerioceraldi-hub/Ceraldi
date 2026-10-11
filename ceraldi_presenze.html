@@ -33160,6 +33160,10 @@ async function rcAnnulla(ids) {
 const rcMeseN = (a, m) => a * 12 + (m - 1);
 const rcStip = t => t === 'cedolino' || t === 'compenso_admin';
 const rcMeseLow = (m, a) => _rPc(m, a).toLowerCase();
+// lo stipendio di un mese si paga dal 25 di quel mese al 25 del mese dopo (stessa regola del motore)
+const RC_GIORNO_PAGA = 25;
+function rcInFin(anno, mese, data) { const n = rcMeseN(+data.slice(0, 4), +data.slice(5, 7)), g = +data.slice(8, 10), m = rcMeseN(anno, mese); return (m === n && g >= RC_GIORNO_PAGA) || (m === n - 1 && g <= RC_GIORNO_PAGA); }
+function rcPagab(anno, mese, data) { const n = rcMeseN(+data.slice(0, 4), +data.slice(5, 7)), g = +data.slice(8, 10), m = rcMeseN(anno, mese); return m < n || (m === n && g >= RC_GIORNO_PAGA); }
 
 // bonifici su cui serve una scelta: proposte salvate dal motore + movimenti che non sa attribuire
 function rcDubbi(D) {
@@ -33275,12 +33279,12 @@ function rcOpzioni(movId) {
     aggiungi({ parti: raggruppa(prop), tag: 'sugg', azione: { kind: 'proposte', ids: prop.map(r => r.id) }, perche });
   }
   // 3. tutto su un solo mese ancora aperto, per ogni persona coinvolta (i mesi già in pari si scelgono da «Un'altra soluzione»)
-  persone.forEach(P => rcMesiVicini(P, movId, prop.concat(reg)).filter(st => st.dare != null && st.resta > 1)
+  persone.forEach(P => rcMesiVicini(P, movId, prop.concat(reg)).filter(st => st.dare != null && st.resta > 1 && rcPagab(st.anno, st.mese, mv.data))
     .forEach(st => aggiungi({ parti: [{ persona: P, tipo: tipoDi(P), anno: st.anno, mese: st.mese, importo: imp }], azione: { kind: 'alloca' } })));
   // 4. diviso sui mesi ancora aperti, dal più vecchio (solo se serve più di un mese e copre tutto)
   persone.forEach(P => {
     let resto = imp; const parti = [];
-    rcMesiVicini(P, movId).filter(st => st.dare != null && st.resta > 1).forEach(st => {
+    rcMesiVicini(P, movId).filter(st => st.dare != null && st.resta > 1 && rcPagab(st.anno, st.mese, mv.data)).forEach(st => {
       if (resto <= 0.5) return; const x = _rr2(Math.min(resto, st.resta));
       parti.push({ persona: P, tipo: tipoDi(P), anno: st.anno, mese: st.mese, importo: x }); resto = _rr2(resto - x);
     });
@@ -33291,9 +33295,17 @@ function rcOpzioni(movId) {
     if (D.persone[x.persona]) aggiungi({ parti: [{ persona: x.persona, tipo: tipoDi(x.persona), anno: x.anno, mese: x.mese, importo: imp }], azione: { kind: 'alloca' } });
   }));
   // ordine: suggerita, attuale, poi i mesi in ordine di tempo
-  const peso = o => o.tag === 'sugg' ? 0 : o.tag === 'att' ? 1 : 2;
+  opz.forEach(o => { o.fin = o.parti.length === 1 && o.parti[0].mese && rcInFin(o.parti[0].anno, o.parti[0].mese, mv.data); });
+  const peso = o => o.tag === 'sugg' ? 0 : o.tag === 'att' ? 1 : o.fin ? 2 : 3;
   opz.sort((a, b) => peso(a) - peso(b) || (a.parti[0].anno * 100 + (a.parti[0].mese || 0)) - (b.parti[0].anno * 100 + (b.parti[0].mese || 0)) || a.parti.length - b.parti.length);
   return opz;
+}
+// mese da cui partire per cercare: quello della risposta consigliata, altrimenti il mese di competenza del bonifico
+function rcMeseCerca(opz, mv) {
+  const q = opz.length && opz[0].parti[0];
+  if (q && q.mese) return q.anno + ',' + q.mese;
+  const n = rcMeseN(+mv.data.slice(0, 4), +mv.data.slice(5, 7)) - (+mv.data.slice(8, 10) >= RC_GIORNO_PAGA ? 0 : 1);
+  return Math.floor(n / 12) + ',' + (n % 12 + 1);
 }
 function rcTitoloOpz(o, piuPersone) {
   const nome = q => piuPersone ? rcNome(q.persona || q.controparte) + ' · ' : '';
@@ -33345,9 +33357,10 @@ function rcDecisione(movId, singola) {
   const piuPersone = new Set(opz.flatMap(o => o.parti.map(q => q.persona || q.controparte))).size > 1;
   h += opz.map((o, i) => `<button class="rc-opt" id="rc-opt-${i}" onclick="rcScegli(${i})">
       <div class="rc-opt-t"><span class="rc-radio"></span><span style="flex:1">${esc(rcTitoloOpz(o, piuPersone))}</span>${o.tag === 'sugg' ? '<span class="rc-tag">consigliato</span>' : o.tag === 'att' ? '<span class="rc-tag att">attuale</span>' : ''}</div>
-      <ul class="rc-opt-e">${rcEffettiOpz(o, movId)}</ul>
+      <ul class="rc-opt-e">${rcEffettiOpz(o, movId)}${o.fin ? `<li>Il bonifico del ${_rD(mv.data)} cade nel periodo in cui si paga lo stipendio di ${rcMeseLow(o.parti[0].mese, o.parti[0].anno)} (dal 25 del mese al 25 del mese dopo)</li>` : ''}</ul>
       ${o.tag === 'sugg' && o.perche && o.perche.length ? `<div class="rc-perche">Perché: ${esc(o.perche.join(' · '))}</div>` : ''}</button>`).join('');
   h += `<div class="rc-alt">
+      ${persone.length ? `<button onclick="rcCerca('${persone[0]}',${rcMeseCerca(opz, mv)})">Cerca un altro bonifico nell'estratto conto ›</button>` : ''}
       <button onclick="rcCollegaManuale('${esc(movId)}')">Un'altra soluzione (altro mese, altra persona, importo diviso a mano) ›</button>
       <button onclick="rcNonStipendio('${esc(movId)}')">Non è uno stipendio ›</button>
       <button class="grigio" onclick="${singola ? "closeSheet('sh-rc-d')" : 'rcSalta()'}">${singola ? 'Annulla, lascia com\'è' : 'Non lo so ora, decido dopo'} ›</button></div>
@@ -33477,7 +33490,8 @@ function rcCollegaMesi(movId) {
   const mesi = [...k].sort((a, b) => b - a).map(v => rcMeseSenza(P, Math.floor(v / 100), v % 100, movId));
   const n = mv ? rcMeseN(+mv.data.slice(0, 4), +mv.data.slice(5, 7)) : 0;
   // proposto: il mese aperto più vecchio vicino alla data del bonifico, altrimenti il mese prima
-  const aperto = mesi.filter(st => st.dare != null && st.resta > 1 && rcMeseN(st.anno, st.mese) >= n - 3 && rcMeseN(st.anno, st.mese) <= n + 1).pop();
+  const apertiOk = mesi.filter(st => st.dare != null && st.resta > 1 && mv && rcPagab(st.anno, st.mese, mv.data) && rcMeseN(st.anno, st.mese) >= n - 3);
+  const aperto = apertiOk.find(st => rcInFin(st.anno, st.mese, mv.data)) || apertiOk.pop();
   const def = RC._preMese && P === (RC._preP || P) ? RC._preMese : aperto ? aperto.anno * 100 + aperto.mese : (mv ? (n - 1 - (n - 1) % 12) / 12 * 100 + ((n - 1) % 12) + 1 : 0);
   $('rc-c-m').innerHTML = mesi.map(st => {
     const v = st.anno * 100 + st.mese;
