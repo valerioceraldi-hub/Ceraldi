@@ -13818,9 +13818,9 @@ async function ricQuadro(dipId) {
       <div class="ric-cmp">
         <div class="ric-cmp-c"><div class="ric-cmp-l"><span class="ric-ico ced xs">${ic('doc')}</span>Cedolino</div><b>${r.cedolino ? (r.netto != null ? _rE(r.netto) : 'senza netto') : '—'}</b>${r.cedolino && r.cedolino.url ? `<button class="ric-link" onclick="apriDocumento('${esc(r.cedolino.url)}','${esc((r.cedolino.nome_file || 'cedolino.pdf').replace(/'/g, ''))}')">Apri ›</button>` : ''}</div>
         <div class="ric-cmp-ar">→</div>
-        <div class="ric-cmp-c"><div class="ric-cmp-l"><span class="ric-ico mov xs">${ic('banca')}</span>Bonifici</div><b>${_rE(r.ricevuto)}</b>${r.coperturaPort ? `<small>+ ${_rE(r.coperturaPort)} dal portafoglio</small>` : ''}</div>
+        <div class="ric-cmp-c" onclick="rcApriMovimenti(${esc(JSON.stringify(r.mov.map(x => x.movId).filter(Boolean)))})" style="cursor:pointer"><div class="ric-cmp-l"><span class="ric-ico mov xs">${ic('banca')}</span>Bonifici</div><b>${_rE(r.ricevuto)}</b>${r.mov.some(x => x.movId) ? '<button class="ric-link">Vedi ›</button>' : ''}${r.coperturaPort ? `<small>+ ${_rE(r.coperturaPort)} dal portafoglio</small>` : ''}</div>
       </div>
-      ${r.mov.map(x => `<div class="ric-mvl"><span>${_rD(x.data)}</span><b>${_rE(x.importo)}</b>${x.movId ? `<a href="${ricMovLink(x.movId)}" target="_blank" rel="noopener">Fatture ›</a>` : ''}<button onclick="ricAnnullaCollegamento(${x.id})">Annulla</button></div>`).join('')}
+      ${r.mov.map(x => `<div class="ric-mvl"><span${x.movId ? ` style="color:var(--accent);cursor:pointer" onclick="rcApriMovimentoId('${esc(x.movId)}')"` : ''}>${_rD(x.data)}${x.movId ? ' ›' : ''}</span><b>${_rE(x.importo)}</b>${x.movId ? `<a href="${ricMovLink(x.movId)}" target="_blank" rel="noopener">Fatture ›</a>` : ''}<button onclick="ricAnnullaCollegamento(${x.id})">Annulla</button></div>`).join('')}
       <div class="ric-mcard-f">${r.diff != null && Math.abs(r.diff) > 0.5 ? `<span class="ric-diff ${r.diff < 0 ? 'warn' : 'info'}">${r.diff > 0 ? '+' : '−'}${_rE(Math.abs(r.diff))}</span>` : r.diff != null ? '<span class="ric-diff ok">differenza 0</span>' : '<span></span>'}<span>Saldo progressivo <b>${_rS(r.saldoProg)}</b></span></div>
       <div class="ric-az-mov">
         ${r.stato === 'da_confermare' ? r.trovati.map(mv => `<button class="btn-sm primary" onclick="ricConfermaTrovato('${mv.id}',${r.mese},${r.anno})">Controlla e collega ${_rE(Math.abs(mv.importo))} del ${_rD(mv.data)}</button>`).join('') : ''}
@@ -13840,6 +13840,7 @@ async function ricNonStipendioDaQuadro(i) { RIC.liberi = RIC.qc.liberi.map(mv =>
   const { error } = await sb.from('presenze_riconciliazione_eccezioni').insert({ dipendente_id: RIC.qc.dip.id, tipo: 'non_stipendio', movimento_banca_id: mv.id, motivo: motivo.trim() || null });
   if (error) { toast('Non salvato: ' + error.message); return; } toast('✓ Segnato: non è uno stipendio'); await ricCarica(); ricQuadro(RIC.qc.dip.id); }
 async function ricCercaPerMese(dipId, m, a) {
+  if (typeof rcCerca === 'function') return rcCerca(dipId, a, m);
   const r = RIC.qc.righe.find(x => x.mese === m && x.anno === a);
   await apriCnrCandidatiDaQuadro(dipId, ricNome(RIC.qc.dip), m, a, r.netto || 0, r.ricevuto + r.coperturaPort);
 }
@@ -32943,7 +32944,7 @@ async function rcPersona(id) {
     return `<details class="rc-mese ${RC_STATO[m.stato] ? RC_STATO[m.stato].tono : ''}"${m.stato !== 'riconciliato' ? ' open' : ''}>
       <summary><div class="rc-mese-t"><b>${_rPc(m.mese, m.anno)}</b>${rcStatoChip(m.stato)}${cd && cd.inviato === false ? '<span class="rc-info">cedolino in attesa di invio</span>' : ''}${cd ? `<button class="rc-apri" style="margin-left:auto" onclick="event.preventDefault();event.stopPropagation();clickDocumento('${esc(String(cd.id))}', true)">Apri cedolino ›</button>` : ''}</div>
         <div class="rc-mese-n"><span>Dare ${_rE(m.dare)}</span><span>Avere ${_rE(m.avere)}</span><span class="${Math.abs(m.saldo) < 1 ? '' : m.saldo > 0 ? 'rc-neg' : 'rc-pos'}">Saldo ${_rE(m.saldo)}</span><span class="rc-prog">progressivo ${_rE(prog)}</span></div></summary>
-      ${quote}</details>`;
+      ${quote}${m.saldo > 1 ? `<button class="btn-secondary" style="width:100%;margin:2px 0 8px" onclick="rcCerca('${id}',${m.anno},${m.mese})">🔍 Cerca il bonifico (mancano ${_rE(m.saldo)})</button>` : ''}</details>`;
   }).join('');
   const senza = D.decisioni.filter(d => d.persona === id && d.azione !== 'correzione' && (d.senza_cedolino || d.tipo === 'fuori_periodo' || d.tipo === 'finanziamento_soci' || d.tipo === 'rimborso_spese'));
   const fuoriHtml = senza.length ? ricSez('Fuori dai cedolini', senza.length, '<small>non toccano il saldo del mese</small>')
@@ -33423,7 +33424,8 @@ function rcCollegaManuale(movId) {
   const body = _sheetDinamico('sh-rc-c', 'Collega a mano');
   openSheet('sh-rc-c');
   const ids = Object.keys(D.persone).filter(id => D.persone[id].kind === 'profilo').sort((a, b) => rcNome(a).localeCompare(rcNome(b)));
-  const pers = rcPersoneDi(movId)[0] || ids[0];
+  const pre = RC.pre; RC.pre = null; RC._preMese = pre ? pre.anno * 100 + pre.mese : null;
+  const pers = (pre && pre.persona) || rcPersoneDi(movId)[0] || ids[0];
   const reg = (D.registro || []).filter(r => r.mov === movId);
   const usato = _rr2(reg.reduce((t, r) => t + r.imp, 0)), libero = _rr2(Math.abs(mv ? mv.imp : 0) - usato);
   body.innerHTML = (mv ? ricMovHtml(rcMovPerRic(mv)) : '')
@@ -33445,7 +33447,7 @@ function rcCollegaMesi(movId) {
   const n = mv ? rcMeseN(+mv.data.slice(0, 4), +mv.data.slice(5, 7)) : 0;
   // proposto: il mese aperto più vecchio vicino alla data del bonifico, altrimenti il mese prima
   const aperto = mesi.filter(st => st.dare != null && st.resta > 1 && rcMeseN(st.anno, st.mese) >= n - 3 && rcMeseN(st.anno, st.mese) <= n + 1).pop();
-  const def = aperto ? aperto.anno * 100 + aperto.mese : (mv ? (n - 1 - (n - 1) % 12) / 12 * 100 + ((n - 1) % 12) + 1 : 0);
+  const def = RC._preMese && P === (RC._preP || P) ? RC._preMese : aperto ? aperto.anno * 100 + aperto.mese : (mv ? (n - 1 - (n - 1) % 12) / 12 * 100 + ((n - 1) % 12) + 1 : 0);
   $('rc-c-m').innerHTML = mesi.map(st => {
     const v = st.anno * 100 + st.mese;
     const info = st.dare == null ? 'cedolino non caricato' : Math.abs(st.resta) <= 1 ? 'netto ' + _rE(st.dare) + ' · già pagato' : st.resta > 0 ? 'netto ' + _rE(st.dare) + ' · mancano ' + _rE(st.resta) : 'netto ' + _rE(st.dare) + ' · pagato ' + _rE(-st.resta) + ' in più';
@@ -33475,9 +33477,92 @@ async function rcCollegaSalva(movId) {
   const resto = mv ? _rr2(Math.abs(mv.imp) - usato) : 0;
   if (resto > 0.5) { toast(`Collegato. Restano ${_rE(resto)} di questo bonifico: dove vanno?`); rcCollegaManuale(movId); return; }
   toast('Collegato');
-  closeSheet('sh-rc-c'); closeSheet('sh-rc-m');
+  closeSheet('sh-rc-c'); closeSheet('sh-rc-m'); closeSheet('sh-rc-s'); RC._preMese = null;
+  if ($('sh-ric-quadro') && $('sh-ric-quadro').classList.contains('on') && RIC.qc && RIC.qc.dip) { try { await ricCarica(); ricQuadro(RIC.qc.dip.id); } catch (e) {} }
   const inDecisione = $('sh-rc-d') && $('sh-rc-d').classList.contains('on');
   if (inDecisione && !RC.singola) rcProssimo(); else { closeSheet('sh-rc-d'); await rcDopoScelta(); }
+}
+
+/* ── Vedere un bonifico da qualsiasi schermata (anche dal quadro di prima) ── */
+async function rcApriMovimentoId(movId) {
+  try { await rcCarica(false); } catch (e) { toast(e.message); return; }
+  if (!rcMov(movId)) {
+    const { data } = await sb.from('movimenti_banca').select('id,data,importo,banca,descrizione').eq('id', movId).maybeSingle();
+    if (!data) { toast('Movimento non trovato in banca'); return; }
+    RC.dati.movimenti[movId] = { id: data.id, data: data.data, imp: +data.importo, banca: data.banca, desc: data.descrizione };
+  }
+  return rcMovimento(movId);
+}
+// più bonifici sullo stesso mese: si vedono tutti, ognuno con i suoi estremi
+async function rcApriMovimenti(ids) {
+  ids = (ids || []).filter(Boolean);
+  if (ids.length === 1) return rcApriMovimentoId(ids[0]);
+  if (!ids.length) { toast('Nessun bonifico collegato'); return; }
+  try { await rcCarica(false); } catch (e) { toast(e.message); return; }
+  const mancano = ids.filter(id => !rcMov(id));
+  if (mancano.length) {
+    const { data } = await sb.from('movimenti_banca').select('id,data,importo,banca,descrizione').in('id', mancano);
+    (data || []).forEach(m => { RC.dati.movimenti[m.id] = { id: m.id, data: m.data, imp: +m.importo, banca: m.banca, desc: m.descrizione }; });
+  }
+  const body = _sheetDinamico('sh-rc-ml', 'Bonifici del mese');
+  openSheet('sh-rc-ml');
+  body.innerHTML = ids.map(id => rcMov(id) ? `<div style="margin-bottom:10px">${ricMovHtml(rcMovPerRic(rcMov(id)))}<button class="rc-apri" style="margin-top:6px" onclick="rcApriMovimentoId('${esc(id)}')">A cosa è collegato ›</button></div>` : '').join('');
+}
+
+/* ── Cerca il bonifico: in tutto l'estratto conto, con ricerca libera ── */
+async function rcCerca(P, anno, mese) {
+  try { await rcCarica(false); } catch (e) { toast(e.message); return; }
+  RC.cerca = { P, anno, mese, periodo: 'vicino', testo: '' };
+  const body = _sheetDinamico('sh-rc-s', 'Cerca il bonifico');
+  openSheet('sh-rc-s');
+  const st = rcMeseSenza(P, anno, mese, '');
+  body.innerHTML = `<div class="rc-sit"><div class="rc-sit-chi">${esc(rcNome(P))}</div>${rcSitMese(P, st, '')}</div>
+    <label class="rc-lbl">Cerca per nome, causale o importo<input id="rc-s-t" type="search" placeholder="es. ${esc((RC.dati.persone[P] || {}).cognome || 'cognome')} oppure 650" oninput="clearTimeout(RC._ts);RC._ts=setTimeout(rcCercaEsegui,350)"></label>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 4px" id="rc-s-p"></div>
+    <div id="rc-s-l"></div>`;
+  rcCercaEsegui();
+}
+async function rcCercaEsegui(periodo) {
+  const C = RC.cerca; if (!C) return;
+  if (periodo) C.periodo = periodo;
+  C.testo = ($('rc-s-t') && $('rc-s-t').value || '').trim();
+  const pz = { vicino: 'Dal mese a 2 mesi dopo', anno: 'Ultimi 12 mesi' };
+  $('rc-s-p').innerHTML = Object.keys(pz).map(k => `<button class="rc-mini${C.periodo === k ? '' : ' off'}" style="margin:0" onclick="rcCercaEsegui('${k}')">${pz[k]}</button>`).join('');
+  const dal = C.periodo === 'vicino' ? `${C.anno}-${String(C.mese).padStart(2, '0')}-01` : new Date(Date.now() - 365 * 864e5).toISOString().slice(0, 10);
+  const alD = new Date(C.anno, C.mese + 2, 0), al = C.periodo === 'vicino' ? `${alD.getFullYear()}-${String(alD.getMonth() + 1).padStart(2, '0')}-${String(alD.getDate()).padStart(2, '0')}` : RC.dati.oggi;
+  $('rc-s-l').innerHTML = '<div class="ric-carica"><div class="spinner"></div>Cerco nell\'estratto conto…</div>';
+  const { data, error } = await sb.from('movimenti_banca').select('id,data,importo,banca,descrizione,sottotipo')
+    .lt('importo', 0).gte('data', dal).lte('data', al).or('sottotipo.eq.Bonifico,descrizione.ilike.*FAVORE*')
+    .order('data', { ascending: false }).limit(400);
+  if (error) { $('rc-s-l').innerHTML = `<div class="ric-carica">${esc(error.message)}</div>`; return; }
+  const p = RC.dati.persone[C.P] || {}, cogn = String(p.cognome || '').toUpperCase(), nome = String(p.nome || '').toUpperCase();
+  const st = rcMeseSenza(C.P, C.anno, C.mese, ''), manca = Math.max(0, st.resta);
+  const q = C.testo.toUpperCase(), qNum = parseFloat(C.testo.replace(/\./g, '').replace(',', '.'));
+  const usato = {}; (RC.dati.registro || []).forEach(r => { (usato[r.mov] = usato[r.mov] || []).push(r); });
+  let lista = (data || []).filter(m => !/ADD\.SPE|COMM/.test(m.descrizione || '')).map(m => {
+    const d = String(m.descrizione || '').toUpperCase(), imp = Math.abs(+m.importo);
+    const perNome = cogn && d.includes(cogn) && (!nome || d.includes(nome));
+    const perImp = manca > 1 && Math.abs(imp - manca) <= 1;
+    return { m, imp, perNome, perImp, ok: q ? (!isNaN(qNum) && /^[\d.,]+$/.test(C.testo) ? Math.abs(imp - qNum) <= 1 : d.includes(q)) : (perNome || perImp) };
+  }).filter(x => x.ok);
+  lista.sort((a, b) => (b.perNome - a.perNome) || (b.perImp - a.perImp) || String(b.m.data).localeCompare(String(a.m.data)));
+  lista = lista.slice(0, 60);
+  $('rc-s-l').innerHTML = (lista.length ? `<div class="rc-avanz">${q ? 'Risultati per «' + esc(C.testo) + '»' : 'Bonifici con il suo nome' + (manca > 1 ? ' o di ' + _rE(manca) : '')}: ${lista.length}</div>` : '')
+    + lista.map(x => {
+      const u = usato[x.m.id] || [], tot = u.reduce((t, r) => t + r.imp, 0), libero = _rr2(x.imp - tot);
+      const info = u.length ? `<div class="rc-gia" style="margin-top:6px">Già collegato: ${u.map(r => esc(rcNome(r.persona || r.controparte)) + ' · ' + (r.mese ? rcMeseLow(r.mese, r.anno) : esc(RC_TIPO[r.tipo] || r.tipo)) + ' ' + _rE(r.imp)).join('; ')}${libero > 0.5 ? ` · liberi ${_rE(libero)}` : ''}</div>` : '';
+      return `<div style="margin:10px 0">${ricMovHtml({ id: x.m.id, data: x.m.data, importo: x.m.importo, banca: x.m.banca, descrizione: x.m.descrizione })}${info}
+        <div class="rc-azioni">${libero > 0.5 ? `<button class="btn-primary" onclick="rcCercaScegli('${esc(x.m.id)}')">Collega a ${esc(rcMeseLow(C.mese, C.anno))}</button>` : '<span class="rc-info">tutto già collegato</span>'}${u.length ? `<button class="btn-secondary" onclick="rcCercaScegli('${esc(x.m.id)}', true)">Cambia</button>` : ''}</div></div>`;
+    }).join('')
+    + (lista.length ? '' : ricIntro(q ? 'Nessun bonifico trovato. Prova con un altro testo o «Ultimi 12 mesi».' : 'Nessun bonifico con il suo nome o con l\'importo che manca. Scrivi sopra un nome, una parola della causale o un importo, oppure allarga a «Ultimi 12 mesi». Se è stato pagato in contanti, registralo in Stipendi.', 'info'));
+  RC._cercaRis = {}; (data || []).forEach(m => { RC._cercaRis[m.id] = m; });
+}
+function rcCercaScegli(movId, cambia) {
+  const m = RC._cercaRis && RC._cercaRis[movId], C = RC.cerca;
+  if (m && !rcMov(movId)) RC.dati.movimenti[movId] = { id: m.id, data: m.data, imp: +m.importo, banca: m.banca, desc: m.descrizione };
+  if (cambia) return rcDecisione(movId, true);
+  RC.pre = { persona: C.P, anno: C.anno, mese: C.mese };
+  rcCollegaManuale(movId);
 }
 
 /* ── Report Excel Dare/Avere ───────────────────────────────────────── */
