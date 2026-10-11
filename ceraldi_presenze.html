@@ -32724,6 +32724,7 @@ setInterval(() => {
 .rc-gia{font-size:12.5px;background:var(--surface2);border-radius:12px;padding:9px 11px;margin-top:12px}
 .rc-mini.off{background:var(--surface2);color:var(--muted)}
 .rc-parte{font-size:11.5px;color:var(--muted)}
+.rc-ok-t{color:var(--ric-ok);font-weight:700}
 .rc-gia div{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:4px}
 </style>
 <script>
@@ -32938,12 +32939,15 @@ async function rcPersona(id) {
   });
   let prog = 0;
   const righe = c.mesi.map(m => {
-    prog += m.dare - m.avere;
+    prog += m.avere - m.dare;
     const cd = ced[m.anno + '-' + m.mese];
-    const quote = m.quote.map(q => rcQuotaHtml(q)).join('') || '<div class="rc-q vuota">Nessun pagamento collegato</div>';
+    const quote = rcBonificiDelMese(id, m);
+    const esito = Math.abs(m.saldo) < 1 ? '<span class="rc-ok-t">in pari col cedolino</span>' : m.saldo > 0 ? `<span class="rc-neg">mancano ${_rE(m.saldo)}</span>` : `<span class="rc-pos">${_rE(-m.saldo)} in più del cedolino</span>`;
     return `<details class="rc-mese ${RC_STATO[m.stato] ? RC_STATO[m.stato].tono : ''}"${m.stato !== 'riconciliato' ? ' open' : ''}>
-      <summary><div class="rc-mese-t"><b>${_rPc(m.mese, m.anno)}</b>${rcStatoChip(m.stato)}${cd && cd.inviato === false ? '<span class="rc-info">cedolino in attesa di invio</span>' : ''}${cd ? `<button class="rc-apri" style="margin-left:auto" onclick="event.preventDefault();event.stopPropagation();clickDocumento('${esc(String(cd.id))}', true)">Apri cedolino ›</button>` : ''}</div>
-        <div class="rc-mese-n"><span>Dare ${_rE(m.dare)}</span><span>Avere ${_rE(m.avere)}</span><span class="${Math.abs(m.saldo) < 1 ? '' : m.saldo > 0 ? 'rc-neg' : 'rc-pos'}">Saldo ${_rE(m.saldo)}</span><span class="rc-prog">progressivo ${_rE(prog)}</span></div></summary>
+      <summary><div class="rc-mese-t"><b>${_rPc(m.mese, m.anno)}</b>${rcStatoChip(m.stato)}${cd ? `<button class="rc-apri" style="margin-left:auto" onclick="event.preventDefault();event.stopPropagation();clickDocumento('${esc(String(cd.id))}', true)">Apri cedolino ›</button>` : ''}</div>
+        <div class="rc-mese-n"><span>Cedolino ${_rE(m.dare)}</span><span>Ricevuto in banca ${_rE(m.avere)}</span>${esito}</div>
+        ${cd && cd.inviato === false ? '<div class="rc-mese-n"><span class="rc-info">cedolino in attesa di invio</span></div>' : ''}
+        <div class="rc-mese-n rc-prog">Da inizio anno: ${Math.abs(prog) < 1 ? 'in pari' : prog > 0 ? 'ricevuto ' + _rE(prog) + ' in più dei cedolini' : 'mancano ' + _rE(-prog)}</div></summary>
       ${quote}${m.saldo > 1 ? `<button class="btn-secondary" style="width:100%;margin:2px 0 8px" onclick="rcCerca('${id}',${m.anno},${m.mese})">🔍 Cerca il bonifico (mancano ${_rE(m.saldo)})</button>` : ''}</details>`;
   }).join('');
   const senza = D.decisioni.filter(d => d.persona === id && d.azione !== 'correzione' && (d.senza_cedolino || d.tipo === 'fuori_periodo' || d.tipo === 'finanziamento_soci' || d.tipo === 'rimborso_spese'));
@@ -32951,6 +32955,24 @@ async function rcPersona(id) {
     + senza.map(d => rcQuotaHtml(d, true)).join('') : '';
   body.innerHTML = hero + ricSez('Mese per mese', c.mesi.length) + righe + fuoriHtml
     + `<button class="btn-secondary ric-cta" onclick="ricQuadro('${id}')">Apri il quadro di prima (cedolini e strumenti)</button>`;
+}
+function rcBonificiDelMese(P, m) {
+  const D = RC.dati, per = {};
+  m.quote.forEach(q => { const k = q.mov; (per[k] = per[k] || []).push(q); });
+  const ids = Object.keys(per);
+  if (!ids.length) return '<div class="rc-q vuota">Nessun bonifico collegato a questo mese</div>';
+  return '<div class="rc-avanz" style="margin-top:8px">Pagato con:</div>' + ids.map(movId => {
+    const qs = per[movId], mv = rcMov(movId), qui = _rr2(qs.reduce((t, q) => t + q.importo, 0));
+    const daConf = qs.some(q => q.azione !== 'conferma' && q.livello !== 'auto');
+    // dove è andato il resto dello stesso bonifico (altri mesi)
+    const altrove = (D.registro || []).concat(D.proposte || []).filter(r => r.mov === movId && !(r.persona === P && r.anno === m.anno && r.mese === m.mese));
+    const p = mv ? ricParse(mv.desc) : {};
+    return `<button class="rc-q" onclick="rcMovimento('${esc(movId)}')">
+      <div class="rc-q-h"><span>Bonifico del ${mv ? _rD(mv.data) + ' · ' + esc(mv.banca || '') : '?'}</span><b>${_rE(mv ? Math.abs(mv.imp) : qui)}</b></div>
+      ${p.causale ? `<div class="rc-q-c">Causale: «${esc(p.causale)}»</div>` : '<div class="rc-q-c rc-parte">Nessuna causale nel testo della banca</div>'}
+      ${altrove.length ? `<div class="rc-q-c rc-parte">${_rE(qui)} su questo mese, il resto su ${altrove.map(r => (r.mese ? rcMeseLow(r.mese, r.anno) : esc(RC_TIPO[r.tipo] || r.tipo)) + ' ' + _rE(r.imp)).join(', ')}</div>` : ''}
+      <div class="rc-q-f">${daConf ? rcChip('warn', 'da confermare') : rcChip('ok', 'collegato')}<span class="rc-q-m">tocca per vedere tutti gli estremi</span></div></button>`;
+  }).join('');
 }
 function rcQuotaHtml(q, conTipo) {
   const D = RC.dati, mv = rcMov(q.mov), dec = D.decisioni.find(d => d.mov === q.mov && (d.importo === q.importo) && d.azione === (q.azione || d.azione));
@@ -32981,8 +33003,17 @@ async function rcMovimento(movId) {
   const riga = (x, imp) => `<div class="rc-coll"><div><b>${x.persona ? esc(rcNome(x.persona)) : x.controparte ? esc(rcNome(x.controparte)) : '—'}</b> · ${esc(RC_TIPO[x.tipo] || x.tipo)}${x.mese ? ' · ' + _rPc(x.mese, x.anno) : ''}</div><b>${_rE(imp)}</b></div>`;
   const motiviHtml = m => (m || []).length ? `<ul class="rc-motivi">${m.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : '';
   let h = mv ? ricMovHtml(rcMovPerRic(mv)) : '';
-  if (reg.length) h += ricSez('Collegato a', reg.length) + reg.map(r => `<div class="rc-card">${riga(r, r.imp)}${motiviHtml(r.motivi)}
-      <div class="rc-azioni"><span class="rc-info">${r.origine === 'auto' ? 'deciso dal motore' : r.origine === 'legacy' ? 'collegato a mano' : 'confermato da te'}</span><button class="btn-secondary" onclick="rcAnnulla([${r.id}])">Annulla collegamento</button></div></div>`).join('');
+  const gruppi = {};
+  reg.forEach(r => { const k = [r.persona || r.controparte, r.tipo, r.anno, r.mese].join('|'); (gruppi[k] = gruppi[k] || []).push(r); });
+  const gl = Object.values(gruppi);
+  if (reg.length) h += ricSez('Questo bonifico paga', gl.length) + gl.map(g => {
+    const r = g[0], tot = _rr2(g.reduce((t, x) => t + x.imp, 0));
+    const st = rcStip(r.tipo) && r.persona && r.mese ? rcMeseSenza(r.persona, r.anno, r.mese, movId) : null;
+    const eff = st ? rcEffetto(st, tot) : '';
+    return `<div class="rc-card">${riga(r, tot)}
+      ${st && st.dare != null ? `<ul class="rc-motivi"><li>Cedolino ${_rE(st.dare)}${st.pagamenti.length ? ', altri bonifici ' + _rE(st.avere) : ''}</li><li>${eff.charAt(0).toUpperCase() + eff.slice(1)}</li></ul>` : ''}
+      <div class="rc-azioni"><span class="rc-info">${g.every(x => x.origine === 'auto') ? 'deciso dal motore' : g.some(x => x.origine === 'legacy') ? 'collegato a mano' : 'confermato da te'}</span><button class="btn-secondary" onclick="rcAnnulla([${g.map(x => x.id).join(',')}])">Annulla</button></div></div>`;
+  }).join('');
   if (prop.length) h += ricSez('Proposta da confermare', prop.length) + prop.map(r => `<div class="rc-card warn">${riga(r, r.imp)}${motiviHtml(r.motivi)}
       ${r.sostituisce ? '<div class="rc-info">È una correzione: sostituisce un collegamento fatto prima.</div>' : ''}
       <div class="rc-azioni"><button class="btn-secondary" onclick="rcDecidi([${r.id}],'rifiuta')">Non è così</button><button class="btn-primary" onclick="rcDecidi([${r.id}],'conferma')">Conferma</button></div></div>`).join('');
