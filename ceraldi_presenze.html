@@ -32721,6 +32721,8 @@ setInterval(() => {
 .rc-conferma{position:sticky;bottom:0;padding:10px 0 4px;background:var(--surface)}
 .rc-conferma button:disabled{opacity:.45}
 .rc-gia{font-size:12.5px;background:var(--surface2);border-radius:12px;padding:9px 11px;margin-top:12px}
+.rc-mini.off{background:var(--surface2);color:var(--muted)}
+.rc-parte{font-size:11.5px;color:var(--muted)}
 .rc-gia div{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:4px}
 </style>
 <script>
@@ -32842,11 +32844,46 @@ function rcDisegna() {
   else if (nAuto) cta = `<button class="btn-primary ric-cta" onclick="rcInizia()">Salva i ${nAuto} collegamenti sicuri del motore</button>
       <div class="rc-piede">Sono bonifici con nome e importo certi. Si possono annullare uno per uno.</div>`;
   const link = (t, on) => `<a href="#" onclick="event.preventDefault();${on}">${t}</a>`;
+  const vista = RC.vista === 'banca' ? 'banca' : 'persone';
   body.innerHTML = hero + rcBancaHtml(D) + cta
-    + ricSez('Situazione per persona', Object.keys(D.conti).length, '<small>tocca un nome per vedere cedolini e bonifici mese per mese</small>')
-    + rcVistaPersone()
+    + `<div class="rc-tabs"><button class="${vista === 'persone' ? 'on' : ''}" onclick="RC.vista='persone';rcDisegna()">Per persona</button><button class="${vista === 'banca' ? 'on' : ''}" onclick="RC.vista='banca';rcDisegna()">Bonifici in uscita</button></div>`
+    + (vista === 'banca' ? rcVistaBanca()
+      : `<div class="rc-avanz">Tocca un nome per vedere cedolini e bonifici mese per mese.</div>` + rcVistaPersone())
     + `<div class="rc-piede">${[link('Altre voci (soci, ex dipendenti, contanti)', "rcVai('altre')"), link('Avvisi' + (nAnom ? ' (' + nAnom + ')' : ''), "rcVai('anomalie')"), link('Report Excel', 'rcExcel()'), link('Storico di prima', 'apriStoricoRiconciliazioni()')].join(' · ')}</div>
        <div class="rc-piede">Calcolato il ${new Date(RC.quando).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · ${link('ricalcola', 'rcRicarica()')}</div>`;
+}
+/* ── Bonifici in uscita: l'estratto conto degli stipendi, mese per mese ── */
+function rcVistaBanca() {
+  const D = RC.dati, f = RC.filtroB || 'tutti';
+  const dubbi = new Set(rcDubbi(D)); D._nuoveProposte.forEach(d => dubbi.add(d.mov));
+  const reg = {}; (D.registro || []).forEach(r => { if (r.tipo !== 'commissione') (reg[r.mov] = reg[r.mov] || []).push(r); });
+  const auto = {}; D._nuoviAuto.forEach(d => (auto[d.mov] = auto[d.mov] || []).push({ ...d, imp: d.importo }));
+  const stato = m => dubbi.has(m.id) ? 'decidere' : reg[m.id] ? 'collegato' : 'auto';
+  const tutti = Object.values(D.movimenti).filter(m => m.imp < 0 && m.data >= D.dal && (reg[m.id] || dubbi.has(m.id) || auto[m.id]))
+    .sort((a, b) => String(b.data).localeCompare(String(a.data)));
+  const conta = { tutti: tutti.length, decidere: tutti.filter(m => stato(m) === 'decidere').length };
+  conta.collegati = tutti.length - conta.decidere;
+  const lista = tutti.filter(m => f === 'tutti' || (f === 'decidere' ? stato(m) === 'decidere' : stato(m) !== 'decidere'));
+  const chip = (k, t) => `<button class="rc-mini${f === k ? '' : ' off'}" style="margin:0" onclick="RC.filtroB='${k}';rcDisegna()">${t} ${conta[k]}</button>`;
+  let h = `<div class="rc-avanz">Tutti i bonifici in uscita legati agli stipendi, come nell'estratto conto. Tocca un bonifico per vederlo intero e cambiare a cosa serve.</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 4px">${chip('tutti', 'Tutti')}${chip('decidere', 'Da decidere')}${chip('collegati', 'Collegati')}</div>`;
+  const perMese = {};
+  lista.forEach(m => (perMese[m.data.slice(0, 7)] = perMese[m.data.slice(0, 7)] || []).push(m));
+  Object.keys(perMese).sort().reverse().forEach(k => {
+    const ms = perMese[k], tot = ms.reduce((t, m) => t + Math.abs(m.imp), 0);
+    h += ricSez(_rPc(+k.slice(5, 7), +k.slice(0, 4)) + ' · pagati ' + _rE(tot), ms.length);
+    h += ms.map(m => {
+      const st = stato(m), quote = reg[m.id] || auto[m.id] || [];
+      const dove = st === 'decidere' ? rcChip('warn', 'da decidere')
+        : quote.map(q => `<div class="rc-q-c">→ <b>${esc(rcNome(q.persona || q.controparte))}</b> · ${rcStip(q.tipo) && q.mese ? 'stipendio di ' + rcMeseLow(q.mese, q.anno) : esc((RC_TIPO[q.tipo] || q.tipo).toLowerCase())}${quote.length > 1 ? ' · ' + _rE(q.imp) : ''}</div>`).join('')
+          + (st === 'auto' ? rcChip('ok', 'sicuro, si salva con Inizia') : '');
+      return `<button class="rc-q" onclick="rcMovimento('${esc(m.id)}')">
+        <div class="rc-q-h"><span>${_rD(m.data)} · ${esc(m.banca || '')}</span><b>${_rE(Math.abs(m.imp))}</b></div>
+        <div class="rc-q-c">${esc(m.benef || (m.desc || '').slice(0, 70))}${m.causale && m.causale !== m.benef ? ' — ' + esc(m.causale) : ''}</div>
+        <div class="rc-q-f" style="display:block">${dove}</div></button>`;
+    }).join('');
+  });
+  return h + (lista.length ? '' : ricIntro('Nessun bonifico in questo filtro.', 'info'));
 }
 // le viste secondarie si aprono sopra, la schermata principale resta semplice
 function rcVai(v) {
@@ -32924,6 +32961,7 @@ function rcQuotaHtml(q, conTipo) {
   return `<button class="rc-q" onclick="rcMovimento('${esc(q.mov)}')">
     <div class="rc-q-h"><span>${banca}${conTipo ? ' · ' + esc(RC_TIPO[q.tipo] || q.tipo) : ''}</span><b>${_rE(q.importo)}</b></div>
     <div class="rc-q-c">${chi}${mv && mv.causale && mv.causale !== mv.benef ? ' — ' + esc(mv.causale) : ''}</div>
+    ${mv && Math.abs(Math.abs(mv.imp) - q.importo) > 0.01 ? `<div class="rc-q-c rc-parte">Parte di un bonifico di <b>${_rE(Math.abs(mv.imp))}</b> del ${_rD(mv.data)}${mv.rif ? ' · rif. ' + esc(mv.rif) : ''} — tocca per vederlo intero</div>` : mv && mv.rif ? `<div class="rc-q-c rc-parte">Rif. ${esc(mv.rif)}</div>` : ''}
     <div class="rc-q-f">${rcChip(liv[0], liv[1])}${motivi.length ? `<span class="rc-q-m">${esc(motivi.slice(1).join(' · ') || motivi[0])}</span>` : ''}</div></button>`;
 }
 
@@ -32931,8 +32969,7 @@ function rcQuotaHtml(q, conTipo) {
 async function rcMovimento(movId) {
   // se su questo bonifico serve una tua scelta, si apre direttamente la domanda (con cedolini e banca davanti)
   if (rcDubbi(RC.dati).includes(movId) || rcNuovoDubbio(movId)) {
-    if (!(await rcPrepDecisioni())) return;
-    if (rcDubbi(RC.dati).includes(movId)) return rcDecisione(movId);
+    if ((await rcPrepDecisioni()) && rcDubbi(RC.dati).includes(movId)) return rcDecisione(movId);
   }
   const D = RC.dati, mv = rcMov(movId);
   const body = _sheetDinamico('sh-rc-m', 'Movimento');
@@ -32949,6 +32986,7 @@ async function rcMovimento(movId) {
       ${r.sostituisce ? '<div class="rc-info">È una correzione: sostituisce un collegamento fatto prima.</div>' : ''}
       <div class="rc-azioni"><button class="btn-secondary" onclick="rcDecidi([${r.id}],'rifiuta')">Non è così</button><button class="btn-primary" onclick="rcDecidi([${r.id}],'conferma')">Conferma</button></div></div>`).join('');
   else if (dec.length) h += ricSez('Cosa farebbe il motore', dec.length) + dec.map(d => `<div class="rc-card ${d.livello === 'auto' ? '' : 'warn'}">${riga(d, d.importo)}${motiviHtml(d.motivi)}<div class="rc-info">Affidabilità ${d.affidabilita}/100 · ${d.livello === 'auto' ? 'si applica da solo con «Applica»' : 'diventa una proposta con «Applica»'}</div></div>`).join('');
+  if (reg.length) h += `<button class="btn-primary ric-cta" onclick="closeSheet('sh-rc-m');rcDecisione('${esc(movId)}', true)">Cambia a cosa serve questo bonifico</button>`;
   if (!reg.length && !prop.length) h += `<div class="rc-azioni"><button class="btn-secondary" onclick="rcNonStipendio('${esc(movId)}')">Non è uno stipendio</button><button class="btn-primary" onclick="rcCollegaManuale('${esc(movId)}')">Collega a mano</button></div>`;
   body.innerHTML = h;
 }
@@ -33128,7 +33166,7 @@ async function rcPrepDecisioni() {
 }
 
 async function rcInizia() {
-  RC.saltati = new Set();
+  RC.saltati = new Set(); RC.singola = false;
   if (!(await rcPrepDecisioni())) return;
   rcProssimo();
 }
@@ -33242,10 +33280,11 @@ function rcEffettiOpz(o, movId) {
   }).join('');
 }
 
-function rcDecisione(movId) {
+function rcDecisione(movId, singola) {
+  RC.singola = !!singola;
   const D = RC.dati, mv = rcMov(movId);
   if (!mv) { toast('Bonifico non più presente in banca'); return; }
-  const tutti = rcDubbi(D).filter(m => !(RC.saltati && RC.saltati.has(m)) || m === movId);
+  const tutti = singola ? [] : rcDubbi(D).filter(m => !(RC.saltati && RC.saltati.has(m)) || m === movId);
   const body = _sheetDinamico('sh-rc-d', 'Questo bonifico a cosa serve?');
   openSheet('sh-rc-d');
   RC.decMov = movId; RC.scelta = null;
@@ -33279,7 +33318,7 @@ function rcDecisione(movId) {
   h += `<div class="rc-alt">
       <button onclick="rcCollegaManuale('${esc(movId)}')">Un'altra soluzione (altro mese, altra persona, importo diviso a mano) ›</button>
       <button onclick="rcNonStipendio('${esc(movId)}')">Non è uno stipendio ›</button>
-      <button class="grigio" onclick="rcSalta()">Non lo so ora, decido dopo ›</button></div>
+      <button class="grigio" onclick="${singola ? "closeSheet('sh-rc-d')" : 'rcSalta()'}">${singola ? 'Annulla, lascia com\'è' : 'Non lo so ora, decido dopo'} ›</button></div>
     <div class="rc-conferma"><button class="btn-primary" id="rc-ok" disabled onclick="rcConfermaScelta()">${opz.length ? 'Scegli una delle risposte sopra' : 'Usa una delle soluzioni sopra'}</button></div>`;
   body.innerHTML = h;
   const sugg = opz.findIndex(o => o.tag === 'sugg');
@@ -33319,8 +33358,8 @@ async function rcConfermaScelta() {
   try {
     await rcEsegui(movId, o);
     toast(o.azione.kind === 'lascia' ? 'Lasciato com\'era' : 'Collegato');
-    await rcCarica(true);
-    rcProssimo();
+    if (RC.singola) { closeSheet('sh-rc-d'); await rcDopoScelta(); }
+    else { await rcCarica(true); rcProssimo(); }
   } catch (e) {
     toast('Non riuscito: ' + e.message);
     try { await rcCarica(true); } catch (_) {}
@@ -33371,7 +33410,8 @@ async function rcNonStipendio(movId) {
 }
 // dopo una scelta fatta fuori dalla domanda: se si stava decidendo, si passa al prossimo bonifico
 async function rcDopoScelta() {
-  const inDecisione = $('sh-rc-d') && $('sh-rc-d').classList.contains('on');
+  const inDecisione = $('sh-rc-d') && $('sh-rc-d').classList.contains('on') && !RC.singola;
+  if (RC.singola) closeSheet('sh-rc-d');
   await rcCarica(true);
   if (inDecisione) rcProssimo();
   else { if ($('sh-rc') && $('sh-rc').classList.contains('on')) rcDisegna(); if (RC.personaAperta && $('sh-rc-p') && $('sh-rc-p').classList.contains('on') && RC.dati.conti[RC.personaAperta]) rcPersona(RC.personaAperta); }
@@ -33437,7 +33477,7 @@ async function rcCollegaSalva(movId) {
   toast('Collegato');
   closeSheet('sh-rc-c'); closeSheet('sh-rc-m');
   const inDecisione = $('sh-rc-d') && $('sh-rc-d').classList.contains('on');
-  if (inDecisione) rcProssimo(); else await rcDopoScelta();
+  if (inDecisione && !RC.singola) rcProssimo(); else { closeSheet('sh-rc-d'); await rcDopoScelta(); }
 }
 
 /* ── Report Excel Dare/Avere ───────────────────────────────────────── */
