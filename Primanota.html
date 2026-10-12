@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.23.2</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.24.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -25451,7 +25451,10 @@ function _anCreditiNC(F, entrate){
       // c'è modo di verificarlo: lo chiediamo a te.
       if(_anPagBanca(f)) return;
       var key = 'ncok|'+note.map(function(x){ return x.nc.id; }).sort().join(',');
-      if(!_anIgnorataChiave(key)){ riga.chiaveOk = key; daVerificare.push(riga); }
+      // già decise «al netto» o «credito ricevuto»: a posto (si cambia dalla scheda della fattura)
+      var esiti = note.map(function(x){ return typeof ncEsitoUso === 'function' ? ncEsitoUso(x.nc, f.id) : 'da_decidere'; });
+      if(esiti.every(function(e){ return e === 'netto' || e === 'ricevuto'; })) return;
+      if(!_anIgnorataChiave(key)){ riga.chiaveOk = key; riga.esiti = esiti; daVerificare.push(riga); }
       return;
     }
     var atteso = _anR2(lordo - ncTot);
@@ -25471,6 +25474,8 @@ function _anCreditiNC(F, entrate){
       entrateUsate[e.id] = 1; rientrato += Number(e.importo); rimborsi.push(e);
     });
     if(rientrato >= credito - 0.5) return;
+    // credito segnato come ricevuto a mano (contanti, carta, scalato…) o pagata al netto
+    if(typeof ncEsitoUso === 'function' && note.every(function(x){ var e = ncEsitoUso(x.nc, f.id); return e === 'ricevuto' || e === 'netto'; })) return;
     // scalato da un pagamento successivo allo stesso fornitore?
     var scalato = Object.keys(fattPerMov).some(function(mid){
       var mv = idx[mid]; if(!mv || !mv.data || String(mv.data) < d0 || String(mv.data) > d1) return false;
@@ -25494,13 +25499,14 @@ function _anCreditiNC(F, entrate){
         (rientrato > 0 ? 'Ne sono rientrati solo '+fmt(rientrato)+'. ' : 'Quei soldi non risultano rientrati: nessun bonifico in entrata dal fornitore e nessun pagamento successivo più basso di quella cifra. ')+
         'Chiedi a '+f.fornitore+' il rimborso, oppure di scalarlo dalla prossima fattura.',
       fatture:[f].concat(note.map(function(x){ return x.nc; })), movimenti:rimborsi, rischio:daAvere,
+      ncScelte: note.map(function(x){ return {nc:x.nc, fid:f.id}; }),
       etichettaOk:'✓ Il credito l\'ho già avuto'});
   });
   if(daVerificare.length){
     var totV = daVerificare.reduce(function(s, r){ return s + r.ncTot; }, 0);
     out.push({chiave:'ncverifica|'+daVerificare.map(function(r){ return r.chiaveOk; }).sort().join(';'), tipo:'nc_da_verificare', gravita:'media',
       titolo: daVerificare.length+' not'+(daVerificare.length===1?'a':'e')+' di credito su fatture pagate in contanti o con carta · '+fmt(totV),
-      testo:'Queste fatture risultano già pagate, poi è arrivata una nota di credito. Il pagamento non passa dall\'estratto conto, quindi l\'app non può sapere se il credito ti è tornato. Per ognuna: se il fornitore te l\'ha restituito o scalato, tocca «Credito ricevuto»; altrimenti è un credito da chiedere.',
+      testo:'Queste fatture risultano già pagate, poi è arrivata una nota di credito. Il pagamento non passa dall\'estratto conto, quindi l\'app non sa com\'è andata. Per ognuna scegli: hai pagato solo la differenza, il credito ti è già tornato, oppure devi ancora riceverlo. Puoi sempre cambiare la scelta.',
       fatture:[], movimenti:[], rischio:0, ncVerifica:daVerificare, etichettaOk:'✓ Li ho già avuti tutti'});
   }
   return out;
@@ -25538,8 +25544,9 @@ function _anHtmlNcVerifica(a, ignorata){
   return '<div class="an-rows">'+a.ncVerifica.map(function(r){
     var f = r.f;
     return '<div class="psb-riga">'+_anRigaFattura(f)+r.note.map(function(x){ return _anRigaFattura(x.nc); }).join('')+
-      '<div class="psb-info">Pagata: <b>'+esc(f.pagamento||'—')+'</b> · credito della nota: <b>'+fmt(r.ncTot)+'</b></div>'+
-      (ignorata ? '' : '<div class="psb-btns"><button class="an-ign" data-k="'+esc(r.chiaveOk)+'" onclick="_anIgnora(this.dataset.k,true)">✓ Credito ricevuto</button></div>')+
+      '<div class="psb-info">Pagata: <b>'+esc(f.pagamento||'—')+'</b> · credito della nota: <b>'+fmt(r.ncTot)+'</b>'+((r.esiti||[]).indexOf('da_ricevere')>=0 ? ' · <b style="color:var(--pn-warn)">da ricevere: chiedilo al fornitore</b>' : '')+'</div>'+
+      (ignorata ? '<div class="psb-btns"><button class="an-fix" data-k="'+esc(r.chiaveOk)+'" onclick="_anIgnora(this.dataset.k,false)">↺ Rimetti da controllare</button></div>' : '<div class="psb-btns">'+r.note.map(function(x){ var e = (typeof ncEsitoUso === 'function') ? ncEsitoUso(x.nc, f.id) : ''; var j = pnIdJs(x.nc.id)+','+pnIdJs(f.id);
+        return '<button class="an-fix" onclick="ncScegliEsito('+j+')">'+(e === 'da_ricevere' ? 'Credito arrivato? Cambia ›' : 'Com\'è andata? Scegli ›')+'</button>'; }).join('')+'</div>')+
     '</div>';
   }).join('')+'</div>';
 }
@@ -25867,6 +25874,8 @@ function _anHtmlVoce(a, ignorata){
       (a.pag
         ? _anHtmlPagamento(a, ignorata)
         : '<div class="an-rows">'+a.fatture.map(_anRigaFattura).join('')+(a.movimenti||[]).map(function(m){ return _anRigaMovimento(m, a, ignorata); }).join('')+'</div>'))+
+    (a.ncScelte && a.ncScelte.length && !ignorata && typeof ncScegliEsito === 'function' ? '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">'+a.ncScelte.map(function(x){
+      return '<button class="an-fix" onclick="ncScegliEsito('+pnIdJs(x.nc.id)+','+pnIdJs(x.fid)+')">NC N° '+esc(x.nc.numero||'—')+': com\'è andata? Scegli ›</button>'; }).join('')+'</div>' : '')+
     (a.bonifica && !ignorata ? '<button class="an-fix" style="margin-top:10px;width:100%;padding:11px" onclick="_anConRitorno(_bfApri)">Apri la sistemazione guidata</button>' : '')+
     (a.riallinea && !ignorata ? '<button class="an-fix" style="margin-top:10px;width:100%;padding:11px" onclick="_anRiallineaRiferimenti()">Segna come usat'+(a.riallinea===1?'o':'i')+'</button>' : '')+
     (a.sparito && !ignorata ? '<button class="an-fix" style="margin-top:10px;width:100%;padding:11px" data-f="'+esc(a.sparito.fid)+'" data-m="'+esc(a.sparito.mid)+'" onclick="_anTogliCollegamentoSparito(this.dataset.f,this.dataset.m)">Togli il vecchio collegamento</button>' : '')+
@@ -32439,7 +32448,7 @@ function pnQuando(g){ return g === 0 ? 'oggi' : g === 1 ? 'domani' : g === -1 ? 
 function pnMetodo(m){ return ({ contanti: 'Contanti', bonifico: 'Bonifico', assegno: 'Assegno', carta: 'Carta', sdd: 'Addebito SDD', rid: 'Addebito SDD' })[m] || (m ? m.charAt(0).toUpperCase() + m.slice(1) : ''); }
 function pnTipo(f){ return ({ nota_credito: 'Nota di credito', ddt: 'DDT', nota_debito: 'Nota di debito', autofattura: 'Autofattura', fattura_differita: 'Fattura differita' })[f.tipo] || 'Fattura'; }
 function pnNoteLibere(f){
-  return String(f.note || '').replace(/\[NC→[^\]]*\]\s*/g, '').replace(/\[NC-P(:\d+)?\]\s*/g, '').replace(/\[NC-NO-AUTO\]\s*/g, '').replace(/\[RIF-NC:[^\]]*\]\s*/g, '')
+  return String(f.note || '').replace(/\[NC→[^\]]*\]\s*/g, '').replace(/\[NC-P(:\d+)?\]\s*/g, '').replace(/\[NC-(RIC|DR):[^\]]*\]\s*/g, '').replace(/\[NC-NO-AUTO\]\s*/g, '').replace(/\[RIF-NC:[^\]]*\]\s*/g, '')
     .replace(/(\s·\s)?Nota di credito N°[^·]*? applicata: -€\s?[\d.,]+/g, '').replace(/^\s*·\s*|\s*·\s*$/g, '').trim();
 }
 function pnF(id){ return (fatture || []).find(function(x){ return String(x.id) === String(id); }) || null; }
@@ -32496,13 +32505,13 @@ async function _ncTogliUso(nc, f){
   if(!u) return;
   if(f){
     var lordo = Math.abs(f.importo || 0);
-    if(u.pagata){ f.parzPagato = scR2((f.parzPagato || 0) + u.imp); f.stato = (f.parzPagato >= lordo - 0.01) ? 'pagata' : 'parziale'; }
+    if(u.pagata){ f.parzPagato = scR2(Math.min(lordo, (f.parzPagato || 0) + u.imp)); f.stato = (f.parzPagato >= lordo - 0.01) ? 'pagata' : 'parziale'; }
     else { f.parzPagato = Math.max(0, scR2((f.parzPagato || 0) - u.imp)); f.stato = f.parzPagato > 0.01 ? 'parziale' : 'da_pagare'; }
     var num = String(nc.numero || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     f.note = String(f.note || '').replace(new RegExp('(\\s·\\s)?Nota di credito N°' + num + ' applicata: -€\\s?[\\d.,]+'), '').replace(/^\s*·\s*/, '').trim();
   }
   var fid = String(u.fid);
-  nc.note = String(nc.note || '').replace(new RegExp('\\[NC→' + fid + '·[\\d.]+·[^\\]]*\\]\\s*'), '').replace(new RegExp('\\[NC-P:' + fid + '\\]\\s*', 'g'), '').trim();
+  nc.note = String(nc.note || '').replace(new RegExp('\\[NC→' + fid + '·[\\d.]+·[^\\]]*\\]\\s*'), '').replace(new RegExp('\\[NC-P:' + fid + '\\]\\s*', 'g'), '').replace(new RegExp('\\[NC-(RIC|DR):' + fid + '[^\\]]*\\]\\s*', 'g'), '').trim();
   if(!scNcUsi(nc).length) nc.note = nc.note.replace(/\[NC-P\]\s*/g, '').trim();
   if(f) await dbUpdate(f);
 }
@@ -32521,6 +32530,109 @@ async function _sganciaNC(ncId, fid){
   renderLista(); if(typeof aggiornaHeroCard === 'function') aggiornaHeroCard();
   toast(usi.length === 1 ? '↩️ Nota di credito tolta da quella fattura' : '↩️ Nota di credito sganciata');
 }
+
+/* ══ NOTA DI CREDITO SU FATTURA GIÀ PAGATA: com'è andata? (12/10/2026) ══
+   Richiesta di Valerio: quando una nota di credito va su una fattura già
+   pagata, chiedere sempre quale dei casi è, con fattura e nota (anche XML)
+   davanti, e poter sempre cambiare la scelta:
+   • «netto»       → ho pagato solo la differenza (es. 100 − 50 = 50): la nota è
+                     scalata dal pagamento, nessun credito da riavere
+   • «ricevuto»    → ho pagato tutto e il credito mi è già tornato (contanti,
+                     bonifico, carta, scalato da un'altra fattura)
+   • «da_ricevere» → ho pagato tutto e il credito devo ancora riceverlo
+   Marcatori nelle note della nota di credito (come gli altri [NC…]):
+   [NC-P:fid] pagata prima della nota · [NC-RIC:fid·metodo·data·importo] credito
+   ricevuto fuori dall'estratto · [NC-DR:fid] confermato «da ricevere». */
+var SC_RE_RIC = /\[NC-RIC:(\d+)·([a-z_]+)·(\d{4}-\d{2}-\d{2})·([\d.]+)\]/g;
+var NC_METODI_RIC = { contanti: 'in contanti', bonifico: 'con bonifico', carta: 'sulla carta', scalato: 'scalato da un\'altra fattura', altro: 'in altro modo' };
+function ncRicevuti(nc, fid){
+  var out = [], m, s = String((nc && nc.note) || '');
+  SC_RE_RIC.lastIndex = 0;
+  while((m = SC_RE_RIC.exec(s))){ if(fid == null || m[1] === String(fid)) out.push({ fid: m[1], metodo: m[2], data: m[3], importo: scR2(parseFloat(m[4]) || 0) }); }
+  return out;
+}
+function ncEsitoUso(nc, fid){
+  var u = scNcUsi(nc).find(function(x){ return String(x.fid) === String(fid); });
+  if(!u) return null;
+  if(!u.pagata) return 'netto';
+  if(ncRicevuti(nc, fid).length) return 'ricevuto';
+  return String(nc.note || '').indexOf('[NC-DR:' + fid + ']') >= 0 ? 'da_ricevere' : 'da_decidere';
+}
+function ncEsitoTesto(nc, fid){
+  var e = ncEsitoUso(nc, fid), r = ncRicevuti(nc, fid)[0];
+  return e === 'netto' ? 'pagata al netto della nota' : e === 'ricevuto' ? 'credito già ricevuto' + (r ? ' ' + (NC_METODI_RIC[r.metodo] || '') + ' il ' + pnGg(r.data) : '')
+    : e === 'da_ricevere' ? 'credito ancora da ricevere' : 'da decidere';
+}
+async function ncImpostaEsito(ncId, fid, esito, metodo, data){
+  var nc = pnF(ncId), f = pnF(fid);
+  if(!nc || !f) throw new Error('documento non trovato');
+  var u = scNcUsi(nc).find(function(x){ return String(x.fid) === String(f.id); });
+  if(!u) throw new Error('la nota non è collegata a questa fattura');
+  var lordo = Math.abs(f.importo || 0), id = String(f.id);
+  var pulisci = function(s){ return String(s || '').replace(new RegExp('\\[NC-P:' + id + '\\]\\s*', 'g'), '').replace(new RegExp('\\[NC-RIC:' + id + '·[^\\]]*\\]\\s*', 'g'), '').replace(new RegExp('\\[NC-DR:' + id + '\\]\\s*', 'g'), '').trim(); };
+  // il vecchio [NC-P] senza id valeva per tutti gli usi: lo si trasforma in quelli con id
+  if(/\[NC-P\]/.test(nc.note || '')){ var tutti = scNcUsi(nc).map(function(x){ return x.fid; }); nc.note = String(nc.note).replace(/\[NC-P\]\s*/g, '').trim() + tutti.map(function(x){ return ' [NC-P:' + x + ']'; }).join(''); }
+  var eraPagata = u.pagata;
+  nc.note = pulisci(nc.note);
+  // base comune: quanto risulta coperto come se la nota scalasse il dovuto
+  var base = eraPagata ? scR2(Math.min(lordo, (f.parzPagato || 0) + u.imp)) : scR2(f.parzPagato || 0);
+  var statoDa = function(v){ return v >= lordo - 0.01 ? 'pagata' : (v > 0.01 ? 'parziale' : 'da_pagare'); };
+  if(esito === 'netto'){
+    // pagato solo la differenza: la nota scala il dovuto, la fattura resta pagata
+    f.parzPagato = base; f.stato = statoDa(base);
+  } else {
+    // pagato tutto: la nota è un credito a parte. Ricevuto → la fattura è chiusa;
+    // da ricevere → resta «parziale» per la cifra da riavere (come prima)
+    f.parzPagato = esito === 'ricevuto' ? base : scR2(Math.max(0, base - u.imp));
+    f.stato = esito === 'ricevuto' ? statoDa(base) : (f.parzPagato >= lordo - 0.01 ? 'pagata' : 'parziale');
+    nc.note = (nc.note + ' [NC-P:' + id + ']' + (esito === 'ricevuto' ? ' [NC-RIC:' + id + '·' + (metodo || 'altro') + '·' + (data || pnOggi()) + '·' + u.imp.toFixed(2) + ']' : '') + (esito === 'da_ricevere' ? ' [NC-DR:' + id + ']' : '')).trim();
+  }
+  await dbUpdate(f); await dbUpdate(nc);
+  try{ if(typeof ricInvalida === 'function') ricInvalida(); }catch(e){}
+}
+function ncScegliEsito(ncId, fid){
+  var nc = pnF(ncId), f = pnF(fid);
+  if(!nc || !f){ toast('Documento non trovato'); return; }
+  var u = scNcUsi(nc).find(function(x){ return String(x.fid) === String(f.id); });
+  if(!u){ toast('La nota non è collegata a questa fattura'); return; }
+  var lordo = Math.abs(f.importo || 0), att = ncEsitoUso(nc, fid), r = ncRicevuti(nc, fid)[0] || {};
+  var mo = pnFoglio('pnNcEsito', { titolo: 'Nota di credito su fattura pagata', sotto: esc(f.fornitore || '') + ' · nota di ' + fmt(u.imp), z: 320 });
+  var opt = function(k, t, s){ return '<label class="pp-v"><input type="radio" name="ncEs" value="' + k + '"' + (att === k ? ' checked' : '') + ' onchange="ncEsitoCambia()"><span><b>' + t + '</b><small>' + s + '</small></span>' + (att === k ? '<em style="font-size:11px;color:var(--blue)">scelta attuale</em>' : '') + '</label>'; };
+  mo.querySelector('.pn-sh-bd').innerHTML =
+    '<div class="an-sceltatit">Fattura</div><div class="an-rows">' + _anRigaFattura(f) + '</div>' +
+    '<div class="an-sceltatit">Nota di credito</div><div class="an-rows">' + _anRigaFattura(nc) + '</div>' +
+    '<div class="gr-s" style="margin:12px 2px">La fattura di ' + fmt(lordo) + ' risulta pagata. La nota di credito di ' + fmt(u.imp) + ' è collegata a questa fattura: com\'è andata?</div>' +
+    '<div class="pp-voci">' +
+      opt('netto', 'Ho pagato solo la differenza', fmt(lordo) + ' − ' + fmt(u.imp) + ' = ' + fmt(Math.max(0, lordo - u.imp)) + ' pagati: nessun credito da riavere') +
+      opt('ricevuto', 'Ho pagato tutto e il credito mi è già tornato', 'Il fornitore mi ha restituito ' + fmt(u.imp) + ' (contanti, bonifico, carta) o l\'ha scalato da un\'altra fattura') +
+      opt('da_ricevere', 'Ho pagato tutto, il credito devo ancora riceverlo', fmt(u.imp) + ' da chiedere al fornitore: resta tra le anomalie finché non arriva') +
+    '</div>' +
+    '<div id="ncEsRic" style="display:' + (att === 'ricevuto' ? 'block' : 'none') + ';margin-top:10px" class="imp-group">' +
+      '<div style="padding:12px 14px"><label style="display:block;font-size:12.5px;color:var(--ink3)">Come ti è tornato<select id="ncEsMet" style="display:block;width:100%;margin-top:4px">' +
+        Object.keys(NC_METODI_RIC).map(function(k){ return '<option value="' + k + '"' + (r.metodo === k ? ' selected' : '') + '>' + ({ contanti: 'Contanti', bonifico: 'Bonifico', carta: 'Carta', scalato: 'Scalato da un\'altra fattura', altro: 'Altro' })[k] + '</option>'; }).join('') +
+      '</select></label><label style="display:block;font-size:12.5px;color:var(--ink3);margin-top:10px">Quando<input type="date" id="ncEsData" value="' + esc(r.data || pnOggi()) + '" style="display:block;width:100%;margin-top:4px"></label>' +
+      '<div style="font-size:11.5px;color:var(--ink3);margin-top:8px;line-height:1.4">Se è arrivato con un bonifico sul conto, puoi anche collegare il movimento dalla Riconciliazione: le due cose non si sommano.</div></div></div>' +
+    '<button class="btn btn-p" style="width:100%;margin-top:14px;padding:13px" data-nc="' + esc(String(nc.id)) + '" data-f="' + esc(String(f.id)) + '" onclick="ncEsitoSalva(this)">Salva la scelta</button>' +
+    '<div style="font-size:11.5px;color:var(--ink3);margin-top:8px;text-align:center">Puoi cambiarla quando vuoi dalla scheda della fattura o da Controllo anomalie.</div>';
+}
+function ncEsitoCambia(){ var v = (document.querySelector('input[name=ncEs]:checked') || {}).value; var b = document.getElementById('ncEsRic'); if(b) b.style.display = v === 'ricevuto' ? 'block' : 'none'; }
+async function ncEsitoSalva(btn){
+  var v = (document.querySelector('input[name=ncEs]:checked') || {}).value;
+  if(!v){ toast('Scegli una delle tre risposte'); return; }
+  btn.disabled = true; btn.textContent = 'Salvo…';
+  try{
+    await ncImpostaEsito(btn.dataset.nc, btn.dataset.f, v, (document.getElementById('ncEsMet') || {}).value, (document.getElementById('ncEsData') || {}).value);
+    pnChiudi('pnNcEsito');
+    toast({ netto: '✓ Segnata pagata al netto della nota', ricevuto: '✓ Credito segnato come ricevuto', da_ricevere: '✓ Credito da ricevere: lo trovi tra le anomalie' }[v], { forza: true });
+    renderLista(); if(typeof aggiornaHeroCard === 'function') aggiornaHeroCard();
+    if(PNA.sch && typeof apriScheda === 'function'){ try{ apriScheda(PNA.sch); }catch(e){} }
+    if(document.getElementById('anOverlay') && typeof _anAggiornaHome === 'function'){ await _anAggiornaHome(false); _anRenderFoglio(); }
+    if(NC_CODA.length) setTimeout(ncCodaProssima, 400);
+  }catch(e){ toast('⚠️ Non salvato: ' + (e.message || e)); btn.disabled = false; btn.textContent = 'Salva la scelta'; }
+}
+// dopo aver collegato a mano una nota a più fatture pagate: una domanda alla volta
+var NC_CODA = [];
+function ncCodaProssima(){ var x = NC_CODA.shift(); if(x) ncScegliEsito(x.nc, x.f); }
 
 /* ══ PAGAMENTI REGISTRATI A MANO (es. la rata pagata con un assegno) ══
    Restano in f.pagamentiManuali finché la banca non mostra il movimento.
@@ -32627,6 +32739,7 @@ function pnRiconciliazioneHtml(f, C, pag){
   var h = '<div class="rc-flow"><div class="rc-box doc"><div class="rc-box-h"><div class="rc-ico doc">' + PN_ICO.doc + '</div><div class="rc-box-t"><div class="rc-lbl">' + esc(pnTipo(f)) + '</div><b>n° ' + esc(f.numero || '—') + ' · ' + pnGg(f.data) + '</b></div><div class="rc-imp">' + fmt(C.lordo) + '<small>totale documento</small></div></div></div>';
   C.nc.forEach(function(x){
     h += '<div class="rc-link-v"><span>ridotta da</span></div><button class="rc-box ncb" onclick="apriScheda(' + pnIdJs(x.nc.id) + ')"><div class="rc-box-h"><div class="rc-ico nc">' + PN_ICO.nc + '</div><div class="rc-box-t"><div class="rc-lbl">Nota di credito</div><b>n° ' + esc(x.nc.numero || '—') + ' · ' + pnGg(x.nc.data) + '</b></div><div class="rc-imp neg">−' + fmt(x.imp) + '<small>' + (x.daRimborsare > 0.009 ? (x.compensata > 0.009 ? fmt(x.compensata) + ' tolti dal dovuto, ' + fmt(x.daRimborsare) + ' da farsi rimborsare' : 'arrivata dopo il pagamento: da farsi rimborsare') : 'tolto dal dovuto') + '</small></div></div></button>';
+    if(typeof ncEsitoUso === 'function' && ncEsitoUso(x.nc, f.id)) h += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 2px 0">' + _btnXml(x.nc, 'mini') + (scStato(f) !== 'da_pagare' ? '<button class="rc-link" onclick="ncScegliEsito(' + pnIdJs(x.nc.id) + ',' + pnIdJs(f.id) + ')">Fattura già pagata: ' + esc(ncEsitoTesto(x.nc, f.id)) + ' · cambia ›</button>' : '') + '</div>';
   });
   pag.forEach(function(p, i){ h += '<div class="rc-link-v"><span>' + (i ? '+ un altro pagamento' : 'pagata con') + '</span></div>' + pnBoxPagamento(p); });
   h += '</div><div class="rc-esito ' + E.tono + '"><div class="rc-esito-ico">' + ({ ok: '✓', warn: '!', ko: '!', nd: 'i', info: '…' })[E.tono] + '</div><div><b>' + esc(E.t) + '</b><small>' + esc(E.s) + '</small></div></div>';
@@ -32947,6 +33060,8 @@ async function pncApplica(btn){
     pnChiudi('pnCollegaNC');
     renderLista(); if(typeof aggiornaHeroCard === 'function') aggiornaHeroCard();
     toast(fatti ? '🔗 Nota di credito usata su ' + (fatti === 1 ? '1 fattura' : fatti + ' fatture') + ' · −' + fmt(tot) : '↩️ Nota di credito aggiornata');
+    NC_CODA = daMettere.filter(function(k){ return ncEsitoUso(nc, k) === 'da_decidere'; }).map(function(k){ return { nc: nc.id, f: k }; });
+    if(NC_CODA.length) setTimeout(ncCodaProssima, 350);
   }catch(e){ toast('⚠️ Non salvato: ' + (e.message || e)); btn.disabled = false; }
 }
 
@@ -33678,7 +33793,9 @@ function ricContiNc(n, idx){
   var netta = ricR2(idx.ncNettoLibero[k] || 0);
   if(netta > 0.009){ compensato = ricR2(compensato + netta); usato = ricR2(usato + netta); dettagli.push({ fid: null, f: null, label: 'scalata dentro un pagamento cumulativo', imp: netta, compensata: netta, daRimborsare: 0, netta: true }); }
   var libero = ricR2(Math.max(0, credito - usato));
-  var rimborsi = (idx.rimb[k] || []).slice().sort(function(a, b){ return String(a.data || '').localeCompare(String(b.data || '')); });
+  var rimborsi = (idx.rimb[k] || []).slice();
+  if(typeof ncRicevuti === 'function') ncRicevuti(n).forEach(function(r){ rimborsi.push({ tipo: 'manuale', movId: 'nc-ric:' + r.fid, data: r.data, importo: r.importo, metodo: r.metodo, conto: NC_METODI_RIC[r.metodo] || r.metodo, descr: 'Credito ricevuto ' + (NC_METODI_RIC[r.metodo] || ''), manuale: true }); });
+  rimborsi.sort(function(a, b){ return String(a.data || '').localeCompare(String(b.data || '')); });
   var rimborsato = ricR2(rimborsi.reduce(function(s, p){ return s + p.importo; }, 0));
   var atteso = ricR2(daRimb + libero);
   var residuo = ricR2(Math.max(0, atteso - rimborsato));
