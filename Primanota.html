@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.23.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.23.1</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -29847,21 +29847,24 @@ async function _ebCaricaStato(){
       return '<div class="imp-group" style="padding:12px 16px;margin-bottom:10px">'
         + '<div style="font-size:15px;font-weight:700;margin-bottom:4px">'+C.ico+' '+esc(C.nome)+'</div>'
         + '<div style="font-size:13px;line-height:1.4">'+riga+'</div>'
-        + '<button class="btn '+(c.attivo?'btn-s':'btn-p')+'" style="width:100%;margin-top:10px;padding:11px" onclick="_ebAvviaCollegamento(\''+c.banca+'\')">'+esc(btn)+'</button></div>';
+        + '<button class="btn '+(c.attivo?'btn-s':'btn-p')+'" style="width:100%;margin-top:10px;padding:11px" onclick="_ebAvviaCollegamento(\''+c.banca+'\')">'+esc(btn)+'</button>'
+        // SumUp su Enable Banking esiste come Italia e come Irlanda: deve essere lo stesso paese scelto nel pannello
+        + (c.banca === 'SumUp' && !c.attivo ? '<button class="btn btn-s" style="width:100%;margin-top:8px;padding:10px" onclick="_ebAvviaCollegamento(\'SumUp\',\'IE\')">Collega SumUp scegliendo Irlanda</button><div style="font-size:11.5px;color:var(--ink3);margin-top:6px;line-height:1.4">Usa lo stesso paese con cui hai aggiunto SumUp nel pannello di Enable Banking.</div>' : '')
+        + '</div>';
     }).join('');
   }catch(e){
     box.innerHTML = '<div class="imp-group" style="padding:14px 16px"><span style="font-size:13px;color:#c0392b">⚠️ '+esc(String(e.message||e))+'</span></div>';
   }
 }
 
-async function _ebAvviaCollegamento(banca){
+async function _ebAvviaCollegamento(banca, paese){
   // Niente finestre secondarie (instabili nelle PWA): si va alla banca nella pagina stessa e si torna qui
   // con ?code=&state= (unico Redirect URL ammesso da Enable Banking: l'indirizzo dell'app).
   banca = banca || 'BPM';
   try{
     var nome = (_EB_CONTI[banca]||{}).nome || banca;
     toast('⏳ Preparo il collegamento con '+nome+'…');
-    var r = await _ebChiamata('banca-collega', {azione:'avvia', banca:banca});
+    var r = await _ebChiamata('banca-collega', {azione:'avvia', banca:banca, country: paese || 'IT'});
     if(r.errore || !r.url){ toast('⚠️ '+(r.errore||'nessun url ricevuto')); return; }
     try{ localStorage.setItem('ceraldi_eb_tornando', '1'); }catch(e){}
     window.location.href = r.url;
@@ -29902,7 +29905,7 @@ async function _ebGestisciRitornoBanca(){
     toast('⏳ Completo il collegamento con la banca…');
     try{
       var r = await _ebChiamata('banca-collega', {azione:'completa', code:code, state:state});
-      if(r.errore) toast('⚠️ '+r.errore);
+      if(r.errore) toast('⚠️ '+r.errore, { forza:true, durata: 9000 });
       else {
         toast('✅ '+((_EB_CONTI[r.banca]||{}).nome||'Conto')+' collegato'+(r.iban ? (' — IBAN '+r.iban) : '')+': scarico i movimenti…');
         try{ await _ebSincronizza(); }catch(e){}
