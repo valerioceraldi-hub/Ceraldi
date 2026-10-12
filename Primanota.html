@@ -4744,7 +4744,7 @@ function _impRenderHome(){
       <div class="imp-group">
         ${_impRow('⚙️','Automazioni', 'SumUp, chiusura cassa, riepilogo Telegram, backup, controlli: stato ed esegui ora', "_impRenderSub('automazioni')")}
         ${_impRow('🏢','Azienda e conti', 'Conto per i bonifici, piano dei conti, formati dei file, categorie', "_impRenderSub('azienda')")}
-        ${_impRow('🏦','Banca (Enable Banking)', 'Collega il conto e sincronizza i movimenti in automatico', "_impRenderSub('banca_eb')")}
+        ${_impRow('🏦','Banca (Enable Banking)', 'BPM e SumUp: movimenti e saldo in automatico', "_impRenderSub('banca_eb')")}
       </div>
 
       <div class="imp-group-label">Preferenze</div>
@@ -18735,6 +18735,20 @@ async function onSumUpBizCSVSelected(input){
       throw new Error('Nessun movimento riconosciuto nel file.');
     }
 
+    // 12/10/2026: se il conto SumUp è collegato a Enable Banking, i movimenti già scaricati da lì
+    // (stessa data e stesso importo) non si duplicano col CSV
+    try{
+      var _tutti = res.bonifici.concat(res.entrate, res.altre || []);
+      if(_tutti.length){
+        var _dd = _tutti.map(function(m){ return m.data; }).sort();
+        var _eb = await sbFetchAll('movimenti_banca?banca=eq.SumUp&id=like.eb_sumup_*&data=gte.'+_dd[0]+'&data=lte.'+_dd[_dd.length-1]+'&select=id,data,importo');
+        if(Array.isArray(_eb) && _eb.length){
+          var _cnt = {}; _eb.forEach(function(r){ var k = r.data+'|'+Number(r.importo).toFixed(2); _cnt[k] = (_cnt[k]||0)+1; });
+          var _filtra = function(lista){ return lista.filter(function(m){ var k = m.data+'|'+Number(m.importo).toFixed(2); if(_cnt[k] > 0){ _cnt[k]--; return false; } return true; }); };
+          res.bonifici = _filtra(res.bonifici); res.entrate = _filtra(res.entrate); res.altre = _filtra(res.altre || []);
+        }
+      }
+    }catch(_e){}
     if(res.bonifici.length){
       if(info) info.textContent = '⏳ Salvataggio ' + res.bonifici.length + ' bonifici SumUp...';
       await upsertMovimentiBanca(res.bonifici);
@@ -29804,91 +29818,66 @@ function _ebRender(body){
   body = body || document.getElementById('impBody'); if(!body) return;
   body.innerHTML = _impBack('Banca (Enable Banking)') + `
     <div style="padding:4px 16px 28px">
-      <div class="gr-s" style="margin:0 2px 12px">Legge da solo i movimenti del conto Banco BPM, al posto di caricare a mano l'estratto PDF/CSV ogni volta. Il collegamento con la banca dura circa 90 giorni, poi va rinnovato.</div>
-      <div class="imp-group" style="padding:14px 16px;margin-bottom:14px" id="ebStato">
-        <span style="font-size:13px;color:var(--ink3)">⏳ Controllo lo stato del collegamento…</span>
+      <div class="gr-s" style="margin:0 2px 12px">Legge da solo movimenti e saldo dei conti, al posto di caricare a mano PDF e CSV. Sincronizza da solo due volte al giorno (6:40 e 15:40). Il collegamento con la banca va rinnovato quando scade: qui sotto vedi lo stato vero, chiesto alla banca.</div>
+      <div id="ebConti"><div class="imp-group" style="padding:14px 16px"><span style="font-size:13px;color:var(--ink3)">⏳ Chiedo lo stato del collegamento…</span></div></div>
+      <div class="imp-group" style="margin-top:14px">
+        ${_impRow('🔄','Sincronizza ora','Scarica subito movimenti e saldi dai conti collegati',"_ebSincronizza()")}
       </div>
-      <div class="imp-group">
-        ${_impRow('🔗','Collega banca da capo','Apre il sito della banca per autorizzare (o rinnovare) l\'accesso',"_ebAvviaCollegamento()")}
-        ${_impRow('🔄','Sincronizza banca ora','Scarica i movimenti nuovi da Enable Banking',"_ebSincronizza()")}
-      </div>
-      <div style="font-size:11.5px;color:var(--ink3);margin-top:14px;line-height:1.4">I movimenti scaricati da qui finiscono nella stessa lista di quelli caricati da PDF/CSV — nessun doppione, nessun abbinamento già fatto viene toccato.</div>
+      <div style="font-size:11.5px;color:var(--ink3);margin-top:14px;line-height:1.4">I movimenti scaricati da qui finiscono nella stessa lista di quelli caricati da PDF/CSV: se un movimento c'è già (stessa data e stesso importo) non viene aggiunto di nuovo, e nessun abbinamento già fatto viene toccato.</div>
     </div>`;
   _ebCaricaStato();
 }
 
+var _EB_CONTI = { BPM: { nome: 'Banco BPM', ico: '🏦' }, SumUp: { nome: 'SumUp', ico: '💳' } };
 async function _ebCaricaStato(){
-  var box = document.getElementById('ebStato'); if(!box) return;
+  var box = document.getElementById('ebConti'); if(!box) return;
   try{
     var s = await _ebChiamata('banca-collega', {azione:'stato'});
-    if(s.errore){ box.innerHTML = '<span style="font-size:13px;color:#c0392b">⚠️ '+esc(s.errore)+'</span>'; return; }
-    if(!s.collegata){
-      box.innerHTML = '<span style="font-size:13px;color:var(--ink2)">🔌 Nessun conto collegato ancora — usa "Collega banca da capo".</span>';
-      return;
-    }
-    var scadenza = s.valido_fino ? new Date(s.valido_fino) : null;
-    var scadutoTesto = '';
-    if(scadenza){
-      var giorni = Math.round((scadenza - new Date())/86400000);
-      scadutoTesto = giorni < 0
-        ? ' · <span style="color:#c0392b;font-weight:700">scaduto '+(-giorni)+' giorni fa, va rinnovato</span>'
-        : ' · valido ancora '+giorni+' giorni ('+scadenza.toLocaleDateString('it-IT')+')';
-    }
-    box.innerHTML = '<span style="font-size:13px;color:var(--ink)">✅ Collegato — IBAN '+esc(s.iban||'—')+scadutoTesto+'</span>';
+    if(s.errore){ box.innerHTML = '<div class="imp-group" style="padding:14px 16px"><span style="font-size:13px;color:#c0392b">⚠️ '+esc(s.errore)+'</span></div>'; return; }
+    var conti = s.conti || [{ banca:'BPM', collegata:s.collegata, iban:s.iban, valido_fino:s.valido_fino, stato:s.stato, attivo:s.attivo }];
+    box.innerHTML = conti.map(function(c){
+      var C = _EB_CONTI[c.banca] || { nome:c.banca, ico:'🏦' }, riga;
+      if(!c.collegata) riga = '<span style="color:var(--ink2)">🔌 Non collegato</span>';
+      else if(c.attivo){
+        var fino = c.valido_fino ? new Date(c.valido_fino) : null, gg = fino ? Math.round((fino - new Date())/86400000) : null;
+        riga = '<span style="color:var(--ink)">✅ Collegato e funzionante'+(c.iban?' · '+esc(c.iban):'')+(gg!=null?' · da rinnovare tra '+gg+' giorni ('+fino.toLocaleDateString('it-IT')+')':'')+'</span>';
+      } else riga = '<span style="color:#c0392b;font-weight:700">⚠️ Collegamento scaduto o revocato dalla banca'+(c.stato&&c.stato!=='ERRORE'?' ('+esc(c.stato)+')':'')+': va rifatto</span>'
+        + (c.errore ? '<div style="font-size:11.5px;color:var(--ink3);margin-top:4px">'+esc(c.errore)+'</div>' : '');
+      var btn = !c.collegata ? 'Collega '+C.nome : c.attivo ? 'Rinnova il collegamento' : 'Ricollega '+C.nome;
+      return '<div class="imp-group" style="padding:12px 16px;margin-bottom:10px">'
+        + '<div style="font-size:15px;font-weight:700;margin-bottom:4px">'+C.ico+' '+esc(C.nome)+'</div>'
+        + '<div style="font-size:13px;line-height:1.4">'+riga+'</div>'
+        + '<button class="btn '+(c.attivo?'btn-s':'btn-p')+'" style="width:100%;margin-top:10px;padding:11px" onclick="_ebAvviaCollegamento(\''+c.banca+'\')">'+esc(btn)+'</button></div>';
+    }).join('');
   }catch(e){
-    box.innerHTML = '<span style="font-size:13px;color:#c0392b">⚠️ '+esc(String(e.message||e))+'</span>';
+    box.innerHTML = '<div class="imp-group" style="padding:14px 16px"><span style="font-size:13px;color:#c0392b">⚠️ '+esc(String(e.message||e))+'</span></div>';
   }
 }
 
-async function _ebAvviaCollegamento(){
-  // 21/09, 3° giro — CAMBIO DI APPROCCIO chiesto da Valerio: i primi due
-  // tentativi giravano intorno a window.open() (finestra separata), che in
-  // un contesto PWA/mobile è un terreno instabile in tre modi diversi —
-  // (1) popup bloccato in silenzio se aperto dopo un await, (2) un
-  // confirm()/prompt() successivo che finisce nascosto dietro la scheda
-  // nuova perché il focus del browser salta lì, (3) alcune webview (PWA
-  // aggiunta alla Home su iOS) non aprono MAI una seconda scheda e basta,
-  // restituendo comunque un oggetto "scheda" apparentemente valido che poi
-  // non naviga da nessuna parte — combacia col sintomo "resta fermo lì".
-  // Niente più finestre secondarie: si porta la banca DENTRO la pagina
-  // stessa (stesso schema di un "Accedi con Google" da mobile). Non c'è
-  // nessun popup da bloccare perché non si apre nessun popup.
-  //
-  // 21/09, 4° giro — causa VERA (screenshot del pannello Enable Banking di
-  // Valerio): l'app ha in whitelist SOLO il proprio indirizzo GitHub Pages
-  // come Redirect URL, non quello della Edge Function. La banca lo valida
-  // carattere per carattere: mandarne uno diverso dà sempre "HTTP 400:
-  // Redirect URI not allowed", qualunque cosa faccia il codice qui intorno.
-  // Ora la scelta del redirect_url è fissa lato server (REDIRECT_URL in
-  // banca-collega.ts, uguale a quanto autorizzato) — il ritorno arriva
-  // qui nella pagina stessa con ?code=&state= in coda all'indirizzo, e lo
-  // intercetta _ebGestisciRitornoBanca() all'avvio dell'app.
+async function _ebAvviaCollegamento(banca){
+  // Niente finestre secondarie (instabili nelle PWA): si va alla banca nella pagina stessa e si torna qui
+  // con ?code=&state= (unico Redirect URL ammesso da Enable Banking: l'indirizzo dell'app).
+  banca = banca || 'BPM';
   try{
-    toast('⏳ Cerco Banco BPM su Enable Banking…');
-    var r1 = await _ebChiamata('banca-collega', {azione:'aspsps', country:'IT', cerca:'banco bpm'});
-    if(r1.errore){ toast('⚠️ '+r1.errore); return; }
-    var elenco = r1.aspsps||[];
-    if(!elenco.length){ toast('⚠️ Enable Banking non ha "Banco BPM" tra le banche italiane — controlla il nome esatto'); return; }
-    var scelta = elenco.find(function(a){ return /^banco bpm$/i.test(a.name||''); }) || elenco[0];
-    var psuType = (scelta.psu_types||[]).includes('business') ? 'business' : ((scelta.psu_types||[])[0]||'business');
-    toast('⏳ Preparo il collegamento con "'+scelta.name+'"…');
-    var r2 = await _ebChiamata('banca-collega', {azione:'avvia', aspsp_name:scelta.name, aspsp_country:scelta.country, psu_type:psuType, giorni_validita: scelta.maximum_consent_validity||90});
-    if(r2.errore || !r2.url){ toast('⚠️ '+(r2.errore||'nessun url ricevuto')); return; }
-    // Ricordo che sto tornando da un collegamento in corso: alla riapertura
-    // dell'app (subito dopo, stessa pagina) l'app si apre da sola sulla
-    // sezione Banca invece di lasciare Valerio a ritrovare il menu da solo.
+    var nome = (_EB_CONTI[banca]||{}).nome || banca;
+    toast('⏳ Preparo il collegamento con '+nome+'…');
+    var r = await _ebChiamata('banca-collega', {azione:'avvia', banca:banca});
+    if(r.errore || !r.url){ toast('⚠️ '+(r.errore||'nessun url ricevuto')); return; }
     try{ localStorage.setItem('ceraldi_eb_tornando', '1'); }catch(e){}
-    window.location.href = r2.url;
+    window.location.href = r.url;
   }catch(e){ toast('⚠️ '+String(e.message||e)); }
 }
 
 async function _ebSincronizza(){
   try{
-    toast('⏳ Sincronizzo con la banca…');
+    toast('⏳ Sincronizzo con le banche…');
     var r = await _ebChiamata('banca-sync', {});
-    if(r.errore){ toast('⚠️ '+r.errore); return; }
-    toast('✓ '+(r.nuovi||0)+' movimenti nuovi, '+(r.gia_presenti||0)+' già presenti ('+(r.dal||'?')+' → '+(r.al||'?')+')');
+    if(r.errore && !r.esiti){ toast('⚠️ '+r.errore); return; }
+    var es = (r.esiti||[]).filter(function(e){ return e.collegato; });
+    if(!es.length){ toast('Nessun conto collegato: usa «Collega»'); _ebCaricaStato(); return; }
+    toast(es.map(function(e){ var n = (_EB_CONTI[e.banca]||{}).nome||e.banca; return e.errore ? '⚠️ '+n+': collegamento da rifare' : '✓ '+n+': '+(e.nuovi||0)+' nuovi'+(e.saldo?' · saldo '+fmt(e.saldo.saldo):''); }).join(' — '), { forza:true });
     if(typeof ricaricaBancaCompleta==='function') await ricaricaBancaCompleta();
+    try{ if(typeof ricvCaricaSaldoSU==='function') await ricvCaricaSaldoSU(); }catch(e){}
     _ebCaricaStato();
   }catch(e){ toast('⚠️ '+String(e.message||e)); }
 }
@@ -29914,7 +29903,10 @@ async function _ebGestisciRitornoBanca(){
     try{
       var r = await _ebChiamata('banca-collega', {azione:'completa', code:code, state:state});
       if(r.errore) toast('⚠️ '+r.errore);
-      else toast('✅ Conto collegato'+(r.iban ? (' — IBAN '+r.iban) : ''));
+      else {
+        toast('✅ '+((_EB_CONTI[r.banca]||{}).nome||'Conto')+' collegato'+(r.iban ? (' — IBAN '+r.iban) : '')+': scarico i movimenti…');
+        try{ await _ebSincronizza(); }catch(e){}
+      }
     }catch(e){ toast('⚠️ '+String(e.message||e)); }
   }
   setTimeout(function(){ try{ apriImpostazioni(); _impRenderSub('banca_eb'); }catch(e){} }, 300);
