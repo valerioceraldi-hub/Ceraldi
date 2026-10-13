@@ -423,7 +423,7 @@ html[data-theme="dark"] .todo-ft{background:rgba(255,255,255,.03)}
 </nav>
 
 <script>
-var APP_VERSION='8.6.2';
+var APP_VERSION='8.7.0';
 var BUILD_VERSION=APP_VERSION, BUILD_NUM=APP_VERSION;
 var APP={key:'ordini',nome:'Ordini',versione:APP_VERSION,authKey:'or_auth_v2',oldAuthKey:'ceraldi_ordini_auth_session',
   markBg:'linear-gradient(145deg,#FFC04D 0%,#FF9F0A 50%,#C2410C 100%)',
@@ -1405,11 +1405,17 @@ function prodottoDaBarcode(lista, c){ return (lista || []).find(function(p){ ret
    ══════════════════════════════════════════════════════════════════ */
 var U = { nome: '', email: '', uid: '', admin: false, lettura: false };
 var CAT = [], CATMAP = {}, FORN = [], STORICO = [], RICH = [], PF = [], PD = [], PROFILI = [];
-var COLS = 'id,name,conf,cat,subcat,iva,prices,best,settore,updated_at,qty_min,nota_ordine,best_override,giacenza,scorta_min,barcode';
+var COLS = 'id,name,conf,cat,subcat,iva,prices,best,settore,settori_extra,updated_at,qty_min,nota_ordine,best_override,giacenza,scorta_min,barcode';
 var SETTORI_BASE = ['Bar', 'Pasticceria', 'Cucina', 'Carta'];
 var STATO_SYNC = { ultimo: 0, errore: '' };
 
 function indicizza(){ CATMAP = {}; CAT.forEach(function(p){ if(!p.prices || typeof p.prices !== 'object') p.prices = {}; CATMAP[p.id] = p; }); }
+// Reparti di un prodotto: il principale (settore) + gli altri in cui compare (settori_extra).
+// Il principale decide categorie e fornitori proposti; gli altri lo rendono visibile anche lì.
+function repartiDi(p){ var l = [settoreDi(p)]; ((p && p.settori_extra) || []).forEach(function(s){ if(s && l.indexOf(s) < 0) l.push(s); }); return l; }
+function inReparto(p, s){ return repartiDi(p).indexOf(s) >= 0; }
+function fornCompatibileProdotto(f, p){ return repartiDi(p).some(function(s){ return fornCompatibile(f, s); }); }
+function fornDelProdotto(p){ return FORN.filter(function(f){ return fornCompatibileProdotto(f, p); }); }
 function settoreDi(p){
   if(p && p.settore) return p.settore;
   var c = String((p && p.cat) || '').trim().toUpperCase();
@@ -1439,7 +1445,7 @@ function prezziOrdinati(p){
 function migliore(p){
   if(!p) return { forn: '', prezzo: 0, fisso: false };
   if(p.best_override){ var f = fornDi(p.best_override), pr = prezzoDi(p, p.best_override); if(f && pr != null) return { forn: f.nome, prezzo: pr, fisso: true }; }
-  var l = prezziOrdinati(p).filter(function(x){ return !x.orfano; }), s = settoreDi(p), rep = l.filter(function(x){ return fornCompatibile(x.forn, s); });
+  var l = prezziOrdinati(p).filter(function(x){ return !x.orfano; }), rep = l.filter(function(x){ return fornCompatibileProdotto(x.forn, p); });
   if(rep.length) l = rep;   // prima i fornitori del reparto del prodotto
   return l.length ? { forn: l[0].forn, prezzo: l[0].prezzo, fisso: false } : { forn: '', prezzo: 0, fisso: false };
 }
@@ -2958,7 +2964,7 @@ function gruppiCarrello(){
 function totaleCarrello(){ return r2(gruppiCarrello().reduce(function(s, g){ return s + g.totale; }, 0)); }
 
 /* ── Schermata Ordina ────────────────────────────────────────────── */
-function settoriPresenti(){ var v = {}; CAT.forEach(function(p){ v[settoreDi(p)] = 1; }); var o = SETTORI_BASE.filter(function(s){ return v[s]; }); Object.keys(v).forEach(function(s){ if(o.indexOf(s) < 0) o.push(s); }); return o; }
+function settoriPresenti(){ var v = {}; CAT.forEach(function(p){ repartiDi(p).forEach(function(s){ v[s] = 1; }); }); var o = SETTORI_BASE.filter(function(s){ return v[s]; }); Object.keys(v).forEach(function(s){ if(o.indexOf(s) < 0) o.push(s); }); return o; }
 function sottoScorta(p){ return p.scorta_min != null && p.scorta_min > 0 && (p.giacenza == null ? false : p.giacenza < p.scorta_min); }
 function renderOrdina(){ renderSettori(); renderCategorie(); renderProdotti(); aggiornaBarra(); renderAvvisiOrdina(); }
 function renderSettori(){
@@ -2967,7 +2973,7 @@ function renderSettori(){
   el.classList.remove('hidden');
   el.innerHTML = ['Tutti'].concat(ss).map(function(s){ return '<button class="seg-b' + (VIEW.settore === s ? ' active' : '') + '" data-s="' + esc(s) + '" onclick="VIEW.settore=this.dataset.s;VIEW.cat=\'Tutte\';VIEW.limite=60;renderOrdina()">' + esc(s) + '</button>'; }).join('');
 }
-function prodottiSettore(){ return VIEW.settore === 'Tutti' ? CAT : CAT.filter(function(p){ return settoreDi(p) === VIEW.settore; }); }
+function prodottiSettore(){ return VIEW.settore === 'Tutti' ? CAT : CAT.filter(function(p){ return inReparto(p, VIEW.settore); }); }
 function renderCategorie(){
   var base = prodottiSettore(), conta = {};
   base.forEach(function(p){ var c = catDi(p); conta[c] = (conta[c] || 0) + 1; });
@@ -3259,15 +3265,15 @@ var _schedaId = null;
 function apriProdotto(id){
   var p = CATMAP[id]; if(!p) return;
   _schedaId = id;
-  apriSheet('shProd', { titolo: nomeBreve(p.name, 40), sotto: esc([p.conf, catDi(p), settoreDi(p)].filter(Boolean).join(' · ')), corpo: '<div id="prodBody"></div>', piede: '<div id="prodPiede"></div>', alto: true, onChiudi: function(){ _schedaId = null; } });
+  apriSheet('shProd', { titolo: nomeBreve(p.name, 40), sotto: esc([p.conf, catDi(p), repartiDi(p).join(' + ')].filter(Boolean).join(' · ')), corpo: '<div id="prodBody"></div>', piede: '<div id="prodPiede"></div>', alto: true, onChiudi: function(){ _schedaId = null; } });
   renderScheda();
 }
 function renderScheda(){
   var p = CATMAP[_schedaId], b = document.getElementById('prodBody'); if(!p || !b) return;
   var m = migliore(p), lp = prezziOrdinati(p), ro = U.lettura;
-  var sett = settoreDi(p), altri = lp.filter(function(x){ return !x.orfano && !fornCompatibile(x.forn, sett); });
+  var sett = repartiDi(p).join(' + '), altri = lp.filter(function(x){ return !x.orfano && !fornCompatibileProdotto(x.forn, p); });
   lp = lp.filter(function(x){ return altri.indexOf(x) < 0; });
-  var senza = fornDelReparto(sett).filter(function(f){ return prezzoDi(p, f.nome) == null; });
+  var senza = fornDelProdotto(p).filter(function(f){ return prezzoDi(p, f.nome) == null; });
   var h = '<div class="sec-title">Prezzi · fornitori ' + esc(sett) + (ro ? '' : '<button class="lnk" onclick="aggiungiPrezzoForn()">+ fornitore</button>') + '</div><div class="grp">';
   h += lp.length || senza.length ? lp.map(function(x){
     var top = !x.orfano && x.forn === m.forn;
@@ -3289,7 +3295,7 @@ function renderScheda(){
     '<div class="row"><div class="row-ico ic-r">⚠️</div><div class="row-main"><div class="row-t">Scorta minima</div><div class="row-s">Sotto questa quantità va riordinato · la usa anche Richieste</div></div><input class="num-in' + (p.scorta_min != null ? ' filled' : '') + '" inputmode="numeric" value="' + (p.scorta_min == null ? '' : p.scorta_min) + '" placeholder="–" ' + (ro ? 'disabled' : '') + ' onchange="salvaNumero(' + p.id + ',\'scorta_min\',this)"></div></div>';
   // Dati
   h += '<div class="sec-title">Dati del prodotto' + (ro ? '' : '<button class="lnk" onclick="modificaDati(' + p.id + ')">Modifica</button>') + '</div><div class="grp">' +
-    [['Nome', p.name], ['Confezione', p.conf], ['Categoria', catDi(p)], ['Reparto', settoreDi(p)], ['IVA', p.iva ? p.iva + '%' : ''], ['Codici a barre', barcodeLista(p).join(', ')]].map(function(x){ return '<div class="row"><div class="row-main row-s" style="margin:0">' + x[0] + '</div><div class="row-r" style="color:var(--ink);max-width:62%;overflow:hidden;text-overflow:ellipsis">' + esc(x[1] || '—') + '</div></div>'; }).join('') + '</div>';
+    [['Nome', p.name], ['Confezione', p.conf], ['Categoria', catDi(p)], ['Reparto', repartiDi(p).join(' + ')], ['IVA', p.iva ? p.iva + '%' : ''], ['Codici a barre', barcodeLista(p).join(', ')]].map(function(x){ return '<div class="row"><div class="row-main row-s" style="margin:0">' + x[0] + '</div><div class="row-r" style="color:var(--ink);max-width:62%;overflow:hidden;text-overflow:ellipsis">' + esc(x[1] || '—') + '</div></div>'; }).join('') + '</div>';
   // Storia acquisti: richiesta → ordine → fattura
   h += '<div class="sec-title">Storia acquisti</div><div id="storiaAcq"><div class="grp"><div class="row"><div class="row-main row-s">Carico…</div></div></div></div>';
   h += '<div class="sec-title">Modifiche al listino</div><div class="grp" id="storPrezzi"><div class="row"><div class="row-main row-s">Carico…</div></div></div>';
@@ -3349,8 +3355,8 @@ async function togliPrezzo(forn){
 async function fissaFornitore(forn){ var p = CATMAP[_schedaId]; if(!p) return; try{ await aggiornaProdotto(p.id, { best_override: forn }); renderScheda(); aggiornaRiga(p.id); toast(forn ? 'Ordinerai sempre da ' + forn : 'Torna il più conveniente'); }catch(e){ toast('⚠️ ' + e.message); } }
 function aggiungiPrezzoForn(scelto){
   var p = CATMAP[_schedaId]; if(!p) return;
-  var liberi = fornDelReparto(settoreDi(p)).filter(function(f){ return prezzoDi(p, f.nome) == null; });
-  apriSheet('shAP', { titolo: 'Prezzo di un altro fornitore', sotto: 'Fornitori del reparto ' + esc(settoreDi(p)), corpo: '<div class="field"><label>Fornitore</label><select class="inp" id="apF" onchange="if(this.value===\'__nuovo__\'){this.value=\'\';chiudiSheet(\'shAP\');apriNuovoFornitore({ settore: settoreDi(CATMAP[_schedaId]), onCreato: function(f){ aggiungiPrezzoForn(f.nome); } });}">' + liberi.map(function(f){ return '<option' + (f.nome === scelto ? ' selected' : '') + '>' + esc(f.nome) + '</option>'; }).join('') + '<option value="__nuovo__">+ Nuovo fornitore…</option></select></div><div class="field"><label>Prezzo IVA inclusa (€)</label><input class="inp" id="apP" inputmode="decimal" placeholder="Es. 12,50"></div>',
+  var liberi = fornDelProdotto(p).filter(function(f){ return prezzoDi(p, f.nome) == null; });
+  apriSheet('shAP', { titolo: 'Prezzo di un altro fornitore', sotto: 'Fornitori del reparto ' + esc(repartiDi(p).join(' + ')), corpo: '<div class="field"><label>Fornitore</label><select class="inp" id="apF" onchange="if(this.value===\'__nuovo__\'){this.value=\'\';chiudiSheet(\'shAP\');apriNuovoFornitore({ settore: settoreDi(CATMAP[_schedaId]), onCreato: function(f){ aggiungiPrezzoForn(f.nome); } });}">' + liberi.map(function(f){ return '<option' + (f.nome === scelto ? ' selected' : '') + '>' + esc(f.nome) + '</option>'; }).join('') + '<option value="__nuovo__">+ Nuovo fornitore…</option></select></div><div class="field"><label>Prezzo IVA inclusa (€)</label><input class="inp" id="apP" inputmode="decimal" placeholder="Es. 12,50"></div>',
     piede: '<button class="btn btn-p" onclick="salvaPrezzoForn()">Salva</button>' });
 }
 async function salvaPrezzoForn(){
@@ -3440,7 +3446,8 @@ function formProdotto(p, opz){
   var spiega = nuovo && pr.simili.length ? '<div class="hint" style="margin:-4px 2px 10px">Ho proposto reparto, categoria, confezione e IVA guardando i prodotti simili: ' + pr.simili.map(function(n){ return esc(nomeBreve(n, 34)); }).join(', ') + '. Controlla e cambia se serve.</div>'
     : nuovo && pr.catDaFornitore ? '<div class="hint" style="margin:-4px 2px 10px">Nessun prodotto simile in catalogo: ho proposto la categoria che usi di più per ' + (opz.forn ? esc(opz.forn) : 'questo reparto') + '. Controlla e cambia se serve.</div>' : '';
   return '<div class="field"><label>Nome</label><input class="inp" id="fpN" autocapitalize="characters" value="' + esc(p.name || '') + '"' + (nuovo ? ' onchange="fpRiproponi()"' : '') + '></div>' + spiega +
-    '<div class="field"><label>Reparto</label><div class="seg" id="fpR">' + SETTORI_BASE.map(function(s){ return '<button type="button" class="seg-b' + (settore === s ? ' active' : '') + '" onclick="fpReparto(this)">' + s + '</button>'; }).join('') + '</div></div>' +
+    '<div class="field"><label>Reparto principale</label><div class="seg" id="fpR">' + SETTORI_BASE.map(function(s){ return '<button type="button" class="seg-b' + (settore === s ? ' active' : '') + '" onclick="fpReparto(this)">' + s + '</button>'; }).join('') + '</div>' +
+      '<div class="row-s" style="font-size:12.5px;margin:8px 2px 6px">Compare anche in (tocca per aggiungere):</div><div class="chips" id="fpRx" style="flex-wrap:wrap;gap:6px">' + fpChipExtra(settore, p.settori_extra || []) + '</div></div>' +
     '<div class="field"><label>Categoria</label><select class="inp" id="fpKs" onchange="fpCategoria()">' + (cat ? '' : '<option value="">Scegli…</option>') + opzioni(cats, cat, '+ Altra categoria…') + '</select><input class="inp hidden" id="fpK" autocapitalize="characters" placeholder="Nome della nuova categoria" style="margin-top:6px" value="' + esc(cat) + '"></div>' +
     '<div class="field"><label>Sottocategoria (facoltativa)</label><select class="inp" id="fpSs" onchange="fpSotto()"><option value="">Nessuna</option>' + opzioni(subs, sub, '+ Altra…') + '</select><input class="inp hidden" id="fpS" autocapitalize="characters" placeholder="Nome della sottocategoria" style="margin-top:6px" value="' + esc(sub) + '"></div>' +
     '<div class="btn-row"><div class="field" style="flex:1.3"><label>Confezione (come lo ordini)</label><select class="inp" id="fpCs" onchange="fpConf()">' + (confC || confAltro ? '' : '<option value="">Scegli…</option>') + opzioni(FORMATI, confC, 'Altro…') + (confAltro ? '<option value="__altro__" selected>' + esc(confAltro) + '</option>' : '') + '</select><input class="inp' + (confAltro ? '' : ' hidden') + '" id="fpC" placeholder="Es. VASSOIO" style="margin-top:6px" value="' + esc(confAltro || confC || '') + '"></div>' +
@@ -3448,8 +3455,14 @@ function formProdotto(p, opz){
     '<div class="field"><label>Codici a barre (se più d\'uno, separati da virgola)</label><input class="inp" id="fpB" value="' + esc(p.barcode || '') + '"></div>';
 }
 function fpSettore(){ var r = document.querySelector('#fpR .seg-b.active'); return r ? r.textContent : 'Bar'; }
+function fpChipExtra(principale, extra){
+  return SETTORI_BASE.filter(function(s){ return s !== principale; }).map(function(s){ return '<button type="button" class="chip' + (extra.indexOf(s) >= 0 ? ' active' : '') + '" data-s="' + esc(s) + '" onclick="fpToggleExtra(this)">' + (extra.indexOf(s) >= 0 ? '✓ ' : '+ ') + esc(s) + '</button>'; }).join('');
+}
+function fpExtraScelti(){ return Array.prototype.map.call(document.querySelectorAll('#fpRx .chip.active'), function(b){ return b.dataset.s; }); }
+function fpToggleExtra(b){ b.classList.toggle('active'); b.textContent = (b.classList.contains('active') ? '✓ ' : '+ ') + b.dataset.s; }
 function fpReparto(b){
   b.parentNode.querySelectorAll('.seg-b').forEach(function(x){ x.classList.remove('active'); }); b.classList.add('active');
+  var rx = document.getElementById('fpRx'); if(rx){ var ex = fpExtraScelti().filter(function(s){ return s !== b.textContent; }); rx.innerHTML = fpChipExtra(b.textContent, ex); }
   var s = fpSettore(), sel = document.getElementById('fpKs'), att = (document.getElementById('fpK').value || '').toUpperCase(), cats = categorieReparto(s);
   sel.innerHTML = (cats.indexOf(att) >= 0 ? '' : '<option value="">Scegli…</option>') + opzioni(cats, cats.indexOf(att) >= 0 ? att : '', '+ Altra categoria…');
   if(cats.indexOf(att) < 0) document.getElementById('fpK').value = '';
@@ -3484,7 +3497,7 @@ function fpFornitoreScelto(){
 function leggiFormProdotto(){
   var v = function(id){ var e = document.getElementById(id); return e ? e.value.trim() : ''; };
   var conf = v('fpCs') === '__altro__' ? v('fpC').toUpperCase() : v('fpCs');
-  return { name: maiusc(v('fpN')), conf: conf, iva: v('fpI') || null, cat: maiusc(v('fpK')), subcat: maiusc(v('fpS')), settore: fpSettore(), barcode: v('fpB').replace(/\s/g, '') || null };
+  return { name: maiusc(v('fpN')), conf: conf, iva: v('fpI') || null, cat: maiusc(v('fpK')), subcat: maiusc(v('fpS')), settore: fpSettore(), settori_extra: fpExtraScelti().filter(function(s){ return s !== fpSettore(); }), barcode: v('fpB').replace(/\s/g, '') || null };
 }
 function modificaDati(id){
   var p = CATMAP[id];
@@ -3569,7 +3582,7 @@ function renderCarrello(){
 function menuRiga(k){
   var r = carr().righe[k]; if(!r) return;
   var p = r.id != null ? CATMAP[r.id] : null, att = fornRiga(r);
-  var opz = FORN.filter(function(f){ return !p || fornCompatibile(f, settoreDi(p)) || prezzoDi(p, f.nome) != null; }).map(function(f){ var pr = p ? prezzoDi(p, f.nome) : null; return { f: f.nome, pr: pr }; }).sort(function(a, b){ if((a.pr == null) !== (b.pr == null)) return a.pr == null ? 1 : -1; return (a.pr || 0) - (b.pr || 0); });
+  var opz = FORN.filter(function(f){ return !p || fornCompatibileProdotto(f, p) || prezzoDi(p, f.nome) != null; }).map(function(f){ var pr = p ? prezzoDi(p, f.nome) : null; return { f: f.nome, pr: pr }; }).sort(function(a, b){ if((a.pr == null) !== (b.pr == null)) return a.pr == null ? 1 : -1; return (a.pr || 0) - (b.pr || 0); });
   apriSheet('shMR', { titolo: nomeBreve(r.nome, 38), corpo:
     '<div class="sec-title">Ordina da</div><div class="grp">' + opz.slice(0, p ? 30 : 30).map(function(o){ return '<button class="row" data-f="' + esc(o.f) + '" onclick="cambiaFornRiga(\'' + k + '\',this.dataset.f)"><div class="row-main"><div class="row-t" style="font-size:14.5px">' + esc(o.f) + '</div>' + (o.pr == null && p ? '<div class="row-s">prezzo non disponibile</div>' : '') + '</div><div class="row-r">' + (o.pr != null ? '<b style="color:var(--ink)">' + eur(o.pr) + '</b>' : '') + (o.f === att ? ' <span style="color:var(--blue)">✓</span>' : '') + '</div></button>'; }).join('') + '</div>' +
     '<div class="grp"><button class="row" onclick="notaRiga(\'' + k + '\')"><div class="row-ico">📝</div><div class="row-main"><div class="row-t">Nota per questo prodotto</div><div class="row-s">' + esc(r.nota || 'nessuna') + '</div></div></button>' +
@@ -5146,7 +5159,7 @@ async function togliFornitoreOrfano(nome){
    ══════════════════════════════════════════════════════════════════ */
 var VM = { filtro: 'sotto', q: '', settore: 'Tutti', limite: 80 };
 function listaMagazzino(){
-  var l = VM.settore === 'Tutti' ? CAT : CAT.filter(function(p){ return settoreDi(p) === VM.settore; });
+  var l = VM.settore === 'Tutti' ? CAT : CAT.filter(function(p){ return inReparto(p, VM.settore); });
   if(VM.filtro === 'sotto') l = l.filter(sottoScorta);
   else if(VM.filtro === 'senza') l = l.filter(function(p){ return p.scorta_min == null; });
   else if(VM.filtro === 'contati') l = l.filter(function(p){ return p.giacenza != null; });
@@ -5198,7 +5211,7 @@ function apriInventario(){
 }
 function iniziaInventario(){
   var s = document.querySelector('#invSett .seg-b.active').textContent, solo = document.getElementById('invSolo').checked;
-  INV.l = CAT.filter(function(p){ return settoreDi(p) === s && (!solo || p.scorta_min != null); }).sort(function(a, b){ return catDi(a).localeCompare(catDi(b), 'it') || a.name.localeCompare(b.name, 'it'); });
+  INV.l = CAT.filter(function(p){ return inReparto(p, s) && (!solo || p.scorta_min != null); }).sort(function(a, b){ return catDi(a).localeCompare(catDi(b), 'it') || a.name.localeCompare(b.name, 'it'); });
   INV.i = 0; INV.fatti = 0;
   chiudiSheet('shInvS');
   if(!INV.l.length){ toast('Nessun prodotto da contare in ' + s); return; }
@@ -5785,7 +5798,7 @@ async function esportaCatalogo(){
   try{
     var X = await libXLSX(), nomi = fornNomi();
     var righe = CAT.slice().sort(function(a, b){ return settoreDi(a).localeCompare(settoreDi(b)) || catDi(a).localeCompare(catDi(b)) || a.name.localeCompare(b.name); }).map(function(p){
-      var r = { ID: p.id, Prodotto: p.name, Confezione: p.conf || '', Categoria: catDi(p), Reparto: settoreDi(p), IVA: p.iva || '' };
+      var r = { ID: p.id, Prodotto: p.name, Confezione: p.conf || '', Categoria: catDi(p), Reparto: repartiDi(p).join(' + '), IVA: p.iva || '' };
       nomi.forEach(function(f){ var v = prezzoDi(p, f); r[f] = v == null ? '' : v; });
       var m = migliore(p); r['Più conveniente'] = m.forn; r['Prezzo migliore'] = m.forn ? m.prezzo : ''; r.Giacenza = p.giacenza == null ? '' : p.giacenza; r['Scorta minima'] = p.scorta_min == null ? '' : p.scorta_min; r['Codice a barre'] = p.barcode || '';
       return r;
@@ -5803,7 +5816,7 @@ function apriModelloFornitore(){
 }
 async function scaricaModello(){
   var f = document.getElementById('mfF').value, s = document.getElementById('mfS').value;
-  var l = CAT.filter(function(p){ if(s === '__forn') return f ? prezzoDi(p, f) != null : true; return !s || settoreDi(p) === s; }).sort(function(a, b){ return catDi(a).localeCompare(catDi(b)) || a.name.localeCompare(b.name); });
+  var l = CAT.filter(function(p){ if(s === '__forn') return f ? prezzoDi(p, f) != null : true; return !s || inReparto(p, s); }).sort(function(a, b){ return catDi(a).localeCompare(catDi(b)) || a.name.localeCompare(b.name); });
   if(!l.length){ toast('Nessun prodotto da mettere nel modello'); return; }
   try{
     var X = await libXLSX(), Z = await libZIP();

@@ -393,7 +393,7 @@ body.has-fbar{padding-bottom:calc(150px + var(--safe-b))}
 
 <script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js" defer></script>
 <script>
-var APP_VERSION='8.3.1';
+var APP_VERSION='8.4.0';
 var BUILD_NUM=APP_VERSION;
 var APP={key:'richieste',nome:'Richieste',versione:APP_VERSION,authKey:'rq_auth_v2',oldAuthKey:'ceraldi_richieste_auth_session',
   markBg:'linear-gradient(145deg,#C4A1FF 0%,#8B5CF6 50%,#5B21B6 100%)',
@@ -1380,6 +1380,8 @@ var _renderRinviato = false;
 
 function lk(n){ return 'rq_' + n + '_' + (U.uid || 'x'); }
 function settoreDi(p){ return (p && p.settore) || 'Bar'; }
+// reparto principale + altri reparti in cui compare (impostati in Ceraldi Ordini)
+function repartiDi(p){ var l = [settoreDi(p)]; ((p && p.settori_extra) || []).forEach(function(s){ if(s && l.indexOf(s) < 0) l.push(s); }); return l; }
 function catDi(p){
   var c = (p.cat || '').trim(), s = settoreDi(p);
   if(p.subcat && c.toUpperCase() === s.toUpperCase()) return p.subcat;
@@ -1444,7 +1446,7 @@ function renderSicuro(){
 /* ── Dati: catalogo, reparti, scorciatoie ────────────────────────── */
 async function caricaCatalogo(){
   try{
-    var righe = await apiTutte('catalogo_ceraldi?select=id,name,conf,cat,subcat,settore,giacenza,scorta_min,barcode&order=name');
+    var righe = await apiTutte('catalogo_ceraldi?select=id,name,conf,cat,subcat,settore,settori_extra,giacenza,scorta_min,barcode&order=name');
     if(righe && righe.length){ CAT = righe; indicizza(); lsSet('rq_catalogo', CAT); lsSet('rq_catalogo_ts', Date.now()); }
   }catch(e){
     if(!CAT.length) document.getElementById('prodotti').innerHTML = '<div class="banner r">Non riesco a scaricare il catalogo: ' + esc(e.message) + '. Controlla la connessione e riapri l\'app.</div>';
@@ -1461,7 +1463,7 @@ async function caricaSezioni(){
   }catch(e){ /* resta l'ultima versione salvata */ }
 }
 function settoriPresenti(){
-  var visti = {}; CAT.forEach(function(p){ visti[settoreDi(p)] = 1; });
+  var visti = {}; CAT.forEach(function(p){ repartiDi(p).forEach(function(s){ visti[s] = 1; }); });
   var out = SETTORI_BASE.filter(function(s){ return visti[s]; });
   Object.keys(visti).forEach(function(s){ if(out.indexOf(s) < 0) out.push(s); });
   return out;
@@ -1472,7 +1474,7 @@ function settoriConsentiti(){
   var ok = tutti.filter(function(s){ return U.sezioni.indexOf(s) >= 0; });
   return ok.length ? ok : tutti;
 }
-function prodottiVisibili(){ var ok = settoriConsentiti(); return CAT.filter(function(p){ return ok.indexOf(settoreDi(p)) >= 0; }); }
+function prodottiVisibili(){ var ok = settoriConsentiti(); return CAT.filter(function(p){ return repartiDi(p).some(function(s){ return ok.indexOf(s) >= 0; }); }); }
 
 // Scorciatoie: salvate nella tabella delle bozze, riga speciale "__scorciatoie__"
 // (la vecchia tabella ceraldi_richieste_scorciatoie accettava solo accessi
@@ -1549,7 +1551,7 @@ function renderSettori(){
   if(VIEW.settore !== 'Tutti' && ss.indexOf(VIEW.settore) < 0) VIEW.settore = 'Tutti';
   el.innerHTML = ['Tutti'].concat(ss).map(function(s){ return '<button class="seg-b' + (VIEW.settore === s ? ' active' : '') + '" data-s="' + esc(s) + '" onclick="VIEW.settore=this.dataset.s;VIEW.cat=\'Tutte\';VIEW.limite=60;renderSettori();renderCategorie();renderProdotti()">' + esc(s) + '</button>'; }).join('');
 }
-function prodottiDelSettore(){ var base = prodottiVisibili(); return VIEW.settore === 'Tutti' ? base : base.filter(function(p){ return settoreDi(p) === VIEW.settore; }); }
+function prodottiDelSettore(){ var base = prodottiVisibili(); return VIEW.settore === 'Tutti' ? base : base.filter(function(p){ return repartiDi(p).indexOf(VIEW.settore) >= 0; }); }
 function renderCategorie(){
   var conta = {}; prodottiDelSettore().forEach(function(p){ var c = catDi(p); conta[c] = (conta[c] || 0) + 1; });
   var cats = Object.keys(conta).sort(function(a, b){ return a.localeCompare(b, 'it'); });
@@ -2181,7 +2183,7 @@ async function scLetto(codice){
   SC.ultimo = codice; SC.ultimoT = Date.now(); SC.aperto = true; scBeep();
   var p = prodottoDaBarcode(CAT, codice);
   if(!p){
-    try{ var r = await api('catalogo_ceraldi?select=id,name,conf,cat,subcat,settore,giacenza,scorta_min,barcode&barcode=ilike.*' + encodeURIComponent(codice) + '*'); r = (r || []).filter(function(x){ return barcodeHa(x, codice); }); if(r && r[0]){ p = r[0]; if(!CATMAP[p.id]){ CAT.push(p); } else Object.assign(CATMAP[p.id], p); indicizza(); } }catch(e){}
+    try{ var r = await api('catalogo_ceraldi?select=id,name,conf,cat,subcat,settore,settori_extra,giacenza,scorta_min,barcode&barcode=ilike.*' + encodeURIComponent(codice) + '*'); r = (r || []).filter(function(x){ return barcodeHa(x, codice); }); if(r && r[0]){ p = r[0]; if(!CATMAP[p.id]){ CAT.push(p); } else Object.assign(CATMAP[p.id], p); indicizza(); } }catch(e){}
   }
   if(p){ scPannelloCatalogo(p, null); return; }
   var st = document.getElementById('scStato'); if(st) st.textContent = 'Cerco il prodotto…';
