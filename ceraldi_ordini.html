@@ -423,7 +423,7 @@ html[data-theme="dark"] .todo-ft{background:rgba(255,255,255,.03)}
 </nav>
 
 <script>
-var APP_VERSION='8.6.1';
+var APP_VERSION='8.6.2';
 var BUILD_VERSION=APP_VERSION, BUILD_NUM=APP_VERSION;
 var APP={key:'ordini',nome:'Ordini',versione:APP_VERSION,authKey:'or_auth_v2',oldAuthKey:'ceraldi_ordini_auth_session',
   markBg:'linear-gradient(145deg,#FFC04D 0%,#FF9F0A 50%,#C2410C 100%)',
@@ -4832,13 +4832,50 @@ function cambiaProdottoPF(id){
   var l = m.cand.map(function(x){ return x.c; }).concat(candidati(descrPulita(r.descrizione), CAT, 12, f).filter(function(x){ return x.s >= 30; }).map(function(x){ return x.c; }))
     .filter(function(c, i, a){ return a.indexOf(c) === i && (!prima || c.id !== prima.id) && !formatoDiverso(c.name, descrPulita(r.descrizione)); }).slice(0, 6);
   apriSheet('shPFp', { titolo: 'Cos\'è questo prodotto?', sotto: esc(f || '') + ' · ' + eur(pfPrezzo(r)), alto: true, corpo:
-    '<div class="banner b" style="margin-bottom:10px"><span>🧾</span><div><div class="row-s" style="font-size:12px">In fattura c\'è scritto</div><b>' + esc(descrPulita(r.descrizione)) + '</b>' + (r.cod_articolo ? '<div class="row-s" style="font-size:12px">codice articolo ' + esc(r.cod_articolo) + '</div>' : '') + '</div></div>' +
+    '<div class="banner b" style="margin-bottom:10px;display:block"><div style="display:flex;gap:10px"><span>🧾</span><div style="flex:1;min-width:0"><div class="row-s" style="font-size:12px">In fattura c\'è scritto</div><b>' + esc(descrPulita(r.descrizione)) + '</b>' + (r.cod_articolo ? '<div class="row-s" style="font-size:12px">codice articolo ' + esc(r.cod_articolo) + '</div>' : '') + '</div></div>' + pfDatiRiga(r) + '</div>' +
     '<p class="hint" style="font-size:13px;margin:0 4px 8px">Tocca il prodotto del catalogo che corrisponde. <b>Se non c\'è</b>, usa il pulsante blu in basso per aggiungerlo.</p>' +
     (l.length ? '<div class="sec-title" style="margin-top:4px">Forse è uno di questi</div><div id="pfSug">' + pfRighe(id, l) + '</div>' : '') +
     '<div class="sec-title">Oppure cerca nel catalogo</div><div class="sw"><span class="si">🔎</span><input id="pfQ" type="search" placeholder="Scrivi una parola del nome" oninput="pfCerca(' + id + ')"></div><div id="pfRis"></div>',
     piede: '<div class="btn-row"><button class="btn btn-s" onclick="chiudiSheet(\'shPFp\');ignoraPF(' + id + ')">Non mi interessa</button><button class="btn btn-p" onclick="chiudiSheet(\'shPFp\');creaDaPF(' + id + ')">Non c\'è: aggiungilo</button></div>' });
 }
-function pfRighe(id, l){ var r = PF.find(function(x){ return x.id === id; }), f = r ? pfForn(r) : ''; if(!l.length) return '<div class="row-s" style="padding:8px 4px">Nessun prodotto trovato.</div>'; return '<div class="grp">' + l.map(function(p){ var a = prezzoDi(p, f), fd = r ? formatoDiverso(p.name, r.descrizione) : ''; return '<button class="row" onclick="associaPF(' + id + ',' + p.id + ')"' + (fd ? ' style="opacity:.55"' : '') + '><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p.name) + '</div><div class="row-s">' + esc(p.conf || '') + (a != null ? ' · ' + esc(f) + ' ' + eur(a) : '') + (fd ? ' · <span style="color:var(--orange-ink)">' + esc(fd) + '</span>' : '') + '</div></div><span class="chev">›</span></button>'; }).join('') + '</div>'; }
+function pfRighe(id, l){
+  var r = PF.find(function(x){ return x.id === id; }), f = r ? pfForn(r) : '', pr = r ? pfPrezzo(r) : 0;
+  if(!l.length) return '<div class="row-s" style="padding:8px 4px">Nessun prodotto trovato.</div>';
+  return '<div class="grp">' + l.map(function(p){
+    var a = prezzoDi(p, f), fd = r ? formatoDiverso(p.name, r.descrizione) : '', m = migliore(p), fo = pfFormato(p.name), c = (typeof CTX !== 'undefined' && CTX.per) ? CTX.per[p.id] : null;
+    // confronto col prezzo in fattura: stesso fornitore prima, altrimenti il migliore del catalogo
+    var rif = a != null ? a : (m.forn ? m.prezzo : null), d = rif && pr ? (pr - rif) / rif * 100 : null;
+    var conf = d == null ? '' : Math.abs(d) < 1 ? '<span class="bdg g">stesso prezzo</span>' : '<span class="bdg ' + (Math.abs(d) <= 15 ? 'n' : 'o') + '">' + (d > 0 ? 'in fattura +' : 'in fattura ') + d.toFixed(1).replace('.', ',') + '%</span>';
+    var ult = c && (c.ultimo_ordine || c.ultima_fattura) ? [c.ultimo_ordine, c.ultima_fattura].filter(Boolean).sort().pop() : null;
+    var extra = [fo ? 'formato ' + fo : '', a == null && m.forn ? 'migliore: ' + m.forn + ' ' + eur(m.prezzo) : (m.forn && m.forn !== f && m.prezzo < (a || 0) - 0.01 ? 'da ' + m.forn + ' ' + eur(m.prezzo) : ''), ult ? 'ultimo acquisto ' + dataIt(ult) : ''].filter(Boolean);
+    return '<button class="row" onclick="associaPF(' + id + ',' + p.id + ')"' + (fd ? ' style="opacity:.55"' : '') + '><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p.name) + '</div>' +
+      '<div class="row-s">' + esc(p.conf || '') + (a != null ? ' · ' + esc(f) + ' ' + eur(a) : ' · nessun prezzo da ' + esc(f || 'questo fornitore')) + (fd ? ' · <span style="color:var(--orange-ink)">' + esc(fd) + '</span>' : '') + '</div>' +
+      (conf || extra.length ? '<div class="row-s" style="font-size:12px;margin-top:3px">' + conf + (extra.length ? (conf ? ' ' : '') + esc(extra.join(' · ')) : '') + '</div>' : '') +
+      '</div><span class="chev">›</span></button>';
+  }).join('') + '</div>';
+}
+// Formato leggibile dal nome: "100 cl", "1,5 l", "× 24"
+function pfFormato(nome){
+  var v = typeof volumeMl === 'function' ? volumeMl(nome) : null, pz = typeof pezziConf === 'function' ? pezziConf(nome) : null, t = '';
+  if(v != null && v > 0) t = v >= 1000 ? String(Math.round(v / 100) / 10).replace('.', ',') + ' l' : (v % 10 === 0 ? (v / 10) + ' cl' : v + ' ml');
+  if(pz && pz > 1) t += (t ? ' ' : '') + '× ' + pz;
+  return t;
+}
+// Dati della riga di fattura per confrontare con il catalogo
+function pfDatiRiga(r){
+  var iva = num(r.iva), pu = num(r.prezzo_unit), pi = pfPrezzo(r), q = num(r.qta), um = r.unita_misura ? String(r.unita_misura).toUpperCase() : '';
+  var t = FATT && FATT.testate ? FATT.testate[String(r.fattura_id)] : null;
+  var celle = [
+    ['Prezzo unitario', eur(pi) + (iva ? '<small> IVA incl.</small>' : '')],
+    ['Senza IVA', pu ? eur(pu) + (iva ? '<small> + ' + String(iva).replace('.', ',') + '%</small>' : '') : '—'],
+    ['Quantità', q ? String(q).replace('.', ',') + (um ? ' ' + esc(um) : '') : '—'],
+    ['Totale riga', q && pi ? eur(pi * q) : '—'],
+    ['Formato dal nome', esc(pfFormato(r.descrizione) || '—')],
+    ['Fattura', (t && t.numero ? 'n° ' + esc(t.numero) + ' · ' : '') + esc(dataIt(r.data_fattura))]
+  ];
+  return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;margin-top:10px;padding-top:10px;border-top:1px solid var(--sep)">' + celle.map(function(c){ return '<div><div class="row-s" style="font-size:11.5px">' + c[0] + '</div><div style="font-size:14px;font-weight:600;font-variant-numeric:tabular-nums">' + c[1] + '</div></div>'; }).join('') + '</div>' +
+    (linkFattura(r) ? '<div class="row-s" style="font-size:12px;margin-top:6px">' + linkFattura(r).replace(/^ · /, '') + '</div>' : '');
+}
 function pfCerca(id){ var q = document.getElementById('pfQ').value.trim(), sg = document.getElementById('pfSug'); if(sg) sg.style.display = q ? 'none' : ''; document.getElementById('pfRis').innerHTML = q ? pfRighe(id, cercaCatalogo(q, 30)) : ''; if(q) pickerListini('pfRis', q, function(pid){ associaPF(id, pid); }); }
 async function associaPF(id, pid){
   var r = PF.find(function(x){ return x.id === id; }); if(!r) return;
