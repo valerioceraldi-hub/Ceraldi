@@ -162,6 +162,7 @@ button.row:active{background:var(--surface2)}
 html[data-theme="dark"] .stp button{background:var(--surface3)}
 .stp button:active{transform:scale(.9)}
 .stp b{min-width:30px;text-align:center;font-size:15px;font-variant-numeric:tabular-nums}
+.stp b.tq{cursor:pointer;border-radius:6px;padding:2px 4px;text-decoration:underline dotted;text-underline-offset:3px}
 
 /* ── Pulsanti ── */
 .btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:14px;border:none;border-radius:var(--radius-sm);font-size:16px;font-weight:600;text-align:center;transition:transform .12s,opacity .15s}
@@ -422,7 +423,7 @@ html[data-theme="dark"] .todo-ft{background:rgba(255,255,255,.03)}
 </nav>
 
 <script>
-var APP_VERSION='8.5.0';
+var APP_VERSION='8.6.0';
 var BUILD_VERSION=APP_VERSION, BUILD_NUM=APP_VERSION;
 var APP={key:'ordini',nome:'Ordini',versione:APP_VERSION,authKey:'or_auth_v2',oldAuthKey:'ceraldi_ordini_auth_session',
   markBg:'linear-gradient(145deg,#FFC04D 0%,#FF9F0A 50%,#C2410C 100%)',
@@ -2151,7 +2152,7 @@ function riconosciRichiesta(it){
 /* L'assistente come secondo parere sui casi incerti: conferma solo se sceglie lo stesso prodotto del motore,
    altrimenti propone il suo (sempre da confermare). Mai un prodotto fuori dai candidati. */
 async function secondoParereIA(voci){
-  if(!voci.length || !chiaveAI()) return;
+  if(!voci.length || !chiaveAI() || !iaRiconoscimentoAttiva()) return;
   try{
     var prompt = 'Sei il magazziniere di un bar. Un dipendente ha scritto a mano il nome di un prodotto da ordinare. Per ciascuna voce scegli quale dei prodotti del catalogo intende, oppure nessuno.\n' +
       'Regole: marca e tipo devono coincidere; se il dipendente non scrive il formato, va bene un formato qualsiasi dello stesso prodotto; errori di battitura e dialetto sono normali (es. "poeersde" = Powerade). Se non sei sicuro rispondi conf "bassa".\n\nVOCI:\n' +
@@ -2239,10 +2240,13 @@ async function riconosci(nomi, extra, opz){
    nome breve ("Europa 23 S.r.l"). L'abbinamento si decide una volta
    (in automatico solo se c'è un'unica corrispondenza sicura) e resta. */
 function normForn(s){ return norm(s).replace(/\b(S ?R ?L ?S?|S ?P ?A|S ?N ?C|S ?A ?S|SOC|COOP|SOCIETA|UNIPERSONALE|DI|DEI|DEL|DELLA|E|C)\b/g, ' ').replace(/\s+/g, ' ').trim(); }
-function risolviFornitore(nomeFattura){
-  if(!nomeFattura) return null;
-  var map = docDati('or8_conf').aliasForn || {}, k = normForn(nomeFattura);
+function risolviFornitore(nomeFattura, pivaRiga){
+  if(!nomeFattura && !pivaRiga) return null;
+  var map = docDati('or8_conf').aliasForn || {}, k = normForn(nomeFattura || '');
   if(map[k] === '__ignora__') return { ignora: true };
+  // P.IVA scritta sulla riga (arriva da Fatture insieme alla riga): la prova più sicura
+  if(pivaRiga){ var fr = fornDaPiva(pivaRiga); if(fr) return { nome: fr.nome }; }
+  if(!nomeFattura) return null;
   // la partita IVA in fattura identifica il fornitore con certezza, qualunque nome abbia
   var pv = pivaDaNomeFattura(nomeFattura), fp = pv ? fornDaPiva(pv) : null; if(fp) return { nome: fp.nome };
   if(map[k]) return fornDi(map[k]) ? { nome: fornDi(map[k]).nome } : null;
@@ -2656,7 +2660,7 @@ var LS_MEMF = 'or8_memf_v1', LS_ATTR = 'or8_attr_v1';
 function descrPulita(d){ return String(d || '').split(/\r?\n/)[0].replace(/\s+/g, ' ').trim(); }
 function codNorm(c){ c = String(c || '').trim().toUpperCase().replace(/\s+/g, ''); return c ? (c.replace(/^0+(?=[0-9A-Z])/, '') || c) : ''; }
 function chiaveCod(forn, cod){ var c = codNorm(cod); return forn && c ? norm(nomeFornitore(forn)) + '|' + c : ''; }
-function fornDiRigaPF(r){ var f = risolviFornitore(r.fornitore); return f && f.nome ? f.nome : null; }
+function fornDiRigaPF(r){ var f = risolviFornitore(r.fornitore, r.piva); return f && f.nome ? f.nome : null; }
 
 /* Quanto vale una riga già lavorata come prova di "codice → prodotto" */
 function pesoRiga(r){
@@ -2673,10 +2677,10 @@ async function caricaMemoriaFatture(forza){
   if(!forza && MEMF.pronto && Date.now() - (MEMF.letto || 0) < 10 * 60000) return MEMF;
   var cache = lsGet(LS_MEMF, null);
   if(cache && cache.righe && !forza){ MEMF.righe = cache.righe; MEMF.agg = cache.agg || ''; }
-  var campi = 'id,fornitore,cod_articolo,product_id,stato,note,descrizione,prezzo_ivato,prezzo_unit,data_fattura,updated_at';
+  var campi = 'id,fornitore,cod_articolo,product_id,stato,note,descrizione,prezzo_ivato,prezzo_unit,data_fattura,updated_at,piva';
   try{
     var nuove = await apiTutte('prezzi_da_fatture?select=' + campi + (MEMF.agg ? '&updated_at=gt.' + encodeURIComponent(MEMF.agg) : '') + '&order=id');
-    (nuove || []).forEach(function(r){ MEMF.righe[r.id] = { f: r.fornitore, c: r.cod_articolo || '', p: r.product_id, s: r.stato, n: (r.note || '').slice(0, 60), d: descrPulita(r.descrizione).slice(0, 90), v: num(r.prezzo_ivato) > 0 ? num(r.prezzo_ivato) : num(r.prezzo_unit), t: r.data_fattura }; if(r.updated_at > MEMF.agg) MEMF.agg = r.updated_at; });
+    (nuove || []).forEach(function(r){ MEMF.righe[r.id] = { f: r.fornitore, iv: r.piva || '', c: r.cod_articolo || '', p: r.product_id, s: r.stato, n: (r.note || '').slice(0, 60), d: descrPulita(r.descrizione).slice(0, 90), v: num(r.prezzo_ivato) > 0 ? num(r.prezzo_ivato) : num(r.prezzo_unit), t: r.data_fattura }; if(r.updated_at > MEMF.agg) MEMF.agg = r.updated_at; });
     lsSet(LS_MEMF, { righe: MEMF.righe, agg: MEMF.agg });
     MEMF.letto = Date.now();
   }catch(e){ if(!Object.keys(MEMF.righe).length) throw e; }
@@ -2690,7 +2694,7 @@ function indicizzaMemoria(){
   Object.keys(MEMF.righe).forEach(function(id){
     var x = MEMF.righe[id]; if(x.p == null || !CATMAP[x.p]) return;
     var r = { stato: x.s, note: x.n }, w = pesoRiga(r); if(!w) return;
-    var fr = risolviFornitore(x.f), forn = fr && fr.nome ? fr.nome : null; if(!forn) return;
+    var fr = risolviFornitore(x.f, x.iv), forn = fr && fr.nome ? fr.nome : null; if(!forn) return;
     var k = chiaveCod(forn, x.c);
     if(k){ cod[k] = cod[k] || { ids: {}, descr: {}, dp: {} }; cod[k].ids[x.p] = (cod[k].ids[x.p] || 0) + w; cod[k].descr[x.d] = 1; if(w >= 3){ (cod[k].dp[x.p] = cod[k].dp[x.p] || {})[norm(x.d)] = 1; } cod[k].forn = forn; cod[k].cod = x.c; }
     var kd = norm(forn) + '|' + norm(x.d); ds[kd] = ds[kd] || { ids: {}, cod: {} }; ds[kd].ids[x.p] = (ds[kd].ids[x.p] || 0) + w; if(x.c) ds[kd].cod[codNorm(x.c)] = x.c;
@@ -2906,7 +2910,7 @@ function confrontaAttributi(A, B){
 }
 /* Rivaluta con l'IA le righe rimaste in dubbio (solo se c'è la chiave) */
 async function rifinisciConIA(righe, esiti){
-  if(!chiaveAI()) return esiti;
+  if(!chiaveAI() || !iaRiconoscimentoAttiva()) return esiti;
   var idx = esiti.map(function(e, i){ return e.tipo !== 'esatto' && e.cand.length ? i : -1; }).filter(function(i){ return i >= 0; });
   if(!idx.length) return esiti;
   var nomi = []; idx.forEach(function(i){ nomi.push(descrPulita(righe[i].r.descrizione)); esiti[i].cand.slice(0, 4).forEach(function(x){ nomi.push(x.c.name); }); });
@@ -3008,7 +3012,7 @@ function rigaProdotto(p){
   var meta = [p.conf, catDi(p)].filter(Boolean).join(' · ');
   var badges = (preferito(p.id) ? '<span class="bdg o">★</span>' : '') + (sottoScorta(p) ? '<span class="bdg r">sotto scorta · ne hai ' + p.giacenza + '</span>' : '') +
     (b.fisso ? '<span class="bdg b">📌 ' + esc(b.forn) + '</span>' : '') + (nForn > 1 ? '<span class="bdg n">' + nForn + ' fornitori</span>' : '') + (!b.forn ? '<span class="bdg o">senza prezzo</span>' : '');
-  var dx = r ? '<span class="stp" onclick="event.stopPropagation()"><button aria-label="Meno" onclick="cambiaQ(\'p' + p.id + '\',-1)">−</button><b data-q="p' + p.id + '">' + r.qty + '</b><button aria-label="Più" onclick="cambiaQ(\'p' + p.id + '\',1)">+</button></span>'
+  var dx = r ? '<span class="stp" onclick="event.stopPropagation()"><button aria-label="Meno" onclick="cambiaQ(\'p' + p.id + '\',-1)">−</button><b class="tq" data-q="p' + p.id + '" onclick="chiediQuantita(\'p' + p.id + '\')">' + r.qty + '</b><button aria-label="Più" onclick="cambiaQ(\'p' + p.id + '\',1)">+</button></span>'
     : (U.lettura ? '' : '<button class="add-b" aria-label="Aggiungi" onclick="event.stopPropagation();aggiungi(' + p.id + ')">+</button>');
   return '<div class="pr' + (r ? ' on' : '') + '" id="pr-' + p.id + '"><span class="pr-stripe"></span><div class="pr-main" onclick="apriProdotto(' + p.id + ')">' +
     '<div class="pr-name">' + evidenzia(p.name, VIEW.q) + '</div><div class="pr-meta">' + esc(meta) + '</div>' + (badges ? '<div class="pr-res">' + badges + '</div>' : '') + '</div>' +
@@ -3286,16 +3290,15 @@ function renderScheda(){
   // Dati
   h += '<div class="sec-title">Dati del prodotto' + (ro ? '' : '<button class="lnk" onclick="modificaDati(' + p.id + ')">Modifica</button>') + '</div><div class="grp">' +
     [['Nome', p.name], ['Confezione', p.conf], ['Categoria', catDi(p)], ['Reparto', settoreDi(p)], ['IVA', p.iva ? p.iva + '%' : ''], ['Codici a barre', barcodeLista(p).join(', ')]].map(function(x){ return '<div class="row"><div class="row-main row-s" style="margin:0">' + x[0] + '</div><div class="row-r" style="color:var(--ink);max-width:62%;overflow:hidden;text-overflow:ellipsis">' + esc(x[1] || '—') + '</div></div>'; }).join('') + '</div>';
-  // Storico
-  var ord = STORICO.filter(function(o){ return (o.items || []).some(function(i){ return i.id === p.id || (i.id == null && norm(i.name) === norm(p.name)); }); }).slice(0, 6);
-  h += '<div class="sec-title">Ultimi ordini</div><div class="grp">' + (ord.length ? ord.map(function(o){ var it = o.items.find(function(i){ return i.id === p.id || norm(i.name) === norm(p.name); }); return '<div class="row"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(o.supplier) + '</div><div class="row-s">' + esc(dataIt(dataOrdine(o))) + '</div></div><div class="row-r tnum">× ' + it.qty + (it.price ? ' · ' + eur(it.price) : '') + '</div></div>'; }).join('') : '<div class="row"><div class="row-main row-s">Mai ordinato con questa app.</div></div>') + '</div>';
-  h += '<div class="sec-title">Andamento del prezzo</div><div class="grp" id="storPrezzi"><div class="row"><div class="row-main row-s">Carico…</div></div></div>';
+  // Storia acquisti: richiesta → ordine → fattura
+  h += '<div class="sec-title">Storia acquisti</div><div id="storiaAcq"><div class="grp"><div class="row"><div class="row-main row-s">Carico…</div></div></div></div>';
+  h += '<div class="sec-title">Modifiche al listino</div><div class="grp" id="storPrezzi"><div class="row"><div class="row-main row-s">Carico…</div></div></div>';
   if(!ro) h += '<button class="btn btn-d" style="margin-top:8px" onclick="chiediElimina(' + p.id + ')">Elimina dal catalogo</button>';
   b.innerHTML = h;
   var r = carr().righe['p' + p.id];
-  document.getElementById('prodPiede').innerHTML = ro ? '' : (r ? '<div class="btn-row"><button class="btn btn-s" onclick="rimuoviRiga(\'p' + p.id + '\');renderScheda()">Togli dal carrello</button><div style="display:flex;align-items:center;justify-content:center;flex:1"><span class="stp"><button onclick="cambiaQ(\'p' + p.id + '\',-1);renderScheda()">−</button><b>' + r.qty + '</b><button onclick="cambiaQ(\'p' + p.id + '\',1);renderScheda()">+</button></span></div></div>'
+  document.getElementById('prodPiede').innerHTML = ro ? '' : (r ? '<div class="btn-row"><button class="btn btn-s" onclick="rimuoviRiga(\'p' + p.id + '\');renderScheda()">Togli dal carrello</button><div style="display:flex;align-items:center;justify-content:center;flex:1"><span class="stp"><button onclick="cambiaQ(\'p' + p.id + '\',-1);renderScheda()">−</button><b class="tq" data-q="p' + p.id + '" onclick="chiediQuantita(\'p' + p.id + '\')">' + r.qty + '</b><button onclick="cambiaQ(\'p' + p.id + '\',1);renderScheda()">+</button></span></div></div>'
     : '<button class="btn btn-p" onclick="aggiungi(' + p.id + ');renderScheda()">Aggiungi al carrello' + (m.forn ? ' · ' + eur(m.prezzo) + ' da ' + esc(m.forn) : '') + '</button>');
-  caricaStoricoPrezzi(p.id);
+  caricaStoricoPrezzi(p.id); caricaStoriaAcquisti(p.id);
 }
 function rigaCampo(ico, t, s, campo){ return '<button class="row" ' + (U.lettura ? 'disabled' : '') + ' onclick="modificaCampo(\'' + campo + '\')"><div class="row-ico">' + ico + '</div><div class="row-main"><div class="row-t">' + t + '</div><div class="row-s">' + esc(s) + '</div></div><span class="chev">›</span></button>'; }
 async function caricaStoricoPrezzi(id){
@@ -3549,12 +3552,12 @@ function renderCarrello(){
       if(r.id == null) bd += '<span class="bdg p">non a catalogo</span> ';
       else if(x.prezzo == null) bd += '<span class="bdg o">nessun prezzo da ' + esc(gr.forn || '—') + '</span> ';
       if(r.forn && x.p && migliore(x.p).forn && migliore(x.p).forn !== gr.forn){ var mm = migliore(x.p); bd += '<span class="bdg n">da ' + esc(mm.forn) + ' costa ' + eur(mm.prezzo) + '</span> '; }
-      (r.da || []).forEach(function(d){ bd += '<span class="bdg b">da ' + esc(String(d.n || '').split(' ')[0]) + '</span> '; });
+      (r.da || []).forEach(function(d){ bd += '<span class="bdg b">da ' + esc(String(d.n || '').split(' ')[0]) + '</span> '; if(d.nota) bd += '<span class="bdg n" title="Nota del dipendente, non va al fornitore">🗣 ' + esc(nomeBreve(d.nota, 30)) + '</span> '; });
       if(r.nota) bd += '<span class="bdg n">📝 ' + esc(nomeBreve(r.nota, 26)) + '</span>';
       if(r.sost) bd += '<span class="bdg b">🔄 al posto di ' + esc(nomeBreve(r.sost, 26)) + '</span>';
       else if(r.orig && r.id != null && norm(r.orig) !== norm(r.nome)) bd += '<span class="bdg n">scritto «' + esc(nomeBreve(r.orig, 24)) + '»</span>';
       h += '<div class="cr"><div class="row-main" onclick="' + (r.id != null ? 'apriProdotto(' + r.id + ')' : '') + '"><div class="cr-t">' + esc(r.nome) + '</div><div class="cr-s">' + esc(r.conf || '') + (x.prezzo != null ? ' · ' + eur(x.prezzo) + ' cad.' : '') + '</div>' + (bd ? '<div class="pr-res">' + bd + '</div>' : '') + '</div>' +
-        '<div class="cr-r"><b class="tnum">' + (x.prezzo != null ? eur(x.sub) : '—') + '</b><div style="display:flex;gap:6px;align-items:center"><span class="stp"><button onclick="cambiaQ(\'' + x.k + '\',-1)">−</button><b data-q="' + x.k + '">' + r.qty + '</b><button onclick="cambiaQ(\'' + x.k + '\',1)">+</button></span><button class="more-b" onclick="menuRiga(\'' + x.k + '\')">⋯</button></div></div></div>';
+        '<div class="cr-r"><b class="tnum">' + (x.prezzo != null ? eur(x.sub) : '—') + '</b><div style="display:flex;gap:6px;align-items:center"><span class="stp"><button onclick="cambiaQ(\'' + x.k + '\',-1)">−</button><b class="tq" data-q="' + x.k + '" onclick="chiediQuantita(\'' + x.k + '\')">' + r.qty + '</b><button onclick="cambiaQ(\'' + x.k + '\',1)">+</button></span><button class="more-b" onclick="menuRiga(\'' + x.k + '\')">⋯</button></div></div></div>';
     });
     h += '</div>';
   });
@@ -3782,13 +3785,14 @@ function condividiPDF(forn, s, titolo){
    PARTE 3 · ORDINI — storico, arrivo merce, confronto con la fattura
    ══════════════════════════════════════════════════════════════════ */
 var VO = { filtro: 'aperti', q: '' };
-var GIORNI_APERTO = 21;
-function ordineAperto(o){ var s = statoOrdine(o); if(s) return false; var d = Date.parse(dataOrdine(o) || 0); return Date.now() - d < GIORNI_APERTO * 86400000; }
+var GIORNI_APERTO = 45;   // le fatture arrivano spesso a fine mese
+function ordineAperto(o){ var s = statoOrdine(o); if(s) return false; if(haFattura(o)) return false; var d = Date.parse(dataOrdine(o) || 0); return Date.now() - d < GIORNI_APERTO * 86400000; }
 function etichettaStato(o){
   var s = statoOrdine(o);
   if(s && s.s === 'ricevuto') return '<span class="bdg g">Arrivato</span>';
   if(s && s.s === 'parziale') return '<span class="bdg o">Arrivato in parte</span>';
-  if(ordineAperto(o)) return '<span class="bdg b">Da ricevere</span>';
+  if(haFattura(o)) return '<span class="bdg g">Fatturato</span>';
+  if(ordineAperto(o)) return '<span class="bdg b">In attesa di fattura</span>';
   return '<span class="bdg n">Archiviato</span>';
 }
 function renderOrdini(){
@@ -3796,23 +3800,23 @@ function renderOrdini(){
   var ora = new Date(), mese = STORICO.filter(function(o){ var d = new Date(dataOrdine(o)); return d.getMonth() === ora.getMonth() && d.getFullYear() === ora.getFullYear(); });
   var aperti = STORICO.filter(ordineAperto);
   var h = '<div class="hero"><div class="hero-lbl">' + ora.toLocaleDateString('it-IT', { month: 'long', year: 'numeric' }) + '</div><div class="hero-big">' + eur(mese.reduce(function(s, o){ return s + (Number(o.total) || 0); }, 0)) + '</div><div class="hero-sub">ordinati questo mese (prezzi da listino)</div>' +
-    '<div class="hero-stats"><div class="hero-stat"><b>' + mese.length + '</b><span>Ordini</span></div><div class="hero-stat"><b>' + aperti.length + '</b><span>Da ricevere</span></div><div class="hero-stat"><b>' + outbox().length + '</b><span>In attesa</span></div></div></div>';
+    '<div class="hero-stats"><div class="hero-stat"><b>' + mese.length + '</b><span>Ordini</span></div><div class="hero-stat"><b>' + aperti.length + '</b><span>Senza fattura</span></div><div class="hero-stat"><b>' + outbox().length + '</b><span>In attesa</span></div></div></div>';
   h += '<div class="sw' + (VO.q ? ' has' : '') + '" id="oSw"><span class="si"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg></span><input id="oQ" type="search" placeholder="Cerca fornitore o prodotto" value="' + esc(VO.q) + '" oninput="VO.q=this.value.trim();renderListaOrdini()"><button class="sx" onclick="VO.q=\'\';renderOrdini()">✕</button></div>';
-  h += '<div class="seg">' + [['aperti', 'In arrivo', aperti.length], ['tutti', 'Tutti'], ['ricevuti', 'Arrivati'], ['richieste', 'Richieste']].map(function(x){ return '<button class="seg-b' + (VO.filtro === x[0] ? ' active' : '') + '" onclick="VO.filtro=\'' + x[0] + '\';renderOrdini()">' + x[1] + (x[2] ? '<span class="n">' + x[2] + '</span>' : '') + '</button>'; }).join('') + '</div>';
+  h += '<div class="seg">' + [['aperti', 'Senza fattura', aperti.length], ['tutti', 'Tutti'], ['ricevuti', 'Fatturati'], ['richieste', 'Richieste']].map(function(x){ return '<button class="seg-b' + (VO.filtro === x[0] ? ' active' : '') + '" onclick="VO.filtro=\'' + x[0] + '\';renderOrdini()">' + x[1] + (x[2] ? '<span class="n">' + x[2] + '</span>' : '') + '</button>'; }).join('') + '</div>';
   var q = outbox(); if(q.length) h += '<div class="banner o"><span>⏳</span><div style="flex:1"><b>' + q.length + ' ordin' + (q.length === 1 ? 'e' : 'i') + ' non ancora salvat' + (q.length === 1 ? 'o' : 'i') + ' sul server</b><br>Partono appena torna la connessione.</div><button class="btn-sm o" onclick="svuotaOutbox().then(renderOrdini)">Riprova</button></div>';
   h += '<div id="listaOrdini"></div>';
   el.innerHTML = h; renderListaOrdini();
-  if(!FATT.at || Date.now() - FATT.at > 5 * 60000) caricaFattureRecenti().then(function(){ if(VIEW.tab === 'ordini') renderListaOrdini(); }).catch(function(){});
+  if(!FATT.at || Date.now() - FATT.at > 5 * 60000) caricaFattureRecenti().then(function(){ aggiornaRichiesteFatturate(); if(VIEW.tab === 'ordini') renderOrdini(); aggiornaBadge(); }).catch(function(){});
 }
 function renderListaOrdini(){
   var el = document.getElementById('listaOrdini'); if(!el) return;
   if(VO.filtro === 'richieste'){ renderStoricoRichieste(el); return; }
   var l = STORICO.slice();
   if(VO.filtro === 'aperti') l = l.filter(ordineAperto);
-  else if(VO.filtro === 'ricevuti') l = l.filter(function(o){ var s = statoOrdine(o); return s && (s.s === 'ricevuto' || s.s === 'parziale'); });
+  else if(VO.filtro === 'ricevuti') l = l.filter(function(o){ var s = statoOrdine(o); return haFattura(o) || (s && (s.s === 'ricevuto' || s.s === 'parziale')); });
   if(VO.q) l = l.filter(function(o){ return cercaTutte(o.supplier + ' ' + (o.items || []).map(function(i){ return i.name; }).join(' '), VO.q); });
   document.getElementById('oSw') && document.getElementById('oSw').classList.toggle('has', !!VO.q);
-  if(!l.length){ el.innerHTML = '<div class="empty"><div class="ei">📦</div><b>' + (VO.filtro === 'aperti' ? 'Nessun ordine da ricevere' : 'Nessun ordine') + '</b><p>' + (VO.filtro === 'aperti' ? 'Gli ordini inviati negli ultimi ' + GIORNI_APERTO + ' giorni e non ancora segnati come arrivati compaiono qui.' : '') + '</p></div>'; return; }
+  if(!l.length){ el.innerHTML = '<div class="empty"><div class="ei">📦</div><b>' + (VO.filtro === 'aperti' ? 'Nessun ordine in attesa di fattura' : 'Nessun ordine') + '</b><p>' + (VO.filtro === 'aperti' ? 'Gli ordini degli ultimi ' + GIORNI_APERTO + ' giorni per cui non è ancora arrivata la fattura compaiono qui. Quando la fattura arriva, l\'ordine si chiude da solo.' : '') + '</p></div>'; return; }
   var h = '', mese = '';
   l.slice(0, 200).forEach(function(o){
     var d = new Date(dataOrdine(o)), m = d.toLocaleDateString('it-IT', { month: 'long', year: 'numeric' });
@@ -3902,12 +3906,12 @@ function apriOrdine(id){
   var o = STORICO.find(function(x){ return x.id === id; }); if(!o) return;
   var s = statoOrdine(o), canali = { w: 'WhatsApp', e: 'Email', p: 'PDF', t: 'Testo copiato', r: 'Ordinato a voce' };
   var manc = s && s.manc ? s.manc : [];
-  var corpo = '<div class="banner ' + (s ? (s.s === 'ricevuto' ? 'g' : 'o') : 'b') + '"><span>' + (s ? (s.s === 'ricevuto' ? '✅' : '⚠️') : '🚚') + '</span><div>' + (s ? (s.s === 'ricevuto' ? 'Arrivato ' + esc(quando(s.at)) : 'Arrivato in parte ' + esc(quando(s.at)) + ' · mancano ' + manc.length + ' prodotti') : 'Inviato ' + esc(quando(dataOrdine(o))) + ' via ' + esc(canali[o.channel] || 'WhatsApp')) + '</div></div>';
+  var rf = riassuntoFattura(o), fatt = rf && rf.fatture && rf.fatture.length;
+  var corpo = '<div class="banner ' + (s ? (s.s === 'ricevuto' ? 'g' : 'o') : (fatt ? 'g' : 'b')) + '"><span>' + (s ? (s.s === 'ricevuto' ? '✅' : '⚠️') : (fatt ? '🧾' : '🚚')) + '</span><div>' + (s ? (s.s === 'ricevuto' ? 'Arrivato ' + esc(quando(s.at)) : 'Arrivato in parte ' + esc(quando(s.at)) + ' · mancano ' + manc.length + ' prodotti') : (fatt ? 'Fatturato: ' + esc(rf.fatture.map(function(z){ return 'n. ' + (z.numero || '?') + ' del ' + dataIt(new Date(z.data).toISOString()); }).join(', ')) + (rf.stato === 'diff' ? ' · ci sono differenze' : '') : 'Inviato ' + esc(quando(dataOrdine(o))) + ' via ' + esc(canali[o.channel] || 'WhatsApp') + ' · in attesa di fattura')) + '</div></div>';
   corpo += '<div class="grp">' + (o.items || []).map(function(i){ var m = manc.some(function(x){ return x.name === i.name; }); return '<div class="row"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(i.name) + (m ? ' <span class="bdg o">mancante</span>' : '') + '</div><div class="row-s">' + esc(i.conf || '') + (i.price ? ' · ' + eur(i.price) + ' cad.' : '') + (i.note ? ' · 📝 ' + esc(i.note) : '') + '</div></div><div class="row-r tnum"><b style="color:var(--ink)">× ' + i.qty + '</b>' + (i.price ? '<br>' + eur(i.price * i.qty) : '') + '</div></div>'; }).join('') +
     '<div class="row"><div class="row-main"><div class="row-t">Totale</div></div><b class="tnum" style="font-size:17px">' + eur(o.total) + '</b></div></div>';
   if(o.note) corpo += '<div class="banner b"><span>📝</span><div>' + esc(o.note) + '</div></div>';
-  corpo += '<div class="grp">' + (!U.lettura && !s ? azione('📦', 'Segna come arrivato', 'Controlla cosa è arrivato e aggiorna il magazzino', 'riceviOrdine(' + o.id + ')', 'ic-g') : '') +
-    (!U.lettura && s ? azione('↺', 'Non è ancora arrivato', 'Torna tra gli ordini da ricevere', 'annullaArrivo(' + o.id + ')') : '') +
+  corpo += '<div class="grp">' +
     (!U.lettura && manc.length ? azione('🛒', 'Riordina i mancanti', manc.length + ' prodotti di nuovo nel carrello', 'riordina(' + o.id + ',true)', 'ic-o') : '') +
     (!U.lettura ? azione('🛒', 'Riordina tutto', 'Rimette questi prodotti nel carrello', 'riordina(' + o.id + ')', 'ic-b') : '') +
     azione('🧾', 'Confronta con la fattura', 'Prezzi e quantità fatturati rispetto all\'ordine', 'confrontaFattura(' + o.id + ')', 'ic-p') +
@@ -3916,37 +3920,6 @@ function apriOrdine(id){
   apriSheet('shOrd', { titolo: o.supplier, sotto: esc(dataIt(dataOrdine(o), true)) + ' · ' + (o.items || []).length + ' prodotti', corpo: corpo, alto: true });
   function azione(ico, t, sub, fn, cls){ return '<button class="row" onclick="' + fn + '"><div class="row-ico ' + (cls || '') + '">' + ico + '</div><div class="row-main"><div class="row-t">' + t + '</div>' + (sub ? '<div class="row-s">' + sub + '</div>' : '') + '</div><span class="chev">›</span></button>'; }
 }
-function riceviOrdine(id){
-  var o = STORICO.find(function(x){ return x.id === id; }); if(!o) return;
-  apriSheet('shRic', { titolo: 'Cosa è arrivato?', sotto: esc(o.supplier) + ' · togli la spunta a ciò che manca', indietro: 'Ordine', onIndietro: function(){ apriOrdine(id); }, corpo:
-    '<div class="grp">' + (o.items || []).map(function(i, ix){ return '<label class="row"><input type="checkbox" checked data-ix="' + ix + '"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(i.name) + '</div><div class="row-s">ordinati ' + i.qty + ' ' + esc(i.conf || '') + '</div></div><input class="num-in filled" style="width:60px;font-size:16px;padding:7px 2px" inputmode="numeric" value="' + i.qty + '" data-q="' + ix + '" onclick="event.preventDefault()"></label>'; }).join('') + '</div>' +
-    '<label class="row" style="background:var(--surface);border-radius:var(--radius);margin-bottom:10px"><div class="row-main"><div class="row-t">Aggiungi alla giacenza</div><div class="row-s">Somma le quantità arrivate al magazzino (solo prodotti del catalogo)</div></div><span class="tgl"><input type="checkbox" id="ricGiac" checked><span></span></span></label>',
-    piede: '<button class="btn btn-g" onclick="confermaArrivo(' + id + ')">Conferma arrivo</button>' });
-}
-async function confermaArrivo(id){
-  var o = STORICO.find(function(x){ return x.id === id; }); if(!o) return;
-  var arrivati = [], manc = [];
-  (o.items || []).forEach(function(i, ix){
-    var ck = document.querySelector('#shRic input[data-ix="' + ix + '"]'), q = parseInt((document.querySelector('#shRic input[data-q="' + ix + '"]') || {}).value, 10);
-    if(isNaN(q)) q = i.qty;
-    if(ck && ck.checked && q > 0){ arrivati.push({ i: i, q: q }); if(q < i.qty) manc.push({ id: i.id, name: i.name, conf: i.conf, qty: i.qty - q }); }
-    else manc.push({ id: i.id, name: i.name, conf: i.conf, qty: i.qty });
-  });
-  var giac = document.getElementById('ricGiac').checked;
-  chiudiSheet('shRic'); chiudiSheet('shOrd');
-  await docModifica('or8_stati', function(d){ d.ordini = d.ordini || {}; d.ordini[id] = { s: manc.length ? 'parziale' : 'ricevuto', at: new Date().toISOString(), manc: manc }; });
-  var err = 0;
-  if(giac) for(var k = 0; k < arrivati.length; k++){
-    var a = arrivati[k]; if(a.i.id == null || !CATMAP[a.i.id]) continue;
-    try{ var fr = await api('catalogo_ceraldi?select=giacenza&id=eq.' + a.i.id); var g0 = fr && fr[0] ? (fr[0].giacenza || 0) : 0; await aggiornaProdotto(a.i.id, { giacenza: g0 + a.q }); }catch(e){ err++; }
-  }
-  // Richieste collegate → "arrivata"
-  var ids = {}; arrivati.forEach(function(a){ (a.i.rich || []).forEach(function(r){ ids[r] = 1; }); });
-  if(Object.keys(ids).length) cambiaStatoRichieste(Object.keys(ids).map(Number), 'arrivata', ['ordinata']).catch(function(){});
-  renderOrdini(); aggiornaBadge();
-  toast((manc.length ? 'Arrivato in parte: ' + manc.length + ' mancanti' : 'Ordine arrivato ✓') + (err ? ' · ' + err + ' giacenze non aggiornate' : ''), manc.length && !U.lettura ? { azione: 'Riordina mancanti', onAzione: function(){ riordina(id, true); } } : {});
-}
-function annullaArrivo(id){ docModifica('or8_stati', function(d){ if(d.ordini) delete d.ordini[id]; }); chiudiSheet('shOrd'); renderOrdini(); aggiornaBadge(); toast('Di nuovo tra gli ordini da ricevere'); }
 function riordina(id, soloMancanti){
   var o = STORICO.find(function(x){ return x.id === id; }); if(!o) return;
   var s = statoOrdine(o), l = soloMancanti && s && s.manc ? s.manc : (o.items || []), n = 0;
@@ -4002,7 +3975,7 @@ function renderConfronto(id){
   h += '<div class="sec-title">Prodotti ordinati</div><div class="grp">' + e.righe.map(function(x){
     var it = x.it, pf = prezzoMedio(x), d = pf != null && it.price > 0 ? (pf - it.price) / it.price : null, mancante = it.qty - x.fatturata;
     totO += (it.price || 0) * it.qty; if(pf != null) totF += pf * x.fatturata;
-    if(d != null && d > 0.01) su.push({ forn: o.supplier, nome: it.name, id: it.id, prima: it.price, dopo: pf });
+    if(d != null && d > 0.01) su.push({ forn: o.supplier, nome: it.name, id: it.id, prima: it.price, dopo: pf, qta: r2(x.fatturata) || null, riga: x.prezzi.length === 1 ? x.prezzi[0].riga.id : null });
     var st = !x.prezzi.length ? '<span class="bdg o">non in fattura</span>' : (mancante > 0.001 ? '<span class="bdg o">mancano ' + r2(mancante) + '</span>' : '') + (d != null && d > 0.01 ? ' <span class="bdg r">+' + (d * 100).toFixed(1) + '%</span>' : (d != null && d < -0.01 ? ' <span class="bdg g">' + (d * 100).toFixed(1) + '%</span>' : (x.prezzi.length ? ' <span class="bdg g">ok</span>' : '')));
     var nomeF = x.prezzi[0] && norm(x.prezzi[0].riga.descrizione) !== norm(it.name) ? '<div class="row-s" style="font-size:11.5px">in fattura: "' + esc(nomeBreve(x.prezzi[0].riga.descrizione, 52)) + '"</div>' : '';
     return '<div class="row"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(it.name) + '</div>' + nomeF + '<div class="row-s">ordinati ' + it.qty + (it.price ? ' a ' + eur(it.price) : '') + (x.prezzi.length ? ' · fatturati ' + r2(x.fatturata) + ' a ' + eur(pf) : '') + '</div><div class="pr-res">' + st + '</div></div></div>';
@@ -4019,7 +3992,7 @@ function renderConfronto(id){
     (e.fatture.length && !man ? '<button class="btn btn-s" onclick="confermaFatturaOrdine(' + o.id + ')">È giusta ✓</button>' : '') +
     (su.length ? '<button class="btn btn-p" onclick="contestaDifferenze()">Contesta ' + su.length + '</button>' : '') + '</div>';
 }
-function confermaFatturaOrdine(id){ var e = abbinamenti().per[id]; if(!e) return; var ids = e.fatture.map(function(z){ return z.id; }); docModifica('or8_stati', function(d){ d.fatture = d.fatture || {}; d.fatture[id] = ids; }); ABB.firma = ''; renderConfronto(id); renderListaOrdini(); toast('Abbinamento confermato'); }
+function confermaFatturaOrdine(id){ var e = abbinamenti().per[id]; if(!e) return; var ids = e.fatture.map(function(z){ return z.id; }); docModifica('or8_stati', function(d){ d.fatture = d.fatture || {}; d.fatture[id] = ids; }); var oo = STORICO.find(function(x){ return x.id === id; }); if(oo && ids.length) segnaRichiesteFatturate(oo); ABB.firma = ''; renderConfronto(id); renderListaOrdini(); toast('Abbinamento confermato'); }
 function scegliFatturaOrdine(id){
   var o = STORICO.find(function(x){ return x.id === id; }); if(!o) return;
   var forn = fornOrdine(o), ff = fattureDelFornitore(forn), d0 = Date.parse(dataOrdine(o)), e = abbinamenti().per[id] || { fatture: [] };
@@ -4040,12 +4013,13 @@ function conCodice(z, id){ var f = (abbinamenti().per[id] || {}).fattureForn || 
 function salvaFatturaOrdine(id, modo){
   var sel = Array.prototype.map.call(document.querySelectorAll('#shSF input:checked'), function(i){ return i.value; });
   docModifica('or8_stati', function(d){ d.fatture = d.fatture || {}; if(modo === 'auto') delete d.fatture[id]; else d.fatture[id] = sel; });
+  if(modo !== 'auto' && sel.length){ var oo = STORICO.find(function(x){ return x.id === id; }); if(oo) segnaRichiesteFatturate(oo); }
   ABB.firma = ''; chiudiSheet('shSF'); confrontaFattura(id); renderListaOrdini();
   toast(modo === 'auto' ? 'Torno a cercarla io' : (sel.length ? 'Fattura abbinata ✓' : 'Segnato: nessuna fattura per questo ordine'));
 }
 async function contestaDifferenze(){
   var l = window._cfDiff || []; if(!l.length) return;
-  try{ await api('prezzi_difformi', { method: 'POST', prefer: 'return=minimal', body: l.map(function(x){ return { fornitore: x.forn, nome_prodotto: x.nome, id_prodotto_catalogo: x.id || null, prezzo_catalogo: x.prima || null, prezzo_nuovo: x.dopo, fonte: 'fattura' }; }) }); await caricaPD(); aggiornaBadge(); toast(l.length + ' contestazioni aggiunte in Da fare'); window._cfDiff = []; }
+  try{ await api('prezzi_difformi', { method: 'POST', prefer: 'return=minimal', body: l.map(function(x){ return { fornitore: x.forn, nome_prodotto: x.nome, id_prodotto_catalogo: x.id || null, prezzo_catalogo: x.prima || null, prezzo_nuovo: x.dopo, fonte: 'fattura', qta: x.qta || null, riga_fattura_id: x.riga || null }; }) }); await caricaPD(); aggiornaBadge(); toast(l.length + ' contestazioni aggiunte in Da fare'); window._cfDiff = []; }
   catch(e){ toast('⚠️ ' + e.message); }
 }
 
@@ -4178,8 +4152,8 @@ async function caricaFattureRecenti(forza){
   _fattInCorso = (async function(){
     var da = new Date(Date.now() - 160 * GIORNO).toISOString().slice(0, 10), base = 'prezzi_da_fatture?select=id,fattura_id,fornitore,data_fattura,descrizione,qta,prezzo_unit,prezzo_ivato,product_id';
     var r;
-    try{ r = await apiTutte(base + ',rif_ordine,ddt_numero,ddt_data&data_fattura=gte.' + da + '&order=id'); }
-    catch(e){ if(!erroreColonna(e)) throw e; r = await apiTutte(base + '&data_fattura=gte.' + da + '&order=id'); }   // colonne DDT non ancora aggiunte
+    try{ r = await apiTutte(base + ',rif_ordine,ddt_numero,ddt_data,piva,unita_misura&data_fattura=gte.' + da + '&order=id'); }
+    catch(e){ if(!erroreColonna(e)) throw e; try{ r = await apiTutte(base + ',rif_ordine,ddt_numero,ddt_data&data_fattura=gte.' + da + '&order=id'); }catch(e2){ if(!erroreColonna(e2)) throw e2; r = await apiTutte(base + '&data_fattura=gte.' + da + '&order=id'); } }   // colonne DDT non ancora aggiunte
     var ids = (r || []).map(function(x){ return x.fattura_id; }).filter(function(x, i, l){ return x && l.indexOf(x) === i && /^\d+$/.test(x); }), test = {};
     for(var i = 0; i < ids.length; i += 100){
       try{ (await api('fatture?select=id,numero,data,importo,num_ddt&id=in.(' + ids.slice(i, i + 100).join(',') + ')') || []).forEach(function(f){ test[String(f.id)] = f; }); }catch(e){ break; }   // senza permesso di Fatture: niente numero/totale
@@ -4194,7 +4168,7 @@ function fornOrdine(o){ var f = fornDi(o.supplier); if(f) return f.nome; var s =
 function fattureDelFornitore(forn){
   var per = {};
   FATT.righe.forEach(function(x){
-    var f = risolviFornitore(x.fornitore), nome = f && f.nome ? f.nome : nomeFornitore(x.fornitore); if(nome !== forn) return;
+    var f = risolviFornitore(x.fornitore, x.piva), nome = f && f.nome ? f.nome : nomeFornitore(x.fornitore); if(nome !== forn) return;
     // fattura differita con più DDT: ogni consegna diventa una "fattura" a sé
     var k = x.fattura_id + (x.ddt_numero ? '#' + x.ddt_numero : '');
     if(!per[k]){ var t = FATT.testate[String(x.fattura_id)] || {}; per[k] = { id: k, fattura: String(x.fattura_id), numero: (t.numero || '') + (x.ddt_numero ? ' · DDT ' + x.ddt_numero : ''), data: _giorno(x.data_fattura || t.data), importo: x.ddt_numero ? null : (t.importo != null ? Number(t.importo) : null), rifOrdine: x.rif_ordine || null, ddtData: _giorno(x.ddt_data), codici: [], tutteConCodice: true, righe: [] }; }
@@ -4248,7 +4222,7 @@ function badgeFattura(o){
 var DF = { mostra: {}, ris: {}, escl: {}, scorta: {} };
 var STATI_APERTI_PF = ['pending', 'new_product', 'new_price', 'review', 'no_match'];
 
-function pfForn(r){ var f = risolviFornitore(r.fornitore); return f && f.nome ? f.nome : null; }
+function pfForn(r){ var f = risolviFornitore(r.fornitore, r.piva); return f && f.nome ? f.nome : null; }
 function pfPrezzo(r){ var a = num(r.prezzo_ivato), b = num(r.prezzo_unit); return a && a > 0 ? a : (b || 0); }
 async function patchPF(ids, campi){
   if(!ids.length) return;
@@ -4318,8 +4292,10 @@ async function processaPending(){
   var pend = PF.filter(function(r){ return r.stato === 'pending'; }); if(!pend.length) return 0;
   _procInCorso = true;
   try{
-    var lav = [], ignora = [];
-    pend.forEach(function(r){ var f = risolviFornitore(r.fornitore); if(f && f.ignora) ignora.push(r.id); else if(f && f.nome) lav.push({ r: r, forn: f.nome }); });
+    var lav = [], ignora = [], serv = [];
+    pend = pend.filter(function(r){ if(rigaServizio(r.descrizione)){ serv.push(r.id); return false; } return true; });
+    if(serv.length) await patchPF(serv, { stato: 'rejected', resolved_at: new Date().toISOString(), note: 'Spesa accessoria (trasporto, cauzione, imballo…): esclusa dal confronto prodotti' });
+    pend.forEach(function(r){ var f = risolviFornitore(r.fornitore, r.piva); if(f && f.ignora) ignora.push(r.id); else if(f && f.nome) lav.push({ r: r, forn: f.nome }); });
     if(ignora.length) await patchPF(ignora, { stato: 'rejected', note: 'Fornitore escluso da Ordini', resolved_at: new Date().toISOString() });
     if(!lav.length) return 0;
     try{ await caricaMemoriaFatture(); }catch(e){}
@@ -4378,6 +4354,7 @@ function renderDaFare(){
   sez += sezioneSchedeFornitori();
   sez += sezioneNuovi(g.nuovi);
   sez += sezioneScorta();
+  sez += sezioneSuggerimenti();
   sez += sezioneContestazioni();
   if(sez) h += '<div style="display:flex;justify-content:flex-end;gap:12px;margin:2px 4px -2px"><button class="lnk-btn" style="font-size:13px;padding:2px" onclick="apriTutteSez(true)">Apri tutte</button><button class="lnk-btn" style="font-size:13px;padding:2px" onclick="apriTutteSez(false)">Chiudi tutte</button></div>';
   h += blocchiDaFare(sez);
@@ -4608,6 +4585,8 @@ function dettaglioVoce(it, x, k){
     if(!p) return '<div class="row-s"><span class="bdg o">prodotto non più in catalogo</span>' + cambia + '</div>';
     var m = migliore(p);
     h = '<div class="row-s">' + (x.cambiato ? '→ <b>' + esc(p.name) + '</b> <span class="bdg b">al posto di ' + esc(nomeBreve(x.cambiato.name, 24)) + '</span> · ' : '') + (it.giacenza != null ? 'ne ha ' + it.giacenza + (it.scortaMin != null ? ' su ' + it.scortaMin : '') + ' · ' : '') + (m.forn ? esc(m.forn) + ' ' + eur(m.prezzo) : 'senza prezzo') + cambia + '</div>';
+    if(it.note) h += '<div class="row-s" style="font-size:12px">📝 ' + esc(it.note) + '</div>';
+    h += htmlAvvisi(avvisiVoceRichiesta(+String(k).split(':')[0], it, p));
     if(it.needsScortaMin && p.scorta_min == null) h += '<label class="row-s" style="display:flex;gap:6px;align-items:center;margin-top:4px"><input type="checkbox" style="width:16px;height:16px" ' + (DF.scorta[k] !== false ? 'checked' : '') + ' onchange="DF.scorta[\'' + k + '\']=this.checked"> imposta scorta minima a ' + ((it.giacenza || 0) + (it.qty || 1)) + '</label>';
     return h;
   }
@@ -4623,6 +4602,7 @@ function dettaglioVoce(it, x, k){
   }
   if(it.barcode) h += '<div class="row-s" style="font-size:12px">codice ' + esc(it.barcode) + '</div>';
   if(it.note) h += '<div class="row-s" style="font-size:12px">📝 ' + esc(it.note) + '</div>';
+  if(p && x.tipo === 'esatto') h += htmlAvvisi(avvisiVoceRichiesta(+String(k).split(':')[0], it, p));
   return h;
 }
 async function preparaRichieste(){
@@ -4683,6 +4663,8 @@ async function prendiRichiesta(id, muto){
   var ok = await cambiaStatoRichieste([id], 'importata', ['pending']);
   if(!ok.length){ await caricaRichieste(); renderDaFare(); aggiornaBadge(); toast('Il dipendente l\'ha annullata o è già stata presa'); return; }
   var da = [{ r: id, n: r.dipendente || '' }], n = 0;
+  // la nota del dipendente su quel prodotto viaggia con la voce (non va al fornitore)
+  function daVoce(it){ return it && it.note ? [{ r: id, n: r.dipendente || '', nota: String(it.note).slice(0, 200) }] : da; }
   for(var ix = 0; ix < (r.items || []).length; ix++){
     var it = r.items[ix], k = id + ':' + ix, x = ris[ix] || {};
     if(DF.escl[k]) continue;
@@ -4690,8 +4672,8 @@ async function prendiRichiesta(id, muto){
     if(x.p && x.tipo === 'esatto'){
       if(it.custom){ salvaAlias(it.name, x.p.id); if(it.barcode) collegaCodice(x.p, it.barcode, true); }
       if(it.needsScortaMin && x.p.scorta_min == null && DF.scorta[k] !== false) aggiornaProdotto(x.p.id, { scorta_min: (it.giacenza || 0) + q }).catch(function(){});
-      aggiungi(x.p.id, q, { da: da, muto: true, orig: it.custom ? it.name : null, sost: x.cambiato ? x.cambiato.name : null });
-    } else aggiungiProvvisorio(it.name, it.conf, q, { da: da, barcode: it.barcode || null, nota: it.note || '' });
+      aggiungi(x.p.id, q, { da: daVoce(it), muto: true, orig: it.custom ? it.name : null, sost: x.cambiato ? x.cambiato.name : null });
+    } else aggiungiProvvisorio(it.name, it.conf, q, { da: daVoce(it), barcode: it.barcode || null, nota: it.note || '' });
     n++;
   }
   renderDaFare(); renderOrdina(); aggiornaBadge();
@@ -4829,7 +4811,7 @@ async function contestaPF(id){
   var r = PF.find(function(x){ return x.id === id; }); if(!r) return;
   var p = CATMAP[r.product_id], f = pfForn(r);
   try{
-    await api('prezzi_difformi', { method: 'POST', prefer: 'return=minimal', body: { fornitore: f, nome_prodotto: p ? p.name : r.descrizione, id_prodotto_catalogo: p ? p.id : null, prezzo_catalogo: p ? prezzoDi(p, f) : null, prezzo_nuovo: pfPrezzo(r), fonte: 'fattura' } });
+    await api('prezzi_difformi', { method: 'POST', prefer: 'return=minimal', body: { fornitore: f, nome_prodotto: p ? p.name : r.descrizione, id_prodotto_catalogo: p ? p.id : null, prezzo_catalogo: p ? prezzoDi(p, f) : null, prezzo_nuovo: pfPrezzo(r), fonte: 'fattura', riga_fattura_id: r.id, qta: num(r.qta) || null } });
     await patchPF([id], { stato: 'rejected', resolved_at: new Date().toISOString(), note: 'Contestato al fornitore' }); if(p) imparaRiga(r, p.id, 2);
     await caricaPD(); renderDaFare(); aggiornaBadge(); toast('Aggiunto alle contestazioni: il prezzo in catalogo resta quello di prima');
   }catch(e){ toast('⚠️ ' + e.message); }
@@ -5219,10 +5201,11 @@ function renderAnalisi(){
   var ris = {}, risTot = 0;
   l.forEach(function(o){ (o.items || []).forEach(function(i){ var p = i.id != null ? CATMAP[i.id] : null; if(!p || !(i.price > 0)) return; var m = migliore(p); if(!m.forn || m.forn === o.supplier || m.prezzo >= i.price - 0.01) return; var d = (i.price - m.prezzo) * i.qty; risTot += d; if(!ris[p.id]) ris[p.id] = { p: p, d: 0, da: o.supplier, a: m.forn }; ris[p.id].d += d; }); });
   var rl = Object.keys(ris).map(function(k){ return ris[k]; }).sort(function(a, b){ return b.d - a.d; }).slice(0, 8);
-  if(rl.length) h += '<div class="sec-title">Dove potevi risparmiare</div><div class="banner g"><span>💡</span><div>Con i prezzi migliori di oggi, gli stessi ordini sarebbero costati <b>' + eur(risTot) + '</b> in meno.</div></div><div class="grp">' + rl.map(function(x){ return '<button class="row" onclick="apriProdotto(' + x.p.id + ')"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(x.p.name) + '</div><div class="row-s">ordinato da ' + esc(x.da) + ' · oggi conviene ' + esc(x.a) + '</div></div><b class="var-dn">−' + eur(x.d) + '</b></button>'; }).join('') + '</div>';
-  h += '<div class="sec-title">Prezzi aumentati di recente</div><div class="grp" id="anaAumenti"><div class="row"><div class="row-main row-s">Carico…</div></div></div>';
+  h += '<div class="sec-title">Risparmi</div><div id="anaRisp"><div class="row-s">Carico…</div></div>';
+  if(rl.length) h += '<div class="sec-title">Dove conviene comprare (confronto teorico)</div><div class="grp">' + rl.map(function(x){ return '<button class="row" onclick="apriProdotto(' + x.p.id + ')"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(x.p.name) + '</div><div class="row-s">ordinato da ' + esc(x.da) + ' · oggi conviene ' + esc(x.a) + '</div></div><b class="var-dn">−' + eur(x.d) + '</b></button>'; }).join('') + '</div>';
+  h += '<div class="sec-title" id="anaAumTit">Prezzi cambiati in fattura</div><div class="grp" id="anaAumenti"><div class="row"><div class="row-main row-s">Carico…</div></div></div>';
   h += '<button class="btn btn-s" style="margin-top:8px" onclick="esportaOrdiniCSV()">Scarica gli ordini del periodo (CSV per Excel)</button>';
-  el.innerHTML = h; caricaAumenti();
+  el.innerHTML = h; caricaAumenti(); caricaRisparmi({ tot: risTot });
 }
 function barre(titolo, mappa, max){
   var k = Object.keys(mappa).filter(function(x){ return mappa[x] > 0; }).sort(function(a, b){ return mappa[b] - mappa[a]; }).slice(0, max || 10), top = k.length ? mappa[k[0]] : 1;
@@ -5237,21 +5220,309 @@ function graficoMesi(){
   mesi.forEach(function(m, i){ var h = m.v / max * hh, x = i * bw + bw * .18; svg += '<rect x="' + x.toFixed(1) + '" y="' + (hh - h).toFixed(1) + '" width="' + (bw * .64).toFixed(1) + '" height="' + Math.max(h, m.v ? 2 : 0).toFixed(1) + '" rx="3" fill="' + (i === 11 ? '#007AFF' : '#8E8E93') + '" opacity="' + (i === 11 ? 1 : .45) + '"><title>' + m.l + ': ' + eur0(m.v) + '</title></rect><text x="' + (i * bw + bw / 2).toFixed(1) + '" y="' + (hh + 16) + '" text-anchor="middle" font-size="9" fill="#8E8E93" font-family="Inter,sans-serif">' + m.l.replace('.', '') + '</text>'; });
   return '<div class="chart">' + svg + '</svg><div class="muted" style="font-size:11.5px;text-align:center;margin-top:2px">Mese più alto: ' + eur0(max) + '</div></div>';
 }
-async function caricaAumenti(){
-  try{
-    var da = new Date(Date.now() - 90 * 86400000).toISOString();
-    var r = await api('prezzi_storico?select=product_id,supplier,price,prev_price,variazione_pct,created_at&created_at=gte.' + encodeURIComponent(da) + '&variazione_pct=gt.0&order=variazione_pct.desc&limit=40');
-    var el = document.getElementById('anaAumenti'); if(!el) return;
-    var visti = {}, l = (r || []).filter(function(x){ var k = x.product_id + '|' + x.supplier; if(visti[k] || !CATMAP[x.product_id]) return false; visti[k] = 1; return true; }).slice(0, 10);
-    el.innerHTML = l.length ? l.map(function(x){ var p = CATMAP[x.product_id]; return '<button class="row" onclick="apriProdotto(' + p.id + ')"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p.name) + '</div><div class="row-s">' + esc(x.supplier) + ' · ' + esc(dataIt(x.created_at)) + ' · da ' + eur(x.prev_price) + ' a ' + eur(x.price) + '</div></div><b class="var-up">+' + Number(x.variazione_pct).toFixed(1) + '%</b></button>'; }).join('')
-      : '<div class="row"><div class="row-main row-s">Nessun aumento registrato negli ultimi 3 mesi.</div></div>';
-  }catch(e){ var el2 = document.getElementById('anaAumenti'); if(el2) el2.innerHTML = '<div class="row"><div class="row-main row-s">Non disponibile.</div></div>'; }
-}
 function esportaOrdiniCSV(){
   var righe = [['Data', 'Fornitore', 'Prodotto', 'Confezione', 'Quantità', 'Prezzo', 'Totale riga', 'Nota']];
   ordiniPeriodo(VA.giorni).forEach(function(o){ (o.items || []).forEach(function(i){ righe.push([dataIt(dataOrdine(o)), o.supplier, i.name, i.conf || '', i.qty, String(i.price || 0).replace('.', ','), String(r2((i.price || 0) * i.qty)).replace('.', ','), i.note || '']); }); });
   scaricaFile('Ordini_' + oggiISO() + '.csv', new Blob(['﻿' + csv(righe)], { type: 'text/csv;charset=utf-8' }));
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   ECOSISTEMA ACQUISTI (v8.6.0)
+   Richiesta → Ordine → Fattura con riferimenti verificabili:
+   - prodotto: id del catalogo (ordini vecchi senza id: solo nome IDENTICO)
+   - richiesta → ordine: item.rich (id delle richieste)
+   - ordine → fattura: abbinamento (codice ordine, prodotti, date, totale)
+     confermato da te o calcolato; mai solo somiglianza del nome
+   - fattura → prodotto: riga collegata (codice articolo, memoria, conferme)
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ── 2.2 Quantità dal tastierino ── */
+function chiediQuantita(k){
+  var r = carr().righe[k]; if(!r || U.lettura) return;
+  apriSheet('askQ', { titolo: 'Quantità', sotto: esc(nomeBreve(r.nome || '', 44)),
+    corpo: '<div class="field"><label>Quante ne ordini?</label><input class="inp" id="askQv" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" value="' + (r.qty || 1) + '" style="font-size:28px;text-align:center;font-weight:700;font-variant-numeric:tabular-nums"></div><p class="hint" style="text-align:center">Scrivi 0 per toglierlo dal carrello.</p>',
+    piede: '<div class="btn-row"><button class="btn btn-s" onclick="chiudiSheet(\'askQ\')">Annulla</button><button class="btn btn-p" onclick="confermaQuantita(\'' + k + '\')">OK</button></div>' });
+  var inp = document.getElementById('askQv'); if(!inp) return;
+  setTimeout(function(){ try{ inp.focus(); inp.select(); }catch(e){} }, 80);
+  inp.onkeydown = function(e){ if(e.key === 'Enter') confermaQuantita(k); };
+}
+function confermaQuantita(k){
+  var inp = document.getElementById('askQv'); if(!inp) return;
+  var v = parseInt(String(inp.value).replace(/[^\d]/g, ''), 10);
+  if(isNaN(v)){ toast('Scrivi un numero'); return; }
+  chiudiSheet('askQ'); impostaQ(k, v);
+}
+function impostaQ(k, nq){
+  var r = carr().righe[k]; if(!r) return;
+  if(nq <= 0){ rimuoviRiga(k); if(_schedaId != null && document.getElementById('prodBody')) renderScheda(); return; }
+  nq = Math.min(9999, nq);
+  docModifica('or8_carrello', function(x){ if(x.righe[k]) x.righe[k].qty = nq; });
+  document.querySelectorAll('[data-q="' + k + '"]').forEach(function(b){ b.textContent = nq; });
+  aggiornaBarra(); if(document.getElementById('shCarr')) renderCarrello();
+  if(_schedaId != null && document.getElementById('prodBody')) renderScheda();
+}
+
+/* ── Contesto acquisti dal server (date, frequenze, quantità abituali; niente prezzi) ── */
+var CTX = { per: {}, at: 0 };
+async function caricaContesto(forza){
+  if(!forza && CTX.at && Date.now() - CTX.at < 5 * 60000) return CTX;
+  try{
+    var r = await api('rpc/acquisti_contesto_prodotti'), per = {};
+    (r || []).forEach(function(x){ per[x.product_id] = x; });
+    CTX = { per: per, at: Date.now() }; lsSet('or8_ctx', CTX);
+  }catch(e){ if(!CTX.at){ var c = lsGet('or8_ctx', null); if(c && c.per) CTX = c; } }
+  return CTX;
+}
+function giorniDa(t){ var d = Date.parse(t || ''); return isNaN(d) ? null : Math.floor((Date.now() - d) / 86400000); }
+function dataBreve(t){ var d = new Date(t); return isNaN(d) ? '' : d.toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' }); }
+/* Avvisi su una richiesta di acquisto: STESSA regola in Ceraldi Richieste.
+   c = contesto del prodotto (dal server); qty = quantità richiesta
+   opz.altraRichiesta = { il, chi } se c'è un'altra richiesta aperta con lo stesso prodotto
+   opz.ordineInAttesa = data di un ordine recente con questo prodotto non ancora fatturato
+   Mai un errore: solo motivi, la decisione resta a chi ordina. Senza almeno
+   3 ordini nello storico non c'è un "di solito" e quindi nessun allarme. */
+function avvisiAcquisto(c, qty, opz){
+  opz = opz || {}; c = c || {};
+  var out = [], n = Number(c.n_ordini) || 0, iv = Number(c.intervallo_medio_giorni) || 0, qt = Number(c.qta_tipica) || 0;
+  var ult = [c.ultimo_ordine, c.ultima_fattura].filter(Boolean).sort().pop(), g = ult ? giorniDa(ult) : null;
+  if(opz.altraRichiesta) out.push({ liv: 'att', t: 'Già in un\'altra richiesta aperta del ' + dataBreve(opz.altraRichiesta.il) + (opz.altraRichiesta.chi ? ' (' + opz.altraRichiesta.chi + ')' : '') });
+  if(opz.ordineInAttesa) out.push({ liv: 'info', t: 'C\'è già un ordine del ' + dataBreve(opz.ordineInAttesa) + ' non ancora fatturato' });
+  if(g != null && n >= 3 && iv >= 2 && g < iv * 0.5) out.push({ liv: 'att', t: 'Ordinato ' + (g === 0 ? 'oggi' : g === 1 ? 'ieri' : g + ' giorni fa') + ': di solito ogni ~' + Math.round(iv) + ' giorni' });
+  if(n >= 3 && qt > 0 && qty > Math.max(qt * 2.5, qt + 3)) out.push({ liv: 'att', t: 'Quantità insolita: di solito circa ' + (Math.round(qt * 10) / 10) });
+  return out;
+}
+function htmlAvvisi(l){ return l.map(function(a){ return '<div class="row-s" style="font-size:12px;color:' + (a.liv === 'att' ? 'var(--orange-ink)' : 'var(--ink2)') + '">' + (a.liv === 'att' ? '⚠️ ' : 'ℹ️ ') + esc(a.t) + '</div>'; }).join(''); }
+function stessoProdotto(i, p){ return i.id === p.id || (i.id == null && norm(i.name) === norm(p.name)); }
+function ordineInAttesaPer(p){
+  var o = STORICO.find(function(o){ return ordineAperto(o) && giorniDa(dataOrdine(o)) <= 14 && (o.items || []).some(function(i){ return stessoProdotto(i, p); }); });
+  return o ? dataOrdine(o) : null;
+}
+function avvisiVoceRichiesta(rId, it, p){
+  if(!p) return [];
+  var altra = RICH.find(function(r){ return r.id !== rId && (r.stato === 'pending' || r.stato === 'importata') && giorniDa(r.created_at) <= 30 && (r.items || []).some(function(i){ return !i.custom && i.id === p.id; }); });
+  return avvisiAcquisto(CTX.per[p.id], Number(it.qty) || 1, { altraRichiesta: altra ? { il: altra.created_at, chi: String(altra.dipendente || '').split(' ')[0] } : null, ordineInAttesa: ordineInAttesaPer(p) });
+}
+
+/* ── 2.1 Niente più "segna come arrivato": un ordine si chiude quando c'è la sua fattura ── */
+function haFattura(o){ var r = riassuntoFattura(o); return !!(r && r.fatture && r.fatture.length); }
+function segnaRichiesteFatturate(o){
+  var ids = {}; (o.items || []).forEach(function(i){ (i.rich || []).forEach(function(r){ ids[r] = 1; }); });
+  var l = Object.keys(ids).map(Number); if(!l.length || U.lettura) return;
+  cambiaStatoRichieste(l, 'arrivata', ['ordinata']).catch(function(){});
+}
+// Ordini con fattura trovata e tutti i prodotti fatturati: le richieste collegate diventano "arrivata"
+function aggiornaRichiesteFatturate(){
+  if(U.lettura || !FATT.at) return;
+  var fatti = lsGet('or8_rich_fatt', {}), cambi = false;
+  STORICO.forEach(function(o){
+    if(fatti[o.id] || !(o.items || []).some(function(i){ return (i.rich || []).length; })) return;
+    var r = riassuntoFattura(o); if(!r || !r.fatture || !r.fatture.length) return;
+    if(r.stato !== 'ok' && !r.manuale) return;
+    segnaRichiesteFatturate(o); fatti[o.id] = 1; cambi = true;
+  });
+  if(cambi) lsSet('or8_rich_fatt', fatti);
+}
+
+/* ── 11 Storia di un prodotto: richiesta → ordine → fattura ── */
+async function caricaStoriaAcquisti(id){
+  var el = document.getElementById('storiaAcq'); if(!el) return;
+  var p = CATMAP[id]; if(!p) return;
+  try{ await Promise.all([caricaStoricoRichieste(), caricaFattureRecenti(), caricaContesto()]); }catch(e){}
+  var righeF = [];
+  try{ righeF = await api('prezzi_da_fatture?select=id,fattura_id,fornitore,piva,data_fattura,descrizione,qta,prezzo_unit,prezzo_ivato,unita_misura,stato,note&product_id=eq.' + id + '&order=data_fattura.desc,id.desc&limit=40') || []; }catch(e){}
+  el = document.getElementById('storiaAcq'); if(!el || _schedaId !== id) return;
+  var ric = VR.tutte || RICH, a = abbinamenti(), usateF = {};
+  var ordini = STORICO.filter(function(o){ return (o.items || []).some(function(i){ return stessoProdotto(i, p); }); }).slice(0, 8);
+  var c = CTX.per[id] || {}, iv = Number(c.intervallo_medio_giorni) || 0, h = '';
+  if(c.n_ordini) h += '<div class="row-s" style="margin:0 4px 8px">Ordinato ' + c.n_ordini + ' volte nell\'ultimo anno' + (iv ? ' · in media ogni ' + Math.round(iv) + ' giorni' : '') + (c.qta_tipica ? ' · di solito ' + (Math.round(c.qta_tipica * 10) / 10) : '') + '</div>';
+  if(!ordini.length && !righeF.length){ el.innerHTML = h + '<div class="grp"><div class="row"><div class="row-main row-s">Nessun ordine o fattura per questo prodotto.</div></div></div>'; return; }
+  ordini.forEach(function(o, ix){
+    var it = (o.items || []).find(function(i){ return stessoProdotto(i, p); }) || {}, dO = Date.parse(dataOrdine(o));
+    var blocco = '';
+    // richieste che hanno originato l'ordine (riferimento: id della richiesta)
+    (it.rich || []).forEach(function(rid){
+      var r = ric.find(function(x){ return x.id === rid; }); if(!r){ blocco += riga('🙋', 'Richiesta #' + rid, 'non più disponibile'); return; }
+      var ri = (r.items || []).find(function(i){ return !i.custom && i.id === p.id; }) || (r.items || []).find(function(i){ return norm(i.name) === norm(p.name); }) || {};
+      blocco += riga('🙋', 'Richiesta di ' + esc(r.dipendente || '—'), esc(dataIt(r.created_at, true)) + (ri.qty ? ' · ' + ri.qty + ' ' + esc(ri.conf || '') : '') + (ri.note ? ' · 📝 ' + esc(ri.note) : ''));
+    });
+    blocco += riga('🛒', 'Ordine a ' + esc(o.supplier), esc(dataIt(dataOrdine(o), true)) + ' · ' + (it.qty || '?') + ' ' + esc(it.conf || '') + (it.price ? ' a ' + eur(it.price) + ' (listino)' : '') + (it.note ? ' · 📝 ' + esc(it.note) : ''), 'apriOrdine(' + o.id + ')');
+    // fattura: dall'abbinamento ordine↔fattura, riga per riga
+    var e = a.per[o.id], x = e && e.righe ? e.righe.find(function(z){ return stessoProdotto(z.it, p); }) : null, avv = [];
+    if(e && e.fatture && e.fatture.length && x && x.prezzi.length){
+      var pf = prezzoMedio(x), nums = e.fatture.map(function(z){ return z.numero || ''; }).filter(Boolean).join(', ');
+      x.prezzi.forEach(function(q){ usateF[q.riga.id] = 1; });
+      blocco += riga('🧾', 'Fattura' + (nums ? ' ' + esc(nums) : ''), 'fatturati ' + r2(x.fatturata) + ' a ' + eur(pf) + (x.prezzi[0] ? linkFattura({ fattura_id: String(x.prezzi[0].fattura || '').split('#')[0], id: x.prezzi[0].riga.id }) : ''));
+      if(it.price > 0 && pf != null && Math.abs(pf - it.price) / it.price > 0.01) avv.push({ liv: 'att', t: 'Prezzo fatturato ' + eur(pf) + ' invece di ' + eur(it.price) + ' (' + (pf > it.price ? '+' : '') + ((pf - it.price) / it.price * 100).toFixed(1) + '%)' });
+      if(Math.abs(x.fatturata - (Number(it.qty) || 0)) > 0.001) avv.push({ liv: 'att', t: 'Quantità fatturata ' + r2(x.fatturata) + ' invece di ' + it.qty + ' ordinati' });
+    } else if(e && e.fatture && e.fatture.length) {
+      blocco += riga('🧾', 'Fattura trovata', 'questo prodotto non c\'è');
+      avv.push({ liv: 'att', t: 'Ordinato ma non presente in fattura' });
+    } else blocco += riga('🧾', 'Fattura', FATT.at ? 'non ancora collegata' : 'fatture non disponibili');
+    // richiesto di nuovo poco dopo questo ordine?
+    var dopo = ric.filter(function(r){ var t = Date.parse(r.created_at); return t > dO && t - dO < Math.max(2, Math.min(7, iv ? iv * 0.5 : 7)) * 86400000 && (r.items || []).some(function(i){ return !i.custom && i.id === p.id; }) && (it.rich || []).indexOf(r.id) < 0; });
+    dopo.forEach(function(r){ var gg = Math.max(0, Math.round((Date.parse(r.created_at) - dO) / 86400000)); avv.push({ liv: 'info', t: 'Richiesto di nuovo da ' + String(r.dipendente || '').split(' ')[0] + ' ' + (gg === 0 ? 'lo stesso giorno dell\'ordine' : gg === 1 ? 'il giorno dopo l\'ordine' : gg + ' giorni dopo questo ordine') }); });
+    h += '<div class="grp">' + blocco + (avv.length ? '<div class="row"><div class="row-main">' + htmlAvvisi(avv) + '</div></div>' : '') + '</div>';
+  });
+  var sole = righeF.filter(function(r){ return !usateF[r.id] && r.stato !== 'no_match'; }).slice(0, 10);
+  if(sole.length) h += '<div class="sec-title" style="margin-top:6px">In fattura senza ordine dall\'app</div><div class="grp">' + sole.map(function(r){
+    return riga('🧾', esc(pfForn(r) || r.fornitore || ''), esc(dataIt(r.data_fattura)) + ' · ' + num(r.qta) + (r.unita_misura ? ' ' + esc(r.unita_misura) : '') + ' a ' + eur(pfPrezzo(r)) + (r.stato === 'storico' ? ' · storico' : '') + linkFattura(r));
+  }).join('') + '</div>';
+  el.innerHTML = h;
+  function riga(ico, t, s, click){ return '<' + (click ? 'button class="row" onclick="' + click + '"' : 'div class="row"') + '><div class="row-ico">' + ico + '</div><div class="row-main"><div class="row-t" style="font-size:14px">' + t + '</div><div class="row-s">' + s + '</div></div>' + (click ? '<span class="chev">›</span></button>' : '</div>'); }
+}
+
+/* ── 7 Aumenti di prezzo dalle fatture (prezzi realmente pagati) ── */
+function sogliaAumento(){ var v = Number(conf().sogliaAumento); return v > 0 ? v : 5; }
+async function impostaSogliaAumento(){
+  var v = await chiediTesto('Soglia aumenti', 'Evidenzia gli aumenti oltre questa percentuale', String(sogliaAumento()), 'Es. 5'); if(v === null) return;
+  var n = parseFloat(String(v).replace(',', '.')); if(!(n > 0) || n > 100){ toast('Scrivi una percentuale tra 0 e 100'); return; }
+  docModifica('or8_conf', function(d){ d.sogliaAumento = n; }); toast('Soglia: ' + n + '%'); if(document.getElementById('shImp')) apriImpostazioni(); if(VIEW.tab === 'analisi') renderAnalisi();
+}
+// Confronto tra due prezzi dello stesso prodotto e fornitore: è un aumento vero?
+function confrontoPrezzi(prima, dopo, nome){
+  var a = pfPrezzo(prima), b = pfPrezzo(dopo);
+  if(!(a > 0) || !(b > 0)) return { ok: false, motivo: 'prezzo mancante' };
+  var ua = String(prima.unita_misura || '').toUpperCase(), ub = String(dopo.unita_misura || '').toUpperCase();
+  if(ua && ub && ua !== ub) return { ok: false, motivo: 'unità diversa (' + ua + ' → ' + ub + ')', a: a, b: b };
+  var q = b / a, pk = (typeof DUP !== 'undefined' ? (DUP.analizza(nome).pack || DUP.analizza(dopo.descrizione).pack) : null);
+  if(pk > 1 && (Math.abs(q / pk - 1) < 0.12 || Math.abs(q * pk - 1) < 0.12)) return { ok: false, motivo: 'confezione diversa (a pezzo / a cartone)', a: a, b: b };
+  if(q > 3 || q < 0.33) return { ok: false, motivo: 'differenza troppo grande per essere solo un prezzo: controlla confezione', a: a, b: b };
+  return { ok: true, a: a, b: b, d: b - a, pct: (b - a) / a * 100 };
+}
+async function caricaAumenti(){
+  var el = document.getElementById('anaAumenti'); if(!el) return;
+  try{
+    var da = new Date(Date.now() - 400 * 86400000).toISOString().slice(0, 10), rec = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+    var r = await apiTutte('prezzi_da_fatture?select=id,fattura_id,fornitore,piva,data_fattura,descrizione,qta,prezzo_unit,prezzo_ivato,product_id,unita_misura,stato,note&product_id=not.is.null&data_fattura=gte.' + da + '&order=data_fattura.asc,id.asc');
+    el = document.getElementById('anaAumenti'); if(!el) return;
+    // solo collegamenti confermati o certi: mai le proposte ancora da verificare
+    var buone = (r || []).filter(function(x){ return CATMAP[x.product_id] && (/approved|matched_auto|storico/.test(x.stato) || (x.stato === 'rejected' && /Contestato/i.test(x.note || ''))); });
+    var g = {}; buone.forEach(function(x){ var k = x.product_id + '|' + (pfForn(x) || x.fornitore); (g[k] = g[k] || []).push(x); });
+    var su = [], giu = [], nc = [], soglia = sogliaAumento();
+    Object.keys(g).forEach(function(k){
+      var l = g[k], ult = l[l.length - 1]; if(!ult || ult.data_fattura < rec) return;
+      var prec = null; for(var i = l.length - 2; i >= 0; i--){ if(String(l[i].fattura_id) !== String(ult.fattura_id) && l[i].data_fattura < ult.data_fattura){ prec = l[i]; break; } }
+      if(!prec) return;
+      var p = CATMAP[ult.product_id], c = confrontoPrezzi(prec, ult, p.name), v = { p: p, forn: pfForn(ult) || ult.fornitore, prima: prec, dopo: ult, c: c };
+      if(!c.ok){ if(Math.abs((c.b || 0) - (c.a || 0)) > 0.01) nc.push(v); return; }
+      if(c.pct > 0.5) su.push(v); else if(c.pct < -0.5) giu.push(v);
+    });
+    su.sort(function(a, b){ return b.c.pct - a.c.pct; }); giu.sort(function(a, b){ return a.c.pct - b.c.pct; });
+    var oltre = su.filter(function(v){ return v.c.pct >= soglia; }).length;
+    function rigaV(v){
+      var forte = v.c.ok && v.c.pct >= soglia;
+      return '<div class="row"><div class="row-main" onclick="apriProdotto(' + v.p.id + ')"><div class="row-t" style="font-size:14px">' + esc(v.p.name) + '</div><div class="row-s">' + esc(v.forn) + ' · da ' + eur(v.c.a) + ' (' + esc(dataIt(v.prima.data_fattura)) + ') a ' + eur(v.c.b) + ' (' + esc(dataIt(v.dopo.data_fattura)) + ')' + (v.c.ok ? '' : ' · ' + esc(v.c.motivo)) + linkFattura(v.dopo) + '</div></div>' +
+        (v.c.ok ? '<div style="text-align:right"><b class="tnum" style="color:' + (v.c.d > 0 ? (forte ? 'var(--red)' : 'var(--orange-ink)') : 'var(--green)') + '">' + (v.c.d > 0 ? '+' : '') + eur(v.c.d) + '</b><div class="row-s"><span class="bdg ' + (v.c.d > 0 ? (forte ? 'r' : 'o') : 'g') + '">' + (v.c.pct > 0 ? '+' : '') + v.c.pct.toFixed(1) + '%</span></div></div>' : '') + '</div>';
+    }
+    var h = '<div class="row"><div class="row-main row-s" style="font-size:12px">Prezzi netti pagati (sconti inclusi, IVA inclusa), ultima fattura degli ultimi 3 mesi rispetto alla precedente dello stesso fornitore. Evidenziati in rosso oltre il ' + soglia + '%' + (U.lettura ? '' : ' · <button class="lnk-btn" style="font-size:12px;padding:0" onclick="impostaSogliaAumento()">cambia soglia</button>') + '.</div></div>';
+    h += su.length ? su.slice(0, 15).map(rigaV).join('') : '<div class="row"><div class="row-main row-s">Nessun aumento nelle fatture degli ultimi 3 mesi.</div></div>';
+    if(giu.length) h += '<div class="row"><div class="row-main row-t" style="font-size:13px;color:var(--ink2)">Prezzi scesi</div></div>' + giu.slice(0, 5).map(rigaV).join('');
+    if(nc.length) h += '<div class="row"><div class="row-main row-t" style="font-size:13px;color:var(--ink2)">Differenze non confrontabili (non sono aumenti)</div></div>' + nc.slice(0, 6).map(rigaV).join('');
+    el.innerHTML = h;
+    var t = document.getElementById('anaAumTit'); if(t) t.textContent = 'Prezzi cambiati in fattura' + (oltre ? ' · ' + oltre + ' oltre il ' + soglia + '%' : '');
+  }catch(e){ var el2 = document.getElementById('anaAumenti'); if(el2) el2.innerHTML = '<div class="row"><div class="row-main row-s">Non disponibile: ' + esc(e.message) + '</div></div>'; }
+}
+
+/* ── 10 Risparmi: verificato, potenziale, e ciò che NON è risparmio ── */
+async function caricaRisparmi(teorico){
+  var el = document.getElementById('anaRisp'); if(!el) return;
+  try{
+    var l = await api('prezzi_difformi?select=*&stato=in.(attivo,inviato,rimborsato,respinto)&order=data.desc&limit=1000') || [];
+    el = document.getElementById('anaRisp'); if(!el) return;
+    var lim = VA.giorni ? Date.now() - VA.giorni * 86400000 : 0;
+    var verif = l.filter(function(x){ return x.stato === 'rimborsato' && num(x.importo_recuperato) > 0 && Date.parse(x.esito_il || x.data) >= lim; });
+    var totV = verif.reduce(function(s, x){ return s + num(x.importo_recuperato); }, 0);
+    var aperte = l.filter(function(x){ return x.stato === 'attivo' || x.stato === 'inviato'; });
+    var conQ = aperte.filter(function(x){ return num(x.qta) > 0 && num(x.prezzo_catalogo) > 0 && num(x.prezzo_nuovo) > num(x.prezzo_catalogo); });
+    var totP = conQ.reduce(function(s, x){ return s + (num(x.prezzo_nuovo) - num(x.prezzo_catalogo)) * num(x.qta); }, 0);
+    var h = '<div class="kpi"><div><b style="color:var(--green)">' + eur(totV) + '</b><span>verificato (rimborsi ottenuti)</span></div><div><b>' + eur(totP) + '</b><span>potenziale (contestazioni aperte)</span></div></div>';
+    h += '<p class="hint" style="font-size:12px;margin:0 4px 8px">Verificato = solo i rimborsi o le note di credito che hai segnato come ottenuti. Potenziale = differenza × quantità fatturata delle contestazioni ancora aperte' + (aperte.length > conQ.length ? ' (' + (aperte.length - conQ.length) + ' senza quantità nota, non conteggiate)' : '') + '. Non è denaro risparmiato finché il fornitore non rimborsa.</p>';
+    var inv = l.filter(function(x){ return x.stato === 'inviato'; });
+    if(inv.length) h += '<div class="grp">' + inv.slice(0, 12).map(function(x){
+      var pot = num(x.qta) > 0 && num(x.prezzo_catalogo) > 0 ? (num(x.prezzo_nuovo) - num(x.prezzo_catalogo)) * num(x.qta) : null;
+      return '<div class="row"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(x.nome_prodotto) + '</div><div class="row-s">' + esc(x.fornitore) + ' · contestato il ' + esc(dataIt(x.data_invio || x.data)) + (pot != null ? ' · in gioco ' + eur(pot) : '') + '</div>' +
+        (U.lettura ? '' : '<div style="margin-top:6px;display:flex;gap:6px"><button class="btn-sm g" onclick="esitoContestazione(' + x.id + ',true,' + (pot != null ? r2(pot) : 'null') + ')">Rimborso ottenuto</button><button class="btn-sm" onclick="esitoContestazione(' + x.id + ',false)">Respinta</button></div>') + '</div></div>';
+    }).join('') + '</div>';
+    if(teorico && teorico.tot > 0) h += '<div class="banner b"><span>ℹ️</span><div><b>Confronto teorico, non è un risparmio:</b> con i prezzi migliori di oggi gli stessi ordini sarebbero costati ' + eur(teorico.tot) + ' in meno. Serve solo a scegliere meglio i prossimi ordini.</div></div>';
+    el.innerHTML = h;
+  }catch(e){ var el2 = document.getElementById('anaRisp'); if(el2) el2.innerHTML = '<div class="row-s">Non disponibile: ' + esc(e.message) + '</div>'; }
+}
+async function esitoContestazione(id, ottenuto, proposta){
+  var body = { stato: ottenuto ? 'rimborsato' : 'respinto', esito_il: new Date().toISOString() };
+  if(ottenuto){
+    var v = await chiediTesto('Rimborso ottenuto', 'Quanto hai recuperato davvero? (nota di credito o sconto)', proposta != null ? String(proposta).replace('.', ',') : '', 'Es. 12,50'); if(v === null) return;
+    var n = parseFloat(String(v).replace(/\./g, '').replace(',', '.')); if(!(n >= 0)){ toast('Importo non valido'); return; }
+    body.importo_recuperato = n;
+  }
+  try{ await api('prezzi_difformi?id=eq.' + id, { method: 'PATCH', prefer: 'return=minimal', body: body }); toast(ottenuto ? 'Registrato come risparmio verificato' : 'Segnata come respinta', { azione: 'Annulla', onAzione: function(){ api('prezzi_difformi?id=eq.' + id, { method: 'PATCH', body: { stato: 'inviato', esito_il: null, importo_recuperato: null } }).then(function(){ renderAnalisi(); }); } }); renderAnalisi(); }
+  catch(e){ toast('⚠️ ' + e.message); }
+}
+
+/* ── 8 Forse da riordinare: solo dallo storico degli ordini, mai "sta finendo" ── */
+function suggerimentiRiordino(){
+  var out = [];
+  CAT.forEach(function(p){
+    var c = CTX.per[p.id]; if(!c || (Number(c.n_ordini) || 0) < 4) return;
+    var iv = Number(c.intervallo_medio_giorni) || 0; if(iv < 2) return;
+    var g = giorniDa(c.ultimo_ordine); if(g == null || g < iv * 1.15 || g > iv * 4) return;   // oltre 4 volte il solito: probabilmente non lo prendi più
+    if(inCarrello(p.id) || sottoScorta(p) || c.richiesta_aperta_il) return;
+    if(p.giacenza != null && p.scorta_min != null && p.giacenza > p.scorta_min) return;      // il conteggio dice che ne hai abbastanza
+    out.push({ p: p, c: c, g: g, iv: iv, q: Math.max(1, Math.round(Number(c.qta_tipica) || p.qty_min || 1)) });
+  });
+  return out.sort(function(a, b){ return b.g / b.iv - a.g / a.iv; });
+}
+function sezioneSuggerimenti(){
+  if(!CTX.at) return '';
+  var l = suggerimentiRiordino(); if(!l.length) return '';
+  var h = titoloSez('Forse da riordinare', l.length);
+  h += '<p class="hint" style="font-size:12.5px;margin:-2px 4px 8px">Calcolato solo da quanto spesso li ordini: non so quanti ne hai in magazzino. Nessun ordine parte da solo.</p><div class="grp">';
+  h += l.slice(0, DF.mostra.sugg ? 60 : 8).map(function(x){
+    return '<div class="row"><div class="row-main" onclick="apriProdotto(' + x.p.id + ')"><div class="row-t" style="font-size:14px">' + esc(x.p.name) + '</div><div class="row-s">Di solito ogni ~' + Math.round(x.iv) + ' giorni · ultimo ordine ' + x.g + ' giorni fa · di solito ' + x.q + '</div></div>' +
+      (U.lettura ? '' : '<button class="btn-sm p" onclick="aggiungi(' + x.p.id + ',' + x.q + ');renderDaFare()">+ ' + x.q + '</button>') + '</div>';
+  }).join('');
+  if(l.length > 8 && !DF.mostra.sugg) h += '<button class="row" onclick="DF.mostra.sugg=1;renderDaFare()"><div class="row-main" style="color:var(--blue);font-weight:600">Mostra tutti</div></button>';
+  return h + '</div>';
+}
+
+/* ── 3 Spese accessorie (trasporto, cauzioni, imballi…): fuori dal confronto prodotti ── */
+async function escludiServizi(){
+  if(U.lettura) return 0;
+  var ids = PF.filter(function(r){ return (r.stato === 'pending' || r.stato === 'new_product' || r.stato === 'no_match') && !r.product_id && rigaServizio(r.descrizione); }).map(function(r){ return r.id; });
+  if(ids.length) try{ await patchPF(ids, { stato: 'rejected', resolved_at: new Date().toISOString(), note: 'Spesa accessoria (trasporto, cauzione, imballo…): esclusa dal confronto prodotti' }); }catch(e){ _registraErrore('fatture', 'servizi: ' + e.message); }
+  return ids.length;
+}
+
+
+/* ── Righe "storico" (fatture passate recuperate da Fatture): le collego al
+   catalogo SOLO se il riconoscimento è certo (codice/nome imparato + prezzo
+   coerente). Non toccano mai il listino e non insegnano nulla alla memoria
+   (peso 0): servono a storia acquisti, ultimo acquisto e aumenti. ── */
+var _storicoInCorso = false;
+async function collegaStorico(){
+  if(_storicoInCorso || U.lettura || !CAT.length) return 0;
+  _storicoInCorso = true;
+  try{
+    var r = await api('prezzi_da_fatture?select=id,fattura_id,fornitore,piva,data_fattura,cod_articolo,descrizione,qta,prezzo_unit,prezzo_ivato,stato,note&stato=eq.storico&product_id=is.null&note=not.ilike.*nessun%20collegamento*&order=data_fattura.desc&limit=300') || [];
+    if(!r.length) return 0;
+    try{ await caricaMemoriaFatture(); }catch(e){}
+    var per = {}, nessuno = [];
+    r.forEach(function(x){
+      if(rigaServizio(x.descrizione)){ nessuno.push(x.id); return; }
+      var f = pfForn(x); if(!f){ nessuno.push(x.id); return; }
+      var m = riconosciRiga(x, f);
+      if(m.tipo === 'esatto' && CATMAP[m.id]) (per[m.id] = per[m.id] || []).push(x.id); else nessuno.push(x.id);
+    });
+    var n = 0;
+    for(var id in per){ try{ await patchPF(per[id], { product_id: +id, note: 'Fattura passata: solo storico · collegata in automatico (riconoscimento certo)' }); n += per[id].length; }catch(e){} }
+    // le incerte restano senza prodotto: le segno per non rianalizzarle a ogni avvio
+    if(nessuno.length) try{ await patchPF(nessuno, { note: 'Fattura passata: solo storico · nessun collegamento certo' }); }catch(e){}
+    return n;
+  } finally { _storicoInCorso = false; }
+}
+
+/* ── IA nel riconoscimento: spenta di default ── */
+function iaRiconoscimentoAttiva(){ return conf().iaRiconoscimento === true; }
+function toggleIaRiconoscimento(v){ docModifica('or8_conf', function(d){ d.iaRiconoscimento = !!v; }); toast(v ? 'IA attiva per i nomi incerti' : 'IA spenta: riconoscimento solo con regole e conferme'); }
 
 /* ══════════════════════════════════════════════════════════════════
    PARTE 7 · IMPOSTAZIONI, FORNITORI, IMPORT/EXPORT, ASSISTENTE
@@ -5267,6 +5538,7 @@ function apriImpostazioni(){
       voce('📥', 'Importa listino o preventivo', 'Excel, CSV, PDF o foto: aggiorna i prezzi in blocco', 'apriImport()', 'ic-g') +
       voce('📤', 'Esporta', 'Catalogo in Excel, modello prezzi per i fornitori, backup', 'apriEsporta()', 'ic-p') +
       voce('⭐', 'Modelli d\'ordine', ((conf().ricorrenti || []).length) + ' salvati · gli ordini che fai sempre uguali', 'apriModelli()', 'ic-o') +
+      voce('📈', 'Soglia aumenti di prezzo', 'Evidenzia in rosso oltre il ' + sogliaAumento() + '%', 'impostaSogliaAumento()', 'ic-r') +
       voce('⏰', 'Promemoria giorno d\'ordine', conf().promemoria && conf().promemoria.giorni && conf().promemoria.giorni.length ? giorniTesto(conf().promemoria.giorni) + ' alle ' + conf().promemoria.ora : 'non impostato', 'apriPromemoria()') + '</div>' +
     '<div class="sec-title">Catalogo</div><div class="grp">' +
       (U.lettura ? '' : voce('＋', 'Nuovo prodotto', '', 'chiudiSheet(\'shImp\');apriNuovoProdotto(\'\')', 'ic-b')) +
@@ -5416,7 +5688,8 @@ function apriAzienda(){
 }
 function salvaAzienda(){ var v = function(i){ return document.getElementById(i).value.trim(); }; docModifica('or8_conf', function(d){ d.azienda = { nome: v('azN') || 'Caffetteria Ceraldi', indirizzo: v('azI'), piva: v('azP'), tel: v('azT'), email: v('azE') }; }); toast('Salvato ✓'); apriImpostazioni(); }
 function apriIA(){
-  sotto('shIA', 'Intelligenza artificiale', '<p class="hint" style="font-size:13.5px;margin-bottom:12px">L\'IA legge listini in PDF o foto e aiuta a riconoscere i nomi incerti. La chiave Anthropic è custodita sul server: non sta più su questo telefono e nessuno può copiarla da qui. Può usarla solo chi entra con un account abilitato a Ordini.</p><div id="iaEsito"></div>',
+  sotto('shIA', 'Intelligenza artificiale', '<p class="hint" style="font-size:13.5px;margin-bottom:12px">L\'IA legge listini in PDF o foto e aiuta a riconoscere i nomi incerti. La chiave Anthropic è custodita sul server: non sta più su questo telefono e nessuno può copiarla da qui. Può usarla solo chi entra con un account abilitato a Ordini.</p><div id="iaEsito"></div>' +
+    '<div class="grp"><label class="row"><div class="row-main"><div class="row-t">Usa l\'IA per i nomi incerti</div><div class="row-s">Spenta: righe di fattura e richieste si riconoscono solo con codici, nomi identici, memoria e le tue conferme. I casi incerti restano da confermare a te.</div></div><span class="tgl"><input type="checkbox" ' + (iaRiconoscimentoAttiva() ? 'checked' : '') + (U.lettura ? ' disabled' : '') + ' onchange="toggleIaRiconoscimento(this.checked)"><span></span></span></label></div>',
     '<div class="btn-row"><button class="btn btn-p" onclick="provaIA()">Prova</button></div>');
 }
 async function provaIA(){ var el = document.getElementById('iaEsito'); el.innerHTML = '<div class="loading"><span class="spinner"></span></div>'; try{ var t = await chiamaClaude('Rispondi solo: OK', 10); el.innerHTML = '<div class="banner g">✓ Funziona (' + esc(t.trim()) + ')</div>'; }catch(e){ el.innerHTML = '<div class="banner r">' + esc(e.message) + '</div>'; } }
@@ -5725,6 +5998,7 @@ async function avvia(){
   CAT = lsGet('or8_cat', null) || lsGet('bp_supabase_cache', []) || []; indicizza();
   FORN = lsGet('or8_forn', []); STORICO = lsGet('or8_storico', []); RICH = lsGet('or8_rich', []);
   Object.keys(DOC_DEFAULT).forEach(docDaCache);
+  var _ctx = lsGet('or8_ctx', null); if(_ctx && _ctx.per) CTX = _ctx;
   misuraHeader(); renderTutto();
   document.getElementById('q').addEventListener('input', debounce(function(){ VIEW.q = this.value.trim(); VIEW.limite = 60; document.getElementById('swBox').classList.toggle('has', !!VIEW.q); renderProdotti(); }, 140));
   await sincronizza(false);
@@ -5764,12 +6038,15 @@ async function sincronizza(manuale, completo){
       if(auto) toast(auto + ' prezzi aggiornati in automatico dalle fatture (variazioni entro l\'1%)', { durata: 3500 });
       renderTuttoSicuro();
     } else if(!U.lettura) risolviPrezziUguali().then(renderTuttoSicuro);
+    try{ await caricaContesto(true); }catch(e){}
+    if(!U.lettura && await escludiServizi()) renderTuttoSicuro();
+    if(!U.lettura) collegaStorico().then(function(n){ if(n) caricaContesto(true); }).catch(function(){});
     if(!U.lettura && conf().doppioniAuto){ var nu = await uniscitiDaSolo(); if(nu){ toast('Ho unito ' + nu + ' doppioni del catalogo (vedi Da fare)', { durata: 3500 }); renderTuttoSicuro(); } }
   })();
   try{ await _syncInCorso; } finally { _syncInCorso = null; }
 }
 async function aggiornaLeggero(){
-  try{ await Promise.all([caricaRichieste(), caricaPF(), docCarica('or8_carrello'), docCarica('or8_stati'), U.lettura ? null : caricaBarcode()]); }catch(e){}
+  try{ await Promise.all([caricaRichieste(), caricaPF(), docCarica('or8_carrello'), docCarica('or8_stati'), U.lettura ? null : caricaBarcode(), caricaContesto()]); }catch(e){}
   if(PF.some(function(r){ return r.stato === 'pending'; })) await processaPending();
   await ricontrollaAbbinamenti();
   renderTuttoSicuro();

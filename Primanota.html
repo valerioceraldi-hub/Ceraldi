@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.24.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.25.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -1831,7 +1831,9 @@ html[data-theme="dark"] .reg-import-link{border-color:rgba(255,255,255,.08)}
       </div><span class="rcard-arr" id="rarr-abbina">›</span>
     </div>
     <div class="rcard-body" id="rbody-abbina">
-      <p style="font-size:12px;color:var(--ink3);margin-bottom:12px;line-height:1.5">Se attivo, quando apri una fattura XML i prezzi vengono inviati a Ceraldi Ordini. Il fornitore viene aggiunto automaticamente se non esiste.</p>
+      <p style="font-size:12px;color:var(--ink3);margin-bottom:12px;line-height:1.5">Le righe delle fatture partono verso Ceraldi Ordini da sole, all'import e con un controllo automatico ogni 6 ore. Vanno a Ordini i fornitori spuntati qui e quelli registrati in Ordini con la stessa P.IVA. Se togli la spunta a un fornitore, non parte più nulla per lui. Le fatture con più di 30 giorni arrivano solo come storico: non cambiano il listino.</p>
+      <button onclick="recuperaRigheOrdiniUI()" style="width:100%;padding:10px;border-radius:10px;border:1.5px solid var(--blue);background:transparent;color:var(--blue);font-size:13px;font-weight:600;cursor:pointer;margin-bottom:6px">🔄 Manda ora a Ordini le fatture mancanti</button>
+      <div id="recuperoOrdiniLog" style="font-size:11px;color:var(--ink3);margin-bottom:12px;text-align:center"></div>
       <div id="abbinaList"></div>
       <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--sep)">
         <button onclick="correggiFattureDifferite()" style="width:100%;padding:10px;border-radius:10px;border:1.5px solid #f59e0b;background:#fffbeb;color:#92400e;font-size:13px;font-weight:600;cursor:pointer">🔧 Correggi fatture differite (TD24/TD25)</button>
@@ -8538,6 +8540,8 @@ async function importaMassivoXml(input){
             if(typeof _updateCacheRow==='function') _updateCacheRow(appToDB(fatture[idx]));
             await dbUpdate(fatture[idx]);
             risultati.aggiornate++;
+            // XML arrivato ora: righe a Ceraldi Ordini (se il fornitore è collegato)
+            if(!haXml) autoEstraiPrezzi(xmlTesto, fatture[idx], {silenzioso:true, stato:(fatture[idx].data && fatture[idx].data >= new Date(Date.now()-30*86400000).toISOString().slice(0,10)) ? 'pending' : 'storico'}).catch(()=>{});
           }
         }
         risultati.duplicate++;
@@ -8598,6 +8602,8 @@ async function importaMassivoXml(input){
       try{
         await dbInsert(nuova);
         risultati.idNuovi.push(nuova.id);
+        // Righe a Ceraldi Ordini subito all'import (prima partivano solo aprendo l'XML)
+        autoEstraiPrezzi(xmlTesto, nuova, {silenzioso:true, stato:(nuova.data && nuova.data >= new Date(Date.now()-30*86400000).toISOString().slice(0,10)) ? 'pending' : 'storico'}).catch(()=>{});
       }catch(e){
         const ix = fatture.findIndex(x=>x.id===nuova.id);
         if(ix>=0) fatture.splice(ix,1);
@@ -11916,7 +11922,22 @@ async function apriAbbinaOrdini(){
   // da Supabase prima di mostrare la lista, altrimenti si vedrebbe solo la cache
   // locale e le modifiche fatte da un altro telefono resterebbero invisibili.
   await sbLoadImpostazione(KABBINA,{});
+  await caricaPiveOrdini(true);
   renderAbbinaList();
+}
+// Stato EFFETTIVO usato davvero per mandare le righe (stessa regola di
+// fornitoreVaAOrdini): prima la lista mostrava "Abbinato" con un confronto
+// "contiene" più largo di quello usato per l'invio, e non coincidevano.
+function _statoAbbinaVisibile(nome){
+  var s=_sceltaAbbinaEsatta(nome);
+  if(s===true)return {on:true,perche:'🔗 Collegato'};
+  if(s===false)return {on:false,perche:'⛔ Escluso da te'};
+  var set=_PIVE_ORDINI.set;
+  if(set&&set.size){
+    var f=(typeof fatture!=='undefined'?fatture:[]).find(function(x){return x.fornitore===nome&&x.piva;});
+    if(f&&set.has(_pivaNorm(f.piva)))return {on:true,perche:'🔗 Collegato (stessa P.IVA di un fornitore di Ordini)'};
+  }
+  return {on:false,perche:'⛔ Non collegato'};
 }
 function renderAbbinaList(){
   var el=document.getElementById('abbinaList');if(!el)return;
@@ -11925,14 +11946,17 @@ function renderAbbinaList(){
   var allKeys=Array.from(new Set(fornitori.concat(df).concat(Object.keys(db)))).filter(Boolean).sort();
   var sub=document.getElementById('rsub-abbina');
   if(!allKeys.length){el.innerHTML='<p style="font-size:13px;color:var(--ink3);text-align:center;padding:8px 0">Apri prima il Registro per vedere i fornitori.</p>';return;}
-  var abilitati=allKeys.filter(function(k){return isFornitoreAbbinato(k);}).length;
-  if(sub)sub.textContent=abilitati+'/'+allKeys.length+' abilitati';
+  var stati={};allKeys.forEach(function(k){stati[k]=_statoAbbinaVisibile(k);});
+  var abilitati=allKeys.filter(function(k){return stati[k].on;}).length;
+  if(sub)sub.textContent=abilitati+'/'+allKeys.length+' collegati';
+  // collegati in alto: sono quelli che interessano
+  allKeys.sort(function(a,b){return (stati[b].on?1:0)-(stati[a].on?1:0)||a.localeCompare(b);});
   el.innerHTML=allKeys.map(function(k){
-    var on=isFornitoreAbbinato(k);
+    var st=stati[k],on=st.on;
     var tid='abbT_'+k.replace(/[^a-zA-Z0-9]/g,'_');
     return '<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 12px;background:var(--surface2);border-radius:8px;margin-bottom:5px">'
       +'<div><div style="font-size:13px;font-weight:600">'+esc(k)+'</div>'
-      +'<div style="font-size:11px;color:'+(on?'var(--green)':'var(--ink3)')+'">'+( on?'🔗 Abbinato':'⛔ Non abbinato')+'</div></div>'
+      +'<div style="font-size:11px;color:'+(on?'var(--green)':'var(--ink3)')+'">'+esc(st.perche)+'</div></div>'
       +'<input type="checkbox" id="'+tid+'" '+(on?'checked':'')
       +' data-k="'+esc(k)+'" onchange="setFornitoreAbbinato(this.dataset.k,this.checked);renderAbbinaList();"'
       +' style="width:20px;height:20px;accent-color:var(--blue);cursor:pointer">'
@@ -11966,24 +11990,76 @@ async function correggiFattureDifferite(){
   if(log)log.textContent='✅ Corrette '+corrette+' fatture.';
   if(corrette>0)setTimeout(function(){location.reload();},2000);
 }
-async function autoEstraiPrezzi(xmlText,fattObj){
+// ══════════════════════════════════════════════════════════════════
+// RIGHE FATTURA → CERALDI ORDINI (v10.25.0)
+// Prima le righe partivano SOLO aprendo la fattura nel visualizzatore XML:
+// su 289 fatture dei fornitori di Ordini (2026) solo 78 erano arrivate.
+// Ora partono anche all'import, e un recupero automatico (ogni 6 ore, in
+// background) manda quelle che mancano — incluse quelle scaricate dal sync
+// Aruba lato server, che dall'import di questa app non passano mai.
+// Quale fornitore va a Ordini: (1) spunta esplicita in "Abbina a Ceraldi
+// Ordini" (nome esatto) oppure (2) P.IVA uguale a un fornitore registrato
+// in Ordini. Una spunta TOLTA a mano vince sempre sulla P.IVA.
+// Righe di fatture vecchie (>30 giorni) arrivano come 'storico': servono a
+// storia prezzi/ultimo acquisto ma NON propongono di cambiare il listino.
+// ══════════════════════════════════════════════════════════════════
+var _PIVE_ORDINI={set:null,at:0};
+function _pivaNorm(p){p=String(p||'').toUpperCase().replace(/[^0-9A-Z]/g,'');if(/^IT\d{11}$/.test(p))p=p.slice(2);return p;}
+async function caricaPiveOrdini(forza){
+  if(!forza&&_PIVE_ORDINI.set&&Date.now()-_PIVE_ORDINI.at<10*60000)return _PIVE_ORDINI.set;
+  try{var r=await sbFetch('rpc/ordini_pive_fornitori');_PIVE_ORDINI.set=new Set((r||[]).map(function(x){return _pivaNorm(typeof x==='string'?x:(x.ordini_pive_fornitori||''));}).filter(Boolean));_PIVE_ORDINI.at=Date.now();}
+  catch(e){if(!_PIVE_ORDINI.set)_PIVE_ORDINI.set=new Set();}
+  return _PIVE_ORDINI.set;
+}
+// true/false se c'è una scelta esplicita per quel nome esatto, null se nessuna
+function _sceltaAbbinaEsatta(fornitore){
+  var db=cacheGet(KABBINA,{}),n=(fornitore||'').trim().toLowerCase();
+  var k=Object.keys(db).find(function(x){return x.toLowerCase()===n;});
+  return k===undefined?null:db[k]!==false;
+}
+async function fornitoreVaAOrdini(fornitore,piva){
+  var s=_sceltaAbbinaEsatta(fornitore);
+  if(s===false)return false;      // tolto a mano: non si manda, anche se la P.IVA è in Ordini
+  if(s===true)return true;
+  var p=_pivaNorm(piva);if(!p)return false;
+  var set=await caricaPiveOrdini();
+  return set.has(p);
+}
+function _xmlDaAllegata(s){
+  s=String(s||'');if(!s)return '';
+  if(s.charAt(0)==='<')return s;
+  if(/^data:[^,]*xml[^,]*,/i.test(s)||/^data:[^,]*octet[^,]*,/i.test(s)||/^data:text\/plain[^,]*,/i.test(s)){
+    var b=s.split(',')[1]||'';
+    try{var t=atob(b);try{t=decodeURIComponent(escape(t));}catch(_){}return t.indexOf('<')>=0?t.slice(t.indexOf('<')):'';}catch(e){return '';}
+  }
+  return '';
+}
+// Ritorna: 'inviate' | 'gia' | 'non_abbinato' | 'non_acquisto' | 'vuota' | 'errore'
+async function autoEstraiPrezzi(xmlText,fattObj,opz){
+  opz=opz||{};
+  var say=function(m){if(!opz.silenzioso)toast(m);};
   try{
-    if(!xmlText||xmlText.length<50||!fattObj||!fattObj.id)return;
+    if(!xmlText||xmlText.length<50||!fattObj||!fattObj.id)return 'vuota';
     var doc=new DOMParser().parseFromString(xmlText,'text/xml');
-    if(doc.querySelector('parsererror'))return;
+    if(doc.querySelector('parsererror'))return 'vuota';
     var gA=function(tag,ctx){var root2=ctx||doc;var els=root2.getElementsByTagName(tag);if(els.length)return els[0].textContent.trim();els=root2.getElementsByTagNameNS('*',tag);if(els.length)return els[0].textContent.trim();var all=root2.getElementsByTagName('*');for(var i=0;i<all.length;i++){if(all[i].localName===tag)return all[i].textContent.trim();}return '';};
     var gaA=function(tag,ctx){var root2=ctx||doc;var els=Array.from(root2.getElementsByTagName(tag));if(els.length)return els;els=Array.from(root2.getElementsByTagNameNS('*',tag));if(els.length)return els;return Array.from(root2.getElementsByTagName('*')).filter(function(e){return e.localName===tag;});};
     var tipoDoc=gA('TipoDocumento')||'';
     var tdInfo=tipoFromTD(tipoDoc);
-    if(!tdInfo.isAcquisto){toast('ℹ️ '+tdInfo.label+(tipoDoc?' ('+tipoDoc+')':'')+' — nessun prezzo');return;}
+    if(!tdInfo.isAcquisto){say('ℹ️ '+tdInfo.label+(tipoDoc?' ('+tipoDoc+')':'')+' — nessun prezzo');return 'non_acquisto';}
     var fornitore=fattObj.fornitore||'';var fatturaId=fattObj.id;var dataFatt=fattObj.data||gA('Data')||null;
-    if(!fornitore||!fatturaId)return;
-    if(fattObj.tipo==='nota_credito'&&tdInfo.isAcquisto){
-      try{await sbFetch('fatture?id=eq.'+fatturaId,{method:'PATCH',headers:{...SB_H,'Prefer':'return=minimal'},body:JSON.stringify({tipo:tdInfo.tipo})});var _idx=fatture.findIndex(function(x){return x.id===fatturaId;});if(_idx>=0){fatture[_idx].tipo=tdInfo.tipo;fattObj.tipo=tdInfo.tipo;}toast('🔧 '+tdInfo.label+' (era N/C)');}catch(e){}
+    if(!fornitore||!fatturaId)return 'vuota';
+    // P.IVA del fornitore: dall'XML (CedentePrestatore), altrimenti dalla fattura
+    var ced=gaA('CedentePrestatore')[0];
+    var piva=_pivaNorm((ced&&(gA('IdCodice',ced)||gA('CodiceFiscale',ced)))||fattObj.piva||'');
+    // Correzione del tipo (era N/C ma l'XML dice acquisto): solo quando la
+    // fattura la apri tu, mai nei passaggi automatici (niente modifiche silenziose)
+    if(!opz.silenzioso&&fattObj.tipo==='nota_credito'&&tdInfo.isAcquisto){
+      try{await sbFetch('fatture?id=eq.'+fatturaId,{method:'PATCH',headers:{'Prefer':'return=minimal'},body:JSON.stringify({tipo:tdInfo.tipo})});var _idx=fatture.findIndex(function(x){return x.id===fatturaId;});if(_idx>=0){fatture[_idx].tipo=tdInfo.tipo;fattObj.tipo=tdInfo.tipo;}toast('🔧 '+tdInfo.label+' (era N/C)');}catch(e){}
     }
-    if(!isFornitoreAbbinatoEsatto(fornitore))return;
-    try{var ck=await fetch(SB_URL+'/rest/v1/prezzi_da_fatture?fattura_id=eq.'+encodeURIComponent(fatturaId)+'&select=id&limit=1',{headers:SB_H});if(ck.ok){var d=await ck.json();if(d&&d.length>0){toast('ℹ️ Prezzi già presenti');return;}}}catch(e){return;}
-    var righe=gaA('DettaglioLinee');if(!righe.length){toast('⚠️ Nessuna riga DettaglioLinee');return;}
+    if(!(await fornitoreVaAOrdini(fornitore,piva)))return 'non_abbinato';
+    try{var d=await sbFetch('prezzi_da_fatture?fattura_id=eq.'+encodeURIComponent(fatturaId)+'&select=id&limit=1');if(d&&d.length>0){say('ℹ️ Prezzi già presenti');return 'gia';}}catch(e){return 'errore';}
+    var righe=gaA('DettaglioLinee');if(!righe.length){say('⚠️ Nessuna riga DettaglioLinee');return 'vuota';}
     var toInsert=[];
     // Riferimenti per Ordini: a quale DDT e a quale ordine appartiene ogni riga.
     // DatiDDT / DatiOrdineAcquisto indicano le righe con RiferimentoNumeroLinea (se mancano, valgono per tutte).
@@ -11991,6 +12067,7 @@ async function autoEstraiPrezzi(xmlText,fattObj){
     var ddtDi=_rifPer('DatiDDT','NumeroDDT','DataDDT'),ordDi=_rifPer('DatiOrdineAcquisto','IdDocumento','Data');
     var _codOrd=function(t){var m=/ORD\s*(\d{6}-\d{4})/i.exec(t||'');return m?'ORD '+m[1]:'';};
     var ordCausale=_codOrd(gaA('Causale').map(function(c){return c.textContent;}).join(' '));
+    var stato=opz.stato||'pending';
     righe.forEach(function(r){
       var desc=gA('Descrizione',r);var codArt=gA('CodiceValore',r)||null;
       var nLinea=gA('NumeroLinea',r)||'';var _ddt=ddtDi(nLinea),_ord=ordDi(nLinea);
@@ -11998,35 +12075,101 @@ async function autoEstraiPrezzi(xmlText,fattObj){
       var pUnit=parseFloat((gA('PrezzoUnitario',r)||'0').replace(',','.'))||0;
       var aliq=parseFloat((gA('AliquotaIVA',r)||'0').replace(',','.'))||0;
       var qta=parseFloat((gA('Quantita',r)||'1').replace(',','.'))||1;
+      var um=(gA('UnitaMisura',r)||'').trim().toUpperCase().slice(0,12)||null;
       // Prezzo realmente pagato: PrezzoTotale è già al netto di sconti e maggiorazioni
       var pTot=parseFloat((gA('PrezzoTotale',r)||'').replace(',','.'));
       if(!isNaN(pTot)&&pTot>0&&qta>0){var pNetto=pTot/qta;if(Math.abs(pNetto-pUnit)>0.0001)pUnit=pNetto;}
       if(!desc||pUnit<=0)return;
-      toInsert.push({fattura_id:fatturaId,fornitore:fornitore,data_fattura:dataFatt||null,cod_articolo:codArt,descrizione:desc,qta:qta,prezzo_unit:Math.round(pUnit*10000)/10000,iva:aliq||null,prezzo_ivato:Math.round(pUnit*(1+aliq/100)*10000)/10000,stato:'pending',rif_ordine:rifOrd,ddt_numero:(_ddt&&_ddt.n)||null,ddt_data:(_ddt&&/^\d{4}-\d{2}-\d{2}$/.test(_ddt.d))?_ddt.d:null});
+      toInsert.push({fattura_id:String(fatturaId),fornitore:fornitore,data_fattura:dataFatt||null,cod_articolo:codArt,descrizione:desc,qta:qta,prezzo_unit:Math.round(pUnit*10000)/10000,iva:aliq||null,prezzo_ivato:Math.round(pUnit*(1+aliq/100)*10000)/10000,stato:stato,rif_ordine:rifOrd,ddt_numero:(_ddt&&_ddt.n)||null,ddt_data:(_ddt&&/^\d{4}-\d{2}-\d{2}$/.test(_ddt.d))?_ddt.d:null,unita_misura:um,piva:piva||null,note:stato==='storico'?'Fattura passata: solo storico, non cambia il listino':null});
     });
-    if(!toInsert.length){toast('⚠️ Nessuna riga con prezzo valido');return;}
-    toast('⏳ Invio '+toInsert.length+' righe per '+fornitore+'...');
-    var resp=await fetch(SB_URL+'/rest/v1/prezzi_da_fatture',{method:'POST',headers:{...SB_H,'Prefer':'resolution=ignore-duplicates,return=minimal'},body:JSON.stringify(toInsert)});
-    if(!resp.ok&&resp.status===400){
-      // Database senza le colonne rif_ordine/ddt_numero/ddt_data: invio come prima
-      var _e400=await resp.clone().text().catch(function(){return'';});
-      if(/rif_ordine|ddt_numero|ddt_data|PGRST204|column/i.test(_e400)){
-        toInsert.forEach(function(x){delete x.rif_ordine;delete x.ddt_numero;delete x.ddt_data;});
-        resp=await fetch(SB_URL+'/rest/v1/prezzi_da_fatture',{method:'POST',headers:{...SB_H,'Prefer':'resolution=ignore-duplicates,return=minimal'},body:JSON.stringify(toInsert)});
-      }
+    if(!toInsert.length){say('⚠️ Nessuna riga con prezzo valido');return 'vuota';}
+    say('⏳ Invio '+toInsert.length+' righe per '+fornitore+'...');
+    var _invia=function(rows){return sbFetch('prezzi_da_fatture',{method:'POST',headers:{'Prefer':'resolution=ignore-duplicates,return=minimal'},body:JSON.stringify(rows)});};
+    try{await _invia(toInsert);}
+    catch(e){
+      // Database senza le colonne nuove: invio senza quelle
+      if(e.status===400&&/rif_ordine|ddt_numero|ddt_data|unita_misura|piva|PGRST204|column/i.test(e.body||e.message||'')){
+        toInsert.forEach(function(x){delete x.unita_misura;delete x.piva;if(/rif_ordine|ddt_/i.test(e.body||'')){delete x.rif_ordine;delete x.ddt_numero;delete x.ddt_data;}});
+        try{await _invia(toInsert);}catch(e2){if(!/23505|duplicate/i.test(e2.body||''))throw e2;}
+      } else if(/23505|duplicate/i.test(e.body||'')){
+        // Righe già salvate per un'altra via: conflitto innocuo
+        return 'gia';
+      } else throw e;
     }
-    if(resp.ok||resp.status===201){toast('✅ '+toInsert.length+' prezzi salvati per '+fornitore);}
-    else{
-      var et=await resp.text().catch(function(){return'';});
-      if(/23505|duplicate/i.test(et)){
-        // Righe già salvate (es. documento riaperto in fretta, o già presenti per un'altra via) —
-        // è un conflitto innocuo, non un vero errore: non allarmare l'utente per questo.
-        console.log('[autoEstraiPrezzi] prezzi già presenti (conflitto benigno):', et.slice(0,120));
-      } else {
-        toast('❌ HTTP '+resp.status+': '+et.slice(0,80));
+    say('✅ '+toInsert.length+' prezzi salvati per '+fornitore);
+    return 'inviate';
+  }catch(e){console.warn('[autoEstraiPrezzi]',e.message);if(!opz.silenzioso)toast('❌ '+String(e.message||e).slice(0,90));return 'errore';}
+}
+// Manda a Ordini le righe delle fatture che non le hanno ancora mandate.
+// opz.max: quante fatture al massimo in questo giro; opz.log: elemento per l'avanzamento
+var _recuperoOrdiniInCorso=null;
+async function sincronizzaRigheOrdini(opz){
+  opz=opz||{};
+  if(_recuperoOrdiniInCorso)return _recuperoOrdiniInCorso;
+  if(typeof _accSoloLettura==='function'&&_accSoloLettura())return {saltato:'sola lettura'};
+  _recuperoOrdiniInCorso=(async function(){
+    var esito={controllate:0,inviate:0,storico:0,gia:0,senzaXml:0,errori:0,daFare:0};
+    var log=function(m){if(opz.log)opz.log.textContent=m;};
+    try{
+      await sbLoadImpostazione(KABBINA,{});
+      await caricaPiveOrdini(true);
+      var limite=new Date(Date.now()-(opz.giorni||365)*86400000).toISOString().slice(0,10);
+      var cand=[];
+      for(var i=0;i<fatture.length;i++){
+        var f=fatture[i];
+        if(!f||f.deletedAt||f.deleted_at||f.tipo==='nota_credito'||f.tipo==='ddt')continue;
+        if(!f.data||f.data<limite)continue;
+        if(!(await fornitoreVaAOrdini(f.fornitore,f.piva)))continue;
+        cand.push(f);
       }
-    }
-  }catch(e){console.warn('[autoEstraiPrezzi]',e.message);}
+      if(!cand.length)return esito;
+      // quali hanno già le righe in Ordini
+      var gia={};
+      try{(await sbFetchAll('prezzi_da_fatture?select=fattura_id&data_fattura=gte.'+limite)||[]).forEach(function(r){gia[String(r.fattura_id)]=1;});}catch(e){esito.errori++;return esito;}
+      var manc=cand.filter(function(f){return !gia[String(f.id)];}).sort(function(a,b){return String(b.data).localeCompare(String(a.data));});
+      esito.daFare=manc.length;
+      var max=opz.max||manc.length,soglia=new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+      for(var k=0;k<manc.length&&k<max;k++){
+        var g=manc[k];esito.controllate++;
+        log('⏳ '+(k+1)+'/'+Math.min(max,manc.length)+' · '+(g.fornitore||'')+' '+(g.numero||''));
+        var xml=_xmlDaAllegata(g.fatturaAllegata);
+        if(!xml){xml=_xmlDaAllegata(await fetchAllegataSingola(g.id));}
+        if(!xml&&g.xmlGithubPath){try{var rr=await fetch(XML_REPO_BASE+g.xmlGithubPath);if(rr.ok)xml=_xmlDaAllegata(await rr.text());}catch(e){}}
+        if(!xml){esito.senzaXml++;continue;}
+        var st=g.data>=soglia?'pending':'storico';
+        var r=await autoEstraiPrezzi(xml,g,{silenzioso:true,stato:st});
+        if(r==='inviate'){if(st==='storico')esito.storico++;else esito.inviate++;}
+        else if(r==='gia')esito.gia++;
+        else if(r==='errore')esito.errori++;
+        // l'XML scaricato serviva solo qui: non lo tengo in memoria
+        if(!opz.tieniXml){var ix=fatture.findIndex(function(x){return x.id===g.id;});if(ix>=0&&fatture[ix]!==g)fatture[ix].fatturaAllegata='';}
+      }
+      try{localStorage.setItem('ceraldi_recupero_ordini_at',String(Date.now()));}catch(e){}
+      return esito;
+    }finally{_recuperoOrdiniInCorso=null;}
+  })();
+  return _recuperoOrdiniInCorso;
+}
+// Pulsante in "Abbina a Ceraldi Ordini"
+async function recuperaRigheOrdiniUI(){
+  var log=document.getElementById('recuperoOrdiniLog');
+  if(log)log.textContent='⏳ Cerco le fatture non ancora mandate a Ordini…';
+  var e=await sincronizzaRigheOrdini({log:log});
+  if(!log)return;
+  if(e.saltato){log.textContent='👁️ Accesso in sola lettura';return;}
+  if(!e.daFare){log.textContent='✅ Tutte le fatture dei fornitori collegati sono già in Ordini';return;}
+  log.textContent='✅ Fatto: '+(e.inviate+e.storico)+' fatture mandate ('+e.inviate+' recenti da controllare in Ordini, '+e.storico+' passate solo come storico)'
+    +(e.senzaXml?' · '+e.senzaXml+' senza XML':'')+(e.errori?' · ⚠️ '+e.errori+' non riuscite (riprova)':'');
+}
+// Recupero automatico in background: al massimo ogni 6 ore, 60 fatture per volta
+function avviaRecuperoOrdiniAuto(){
+  setTimeout(function(){
+    try{var at=+localStorage.getItem('ceraldi_recupero_ordini_at')||0;if(Date.now()-at<6*3600000)return;}catch(e){}
+    sincronizzaRigheOrdini({max:60}).then(function(e){
+      if(e&&(e.inviate+e.storico)>0)console.log('[Ordini] righe recuperate',e);
+      if(e&&e.errori&&typeof _registraErrore==='function')_registraErrore('ordini','Recupero righe fatture: '+e.errori+' non riuscite');
+    }).catch(function(){});
+  },25000);
 }
 // Renderizza un XML FatturaPA come card HTML leggibili
 function renderFatturaXML(xmlText, ddt){
@@ -12628,6 +12771,7 @@ async function init(){
       }
       await caricaMovimentiBanca();
       await caricaMovimentiCarta();
+      avviaRecuperoOrdiniAuto();
       // Stesso bug del sync in background (FIX 01/09): la vista riconciliazione
       // (Cassa → Storico) non veniva mai ridisegnata qui, quindi restava ferma
       // sui dati vecchi anche dopo che chiusure/movimenti banca erano arrivati.
@@ -12658,6 +12802,7 @@ async function init(){
     }).catch(()=>{});
     caricaMovimentiBanca().catch(()=>{});
     caricaMovimentiCarta().catch(()=>{});
+    avviaRecuperoOrdiniAuto();
   }
   // Ricontrollo periodico (15 min): copre sia il caso "l'app resta aperta
   // da prima delle 20" sia un eventuale "posticipa" che nel frattempo scade.

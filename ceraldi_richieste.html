@@ -135,6 +135,8 @@ button.row:active{background:var(--surface2)}
 .pr-name{font-size:14.5px;font-weight:700;line-height:1.28;word-break:break-word}
 .pr-name mark{background:rgba(0,122,255,.14);color:inherit;border-radius:3px;padding:0 1px}
 .pr-meta{font-size:12px;color:var(--ink3);margin-top:2px}
+.pr-ult{font-size:11.5px;color:var(--ink3);margin-top:1px}
+.av{font-size:12px;margin-top:3px;line-height:1.35}.av.att{color:var(--orange-ink,#b45309)}.av.info{color:var(--ink2)}
 .pr-res{margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:0}
 .pr-side{flex-shrink:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px 12px 8px 4px;gap:3px}
 .pr-side label{font-size:9.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--ink3)}
@@ -391,7 +393,7 @@ body.has-fbar{padding-bottom:calc(150px + var(--safe-b))}
 
 <script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js" defer></script>
 <script>
-var APP_VERSION='8.2.0';
+var APP_VERSION='8.3.0';
 var BUILD_NUM=APP_VERSION;
 var APP={key:'richieste',nome:'Richieste',versione:APP_VERSION,authKey:'rq_auth_v2',oldAuthKey:'ceraldi_richieste_auth_session',
   markBg:'linear-gradient(145deg,#C4A1FF 0%,#8B5CF6 50%,#5B21B6 100%)',
@@ -1407,7 +1409,8 @@ async function avvia(){
     document.getElementById('swBox').classList.toggle('has', !!VIEW.q);
     renderProdotti();
   }, 120));
-  await Promise.all([caricaCatalogo(), caricaSezioni(), caricaScorciatoie()]);
+  var _c = lsGet('rq_ctx', null); if(_c && _c.per) CTX = _c;
+  await Promise.all([caricaCatalogo(), caricaSezioni(), caricaScorciatoie(), caricaContesto(true)]);
   renderTutto();
   caricaBozzaServer();
   svuotaOutbox(true);
@@ -1419,6 +1422,7 @@ async function avvia(){
     if(document.hidden) return;
     svuotaOutbox(true);
     if(Date.now() - (lsGet('rq_catalogo_ts', 0) || 0) > 10 * 60 * 1000) caricaCatalogo().then(function(){ renderSicuro(); });
+    caricaContesto().then(function(){ renderSicuro(); });
     if(VIEW.tab === 'storico') caricaStorico();
   });
   if(navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', function(ev){
@@ -1521,9 +1525,9 @@ function calcola(){
     out.giacenze.push({ id: it.id, g: it.giacenza });
     if(sm != null){
       var d = sm - it.giacenza;
-      if(d > 0) out.items.push({ id: it.id, name: it.name, conf: it.conf || '', qty: d, custom: false, giacenza: it.giacenza, scortaMin: sm });
+      if(d > 0) out.items.push({ id: it.id, name: it.name, conf: it.conf || '', qty: d, custom: false, giacenza: it.giacenza, scortaMin: sm, note: it.note || undefined });
       else out.scortaOk.push(k);
-    } else out.items.push({ id: it.id, name: it.name, conf: it.conf || '', qty: it.qty || 1, custom: false, giacenza: it.giacenza, needsScortaMin: true });
+    } else out.items.push({ id: it.id, name: it.name, conf: it.conf || '', qty: it.qty || 1, custom: false, giacenza: it.giacenza, needsScortaMin: true, note: it.note || undefined });
   });
   return out;
 }
@@ -1605,7 +1609,7 @@ function rigaProdotto(p){
   var meta = [p.conf, catDi(p)].filter(Boolean).join(' · ') + (p.scorta_min != null ? ' · scorta minima ' + p.scorta_min : '');
   return '<div class="pr' + (it ? ' on' : '') + '" id="pr-' + p.id + '"><span class="pr-stripe"></span>' +
     '<div class="pr-main" onclick="fuocoG(' + p.id + ')"><div class="pr-name">' + evidenzia(p.name, VIEW.q) + ((FREQ[p.id] || 0) >= 3 ? ' <span class="bdg n" title="Lo richiedi spesso">★</span>' : '') + '</div>' +
-    '<div class="pr-meta">' + esc(meta) + '</div><div class="pr-res" id="res-' + p.id + '">' + esitoHtml(p, it) + '</div></div>' +
+    '<div class="pr-meta">' + esc(meta) + '</div>' + (ultimoAcquistoTesto(p.id) ? '<div class="pr-ult">' + esc(ultimoAcquistoTesto(p.id)) + '</div>' : '') + '<div class="pr-res" id="res-' + p.id + '">' + esitoHtml(p, it) + '</div></div>' +
     '<div class="pr-side"><label for="g-' + p.id + '">Ne hai</label><input class="num-in' + (g !== '' ? ' filled' : '') + '" id="g-' + p.id + '" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" value="' + g + '" placeholder="–" oninput="setG(' + p.id + ',this)" enterkeyhint="done"></div></div>';
 }
 function esitoHtml(p, it){
@@ -1662,9 +1666,9 @@ function renderLista(){
   c.scortaOk.forEach(function(k){ ok[k] = 1; });
   function riga(k){
     var it = LISTA[k];
-    if(it.custom) return '<div class="row"><div class="row-main"><div class="row-t">' + esc(it.name) + '</div><div class="row-s">' + esc(it.conf || '') + ' · <span class="bdg p">non in elenco</span>' + (it.barcode ? ' · codice ' + esc(it.barcode) : '') + '</div><div style="margin-top:7px">' + stepper(k, it.qty) + '</div></div><button class="sheet-x" onclick="togli(\'' + k + '\')" aria-label="Togli">✕</button></div>';
+    if(it.custom) return '<div class="row"><div class="row-main"><div class="row-t">' + esc(it.name) + '</div><div class="row-s">' + esc(it.conf || '') + ' · <span class="bdg p">non in elenco</span>' + (it.barcode ? ' · codice ' + esc(it.barcode) : '') + '</div><div style="margin-top:7px">' + stepper(k, it.qty) + '</div>' + notaVoceHtml(k) + '</div><button class="sheet-x" onclick="togli(\'' + k + '\')" aria-label="Togli">✕</button></div>';
     var p = CATMAP[it.id], g = it.giacenza != null ? it.giacenza : '';
-    return '<div class="row"><div class="row-main"><div class="row-t">' + esc(it.name) + '</div><div class="row-s">' + esc([it.conf, p ? catDi(p) : ''].filter(Boolean).join(' · ')) + '</div><div class="pr-res" id="lres-' + it.id + '">' + esitoHtml(p, it) + '</div></div>' +
+    return '<div class="row"><div class="row-main"><div class="row-t">' + esc(it.name) + '</div><div class="row-s">' + esc([it.conf, p ? catDi(p) : ''].filter(Boolean).join(' · ')) + '</div><div class="pr-res" id="lres-' + it.id + '">' + esitoHtml(p, it) + '</div>' + (daOrd[it.id] ? htmlAvvisi(avvisiVoce(it.id, daOrd[it.id])) : '') + notaVoceHtml(k) + '</div>' +
       '<div style="display:flex;flex-direction:column;align-items:center;gap:3px"><span style="font-size:9.5px;font-weight:700;color:var(--ink3);text-transform:uppercase;letter-spacing:.4px">Ne hai</span><input class="num-in' + (g !== '' ? ' filled' : ' err') + '" id="lg-' + it.id + '" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" value="' + g + '" placeholder="–" oninput="setG(' + it.id + ',this)"></div>' +
       '<button class="sheet-x" onclick="togli(\'' + k + '\')" aria-label="Togli" style="align-self:flex-start">✕</button></div>';
   }
@@ -1747,10 +1751,10 @@ async function spedisci(e){
     }
     if(!e.inserita){
       var riga = { dipendente: U.nome, nota: e.nota || '', items: e.items, stato: 'pending' };
-      var ins = null, extra = lsGet('rq_colonne_extra', true);
+      var ins = null, extra = true;
       if(extra){
         try{ ins = await api('ceraldi_richieste_storico', { method: 'POST', prefer: 'return=representation', body: Object.assign({}, riga, { utente: U.uid || null, email: U.email || null, urgente: !!e.urgente }) }); }
-        catch(er){ if(erroreColonna(er)){ lsSet('rq_colonne_extra', false); extra = false; } else throw er; }
+        catch(er){ if(erroreColonna(er)) extra = false; else throw er; }
       }
       if(!extra) ins = await api('ceraldi_richieste_storico', { method: 'POST', prefer: 'return=representation', body: riga });
       e.inserita = ins && ins[0] ? ins[0].id : -1; esito = { id: e.inserita, gia: false };
@@ -1914,6 +1918,65 @@ function segnalaCodiceNuovo(codice, nome){
   api('ceraldi_barcode_sconosciuti', { method: 'POST', prefer: 'return=minimal', body: { barcode: String(codice), nome_suggerito: nome || '', dipendente: U.nome || '', stato: 'nuovo' } }).catch(function(){});
 }
 
+
+/* ══════════════════════════════════════════════════════════════════
+   ECOSISTEMA ACQUISTI (v8.3.0) — dati da Ordini e Fatture, senza prezzi
+   - sotto ogni prodotto: data dell'ultimo acquisto registrato
+   - avvisi motivati (stessa regola di Ceraldi Ordini): mai un blocco
+   ══════════════════════════════════════════════════════════════════ */
+var CTX = { per: {}, at: 0 };
+async function caricaContesto(forza){
+  if(!forza && CTX.at && Date.now() - CTX.at < 5 * 60000) return CTX;
+  try{
+    var r = await api('rpc/acquisti_contesto_prodotti'), per = {};
+    (r || []).forEach(function(x){ per[x.product_id] = x; });
+    CTX = { per: per, at: Date.now() }; lsSet('rq_ctx', CTX);
+  }catch(e){ if(!CTX.at){ var c = lsGet('rq_ctx', null); if(c && c.per) CTX = c; } }
+  return CTX;
+}
+function giorniDa(t){ var d = Date.parse(t || ''); return isNaN(d) ? null : Math.floor((Date.now() - d) / 86400000); }
+function dataBreve(t){ var d = new Date(t); return isNaN(d) ? '' : d.toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' }); }
+// Testo piccolo sotto il nome: niente date inventate. Se non ho ancora i dati non scrivo nulla.
+function ultimoAcquistoTesto(id){
+  if(!CTX.at) return '';
+  var c = CTX.per[id];
+  var o = c && c.ultimo_ordine ? c.ultimo_ordine : null, f = c && c.ultima_fattura ? c.ultima_fattura : null;
+  if(!o && !f) return 'Nessun acquisto registrato';
+  var usa = (!f || (o && String(o).slice(0, 10) >= String(f).slice(0, 10))) ? { d: o, t: 'ordine' } : { d: f, t: 'fattura' };
+  var d = new Date(String(usa.d).length <= 10 ? usa.d + 'T12:00:00' : usa.d), g = giorniDa(d.toISOString());
+  return 'Ultimo acquisto: ' + d.toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit', year: '2-digit' }) + (g != null ? ' (' + (g <= 0 ? 'oggi' : g === 1 ? 'ieri' : g + ' giorni fa') + ')' : '');
+}
+/* STESSA regola di Ceraldi Ordini (avvisiAcquisto): se la cambi, cambiala anche là */
+function avvisiAcquisto(c, qty, opz){
+  opz = opz || {}; c = c || {};
+  var out = [], n = Number(c.n_ordini) || 0, iv = Number(c.intervallo_medio_giorni) || 0, qt = Number(c.qta_tipica) || 0;
+  var ult = [c.ultimo_ordine, c.ultima_fattura].filter(Boolean).sort().pop(), g = ult ? giorniDa(ult) : null;
+  if(opz.altraRichiesta) out.push({ liv: 'att', t: 'Già in un\'altra richiesta aperta del ' + dataBreve(opz.altraRichiesta.il) + (opz.altraRichiesta.chi ? ' (' + opz.altraRichiesta.chi + ')' : '') });
+  if(opz.ordineInAttesa) out.push({ liv: 'info', t: 'C\'è già un ordine del ' + dataBreve(opz.ordineInAttesa) + ' non ancora fatturato' });
+  if(g != null && n >= 3 && iv >= 2 && g < iv * 0.5) out.push({ liv: 'att', t: 'Ordinato ' + (g === 0 ? 'oggi' : g === 1 ? 'ieri' : g + ' giorni fa') + ': di solito ogni ~' + Math.round(iv) + ' giorni' });
+  if(n >= 3 && qt > 0 && qty > Math.max(qt * 2.5, qt + 3)) out.push({ liv: 'att', t: 'Quantità insolita: di solito circa ' + (Math.round(qt * 10) / 10) });
+  return out;
+}
+function avvisiVoce(id, qty){
+  var c = CTX.per[id]; if(!c) return [];
+  return avvisiAcquisto(c, qty, { altraRichiesta: c.richiesta_aperta_il ? { il: c.richiesta_aperta_il } : null });
+}
+function htmlAvvisi(l){ return l.map(function(a){ return '<div class="av ' + a.liv + '">' + (a.liv === 'att' ? '⚠️ ' : 'ℹ️ ') + esc(a.t) + '</div>'; }).join(''); }
+// Nota per un singolo prodotto della richiesta (resta legata a quel prodotto)
+async function notaVoce(k){
+  var it = LISTA[k]; if(!it) return;
+  var v = await chiediTesto('Nota per questo prodotto', it.name, it.note || '', 'Es. quello in vetro, non in plastica');
+  if(v === null) return;
+  v = String(v).trim().slice(0, 200);
+  if(LISTA[k]){ if(v) LISTA[k].note = v; else delete LISTA[k].note; }
+  salvaLista(); renderLista();
+}
+function notaVoceHtml(k){
+  var it = LISTA[k]; if(!it) return '';
+  return (it.note ? '<div class="row-s" style="font-size:12.5px;margin-top:4px">📝 ' + esc(it.note) + '</div>' : '') +
+    (U.lettura ? '' : '<button class="lnk-btn" style="font-size:12.5px;padding:3px 0 0" onclick="notaVoce(\'' + k + '\')">' + (it.note ? 'Modifica nota' : '+ Nota per questo prodotto') + '</button>');
+}
+
 /* ── Le mie richieste ────────────────────────────────────────────── */
 var STATI = {
   pending: ['In attesa', 'o', 1], importata: ['Presa in carico', 'b', 2], ordinata: ['Ordinata', 'g', 3], arrivata: ['Arrivata', 'g', 4],
@@ -1922,7 +1985,8 @@ var STATI = {
 async function caricaStorico(silenzioso){
   var nomi = [U.nome], p1 = U.nome.split(' ')[0];
   if(p1 && p1 !== U.nome) nomi.push(p1);
-  var filtro = 'dipendente=in.' + encodeURIComponent('(' + nomi.map(function(n){ return '"' + n.replace(/["\\]/g, '') + '"'; }).join(',') + ')');
+  var perNome = 'dipendente.in.(' + nomi.map(function(n){ return '"' + n.replace(/["\\,()]/g, '') + '"'; }).join(',') + ')';
+  var filtro = 'or=' + encodeURIComponent('(' + (U.uid ? 'utente.eq.' + U.uid + ',' : '') + perNome + ')');
   try{
     STORICO = await api('ceraldi_richieste_storico?select=*&' + filtro + '&order=created_at.desc&limit=40') || [];
     lsSet(lk('storico'), STORICO);
@@ -1945,12 +2009,12 @@ function renderStorico(){
   h += STORICO.map(function(r){
     var st = STATI[r.stato] || [r.stato || '—', 'n', 0], nuovo = r.stato !== 'pending' && VISTI[r.id] !== r.stato;
     var nomiAnteprima = (r.items || []).slice(0, 3).map(function(i){ return i.name; }).join(', ') + ((r.items || []).length > 3 ? '…' : '');
-    var tl = st[2] > 0 ? '<div class="timeline">' + [1, 2, 3].map(function(s, ix){ return (ix ? '<span class="tl-line' + (st[2] >= s ? ' on' : '') + '"></span>' : '') + '<span class="tl-dot' + (st[2] >= s ? ' on' : '') + '"></span>'; }).join('') + '</div><div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--ink3);margin-top:3px"><span>Inviata</span><span>Presa in carico</span><span>Ordinata</span></div>' : '';
+    var tl = st[2] > 0 ? '<div class="timeline">' + [1, 2, 3, 4].map(function(s, ix){ return (ix ? '<span class="tl-line' + (st[2] >= s ? ' on' : '') + '"></span>' : '') + '<span class="tl-dot' + (st[2] >= s ? ' on' : '') + '"></span>'; }).join('') + '</div><div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--ink3);margin-top:3px"><span>Inviata</span><span>Presa in carico</span><span>Ordinata</span><span>Arrivata</span></div>' : '';
     return '<div class="req-card"><button class="req-hd" onclick="apriReq(' + r.id + ')">' +
       '<div class="row-main"><div class="row-t">' + (r.items || []).length + ' prodott' + ((r.items || []).length === 1 ? 'o' : 'i') + ' · ' + esc(quando(r.created_at)) + (nuovo ? ' <span class="bdg b">novità</span>' : '') + '</div>' +
       '<div class="row-s">' + esc(nomiAnteprima) + '</div>' + tl + '</div><span class="bdg ' + st[1] + '">' + esc(st[0]) + '</span></button>' +
       '<div class="req-items hidden" id="ri-' + r.id + '">' + (r.items || []).map(function(i){
-        return '<div class="req-it"><span>' + esc(i.name) + (i.conf ? ' <span class="muted">(' + esc(i.conf) + ')</span>' : '') + (i.giacenza != null ? '<br><span class="muted" style="font-size:12px">ne avevi ' + i.giacenza + '</span>' : '') + '</span><b class="tnum">× ' + (i.qty || 1) + '</b></div>';
+        return '<div class="req-it"><span>' + esc(i.name) + (i.conf ? ' <span class="muted">(' + esc(i.conf) + ')</span>' : '') + (i.giacenza != null ? '<br><span class="muted" style="font-size:12px">ne avevi ' + i.giacenza + '</span>' : '') + (i.note ? '<br><span class="muted" style="font-size:12px">📝 ' + esc(i.note) + '</span>' : '') + '</span><b class="tnum">× ' + (i.qty || 1) + '</b></div>';
       }).join('') + (r.nota ? '<div class="hint" style="margin:8px 0 0">📝 ' + esc(r.nota) + '</div>' : '') +
       '<div class="btn-row" style="margin-top:10px">' + (r.stato === 'pending' ? '<button class="btn-sm r" onclick="annullaReq(' + r.id + ')">Annulla richiesta</button>' : '') + '<button class="btn-sm p" onclick="ripeti(' + r.id + ')">↻ Richiedi di nuovo</button></div></div></div>';
   }).join('');
