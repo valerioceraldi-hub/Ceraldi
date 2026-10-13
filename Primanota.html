@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.25.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.26.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -2960,7 +2960,7 @@ async function _aiCicloConStrumenti(systemPrompt, bollaRisposta){
 // il dato era sempre stato corretto e completo (verificato: 58,71+167,99=226,70,
 // esatto) — mancava solo qui nella select. Aggiungendo la colonna, il fix vale
 // per TUTTE le fatture pagate con più di un bonifico/movimento, non solo questa.
-const SLIM_COLS_FATTURE = 'id,tipo,fornitore,numero,fatt_num,num_ddt,data,importo,pagamento,pagamento_origine,pagamento_impostato_il,assegno,ass_int,ass_banca,bon_iban,bon_caus,bon_data,bon_rif,riconciliata,riconciliazione,riconciliazione_storico,piva,denominazione_xml,note,stato,scadenza,fattura_allegata_name,xml_github_path,source,rate,ts,parz_pagato,data_pagamento,pec_verificata,pec_verificata_at,pec_id,iva,iva_breakdown,totale_imponibile,totale_imposta,incompleta,deleted_at,avviso_giorni,pagamenti_manuali';
+const SLIM_COLS_FATTURE = 'id,tipo,fornitore,numero,fatt_num,num_ddt,data,importo,pagamento,pagamento_origine,pagamento_impostato_il,assegno,ass_int,ass_banca,bon_iban,bon_caus,bon_data,bon_rif,riconciliata,riconciliazione,riconciliazione_storico,piva,denominazione_xml,note,stato,scadenza,fattura_allegata_name,xml_github_path,source,rate,ts,parz_pagato,data_pagamento,pec_verificata,pec_verificata_at,pec_id,iva,iva_breakdown,totale_imponibile,totale_imposta,incompleta,deleted_at,avviso_giorni,pagamenti_manuali,conferme_fornitore';
 
 // Accesso (20/09): nessuna lettura/scrittura parte prima che la persona abbia fatto l'accesso
 var _authApertoP = new Promise(function(r){ window._authApri = r; });
@@ -3140,6 +3140,7 @@ function dbToApp(r){
     // 07/10/2026: avviso di pagamento scelto per questa fattura (null = predefinito)
     avvisoGiorni: (r.avviso_giorni===null || r.avviso_giorni===undefined) ? null : +r.avviso_giorni,
     pagamentiManuali: Array.isArray(r.pagamenti_manuali) ? r.pagamenti_manuali : [],
+    confermeFornitore: Array.isArray(r.conferme_fornitore) ? r.conferme_fornitore : [],
     note:r.note||'', stato:r.stato||'pagata', scadenza:r.scadenza||'',
     foto:r.foto||'', fatturaAllegata:r.fattura_allegata||'', fatturaAllegataName:r.fattura_allegata_name||'',
     xmlGithubPath:r.xml_github_path||'', source:r.source||'',
@@ -3175,6 +3176,7 @@ function appToDB(f){
     rate:f.rate||[], ts:f.ts||0, parz_pagato:f.parzPagato||0,
     avviso_giorni:(f.avvisoGiorni===null||f.avvisoGiorni===undefined)?null:f.avvisoGiorni,
     pagamenti_manuali:f.pagamentiManuali||[],
+    conferme_fornitore:f.confermeFornitore||[],
     data_pagamento:f.dataPagamento&&f.dataPagamento.match(/^\d{4}-\d{2}-\d{2}/)?f.dataPagamento.slice(0,10):null,
     pec_verificata:f.pecVerificata||false,
     pec_id:f.pecId||null,
@@ -3555,6 +3557,7 @@ async function dbUpdate(f){
       rate:f.rate||[],
       avviso_giorni:(f.avvisoGiorni===null||f.avvisoGiorni===undefined)?null:f.avvisoGiorni,
       pagamenti_manuali:f.pagamentiManuali||[],
+      conferme_fornitore:f.confermeFornitore||[],
       ts:Date.now(), // sempre un valore NUOVO: è il segnale che il sync automatico (su altri dispositivi) usa per capire che questa riga è cambiata — rimandare il vecchio ts la rendeva invisibile al sync incrementale
       parz_pagato:f.parzPagato||0,
       data_pagamento:f.dataPagamento||null,
@@ -7681,6 +7684,21 @@ async function salvaEdit(){
   }
 
   const parzPagato=eStato==='parziale'?parseFloat((gv('eParzPagato')||'0').replace(',','.'))||0:0;
+  // v10.26: prima cambiare "Pagato fino ad ora" non lasciava traccia di quando e come
+  // (l'acconto spariva dalla riconciliazione). Ora la differenza diventa un pagamento.
+  var _pmNuovi = (fatture[idx].pagamentiManuali||[]).slice();
+  if(eStato==='parziale'){
+    var _parzPrima = (fatture[idx].stato==='parziale') ? (+fatture[idx].parzPagato||0) : 0, _dPm = Math.round((parzPagato - _parzPrima)*100)/100;
+    if(_dPm > 0.009){
+      var _dPag = gv('eDataPag2')||'', _oggiPm = new Date().toISOString().slice(0,10);
+      if(!_dPag || _dPag === gv('eData2')) _dPag = _oggiPm;   // la data proposta di default è quella della fattura: non è il giorno del pagamento
+      _pmNuovi.push({ data:_dPag, importo:_dPm, metodo:ePag||'contanti', assegno:gv('eAss2').trim(), il:new Date().toISOString(), origine:'modifica' });
+    } else if(_dPm < -0.009){
+      // pagato corretto al ribasso: tolgo dai pagamenti a mano più recenti (mai quelli già visti in banca)
+      var _daTogliere = -_dPm;
+      for(var _i=_pmNuovi.length-1; _i>=0 && _daTogliere>0.009; _i--){ var _x=_pmNuovi[_i]; if(!_x || _x.mov) continue; var _t=Math.min(+_x.importo||0,_daTogliere); _x=Object.assign({},_x,{importo:Math.round(((+_x.importo||0)-_t)*100)/100}); _daTogliere=Math.round((_daTogliere-_t)*100)/100; if(_x.importo<=0.009) _pmNuovi.splice(_i,1); else _pmNuovi[_i]=_x; }
+    }
+  }
   var _eRiconciliataOra = !!(document.getElementById('eRiconciliata') && document.getElementById('eRiconciliata').checked);
   fatture[idx]={
     ...fatture[idx],
@@ -7694,7 +7712,7 @@ async function salvaEdit(){
     bonCaus:gv('eBonCaus2').trim(), bonData:gv('eBonData2')||null, bonRif:gv('eBonRif2').trim(), note:gv('eNote2').trim(),
     // Con quale banca/carta — vuoto se il metodo non è bonifico/carta.
     contoPagamento: (ePag==='bonifico'||ePag==='carta') ? _eContoPag : '',
-    rate:eRate, avvisoGiorni:_eAvviso, stato:eStato, scadenza:gv('eScad2')||'', parzPagato,
+    rate:eRate, avvisoGiorni:_eAvviso, stato:eStato, scadenza:gv('eScad2')||'', parzPagato, pagamentiManuali:_pmNuovi,
     dataPagamento:(eStato==='pagata'||eStato==='parziale')?gv('eDataPag2')||'':'',
     riconciliata: _eRiconciliataOra,
     // Sganciare la spunta cancella davvero il campo strutturato — prima
@@ -32820,7 +32838,8 @@ function pnLeggiBanca(desc){
   if(!out.assegno && (m = s.match(/ASSEGNO\s+N\.?\s*(\d{6,})/i))) out.assegno = m[1];
   return out;
 }
-function pnPagamenti(f){
+function pnPagamenti(f){ var _l = _pnPagamentiBase(f), _g = pnSenzaDettaglio(f); if(_g) _l = _l.concat([{ tipo: 'manuale', senzaDettaglio: true, movId: null, data: '', importo: _g, conto: pnMetodo(f.pagamento) || '', metodo: f.pagamento || '' }]); return _l; }
+function _pnPagamentiBase(f){
   // v10.13: le prove arrivano dal motore dei conti. Prima un pagamento con carta
   // Nexi era contato due volte (codice "carta:nexi_…" e "nexi_…" visti come due
   // movimenti diversi) e un assegno che pagava tre fatture valeva intero su ognuna.
@@ -32864,6 +32883,8 @@ var PN_ICO = {
   nc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M9 14h6"/></svg>'
 };
 function pnBoxPagamento(p){
+  if(p.senzaDettaglio) return '<div class="rc-box man"><div class="rc-box-h"><div class="rc-ico man">' + PN_ICO.doc + '</div><div class="rc-box-t"><div class="rc-lbl">Registrato senza dettagli' + (p.conto ? ' · ' + esc(p.conto) : '') + '</div><b>Data non indicata</b></div><div class="rc-imp">' + fmt(p.importo) + '<small>pagato</small></div></div>' +
+    '<button class="rc-link" onclick="pnCompletaPagamento(' + pnIdJs(PNA.sch) + ')">Aggiungi data e modalità ›</button></div>';
   if(p.tipo === 'manuale') return '<div class="rc-box man"><div class="rc-box-h"><div class="rc-ico man">' + PN_ICO.doc + '</div><div class="rc-box-t"><div class="rc-lbl">Registrato a mano · ' + esc(p.conto || '') + '</div><b>' + pnGg(p.data) + '</b></div><div class="rc-imp">' + fmt(p.importo) + '<small>' + (/^(bonifico|assegno|sdd|rid|carta)$/i.test(p.metodo || '') ? 'aspetta la banca' : 'pagato') + '</small></div></div>' + (p.descr ? '<dl class="rc-dl"><dt>Dettaglio</dt><dd>' + esc(p.descr) + '</dd></dl>' : '') + '</div>';
   var L = pnLeggiBanca(p.descr), fonte = p.tipo === 'contanti' ? 'Contanti' : p.tipo === 'carta' ? p.conto : (typeof _fonteMov === 'function' ? _fonteMov({ banca: p.conto }).et : p.conto);
   var righe = [];
@@ -32889,6 +32910,141 @@ function pnRiconciliazioneHtml(f, C, pag){
   pag.forEach(function(p, i){ h += '<div class="rc-link-v"><span>' + (i ? '+ un altro pagamento' : 'pagata con') + '</span></div>' + pnBoxPagamento(p); });
   h += '</div><div class="rc-esito ' + E.tono + '"><div class="rc-esito-ico">' + ({ ok: '✓', warn: '!', ko: '!', nd: 'i', info: '…' })[E.tono] + '</div><div><b>' + esc(E.t) + '</b><small>' + esc(E.s) + '</small></div></div>';
   return h;
+}
+
+
+/* ══ ACCONTI SENZA DETTAGLI E CONFERMA DEL FORNITORE (v10.26.0) ══
+   1) Un acconto segnato solo cambiando "Pagato fino ad ora" (Modifica) non
+      lasciava traccia di data e modalità: il pagato tornava, ma nella
+      riconciliazione l'acconto non si vedeva. Ora resta sempre visibile come
+      "senza dettagli" e lo completi tu (data e modalità): nulla cambia da solo.
+   2) Messaggio WhatsApp o email al fornitore con acconti/saldo, che chiede di
+      confermare per iscritto quanto scritto. Ogni richiesta resta registrata
+      sulla fattura (conferme_fornitore) con il suo esito. */
+function pnSenzaDettaglio(f){
+  if(!f || f.tipo === 'nota_credito' || f.tipo === 'ddt' || typeof ricConti !== 'function') return 0;
+  var R = ricConti(f); return R && R.nonDettagliato > 0.009 ? R.nonDettagliato : 0;
+}
+// Data in cui l'acconto è stato registrato nell'app (dallo storico delle modifiche)
+async function pnDataRegistrazioneAcconto(f){
+  try{
+    var r = await sbFetch('fatture_storico?select=quando,modifiche&fattura_id=eq.' + encodeURIComponent(f.id) + '&order=quando.asc&limit=200') || [];
+    var man = (f.pagamentiManuali || []).map(function(p){ return String(p.il || '').slice(0, 16); });
+    for(var i = 0; i < r.length; i++){
+      var m = r[i].modifiche && r[i].modifiche.parz_pagato; if(!m) continue;
+      if(+m.dopo > +(m.prima || 0) + 0.009 && man.indexOf(String(r[i].quando).slice(0, 16)) < 0) return String(r[i].quando).slice(0, 10);
+    }
+  }catch(e){}
+  return '';
+}
+async function pnCompletaPagamento(id){
+  var f = pnF(id); if(!f) return; var gap = pnSenzaDettaglio(f); if(!gap) return;
+  var mo = pnFoglio('pnCompPag', { titolo: 'Completa il pagamento', sotto: esc(f.fornitore || '') + ' · n° ' + esc(f.numero || '—'), z: 330, piede: true });
+  mo.querySelector('.pn-sh-bd').innerHTML = '<div class="sk-nota" style="margin-top:0">Questo importo risulta già pagato ma senza data e modalità. Indicale: il totale pagato non cambia, si aggiunge solo il dettaglio.</div>' +
+    '<div class="pr-griglia" style="margin-top:12px"><label class="pr-campo"><span>Importo</span><input value="' + fmt(gap) + '" disabled></label>' +
+    '<label class="pr-campo"><span>Pagato il</span><input type="date" id="cpData" value=""></label>' +
+    '<label class="pr-campo"><span>Come</span><select id="cpMetodo">' + [['contanti', 'Contanti'], ['bonifico', 'Bonifico'], ['assegno', 'Assegno'], ['carta', 'Carta']].map(function(x){ return '<option value="' + x[0] + '"' + ((f.pagamento || 'contanti') === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') + '</select></label></div>' +
+    '<div class="sk-nota" id="cpHint">Cerco quando è stato registrato…</div>';
+  mo.querySelector('.pn-sh-ft').innerHTML = '<button class="sk-btn prim big" onclick="pnCompletaSalva(' + pnIdJs(f.id) + ',this)">Salva il dettaglio</button>';
+  var d = await pnDataRegistrazioneAcconto(f), h = document.getElementById('cpHint'), di = document.getElementById('cpData');
+  if(di && d && !di.value) di.value = d;
+  if(h) h.textContent = d ? 'Registrato nell\'app il ' + pnGg(d) + ': se l\'hai pagato un altro giorno, cambia la data.' : 'Non trovo quando è stato registrato: scrivi tu la data.';
+}
+async function pnCompletaSalva(id, btn){
+  var f = pnF(id); if(!f) return; var gap = pnSenzaDettaglio(f), d = gv('cpData'), m = gv('cpMetodo');
+  if(!gap){ pnChiudi('pnCompPag'); return; }
+  if(!d){ toast('Scrivi la data del pagamento'); return; }
+  var prima = (f.pagamentiManuali || []).slice();
+  btn.disabled = true; btn.textContent = 'Salvo…';
+  f.pagamentiManuali = prima.concat([{ data: d, importo: gap, metodo: m, assegno: '', il: new Date().toISOString(), origine: 'completato' }]);
+  try{ var r = await dbUpdate(f); if(!r || !r[0]) throw new Error('non salvato'); pnChiudi('pnCompPag'); toast('✓ Dettaglio del pagamento salvato', { forza: true }); _schedaAggiorna(); }
+  catch(e){ f.pagamentiManuali = prima; btn.disabled = false; btn.textContent = 'Salva il dettaglio'; toast('⚠️ Non salvato: riprova'); }
+}
+
+/* ── Richiesta di conferma al fornitore ── */
+var PCF = { id: null, contatti: null };
+function _pcfMetodo(p){
+  if(p.senzaDettaglio) return (p.conto || '').toLowerCase() || 'modalità non indicata';
+  if(p.tipo === 'contanti') return 'contanti';
+  var m = String(p.metodo || '').toLowerCase();
+  var L = (typeof pnLeggiBanca === 'function' && p.descr) ? pnLeggiBanca(p.descr) : {};
+  if(L.assegno || /assegno/.test(m)) return 'assegno' + (L.assegno ? ' n° ' + L.assegno : '');
+  if(/bonifico/.test(m) || p.tipo === 'banca') return 'bonifico' + (L.rif ? ' (rif. ' + L.rif + ')' : '');
+  if(/sdd|rid/.test(m)) return 'addebito diretto SDD';
+  if(/carta/.test(m) || p.tipo === 'carta') return 'carta';
+  return (typeof pnMetodo === 'function' ? pnMetodo(m) : m).toLowerCase() || 'contanti';
+}
+function pnTestoConferma(f){
+  var C = scConti(f, fatture), pag = pnPagamenti(f).filter(function(p){ return !p.entrata && +p.importo > 0; });
+  pag.sort(function(a, b){ return String(a.data || '9').localeCompare(String(b.data || '9')); });
+  var saldo = C.stato === 'pagata' || C.residuo < 0.01;
+  var righe = pag.map(function(p, i){
+    var tipo = saldo && i === pag.length - 1 ? 'saldo' : 'acconto';
+    return '• ' + (p.data ? pnGg(p.data) : 'data non indicata') + ' – ' + fmt(+p.importo) + ' in ' + _pcfMetodo(p) + ' (' + tipo + ')';
+  });
+  var t = 'Buongiorno,\nvi scriviamo da Caffetteria Ceraldi (Ceraldi Group S.r.l.) per la vostra fattura n° ' + (f.numero || '—') + ' del ' + pnGg(f.data) + ', totale ' + fmt(Math.abs(+f.importo || 0)) + '.\n\n';
+  if(C.ncTot > 0.009) t += 'Note di credito scalate: ' + fmt(C.ncTot) + ' (resta da pagare ' + fmt(C.dovuto) + ').\n\n';
+  t += (righe.length === 1 ? 'Pagamento effettuato:\n' : 'Pagamenti effettuati:\n') + righe.join('\n') + '\n\n';
+  t += 'Totale versato: ' + fmt(C.pagato) + '\n' + (saldo ? 'Con questo pagamento la fattura risulta interamente saldata.\n' : 'Resta da pagare: ' + fmt(C.residuo) + '\n');
+  t += '\nVi chiediamo cortesemente di confermare, rispondendo a questo messaggio, che le date, gli importi e le modalità indicate sono corretti' + (saldo ? ' e che la fattura è saldata (quietanza di saldo)' : '') + '.\n\nGrazie, cordiali saluti\nCaffetteria Ceraldi';
+  return t;
+}
+function _pcfNumero(n){ n = String(n || '').replace(/[^\d+]/g, '').replace(/^\+/, '').replace(/^00/, ''); if(/^3\d{8,9}$/.test(n)) n = '39' + n; return n; }
+async function pnChiediConferma(id){
+  var f = pnF(id); if(!f) return;
+  PCF.id = f.id; PCF.contatti = null;
+  var mo = pnFoglio('pnConfForn', { titolo: 'Chiedi conferma al fornitore', sotto: esc(f.fornitore || ''), alto: true, z: 330, piede: true });
+  mo.querySelector('.pn-sh-bd').innerHTML = '<div class="sk-nota" style="margin-top:0">Manda al fornitore il riepilogo dei pagamenti e chiedi che confermi per iscritto. Puoi modificare il testo prima di inviarlo.</div>' +
+    '<textarea id="pcfTesto" rows="13" style="width:100%;box-sizing:border-box;margin-top:10px;padding:12px;border-radius:12px;border:1px solid var(--sep);background:var(--surface2);color:var(--ink);font:inherit;font-size:14px;line-height:1.45">' + esc(pnTestoConferma(f)) + '</textarea>' +
+    '<div class="pr-griglia" style="margin-top:10px"><label class="pr-campo"><span>WhatsApp</span><input id="pcfWa" type="tel" inputmode="tel" placeholder="Numero del fornitore"></label>' +
+    '<label class="pr-campo"><span>Email</span><input id="pcfEmail" type="email" placeholder="email del fornitore"></label></div>' +
+    '<label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-top:8px;color:var(--ink2)"><input type="checkbox" id="pcfSalva" checked style="width:18px;height:18px"> Ricorda numero ed email per questo fornitore</label>';
+  mo.querySelector('.pn-sh-ft').innerHTML = '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="sk-btn prim" style="flex:1" onclick="pnInviaConferma(\'wa\',this)">💬 WhatsApp</button><button class="sk-btn" style="flex:1" onclick="pnInviaConferma(\'email\',this)">✉️ Email</button><button class="sk-btn" style="flex:1" onclick="pnInviaConferma(\'copia\',this)">📋 Copia</button></div>';
+  // contatti del fornitore (P.IVA prima, poi nome esatto)
+  try{
+    var q = f.piva ? 'fornitori?select=id,nome,piva,whatsapp,email&piva=eq.' + encodeURIComponent(f.piva) : 'fornitori?select=id,nome,piva,whatsapp,email&nome=eq.' + encodeURIComponent(f.fornitore || '');
+    var r = await sbFetch(q) || [];
+    if(!r.length && f.piva) r = await sbFetch('fornitori?select=id,nome,piva,whatsapp,email&nome=eq.' + encodeURIComponent(f.fornitore || '')) || [];
+    PCF.contatti = r[0] || null;
+    if(PCF.contatti && PCF.id === f.id){ var w = document.getElementById('pcfWa'), e = document.getElementById('pcfEmail'); if(w && !w.value) w.value = PCF.contatti.whatsapp || ''; if(e && !e.value) e.value = PCF.contatti.email || ''; }
+  }catch(e){}
+}
+async function pnInviaConferma(canale, btn){
+  var f = pnF(PCF.id); if(!f) return;
+  var testo = (document.getElementById('pcfTesto') || {}).value || '', wa = _pcfNumero(gv('pcfWa')), em = String(gv('pcfEmail') || '').trim();
+  if(!testo.trim()){ toast('Il messaggio è vuoto'); return; }
+  if(canale === 'email' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)){ toast('Scrivi l\'email del fornitore'); return; }
+  // apro subito (dentro il tocco: iOS blocca le aperture fatte dopo un'attesa)
+  if(canale === 'wa') window.open('https://wa.me/' + (wa || '') + '?text=' + encodeURIComponent(testo), '_blank');
+  else if(canale === 'email') location.href = 'mailto:' + encodeURIComponent(em) + '?subject=' + encodeURIComponent('Conferma pagamenti fattura n° ' + (f.numero || '') + ' – Caffetteria Ceraldi') + '&body=' + encodeURIComponent(testo);
+  else { try{ await navigator.clipboard.writeText(testo); toast('Testo copiato', { forza: true }); }catch(e){ toast('Copia non riuscita: seleziona il testo a mano'); return; } }
+  var C = scConti(f, fatture), prima = (f.confermeFornitore || []).slice();
+  f.confermeFornitore = prima.concat([{ il: new Date().toISOString(), canale: canale, a: canale === 'wa' ? wa : (canale === 'email' ? em : ''), pagato: C.pagato, residuo: C.residuo, testo: testo.slice(0, 2000), esito: null }]);
+  try{ var r = await dbUpdate(f); if(!r || !r[0]) throw new Error('x'); }catch(e){ f.confermeFornitore = prima; toast('⚠️ Messaggio aperto, ma la richiesta non è stata registrata'); }
+  // contatti per le prossime volte (solo se il fornitore è in anagrafica e il dato è cambiato)
+  var c = PCF.contatti;
+  if(c && document.getElementById('pcfSalva') && document.getElementById('pcfSalva').checked){
+    var agg = {}; if(wa && wa !== _pcfNumero(c.whatsapp)) agg.whatsapp = wa; if(em && em !== (c.email || '')) agg.email = em;
+    if(Object.keys(agg).length) sbFetch('fornitori?id=eq.' + c.id, { method: 'PATCH', headers: { 'Prefer': 'return=minimal' }, body: JSON.stringify(agg) }).catch(function(){});
+  }
+  pnChiudi('pnConfForn'); _schedaAggiorna();
+}
+async function pnEsitoConferma(id, i, esito){
+  var f = pnF(id); if(!f || !(f.confermeFornitore || [])[i]) return;
+  var prima = JSON.parse(JSON.stringify(f.confermeFornitore));
+  f.confermeFornitore[i].esito = esito; f.confermeFornitore[i].esitoIl = esito ? new Date().toISOString() : null;
+  try{ var r = await dbUpdate(f); if(!r || !r[0]) throw new Error('x'); toast(esito === 'confermata' ? '✓ Segnata come confermata dal fornitore' : esito === 'contestata' ? 'Segnata: il fornitore non conferma' : 'Esito tolto', { forza: true }); _schedaAggiorna(); }
+  catch(e){ f.confermeFornitore = prima; toast('⚠️ Non salvato: riprova'); }
+}
+function pnConfermeHtml(f){
+  var l = f.confermeFornitore || [];
+  if(!l.length) return '';
+  return '<div class="sk-sez-t" style="margin-top:12px">Conferme del fornitore</div>' + l.map(function(x, i){ return { x: x, i: i }; }).reverse().map(function(o){
+    var x = o.x, can = { wa: 'WhatsApp', email: 'email', copia: 'testo copiato' }[x.canale] || x.canale;
+    var st = x.esito === 'confermata' ? '<span class="pn-chip ok">Confermato ' + pnGg(x.esitoIl) + '</span>' : x.esito === 'contestata' ? '<span class="pn-chip ko">Non confermato</span>' : '<span class="pn-chip warn">In attesa di risposta</span>';
+    return '<div class="sk-riga"><div class="sk-riga-m"><b>Chiesta il ' + pnGg(x.il) + ' via ' + esc(can) + '</b><small>pagati ' + fmt(+x.pagato || 0) + (x.residuo > 0.009 ? ' · restavano ' + fmt(+x.residuo) : ' · saldo') + '</small><div style="margin-top:6px">' + st + '</div>' +
+      (x.esito ? '<button class="rc-link" onclick="pnEsitoConferma(' + pnIdJs(f.id) + ',' + o.i + ',null)">Annulla esito</button>' : '<div style="display:flex;gap:6px;margin-top:6px"><button class="sk-btn sm" onclick="pnEsitoConferma(' + pnIdJs(f.id) + ',' + o.i + ',\'confermata\')">✓ Ha confermato</button><button class="sk-btn sm" onclick="pnEsitoConferma(' + pnIdJs(f.id) + ',' + o.i + ',\'contestata\')">Non conferma</button></div>') + '</div></div>';
+  }).join('');
 }
 
 /* ══ SCHEDA DELLA FATTURA (sola lettura) ══ */
@@ -32965,6 +33121,8 @@ function _pnDisegnaSchedaVero(){
     if(C.stato !== 'pagata') bt.push('<button class="sk-btn prim" onclick="pnRegistraPagamento(' + pnIdJs(f.id) + ')">✓ Registra pagamento</button>');
     bt.push('<button class="sk-btn" onclick="apriRiconciliaDaFattura(\'' + f.id + '\')">🔗 Riconcilia con la banca</button>');
     p += '<div class="sk-btns">' + bt.join('') + '</div>';
+    if(C.pagato > 0.009) p += '<div class="sk-btns"><button class="sk-btn" style="flex:1" onclick="pnChiediConferma(' + pnIdJs(f.id) + ')">📨 Chiedi conferma al fornitore' + (C.stato === 'pagata' ? ' (saldo)' : ' (acconti)') + '</button></div>';
+    p += pnConfermeHtml(f);
     h += pnSez('Pagamento', p);
     // ── scadenze e avvisi
     h += pnSez('Scadenze e avvisi', pnScadenzeHtml(f, C));
@@ -33857,6 +34015,7 @@ function ricContiFattura(f, idx){
 
   if(prove.length){
     var pagato = Math.max(denaro, parzDich);
+    if(parzDich > denaro + A) R.nonDettagliato = ricR2(parzDich - denaro);
     if(parzDich > denaro + A) R.anomalie.push({ liv: 'info', cod: 'manuale_non_collegato', t: 'Pagato registrato ' + ricEur(parzDich) + ', collegati ' + ricEur(denaro), s: 'Una parte del pagamento è stata segnata a mano ma non ha ancora un movimento collegato.' });
     var diff = ricR2(pagato - R.dovuto);
     if(diff >= -A){
@@ -33876,7 +34035,7 @@ function ricContiFattura(f, idx){
     }
   } else {
     if(st === 'pagata'){ R.pagato = R.dovuto; R.residuo = 0; }
-    else if(st === 'parziale'){ R.pagato = parzDich; R.residuo = ricR2(Math.max(0, R.dovuto - R.pagato)); if(R.residuo <= 0.009 && R.dovuto > 0) R.stato = 'pagata'; }
+    else if(st === 'parziale'){ if(parzDich > A) R.nonDettagliato = parzDich; R.pagato = parzDich; R.residuo = ricR2(Math.max(0, R.dovuto - R.pagato)); if(R.residuo <= 0.009 && R.dovuto > 0) R.stato = 'pagata'; }
     else { R.pagato = 0; R.residuo = R.dovuto; if(R.dovuto <= 0.009 && ncTot > 0) R.stato = 'pagata'; }
   }
 
