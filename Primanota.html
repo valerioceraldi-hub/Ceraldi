@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.27.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.28.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -28557,6 +28557,17 @@ function _ecCostruisci(o){
     var sF={}; reg.forEach(function(r){ r.righe.forEach(function(x){ if(x.k==='fornitori'){ var k=r.controparte||'—'; sF[k]=(sF[k]||0)+x.avere-x.dare; } }); });
     Object.keys(sF).forEach(function(k){ var v=_ecR2(sF[k]); if(v<-0.5) avvisi.push({liv:2, tipo:'Fornitore con saldo a credito', testo:k+': a fine periodo risulta un credito di '+fmt(-v)+' (note di credito o pagamenti oltre il dovuto). Se la nota di credito è stata rimborsata, il rimborso va registrato; se è da compensare, resta un credito verso il fornitore.'}); });
   }
+  // v10.28: anche le anomalie che l'app mostra in Controllo anomalie
+  if(o.fatture){
+    F.forEach(function(f){
+      if(f.tipo==='ddt') return;
+      var St=(Array.isArray(f.riconciliazioneStorico)?f.riconciliazioneStorico:[]);
+      if(!(inP(f.data) || inP(f.dataPagamento) || St.some(function(x){ return x && inP(x.data); }))) return;
+      _ecAnomalieApp(f).forEach(function(a){
+        avvisi.push({liv:a.liv==='ko'?1:2, tipo:'Anomalia dell\'app', testo:(f.tipo==='nota_credito'?'NC ':'')+(f.fornitore||'')+' n. '+(f.numero||'—')+' del '+_ecGg(f.data)+': '+a.t+(a.s?'. '+a.s:''), imp:null});
+      });
+    });
+  }
   // raggruppa avvisi di categoria
   var visti={}; avvisi=avvisi.filter(function(a){ if(!a.chiave) return true; if(visti[a.chiave]) return false; visti[a.chiave]=1; return true; });
   var fiscIncompleti={}; regIva.forEach(function(r){ if(r.fonte==='no'){ var mk=String(r.data).slice(0,7); fiscIncompleti[mk]=(fiscIncompleti[mk]||0)+1; } });
@@ -29153,6 +29164,17 @@ async function _ecCaricaPn(o){
   }catch(e){ window._ecPn = window._ecPn || []; }
   return window._ecPn;
 }
+
+/* ══ REPORT = SCHERMO (v10.28.0) ══
+   I report usano gli stessi conti e le stesse anomalie che vedi nell'app
+   (motore unico ricConti): prima pagato/residuo venivano dai campi vecchi e
+   le anomalie di Controllo anomalie non finivano in nessun file. */
+function _ecConti(f){ if(!f || f.tipo === 'ddt' || f.tipo === 'nota_credito' || typeof scConti !== 'function') return null; try{ return scConti(f, fatture); }catch(e){ return null; } }
+function _ecAnomalieApp(f){
+  if(!f || f.tipo === 'ddt' || typeof ricConti !== 'function') return [];
+  try{ var R = ricConti(f); return ((R && R.anomalie) || []).filter(function(a){ return a.liv === 'ko' || a.liv === 'warn'; }); }catch(e){ return []; }
+}
+function _ecAnomalieTesto(l){ return l.map(function(a){ return (a.liv === 'ko' ? '‼ ' : '⚠ ') + a.t + (a.s ? ' — ' + a.s : ''); }).join(' || '); }
 function _ecElencoRighe(o){
   var inP=function(d){ d=String(d||'').slice(0,10); return d && d>=o.dal && d<=o.al; };
   var movPerF={}; (_bancaMovimenti||[]).forEach(function(m){ if(m.abbinata && m.fatturaId) (movPerF[String(m.fatturaId)]=movPerF[String(m.fatturaId)]||[]).push(m); });
@@ -29163,12 +29185,15 @@ function _ecElencoRighe(o){
     if(B){ imp=0; iva=0; Object.keys(B).forEach(function(k){ imp+=Math.abs(+B[k].imponibile||0); iva+=Math.abs(+B[k].imposta||0); al.push(_ecAliq(k)+'%'); }); imp*=s; iva*=s; }
     var pag = f.stato==='pagata' ? tot : (f.stato==='parziale' ? s*(+f.parzPagato||0) : 0);
     var res = nc ? 0 : Math.max(0, Math.abs(tot)-Math.abs(pag));
+    var Cx = _ecConti(f), statoX = f.stato;
+    if(Cx){ pag = _ecR2(Cx.pagato); res = _ecR2(Cx.residuo); statoX = Cx.stato; }
+    var anom = _ecAnomalieApp(f);
     var mv=movPerF[String(f.id)]||[];
     var rit = (!nc && res>0.005 && f.scadenza) ? Math.round((alD-new Date(String(f.scadenza).slice(0,10)+'T12:00:00'))/86400000) : null;
     var cat=_ecContoCosto(f);
     var tr=_ecTraccia(f);
     return {f:f, tr:tr, data:f.data, num:f.numero||'', tipo:nc?'Nota di credito':'Fattura', forn:f.fornitore||'', piva:f.piva||'', cat:cat==='c_nc'?'Da classificare':_ceLabel(cat.slice(2)),
-      imp:imp, iva:iva, al:al.join(' '), tot:tot, stato:({pagata:'Pagata',da_pagare:'Da pagare',parziale:'Parziale'})[f.stato]||f.stato||'', metodo:f.pagamento||'', dataPag:f.dataPagamento||'',
+      imp:imp, iva:iva, al:al.join(' '), tot:tot, stato:({pagata:'Pagata',da_pagare:'Da pagare',parziale:'Parziale'})[statoX]||statoX||'', anom:anom, anomTxt:_ecAnomalieTesto(anom), metodo:f.pagamento||'', dataPag:f.dataPagamento||'',
       pagato:pag, res:res, scad:f.scadenza||'', rit:rit>0?rit:null, banca:mv.length?('sì · '+mv.map(function(m){ return _ecGg(m.data); }).join(', ')):(f.riconciliata?'sì':''), xml:B?'sì':'no', doc:(typeof _docHaFile==='function'&&_docHaFile(f))?'sì':'no', note:f.note||''};
   }).sort(function(a,b){ return String(a.data).localeCompare(String(b.data)); });
 }
@@ -29183,7 +29208,7 @@ function _ecElencoXlsx(o){
   // 21/09 — colonne nuove sulla riconciliazione: come è stata pagata, con
   // quali estremi, con quali movimenti, e se i conti tornano.
   var a=[['Data','Numero','Tipo','Fornitore','P.IVA','Categoria','Imponibile','IVA','Aliquote','Totale','Stato','Metodo','Conto','Origine del metodo','Impostato il','Data pagamento','Pagato','Residuo','Scadenza','Giorni di ritardo',
-    'Come è stata pagata','Estremi sul documento','Movimenti collegati','Dettaglio movimenti','Totale abbinato','Differenza','Note di credito collegate','Note del movimento','Da verificare','Documento allegato','Dettaglio IVA','Note']];
+    'Come è stata pagata','Estremi sul documento','Movimenti collegati','Dettaglio movimenti','Totale abbinato','Differenza','Note di credito collegate','Note del movimento','Da verificare','Da controllare (anomalie dell\'app)','Documento allegato','Dettaglio IVA','Note']];
   R.forEach(function(r){
     var t=r.tr||{mov:[],nc:[],estremi:[]};
     a.push([_ecDate(r.data),r.num,r.tipo,r.forn,r.piva,r.cat,r.imp,r.iva,r.al,r.tot,r.stato,r.metodo,t.conto||'',t.origine||'',_ecDate(t.impostatoIl),_ecDate(r.dataPag),_ecR2(r.pagato),_ecR2(r.res),_ecDate(r.scad),r.rit,
@@ -29192,11 +29217,11 @@ function _ecElencoXlsx(o){
       t.mov.length?_ecR2(t.abbinato):null, t.mov.length?_ecR2(t.differenza):null,
       t.nc.map(function(n){ return 'n° '+n.num+' del '+_ecGg(n.data)+' '+(+n.importo).toFixed(2).replace('.',',')+'€'; }).join(' · '),
       t.mov.map(function(m){ return m.nota; }).filter(Boolean).join(' · '),
-      t.avviso||'', r.doc, r.xml, r.note]);
+      t.avviso||'', r.anomTxt||'', r.doc, r.xml, r.note]);
   });
   var T=function(k){ return _ecR2(R.reduce(function(s,r){ return s+(+r[k]||0); },0)); };
   a.push([]); a.push(['','','','TOTALE ('+R.length+')','','',T('imp'),T('iva'),'',T('tot'),'','','','','','',T('pagato'),T('res')]);
-  sh('Fatture', a, [11,16,13,32,13,22,13,11,10,13,10,10,10,18,12,12,12,12,11,9,46,40,10,80,13,12,34,34,34,9,8,40], [6,7,9,16,17,24,25], [0,14,15,18]);
+  sh('Fatture', a, [11,16,13,32,13,22,13,11,10,13,10,10,10,18,12,12,12,12,11,9,46,40,10,80,13,12,34,34,34,70,9,8,40], [6,7,9,16,17,24,25], [0,14,15,18]);
   // ── Foglio analitico: una riga per ogni collegamento ──
   var rec=[_EC_RIC_HEAD].concat(_ecRiconcRighe(o,false));
   if(rec.length>1) sh('Riconciliazione', rec, [12,10,16,15,26,70,34,16,30,12,13,10,10,13,16,16], [3,10,13], [0,9]);
@@ -29205,8 +29230,8 @@ function _ecElencoXlsx(o){
   R.forEach(function(r){
     var t=r.tr; if(!t) return;
     var problemi=[];
-    if(t.avviso) problemi.push(t.avviso);
-    if(r.f.stato!=='pagata' && r.f.tipo!=='nota_credito' && t.mov.length) problemi.push('ha movimenti collegati ma non risulta pagata');
+    (r.anom||[]).forEach(function(a){ problemi.push(a.t); });
+    if(t.avviso && !(r.anom||[]).length) problemi.push(t.avviso);
     if(r.doc==='no') problemi.push('senza documento allegato');
     else if(r.xml==='no') problemi.push('senza dettaglio IVA (XML non letto)');
     if(!problemi.length) return;
@@ -29230,7 +29255,7 @@ function _ecElencoXlsx(o){
 }
 function _ecElencoCsv(o){
   var R=_ecElencoRighe(o), rows=[['DATA','NUMERO','TIPO','FORNITORE','PIVA','CATEGORIA','IMPONIBILE','IVA','ALIQUOTE','TOTALE','STATO','METODO','CONTO','ORIGINE_METODO','IMPOSTATO_IL','DATA_PAGAMENTO','PAGATO','RESIDUO','SCADENZA','GIORNI_RITARDO',
-    'COME_PAGATA','ESTREMI_DOCUMENTO','N_MOVIMENTI','DETTAGLIO_MOVIMENTI','TOTALE_ABBINATO','DIFFERENZA','NOTE_CREDITO','NOTE_MOVIMENTO','DA_VERIFICARE','DOCUMENTO_ALLEGATO','DETTAGLIO_IVA','NOTE']];
+    'COME_PAGATA','ESTREMI_DOCUMENTO','N_MOVIMENTI','DETTAGLIO_MOVIMENTI','TOTALE_ABBINATO','DIFFERENZA','NOTE_CREDITO','NOTE_MOVIMENTO','DA_VERIFICARE','ANOMALIE_APP','DOCUMENTO_ALLEGATO','DETTAGLIO_IVA','NOTE']];
   R.forEach(function(r){
     var t=r.tr||{mov:[],nc:[],estremi:[]};
     rows.push([_ecGg(r.data),r.num,r.tipo,r.forn,r.piva,r.cat,r.imp===null?null:_ecR2(r.imp),r.iva===null?null:_ecR2(r.iva),r.al,_ecR2(r.tot),r.stato,r.metodo,t.conto||'',t.origine||'',_ecGg(t.impostatoIl),_ecGg(r.dataPag),_ecR2(r.pagato),_ecR2(r.res),_ecGg(r.scad),r.rit===null?'':String(r.rit),
@@ -29238,7 +29263,7 @@ function _ecElencoCsv(o){
       t.mov.map(function(m){ return m.tipo+' '+_ecGg(m.data)+' '+(+m.importo).toFixed(2).replace('.',',')+'€'+(m.conto?' ['+m.conto+']':'')+(m.rif?' '+m.rif:'')+' — '+String(m.descr||'').replace(/\s+/g,' ').slice(0,90); }).join(' || '),
       t.mov.length?_ecR2(t.abbinato):'', t.mov.length?_ecR2(t.differenza):'',
       t.nc.map(function(n){ return 'n° '+n.num+' del '+_ecGg(n.data)+' '+(+n.importo).toFixed(2).replace('.',',')+'€'; }).join(' · '),
-      t.mov.map(function(m){ return m.nota; }).filter(Boolean).join(' · '), t.avviso||'', r.doc, r.xml, r.note]);
+      t.mov.map(function(m){ return m.nota; }).filter(Boolean).join(' · '), t.avviso||'', r.anomTxt||'', r.doc, r.xml, r.note]);
   });
   return new Blob([_ecCsv(rows)], {type:'text/csv;charset=utf-8'});
 }
@@ -29279,14 +29304,14 @@ function _ecElencoPdf(o){
     riga([_ecGg(r.data),r.num,r.forn,r.cat,n(r.imp),n(r.iva),n(r.tot),r.stato,r.res>0.005?n(r.res):'', (r.tr&&r.tr.testo)||r.metodo],L,{dx:dx,fs:7.5,h:4.1}); });
   riga(['','','TOTALE','',n(ti),n(tv),n(tt),'',n(tr),''],L,{b:true,dx:dx});
   // 21/09 — quello che non torna, scritto nero su bianco anche nel PDF
-  var daVer=R.filter(function(r){ return r.tr && (r.tr.avviso || (r.f.stato!=='pagata' && r.f.tipo!=='nota_credito' && r.tr.mov.length)); });
+  var daVer=R.filter(function(r){ return (r.anom&&r.anom.length) || (r.tr && r.tr.avviso); });
   if(daVer.length){
     y+=4; if(y>180){ doc.addPage(); y=14; }
     doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.text('Da verificare ('+daVer.length+')', M, y); y+=6;
     var L3=[22,30,60,24,24,120];
     riga(['Data','Numero','Fornitore','Totale','Abbinato','Cosa non torna'],L3,{b:true,dx:{3:1,4:1}});
     daVer.forEach(function(r){
-      riga([_ecGg(r.data),r.num,r.forn,n(r.tot),n(r.tr.abbinato), r.tr.avviso||'ha movimenti collegati ma non risulta pagata'],L3,{dx:{3:1,4:1},fs:7.5,h:4.1});
+      riga([_ecGg(r.data),r.num,r.forn,n(r.tot),n((r.tr||{}).abbinato), (r.anom&&r.anom.length) ? r.anom.map(function(a){ return a.t; }).join(' · ') : (r.tr.avviso||'')],L3,{dx:{3:1,4:1},fs:7.5,h:4.1});
     });
   }
   y+=4; doc.setFont('helvetica','bold'); doc.setFontSize(11); if(y>186){ doc.addPage(); y=14; } doc.text('Riepilogo per fornitore', M, y); y+=6;
@@ -29366,6 +29391,12 @@ function _ecNomeBase(){ var o=_ecOpz; return 'Ceraldi_contabilita_'+o.dal.replac
 async function _ecScarica(tipo, btn){
   var t0=btn?btn.innerHTML:''; if(btn){ btn.disabled=true; btn.querySelector('b').textContent='Preparo…'; }
   try{
+    // v10.28: prima di creare il file riallineo fatture e banca col Cloud (max 15 s),
+    // così il report contiene anche ciò che è cambiato pochi secondi fa su un altro telefono
+    if(btn) btn.querySelector('b').textContent='Aggiorno i dati…';
+    try{ await Promise.race([ (async function(){ if(typeof _eseguiSyncIncrementale==='function') await _eseguiSyncIncrementale(); if(typeof caricaMovimentiCarta==='function') await caricaMovimentiCarta(); })(), new Promise(function(ok){ setTimeout(ok, 15000); }) ]); }catch(_s){}
+    if(typeof ricInvalida==='function') ricInvalida();
+    if(btn) btn.querySelector('b').textContent='Preparo…';
     // I pagamenti in contanti stanno in Prima Nota: si caricano ora, così
     // ogni export può dire anche COME è uscito il contante.
     await _ecCaricaPn(_ecOpz);
