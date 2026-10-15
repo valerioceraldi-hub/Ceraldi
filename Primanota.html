@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.29.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.30.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -2795,7 +2795,7 @@ function _aiLeggiFatture(input){
 }
 
 
-/* ══ RIGHE DELLE FATTURE PER L'ASSISTENTE (v10.29.0) ══
+/* ══ RIGHE DELLE FATTURE PER L'ASSISTENTE (v10.30.0) ══
    Legge gli articoli dagli XML e calcola le quantità in modo deterministico.
    Chili: (1) unità di misura kg/g → è già il peso; (2) unità diversa (CF, PZ, CT)
    → peso per unità ricavato dal prezzo al kg dello STESSO articolo nelle righe in kg
@@ -8464,7 +8464,8 @@ async function extractP7mBrowser(file){
 async function ricCorreggiMetodo(fid, verso){
   var f = pnF(fid); if(!f || !verso) return;
   var prima = { pagamento: f.pagamento, pagamentoOrigine: f.pagamentoOrigine };
-  _impostaPagamentoDaRiconciliazione(f, verso === 'altro' ? 'bonifico' : verso);
+  var _v = verso === 'altro' ? 'bonifico' : verso;
+  if(f.pagamento !== _v){ f.pagamento = _v; f.pagamentoOrigine = 'banca'; f.pagamentoImpostatoIl = new Date().toISOString(); }
   try{
     var r = await dbUpdate(f); if(!r || !r[0]) throw new Error('non salvato');
     if(typeof ricInvalida === 'function') ricInvalida();
@@ -22667,9 +22668,32 @@ function _cfMultiplo(){
 // dell'app scrivevano il pagamento solo "se era vuoto" — mai per CORREGGERE
 // un valore già presente ma sbagliato, che è esattamente il caso che
 // produceva l'incoerenza segnalata.
-function _impostaPagamentoDaRiconciliazione(f, metodo){
-  f.pagamento = metodo;
-  f.pagamentoOrigine = 'riconciliazione';
+// v10.30: UNA sola regola per tutta l'app. La modalità di una fattura
+// collegata alla banca è quella del MOVIMENTO (assegno, SDD, bonifico, carta),
+// qualunque bottone si sia usato per collegarla e qualunque cosa dicesse l'XML.
+// Prima ogni percorso decideva per conto suo ("bonifico" fisso, oppure "solo se
+// vuoto") e restavano fatture "bonifico" pagate con assegno.
+function _metodoDelMovimento(m){
+  if(!m) return null;
+  var id = String(m.movId || m.id || ''), d = String(m.descrizione || ''), st = String(m.sottotipo || ''), b = String(m.banca || m.conto || '');
+  if(/^carta:/.test(id) || /^nexi/i.test(b) || m.fonte === 'carta') return 'carta';
+  if(/vostro assegno|prelievo assegno/i.test(d) || /assegno/i.test(st)) return 'assegno';
+  if(/sdd\s*(core|b2b)|addebito\s+diretto/i.test(d) || /sdd/i.test(st)) return 'sdd';
+  if(/sumup/i.test(b) && (/^carta$/i.test(st) || /pagamento\s+pos/i.test(d))) return 'carta';
+  if(/vs\.?\s*disp|favore|bonif|bon\.da/i.test(d) || /bonifico/i.test(st) || /sumup/i.test(b)) return 'bonifico';
+  return null;
+}
+function _impostaPagamentoDaRiconciliazione(f, metodo, mov){
+  if(!f || f.tipo === 'nota_credito') return;
+  var vero = _metodoDelMovimento(mov || f.riconciliazione);
+  if(vero) metodo = vero;
+  if(!metodo) return;
+  // pagata in parte in contanti (registrati in Prima Nota) e in parte in banca: resta com'è
+  if(f.pagamento === 'contanti' && typeof ricContantiDi === 'function' && ricContantiDi(String(f.id)).length) return;
+  var prima = f.pagamento === 'rid' ? 'sdd' : f.pagamento;
+  if(prima === metodo) return;
+  f.pagamento = metodo; f.pagamentoOrigine = 'banca'; f.pagamentoImpostatoIl = new Date().toISOString();
+  if(metodo === 'carta' && !f.contoPagamento) f.contoPagamento = /sumup/i.test(String((mov || f.riconciliazione || {}).banca || (mov || {}).conto || '')) ? 'SumUp' : 'Nexi';
 }
 
 function _impostaDatiRiconciliazione(f, mov, isParziale, importoSpecifico){
@@ -22692,6 +22716,7 @@ function _impostaDatiRiconciliazione(f, mov, isParziale, importoSpecifico){
     // storici/carta non hanno mai avuto questo campo prima) — mai 'undefined'.
     banca: mov.banca || 'BPM'
   };
+  if(mov.sottotipo) f.riconciliazione.sottotipo = mov.sottotipo;
   // Storico di tutti i pagamenti (06/09, richiesto da Valerio): oltre a
   // sovrascrivere il campo "ultimo pagamento" sopra (comportamento invariato,
   // ovunque nell'app continua a leggere f.riconciliazione per l'ultimo),
@@ -22719,6 +22744,8 @@ function _impostaDatiRiconciliazione(f, mov, isParziale, importoSpecifico){
             || mov.descrizione.match(/\b([A-Z]{2,}[A-Z0-9]*\/[0-9]{6,})\b/);
     f.bonRif = mRif ? mRif[1] : (mov.descrizione||'').slice(0,80);
   }
+  // v10.30: collegata a un movimento → la modalità è quella del movimento, sempre
+  if(f.tipo !== 'nota_credito') _impostaPagamentoDaRiconciliazione(f, null, mov);
 }
 
 // Riconcilia dalla fattura (07/09, richiesto da Valerio): finora si poteva
@@ -23628,7 +23655,7 @@ function _confermaPagamento(idx, conferma){
     // confermato essere questo movimento di banca → il metodo diventa quello
     // vero e la data quella della banca; il "pagato" non si raddoppia.
     if(d.cambiaMetodo){
-      d.fatt.pagamento = d.cambiaMetodo; d.fatt.pagamentoOrigine = 'riconciliazione';
+      d.fatt.pagamento = d.cambiaMetodo; d.fatt.pagamentoOrigine = 'banca';
       d.fatt.dataPagamento = d.mov.data;
     }
     if(_eraPagataCf){ d.fatt.parzPagato = Math.max(_parzPrimaCf, d.fatt.importo||0); d.fatt.stato='pagata'; }
@@ -29171,7 +29198,7 @@ function _ecRifTesto(r){
   return p.join(' · ');
 }
 var _EC_METODO={contanti:'Contanti', bonifico:'Bonifico', assegno:'Assegno', carta:'Carta', sdd:'SDD (addebito diretto)', rid:'SDD (addebito diretto)'};
-var _EC_ORIGINE={manuale:'scelto a mano', xml:'letto dall\'XML', prima_nota:'dedotto dalla Prima Nota', banca:'dalla riconciliazione bancaria'};
+var _EC_ORIGINE={manuale:'scelto a mano', xml:'letto dall\'XML', prima_nota:'dedotto dalla Prima Nota', banca:'dalla riconciliazione bancaria', riconciliazione:'dalla riconciliazione bancaria'};
 function _ecPnDi(fid){
   return (window._ecPn||[]).filter(function(p){ return String(p.fattura_id||'')===String(fid) && !p.deleted_at; });
 }
@@ -33077,6 +33104,16 @@ var PN_ICO = {
   contanti: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="7" width="18" height="11" rx="2"/><circle cx="12" cy="12.5" r="2.5"/></svg>',
   nc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M9 14h6"/></svg>'
 };
+// v10.30: un movimento che paga più fatture (es. un assegno per due fatture) non è
+// un pagamento «parziale»: ogni fattura riceve la sua quota intera. Qui si
+// ricavano le altre fatture pagate dallo stesso movimento, per dirlo chiaro.
+function _pnAltreFatture(p){
+  try{
+    if(!p || !p.movId || typeof ricIndice !== 'function' || typeof ricMovKey !== 'function') return [];
+    var q = (ricIndice().quoteMov || {})[ricMovKey(p.movId)]; if(!q || !q.docs) return [];
+    return q.docs.filter(function(d){ return String(d.fid) !== String(PNA.sch); }).map(function(d){ return { f: (typeof pnF === 'function' ? pnF(d.fid) : null), quota: Math.abs(+d.quota || 0) }; });
+  }catch(e){ return []; }
+}
 function pnBoxPagamento(p){
   if(p.senzaDettaglio) return '<div class="rc-box man"><div class="rc-box-h"><div class="rc-ico man">' + PN_ICO.doc + '</div><div class="rc-box-t"><div class="rc-lbl">Registrato senza dettagli' + (p.conto ? ' · ' + esc(p.conto) : '') + '</div><b>Data non indicata</b></div><div class="rc-imp">' + fmt(p.importo) + '<small>pagato</small></div></div>' +
     '<button class="rc-link" onclick="pnCompletaPagamento(' + pnIdJs(PNA.sch) + ')">Aggiungi data e modalità ›</button></div>';
@@ -33090,8 +33127,10 @@ function pnBoxPagamento(p){
   if(L.iban) righe.push(['IBAN', '<span class="rc-mono">' + esc(L.iban) + '</span>']);
   if(L.causale) righe.push(['Causale', esc(L.causale)]);
   if(p.tipo === 'contanti' && p.descr) righe.push(['Descrizione', esc(p.descr)]);
+  var altre = _pnAltreFatture(p);
+  if(altre.length) righe.push(['Paga anche', altre.map(function(a){ return 'n° ' + esc(a.f ? (a.f.numero || '—') : '—') + ' (' + fmt(a.quota) + ')'; }).join(', ') + (p.totale != null ? ' · movimento ' + fmt(p.totale) : '')]);
   var apri = (p.tipo === 'banca' && p.movId && typeof _movSchedaApri === 'function') ? '<button class="rc-link" onclick="_movSchedaApri(' + esc(JSON.stringify(String(p.movId))).replace(/"/g, '&quot;') + ')">Apri il movimento ›</button>' : '';
-  return '<div class="rc-box mov ' + p.tipo + '"><div class="rc-box-h"><div class="rc-ico ' + p.tipo + '">' + (PN_ICO[p.tipo] || PN_ICO.banca) + '</div><div class="rc-box-t"><div class="rc-lbl">' + esc(fonte) + (p.parziale ? ' · parziale' : '') + '</div><b>' + pnGg(p.data) + '</b></div><div class="rc-imp">' + fmt(p.importo) + '<small>' + (p.tipo === 'contanti' ? 'dalla cassa' : (p.condiviso && p.totale != null && p.importo < p.totale - 0.009 ? 'quota di ' + fmt(p.totale) : (p.entrata ? 'entrato sul conto' : 'uscito dal conto'))) + '</small></div></div>' +
+  return '<div class="rc-box mov ' + p.tipo + '"><div class="rc-box-h"><div class="rc-ico ' + p.tipo + '">' + (PN_ICO[p.tipo] || PN_ICO.banca) + '</div><div class="rc-box-t"><div class="rc-lbl">' + esc(fonte) + (p.condiviso && altre.length ? ' · paga più fatture' : (p.parziale ? ' · in parte' : '')) + '</div><b>' + pnGg(p.data) + '</b></div><div class="rc-imp">' + fmt(p.importo) + '<small>' + (p.tipo === 'contanti' ? 'dalla cassa' : (p.condiviso && p.totale != null && p.importo < p.totale - 0.009 ? 'sui ' + fmt(p.totale) + ' del movimento' : (p.entrata ? 'entrato sul conto' : 'uscito dal conto'))) + '</small></div></div>' +
     (righe.length ? '<dl class="rc-dl">' + righe.map(function(r){ return '<dt>' + r[0] + '</dt><dd>' + r[1] + '</dd>'; }).join('') + '</dl>' : '') +
     (p.descr && p.tipo !== 'contanti' ? '<details class="rc-orig"><summary>Testo originale della banca</summary><div>' + esc(p.descr) + '</div></details>' : '') + apri + '</div>';
 }
@@ -33301,7 +33340,7 @@ function _pnDisegnaSchedaVero(){
       var pct = C.dovuto ? Math.min(100, Math.round(C.pagato / C.dovuto * 100)) : 0;
       p += '<div class="sk-bar"><i style="width:' + pct + '%"></i></div><div class="sk-bar-l"><span>Pagati ' + fmt(C.pagato) + '</span><span>Restano ' + fmt(C.residuo) + '</span></div>';
     }
-    var orig = ({ manuale: 'scelto a mano', xml: 'letto dall\'XML', prima_nota: 'dalla Prima Nota', banca: 'dalla banca' })[f.pagamentoOrigine] || '';
+    var orig = ({ manuale: 'scelto a mano', xml: 'letto dall\'XML', prima_nota: 'dalla Prima Nota', banca: 'dalla banca', riconciliazione: 'dalla banca' })[f.pagamentoOrigine] || '';
     p += pnKv([
       ['Metodo', esc(pnMetodo(f.pagamento) || '—') + (orig ? ' <span class="sk-dim">· ' + orig + '</span>' : '')],
       ['Conto', esc(f.contoPagamento || '')],
@@ -35635,7 +35674,7 @@ async function ricvCollega(key, docs, opz){
       f.riconciliata = true;
       // v10.27: anche se era «pagata in contanti»: se la colleghi a un movimento di banca, in contanti non è uscita (altrimenti la cassa la conta due volte)
       var _haContanti = typeof ricContantiDi === 'function' && ricContantiDi(String(f.id)).length;
-      if(f.tipo !== 'nota_credito' && (!f.pagamento || (f.pagamento === 'contanti' && !_haContanti))) _impostaPagamentoDaRiconciliazione(f, tipo === 'altro' ? 'bonifico' : tipo);
+      if(f.tipo !== 'nota_credito' && !_haContanti) _impostaPagamentoDaRiconciliazione(f, tipo === 'altro' ? (f.pagamento ? null : 'bonifico') : tipo, movPerDoc);
       if(f.tipo !== 'nota_credito' && f.pagamento === 'carta' && R.fonte === 'carta' && !f.contoPagamento) f.contoPagamento = 'Nexi';
     }
     m.abbinata = true;
@@ -35743,7 +35782,7 @@ async function ricvStacca(key, fid){
       if(f.riconciliazione && (String(f.riconciliazione.movId) === mid || ricMovKey(f.riconciliazione.movId) === key)) f.riconciliazione = f.riconciliazioneStorico.length ? Object.assign({}, f.riconciliazioneStorico[f.riconciliazioneStorico.length - 1]) : null;
       if(f.tipo !== 'nota_credito'){
         var r = _anStatoDopoStacco(f);
-        if(!f.riconciliazione){ f.riconciliata = false; if(f.pagamentoOrigine === 'riconciliazione' || /^(bonifico|assegno|sdd|rid|carta)$/.test(f.pagamento || '')){ f.stato = 'da_pagare'; f.parzPagato = 0; f.dataPagamento = ''; } }
+        if(!f.riconciliazione){ f.riconciliata = false; if(f.pagamentoOrigine === 'riconciliazione' || f.pagamentoOrigine === 'banca' || /^(bonifico|assegno|sdd|rid|carta)$/.test(f.pagamento || '')){ f.stato = 'da_pagare'; f.parzPagato = 0; f.dataPagamento = ''; } }
         else { f.stato = r.stato; f.parzPagato = r.pagato; }
       } else f.riconciliata = !!(f.riconciliazione && f.riconciliazione.movId);
       await dbUpdate(f);
