@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.30.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.31.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -1892,6 +1892,14 @@ html[data-theme="dark"] .reg-import-link{border-color:rgba(255,255,255,.08)}
         <div class="fisc-row-chev">›</div>
       </div>
       </div>
+    <!-- v10.31.0: entrate e uscite ricorrenti (utenze, mutui, F24, stipendi da Presenze…) -->
+    <div style="background:var(--surface);border-radius:var(--radius);padding:4px 16px;box-shadow:var(--shadow);margin-bottom:12px">
+      <div class="fisc-row" onclick="rcoApri()" style="border-bottom:none">
+        <div class="fisc-row-icon ds-g ds-g-teal"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/></svg></div>
+        <div class="fisc-row-body"><div class="fisc-row-title">Entrate e uscite ricorrenti <span id="rcoMenuBadge" class="rco-badge" style="display:none"></span></div><div class="fisc-row-desc" id="rcoMenuDesc">Utenze, mutui, F24, stipendi: l'app le trova da sola</div></div>
+        <div class="fisc-row-chev">›</div>
+      </div>
+    </div>
     <div style="background:var(--surface);border-radius:var(--radius);padding:4px 16px;box-shadow:var(--shadow);margin-bottom:12px">
       <div class="fisc-row" onclick="apriFiscaleSezione('mese')">
         <div class="fisc-row-icon ds-g ds-g-indigo"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16"/><rect x="5.5" y="11" width="3" height="6" rx="1"/><rect x="10.5" y="6" width="3" height="11" rx="1"/><rect x="15.5" y="9" width="3" height="8" rx="1"/></svg></div>
@@ -2795,7 +2803,7 @@ function _aiLeggiFatture(input){
 }
 
 
-/* ══ RIGHE DELLE FATTURE PER L'ASSISTENTE (v10.30.0) ══
+/* ══ RIGHE DELLE FATTURE PER L'ASSISTENTE (v10.31.0) ══
    Legge gli articoli dagli XML e calcola le quantità in modo deterministico.
    Chili: (1) unità di misura kg/g → è già il peso; (2) unità diversa (CF, PZ, CT)
    → peso per unità ricavato dal prezzo al kg dello STESSO articolo nelle righe in kg
@@ -36364,7 +36372,7 @@ function ricvPrevisione(){
     var x = serie[sr.k] = serie[sr.k] || { k: sr.k, t: sr.t, agg: !!sr.agg, sdd: !!sr.sdd, mesi: {}, giorni: [], ultimi: [] };
     var mk = meseK(M.data), mm = x.mesi[mk] = x.mesi[mk] || { tot: 0, gp: 0 };
     mm.tot += -M.importo; mm.gp += (+M.data.slice(8, 10)) * (-M.importo);
-    x.giorni.push(+M.data.slice(8, 10)); x.ultimi.push({ d: M.data, v: -M.importo });
+    x.giorni.push(+M.data.slice(8, 10)); x.ultimi.push({ d: M.data, v: -M.importo, k: M.id });
   });
   var settStoria = 126 / 7, settRec = giorniRec / 7;
   var dowRec = [0, 0, 0, 0, 0, 0, 0]; for(var dr = new Date(recente); dr <= fineStoria; dr.setDate(dr.getDate() + 1)) dowRec[dr.getDay()]++;
@@ -36379,8 +36387,9 @@ function ricvPrevisione(){
     if(presenti.length < 3) { fornW += presenti.reduce(function(s, m){ return s + x.mesi[m].tot; }, 0) / settStoria; return; }
     var importo = x.agg ? ricvMed(presenti.map(function(m){ return x.mesi[m].tot; })) : x.ultimi[x.ultimi.length - 1].v;
     var giorno = Math.round(ricvMed(presenti.map(function(m){ return x.mesi[m].gp / x.mesi[m].tot; })));
-    ricorrenti.push({ k: k, t: x.t, importo: ricR2(importo), giorno: Math.min(28, Math.max(1, giorno)), sdd: x.sdd, mesi: x.mesi });
+    ricorrenti.push({ k: k, t: x.t, importo: ricR2(importo), giorno: Math.min(28, Math.max(1, giorno)), sdd: x.sdd, mesi: x.mesi, ultimi: x.ultimi });
   });
+  var rcoEv = {};
   // 3) fatture da pagare alla loro scadenza (quello che manca davvero; non quelle in contanti né quelle con addebito SDD già previsto)
   var ap = ricvAperti(C.idx), meno30 = new Date(oggi); meno30.setDate(meno30.getDate() - 30); var meno30K = ricvIso(meno30);
   var fineH = new Date(oggi); fineH.setDate(fineH.getDate() + 56); var fineK = ricvIso(fineH);
@@ -36395,11 +36404,27 @@ function ricvPrevisione(){
     if(sk > fineK) return;
     (fattDue[sk] = fattDue[sk] || []).push({ f: f, v: ap.bis[fid] }); nFatt++;
   });
+  // v10.31.0: le ricorrenze che hai confermato (Fiscale → Entrate e uscite ricorrenti) hanno date e importi veri:
+  // sostituiscono le serie che l'app indovinava da sola sugli stessi movimenti, e si aggiungono le altre
+  try{
+    if(typeof rcoProssimi === 'function' && typeof RCO !== 'undefined' && RCO.doc){
+      var S0 = rcoStato(), usatiR = S0.calc.usati;
+      ricorrenti = ricorrenti.filter(function(r){ var tot = (r.ultimi || []).length, cop = (r.ultimi || []).filter(function(u){ return usatiR[String(u.k)]; }).length; return !(tot && cop / tot >= 0.5); });
+      var fornDue = []; Object.keys(fattDue).forEach(function(dk){ fattDue[dk].forEach(function(x){ fornDue.push({ d: dk, tok: rcoTok(x.f.fornitore) }); }); });
+      rcoProssimi(70, { inAttesa: true }).forEach(function(x){
+        var vt = (x.v.regola && x.v.regola.tipo === 'nome') ? rcoTok(x.v.regola.valore || x.v.nome) : [];
+        // se per lo stesso fornitore c'è già una fattura in scadenza vicina, conta la fattura (niente doppioni)
+        if(vt.length && fornDue.some(function(f){ return Math.abs(rcoGiorni(f.d, x.data)) <= 10 && f.tok.some(function(w){ return w.length >= 4 && vt.indexOf(w) >= 0; }); })) return;
+        (rcoEv[x.data] = rcoEv[x.data] || []).push({ t: x.v.nome, v: (x.v.dir === 'entrata' ? 1 : -1) * x.p.atteso, tipo: 'serie' });
+      });
+    }
+  }catch(e){ console.warn('previsione, ricorrenti:', e); }
   // 4) simulazione giorno per giorno: dall'ultimo movimento noto a oggi (stima), poi 8 settimane
   var giaPagata = function(r, mk){ return r.mesi[mk] && r.mesi[mk].tot >= r.importo * 0.8; };
   var eventiDel = function(dK){
     var ev = [], g = +dK.slice(8, 10), mk = dK.slice(0, 7);
     ricorrenti.forEach(function(r){ if(r.giorno === g && !giaPagata(r, mk)) ev.push({ t: r.t, v: -r.importo, tipo: 'serie' }); });
+    (rcoEv[dK] || []).forEach(function(e){ ev.push(e); });
     return ev;
   };
   var cur = saldo, giorno = new Date(base + 'T12:00:00'); giorno.setDate(giorno.getDate() + 1);
@@ -37360,6 +37385,1024 @@ function ricvVaiLink(link){
       return orig.apply(this, arguments);
     };
   }
+})();
+
+</script>
+<style>
+/* v10.31.0 — entrate e uscite ricorrenti */
+.rco-badge{display:inline-block;min-width:18px;padding:1px 6px;border-radius:99px;background:var(--red);color:#fff;font-size:11px;font-weight:700;margin-left:4px;vertical-align:middle;text-align:center}
+.rco-vuoto{padding:18px 4px;color:var(--ink3);font-size:14px;line-height:1.45;text-align:center}
+.rco-kpi{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px}
+.rco-kpi>div{background:var(--surface);border-radius:var(--radius-sm);padding:10px 12px;display:flex;flex-direction:column;gap:2px;box-shadow:var(--shadow)}
+.rco-kpi span{font-size:11px;font-weight:600;color:var(--ink3);text-transform:uppercase;letter-spacing:.4px}
+.rco-kpi b{font-size:18px;font-variant-numeric:tabular-nums}
+.rco-kpi small{font-size:12px;color:var(--ink3)}
+.rco-kpi .neg,.rco-v.neg{color:var(--red);font-style:normal}
+.rco-sez{margin:18px 2px 8px;display:flex;flex-direction:column;gap:2px}
+.rco-sez h4{margin:0;font-size:15px;font-weight:700;color:var(--ink)}
+.rco-sez small{font-size:12px;color:var(--ink3);line-height:1.4}
+.rco-card{background:var(--surface);border-radius:var(--radius-sm);padding:12px;margin-bottom:8px;box-shadow:var(--shadow);border-left:3px solid transparent;display:flex;flex-direction:column;gap:6px}
+.rco-card.prop{border-left-color:var(--blue)}
+.rco-card.warn{border-left-color:var(--orange)}
+.rco-card.ko{border-left-color:var(--red)}
+.rco-card p{margin:0;font-size:13px;line-height:1.45;color:var(--ink2)}
+.rco-card-h{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;cursor:pointer}
+.rco-card-h b{font-size:14.5px;min-width:0}
+.rco-pill{flex-shrink:0;font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;white-space:nowrap}
+.rco-pill.ok{background:var(--green-light);color:var(--green)}
+.rco-pill.warn{background:var(--orange-light);color:var(--orange)}
+.rco-pill.ko{background:var(--red-light);color:var(--red)}
+.rco-pill.nd{background:var(--surface2);color:var(--ink3)}
+.rco-storia{display:flex;flex-wrap:wrap;gap:4px}
+.rco-storia span{font-size:11.5px;color:var(--ink3);background:var(--surface2);border-radius:6px;padding:2px 6px;font-variant-numeric:tabular-nums}
+.rco-storia b{color:var(--ink2);font-weight:600}
+.rco-pross{font-size:13px}
+.rco-pross em{color:var(--ink3);font-style:normal}
+.rco-az{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}
+.rco-b{font:inherit;font-size:13px;font-weight:600;padding:7px 12px;border-radius:9px;border:none;background:var(--surface2);color:var(--blue);cursor:pointer}
+.rco-b.pri{background:var(--blue);color:#fff}
+.rco-b.neg{color:var(--red)}
+.rco-b:focus-visible,.rco-riga:focus-visible,.rco-voce:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.rco-durata{display:flex;flex-direction:column;gap:7px;background:var(--surface2);border-radius:9px;padding:10px}
+.rco-durata label{display:flex;align-items:center;flex-wrap:wrap;gap:6px;font-size:13.5px}
+.rco-durata small{color:var(--ink3);font-size:12px;width:100%;padding-left:24px}
+.rco-durata input[type=number]{width:64px}
+.rco-durata input,.rco-durata select{font:inherit;font-size:14px;padding:6px 8px;border:1px solid var(--sep);border-radius:8px;background:var(--surface);color:var(--ink)}
+.rco-durata input[type=radio]{width:auto;padding:0}
+.rco-q{font-size:11px;font-weight:700;color:var(--ink3);text-transform:uppercase;letter-spacing:.4px;margin-top:4px}
+.rco-cal{background:var(--surface);border-radius:var(--radius-sm);box-shadow:var(--shadow);overflow:hidden}
+.rco-riga{display:grid;grid-template-columns:92px 1fr auto;gap:8px;align-items:center;width:100%;text-align:left;font:inherit;background:none;border:none;border-bottom:.5px solid var(--sep);padding:10px 12px;cursor:pointer;color:var(--ink)}
+.rco-riga:last-child{border-bottom:none}
+.rco-d{font-size:12px;color:var(--ink3)}
+.rco-n{font-size:13.5px;min-width:0}
+.rco-n em{display:block;font-size:11.5px;color:var(--orange);font-style:normal}
+.rco-v{font-size:13.5px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.rco-v.pos{color:var(--green)}
+.rco-cat{font-size:11px;font-weight:700;color:var(--ink3);text-transform:uppercase;letter-spacing:.5px;margin:12px 4px 6px}
+.rco-voce{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;text-align:left;font:inherit;background:var(--surface);border:none;border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:6px;box-shadow:var(--shadow);cursor:pointer;color:var(--ink)}
+.rco-voce span{display:flex;flex-direction:column;min-width:0}
+.rco-voce b{font-size:14px}
+.rco-voce small{font-size:12px;color:var(--ink3)}
+.rco-voce.spenta{opacity:.6}
+.rco-escl{margin-top:14px;font-size:13px;color:var(--ink3)}
+.rco-escl summary{cursor:pointer;padding:6px 2px}
+.rco-escl div{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 2px;border-bottom:.5px solid var(--sep)}
+.rco-dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0 0 6px;font-size:13.5px;background:var(--surface);border-radius:var(--radius-sm);padding:12px;box-shadow:var(--shadow)}
+.rco-dl dt{color:var(--ink3)}
+.rco-dl dd{margin:0;min-width:0;word-break:break-word}
+.rco-pers{background:var(--surface);border-radius:var(--radius-sm);box-shadow:var(--shadow);padding:4px 12px}
+.rco-pers div{display:grid;grid-template-columns:1fr auto;gap:0 8px;padding:7px 0;border-bottom:.5px solid var(--sep);font-size:13.5px}
+.rco-pers div:last-child{border-bottom:none}
+.rco-pers em{grid-column:1;font-size:11.5px;color:var(--ink3);font-style:normal}
+.rco-pers b{grid-row:1/3;grid-column:2;align-self:center;font-variant-numeric:tabular-nums}
+.rco-per{display:flex;flex-direction:column;gap:6px}
+.rco-p{background:var(--surface);border-radius:var(--radius-sm);padding:10px 12px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:4px}
+.rco-p-h{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.rco-p-h b{font-size:13.5px}
+.rco-p small{font-size:12px;color:var(--ink3)}
+.rco-movs{display:flex;flex-wrap:wrap;gap:4px}
+.rco-mov{font:inherit;font-size:12px;border:none;background:var(--blue-light);color:var(--blue);border-radius:6px;padding:3px 7px;cursor:pointer}
+.rco-az-voce{margin-top:16px}
+.rco-form{display:flex;flex-direction:column;gap:12px}
+.rco-form label{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:600;color:var(--ink3);min-width:0}
+.rco-form label small{font-weight:400}
+.rco-form input,.rco-form select{font:inherit;font-size:15px;font-weight:400;padding:10px;border:1.5px solid var(--sep);border-radius:10px;background:var(--surface);color:var(--ink);width:100%;box-sizing:border-box}
+.rco-2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.rco-nota{margin:0;font-size:12.5px;color:var(--ink3);line-height:1.45}
+.rco-banner{position:fixed;left:12px;right:12px;bottom:calc(84px + env(safe-area-inset-bottom));z-index:880;max-width:520px;margin:0 auto;background:var(--surface);border-radius:14px;box-shadow:0 10px 30px -10px rgba(0,0,0,.35);padding:12px;display:flex;align-items:center;gap:10px;animation:slideUp .3s ease}
+.rco-banner>div{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.rco-banner b{font-size:14px}
+.rco-banner span{font-size:12.5px;color:var(--ink2);line-height:1.4}
+@media (max-width:380px){.rco-2{grid-template-columns:1fr}.rco-riga{grid-template-columns:78px 1fr auto}}
+</style>
+<script>
+/* ══════════════════════════════════════════════════════════════════
+   ENTRATE E USCITE RICORRENTI — motore (v10.31.0, 15/10/2026)
+   Lo STESSO codice gira nell'app e sul server (avvisi del mattino): quello
+   che vedi e quello che ti arriva sul telefono dicono la stessa cosa.
+   Regole:
+   • Riconoscimento deterministico: mandato SDD → numero di mutuo → IBAN →
+     nome del beneficiario (parole in qualsiasi ordine, BPM e SumUp insieme)
+     → testo nella descrizione. Ogni voce dice quale regola la aggancia.
+   • L'app PROPONE; diventa ricorrenza solo ciò che confermi.
+   • Un movimento conta una volta sola: va alla voce più specifica.
+   • "Mancante" solo se l'estratto copre già i giorni in cui doveva arrivare.
+   • Stipendi e compensi dei soci: la previsione viene da Presenze.
+   • Nessun dato contabile viene modificato.
+   ══════════════════════════════════════════════════════════════════ */
+var RCO_STOP = /^(srl|srls|sas|snc|spa|sapa|soc|societa|cooperativa|coop|unipersonale|dottoressa|dottore|dott|dr|ragioniere|rag|sig|sigra|signor|avv|geom|ing|italia|italy|it|branch|eu|sarl|et|cie|sca|the|di|de|del|della|dei|e|ed|and|a|r|l|s|p|cons|consortile|onlus|via|corso|c)$/;
+// una voce «non c'è più» resta attesa fino all'ultima data indicata
+function rcoViva(v){ return v && (v.stato === 'attiva' || v.stato === 'conclusa' && !!v.al); }
+function rcoR2(n){ return Math.round((+n || 0) * 100) / 100; }
+function rcoNorm(s){ return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim(); }
+function rcoTok(s){
+  var out = {}; rcoNorm(s).split(' ').forEach(function(w){ if(w.length >= 2 && !RCO_STOP.test(w) && !/^\d+$/.test(w) && !/^[a-z]{0,2}\d/.test(w)) out[w] = 1; });
+  return Object.keys(out).sort();
+}
+function rcoIso(d){ return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function rcoData(iso){ return new Date(String(iso).slice(0, 10) + 'T12:00:00'); }
+function rcoPiu(iso, n){ var d = rcoData(iso); d.setDate(d.getDate() + n); return rcoIso(d); }
+function rcoGiorni(a, b){ return Math.round((rcoData(b) - rcoData(a)) / 86400000); }
+function rcoMeseIdx(mk){ return (+mk.slice(0, 4)) * 12 + (+mk.slice(5, 7)) - 1; }
+function rcoMeseDa(idx){ return Math.floor(idx / 12) + '-' + String(idx % 12 + 1).padStart(2, '0'); }
+function rcoMed(a){ if(!a.length) return null; var b = a.slice().sort(function(x, y){ return x - y; }), m = b.length >> 1; return b.length % 2 ? b[m] : (b[m - 1] + b[m]) / 2; }
+function rcoPasqua(a){
+  var b = a % 19, c = Math.floor(a / 100), d = a % 100, e = Math.floor(c / 4), f = c % 4, g = Math.floor((c + 8) / 25), h = Math.floor((c - g + 1) / 3),
+      i = (19 * b + c - e - h + 15) % 30, k = Math.floor(d / 4), l = d % 4, m = (32 + 2 * f + 2 * k - i - l) % 7, n = Math.floor((b + 11 * m + 22 * i) / 451),
+      mese = Math.floor((i + m - 7 * n + 114) / 31), giorno = ((i + m - 7 * n + 114) % 31) + 1;
+  return new Date(a, mese - 1, giorno, 12);
+}
+function rcoFestivo(d){
+  var md = (d.getMonth() + 1) + '-' + d.getDate();
+  if(['1-1', '1-6', '4-25', '5-1', '6-2', '8-15', '11-1', '12-8', '12-25', '12-26'].indexOf(md) >= 0) return true;
+  var p = rcoPasqua(d.getFullYear()); p.setDate(p.getDate() + 1);
+  return d.getMonth() === p.getMonth() && d.getDate() === p.getDate();
+}
+// la banca addebita il primo giorno lavorativo utile
+function rcoLavorativo(iso){ var d = rcoData(iso); while(d.getDay() === 0 || d.getDay() === 6 || rcoFestivo(d)) d.setDate(d.getDate() + 1); return rcoIso(d); }
+
+/* ── chi c'è dall'altra parte del movimento ── */
+function rcoControparte(m){
+  var d = String(m.descrizione || '').replace(/\s+/g, ' ').trim(), st = String(m.sottotipo || ''), x;
+  var iban = ((d.toUpperCase().match(/\bIT\d{2}[A-Z][0-9A-Z]{22}\b/) || [])[0]) || '';
+  if((x = d.match(/SDD\s*(?:CORE|B2B)\s*:\s*([A-Z0-9]{6,})\s*(.*)$/i))) return { tipo: 'mandato', valore: x[1].toUpperCase(), nome: x[2] || 'Addebito diretto', tok: rcoTok(x[2]), iban: iban };
+  if((x = d.match(/MUTUO\s*N\.?\s*([\d ]{6,})/i))) return { tipo: 'mutuo', valore: x[1].replace(/\D/g, ''), nome: 'Mutuo n° ' + x[1].trim(), tok: [], iban: iban };
+  if(/\bI24\s+AGENZIA|\bF24\b/i.test(d) || /^f24$/i.test(st)) return { tipo: 'f24', valore: 'f24', nome: 'F24 (Agenzia delle Entrate)', tok: ['f24'], iban: iban };
+  if((x = d.match(/CBILL\s+(.+?)\s+-\s+R\b/i))) return { tipo: 'nome', valore: rcoTok('cbill ' + x[1]).join(' '), nome: 'Bollettino ' + x[1], tok: rcoTok('cbill ' + x[1]), iban: iban };
+  if(/assegno/i.test(d) || /assegno/i.test(st)) return { tipo: 'assegno', valore: '', nome: 'Assegno', tok: [], iban: '' };
+  var nome = '';
+  if((x = d.match(/FAVORE\s+(.+?)(?:\s+NOTPROVIDE\b|\s+-\s+|$)/i))) nome = x[1];
+  else if((x = d.match(/BON\.?\s*DA\s+(.+?)(?:\s+-\s+|$)/i))) nome = x[1];
+  else if(iban && (x = d.match(/^(.+?)\s+IT\d{2}[A-Z][0-9A-Z]{22}\b/i))) nome = x[1];
+  else if((x = d.match(/^pagamento\s+(?:pos|online)\s*[—-]\s*(.+?)(?:\s+[A-Z]{2})?$/i))) nome = x[1];
+  if(nome){ var t = rcoTok(nome); if(t.length) return { tipo: 'nome', valore: t.join(' '), nome: nome, tok: t, iban: iban }; }
+  var testo = rcoNorm(d.replace(/\d[\d\/.:,-]*/g, ' ')).split(' ').filter(Boolean).slice(0, 4).join(' ');
+  return { tipo: 'testo', valore: testo, nome: d.split(' - ')[0].slice(0, 40), tok: rcoTok(testo), iban: iban };
+}
+function rcoCp(m){ if(!m._rco) m._rco = rcoControparte(m); return m._rco; }
+function rcoInterno(m){
+  var d = String(m.descrizione || ''), c = m.cat || '';
+  if(/^(giroconto|finanziamento_soci|incasso|versamento)$/.test(c)) return true;
+  if(/giroconto|ceraldi\s+group/i.test(d)) return true;
+  if(m.importo > 0 && /numia|inc\.?\s*pos|incas\.?\s*tramite|payout|pagamento da sumup|vers\.?\s*contanti|versamento\s+contanti/i.test(d)) return true;
+  if(m.importo > 0 && String(m.conto) === 'SumUp' && /^pid\b|\bpid\s+sumup|sumup\s+pid/i.test(rcoNorm(d))) return true;
+  return false;
+}
+function rcoPresenzeDi(m, ctx){
+  if(!ctx || !ctx.presenze) return '';
+  var cp = rcoCp(m); if(!(m.importo < 0)) return '';
+  if(/beneficiari\s+vari/i.test(m.descrizione || '')) return 'dipendenti';
+  if(!cp.tok || !cp.tok.length) return '';
+  var t = {}; cp.tok.forEach(function(w){ t[w] = 1; });
+  var gruppi = ['soci', 'dipendenti'];
+  for(var g = 0; g < gruppi.length; g++){
+    var L = ctx.presenze[gruppi[g]] || [];
+    for(var i = 0; i < L.length; i++){ var p = L[i]; if(p.tok.length >= 2 && p.tok.every(function(w){ return t[w]; })) return gruppi[g]; }
+  }
+  return '';
+}
+/* ── la voce riconosce questo movimento? ── */
+function rcoRiconosce(v, m, ctx){
+  var r = v.regola || {}; if(!r.tipo || r.tipo === 'nessuna') return false;
+  if((v.dir === 'entrata') !== (m.importo > 0)) return false;
+  if(r.conto && String(m.conto) !== r.conto) return false;
+  var a = Math.abs(+m.importo || 0);
+  if(r.min != null && r.min !== '' && a < +r.min - 0.005) return false;
+  if(r.max != null && r.max !== '' && a > +r.max + 0.005) return false;
+  var cp = rcoCp(m), val = [].concat(r.valori || (r.valore != null ? [r.valore] : [])).map(String);
+  if(r.tipo === 'presenze') return rcoPresenzeDi(m, ctx) === r.gruppo;
+  if(r.tipo === 'f24') return cp.tipo === 'f24';
+  if(r.tipo === 'mandato') return cp.tipo === 'mandato' && val.indexOf(cp.valore) >= 0;
+  if(r.tipo === 'mutuo') return cp.tipo === 'mutuo' && val.some(function(x){ return x.replace(/\D/g, '') === cp.valore; });
+  if(r.tipo === 'iban') return !!cp.iban && val.some(function(x){ return x.toUpperCase().replace(/\s/g, '') === cp.iban; });
+  if(r.tipo === 'nome'){
+    if(!cp.tok || !cp.tok.length) return false;
+    var t = {}; cp.tok.forEach(function(w){ t[w] = 1; });
+    return val.some(function(x){ var w = rcoTok(x); return w.length && w.every(function(y){ return t[y]; }); });
+  }
+  if(r.tipo === 'testo'){ var dn = rcoNorm(m.descrizione); return val.some(function(x){ var n = rcoNorm(x); return n && dn.indexOf(n) >= 0; }); }
+  return false;
+}
+function rcoSpecificita(v){ var r = v.regola || {}, b = { mandato: 0, mutuo: 0, iban: 0, presenze: 1, nome: 1, testo: 3, f24: 3 }[r.tipo]; if(b == null) b = 4; if(r.min != null && r.min !== '' || r.max != null && r.max !== '') b -= 1; return b; }
+
+/* ── date attese di una voce ── */
+function rcoAtteso(v, mk){
+  var a = +mk.slice(0, 4), mm = +mk.slice(5, 7), fine = new Date(a, mm, 0).getDate();
+  return rcoLavorativo(mk + '-' + String(Math.min(+v.giorno || 1, fine)).padStart(2, '0'));
+}
+function rcoPeriodi(v, daMk, aMk){
+  var ogni = Math.max(1, +v.ogni || 1), base = v.base || (v.dal ? String(v.dal).slice(0, 7) : daMk), bi = rcoMeseIdx(base), out = [];
+  var ini = rcoMeseIdx(daMk), fin = rcoMeseIdx(aMk);
+  var primo = v.dal ? rcoMeseIdx(String(v.dal).slice(0, 7)) : -Infinity;
+  for(var i = ini; i <= fin; i++){
+    if(((i - bi) % ogni + ogni) % ogni) continue;
+    if(i < primo) continue;
+    var mk = rcoMeseDa(i), d = rcoAtteso(v, mk);
+    if(v.dal && d < String(v.dal).slice(0, 10) && rcoMeseIdx(String(v.dal).slice(0, 7)) === i){ /* stesso mese d'inizio: vale comunque */ }
+    if(v.rate && v.dal){ var n = Math.floor((i - rcoMeseIdx(String(v.dal).slice(0, 7))) / ogni) + 1; if(n > +v.rate) continue; }
+    if(v.al && d > String(v.al).slice(0, 10)) continue;
+    out.push({ periodo: mk, data: d });
+  }
+  return out;
+}
+function rcoFinestra(v){ var t = v.toll != null ? +v.toll : ((+v.ogni || 1) <= 1 ? 8 : (+v.ogni <= 3 ? 12 : 20)); return { prima: Math.max(3, Math.round(t * 0.8)), dopo: t }; }
+
+/* ── stipendi e compensi dei soci da Presenze ── */
+// ctx.presenze = { dipendenti:[{id,nome,tok,iban,fine}], soci:[…], bonifici:{id:{'AAAA-MM':importo}}, liquidazioni:{id:{'AAAA-MM':bonifico}}, compensi:{id:{'AAAA-MM':netto}}, giorno:{dipendenti:n, soci:n} }
+// Il pagamento del mese M (stipendio di M) arriva in banca nel mese M+1.
+function rcoStimaPresenze(gruppo, mkPagamento, ctx){
+  var P = ctx && ctx.presenze; if(!P) return null;
+  var rif = rcoMeseDa(rcoMeseIdx(mkPagamento) - 1), righe = [];
+  (P[gruppo] || []).forEach(function(p){
+    if(p.fine && String(p.fine).slice(0, 7) < rif) return;
+    var liq = (P.liquidazioni[p.id] || {})[rif], comp = (P.compensi[p.id] || {})[rif];
+    var storia = P.bonifici[p.id] || {}, ult = Object.keys(storia).filter(function(k){ return k < rif; }).sort().slice(-3).map(function(k){ return storia[k]; }).filter(function(x){ return x > 0; });
+    var v = null, come = '';
+    if(liq != null && liq > 0){ v = liq; come = 'liquidazione di Presenze'; }
+    else if(gruppo === 'soci' && comp != null && comp > 0){ v = comp; come = 'compenso fissato in Presenze'; }
+    else if(p.netto && p.netto > 0){ v = p.netto; come = 'netto fisso in Presenze'; }
+    else if(ult.length){ v = rcoMed(ult); come = 'media degli ultimi ' + ult.length + ' mesi'; }
+    if(v) righe.push({ id: p.id, nome: p.nome, importo: rcoR2(v), come: come, certo: come.indexOf('liquidazione') === 0 || come.indexOf('compenso') === 0 });
+  });
+  if(!righe.length) return null;
+  return { rif: rif, righe: righe, totale: rcoR2(righe.reduce(function(s, x){ return s + x.importo; }, 0)), certo: righe.every(function(x){ return x.certo; }) };
+}
+
+/* ── esito mese per mese: arrivato, previsto, mancante, diverso ── */
+// opz: { oggi, copertura:{conto:ultima data}, esiti:{'id|AAAA-MM':{esito,mov,nota}}, mesiIndietro, mesiAvanti, iban:{noti} }
+function rcoCalcola(voci, movs, ctx, opz){
+  opz = opz || {}; var oggi = opz.oggi || rcoIso(new Date());
+  var mi = rcoMeseIdx(oggi.slice(0, 7)), daMk = rcoMeseDa(mi - (opz.mesiIndietro != null ? opz.mesiIndietro : 13)), aMk = rcoMeseDa(mi + (opz.mesiAvanti != null ? opz.mesiAvanti : 3));
+  var cop = opz.copertura || {}, copTutti = Object.keys(cop).reduce(function(m, k){ return !m || cop[k] > m ? cop[k] : m; }, '');
+  var usati = {}, perId = {}, esiti = opz.esiti || {};
+  var mPer = {}; (movs || []).forEach(function(m){ mPer[String(m.id)] = m; });
+  var attive = (voci || []).filter(function(v){ return v && v.stato !== 'esclusa' && !v.eliminata; }).slice().sort(function(a, b){ return rcoSpecificita(a) - rcoSpecificita(b); });
+  // collegamenti fatti a mano: prima di tutto
+  attive.forEach(function(v){ Object.keys(esiti).forEach(function(k){ var e = esiti[k]; if(k.split('|')[0] === String(v.id) && e && e.esito === 'collegato' && e.mov) usati[String(e.mov)] = v.id; }); });
+  attive.forEach(function(v){
+    var F = rcoFinestra(v), P = rcoPeriodi(v, daMk, aMk), agg = !!v.aggrega || (v.regola || {}).tipo === 'presenze' || (v.regola || {}).tipo === 'f24' && v.regola.min == null && v.regola.max == null;
+    var cand = (movs || []).filter(function(m){ return !usati[String(m.id)] && rcoRiconosce(v, m, ctx); }).sort(function(a, b){ return a.data < b.data ? -1 : 1; });
+    var out = [], ibanVisti = {};
+    P.forEach(function(p){
+      var e = esiti[v.id + '|' + p.periodo] || null, ini = rcoPiu(p.data, -F.prima), fin = rcoPiu(p.data, F.dopo), presi = [];
+      if(e && e.esito === 'collegato' && e.mov && mPer[String(e.mov)]) presi = [mPer[String(e.mov)]];
+      else {
+        var nel = cand.filter(function(m){ return !usati[String(m.id)] && m.data >= ini && m.data <= fin; });
+        if(agg) presi = nel;
+        else if(nel.length){ nel.sort(function(a, b){ return Math.abs(rcoGiorni(p.data, a.data)) - Math.abs(rcoGiorni(p.data, b.data)) || Math.abs(Math.abs(a.importo) - (v.importo || 0)) - Math.abs(Math.abs(b.importo) - (v.importo || 0)); }); presi = [nel[0]]; }
+      }
+      presi.forEach(function(m){ usati[String(m.id)] = v.id; });
+      var stima = (v.regola || {}).tipo === 'presenze' ? rcoStimaPresenze(v.regola.gruppo, p.periodo, ctx) : null;
+      var atteso = stima ? stima.totale : (+v.importo || 0);
+      var reale = rcoR2(presi.reduce(function(s, m){ return s + Math.abs(+m.importo || 0); }, 0));
+      var conto = (v.regola || {}).conto || v.conto || '', copre = (conto && cop[conto]) || copTutti;
+      var stato;
+      if(e && e.esito === 'saltato') stato = 'saltato';
+      else if(v.sospesaFino && p.data <= v.sospesaFino) stato = 'sospeso';
+      else if(presi.length){
+        stato = 'arrivato';
+        if(!(e && e.esito === 'va_bene')){
+          var lo = v.min != null ? +v.min : atteso, hi = v.max != null ? +v.max : atteso, t = v.variabile || stima ? 0.25 : 0.03;
+          if(stima) { lo = Math.min(lo, atteso); hi = Math.max(hi, atteso); }
+          if(lo > 0 && (reale < lo * (1 - t) - 0.5 || reale > hi * (1 + t) + 0.5)) stato = 'diverso';
+        }
+      }
+      else if(!(v.regola && v.regola.tipo && v.regola.tipo !== 'nessuna')) stato = p.data < oggi ? 'da_segnare' : 'previsto';
+      else if(copre && fin < copre) stato = 'mancante';
+      else if(p.data <= oggi) stato = 'in_attesa';
+      else stato = 'previsto';
+      // IBAN nuovo: il beneficiario è pagato su un conto mai visto e non registrato altrove
+      // (per persona: nelle voci con più beneficiari, come gli stipendi, conta il nome)
+      var ibanNuovo = '';
+      presi.forEach(function(m){
+        var cp = rcoCp(m); if(!cp.iban) return;
+        var chi = (cp.tok || []).join(' ') || '-', visti = ibanVisti[chi] = ibanVisti[chi] || [];
+        if(visti.length && visti.indexOf(cp.iban) < 0 && !(opz.ibanNoti && opz.ibanNoti[cp.iban])) ibanNuovo = cp.iban;
+        if(visti.indexOf(cp.iban) < 0) visti.push(cp.iban);
+      });
+      out.push({ periodo: p.periodo, data: p.data, fino: fin, atteso: rcoR2(atteso), stima: stima, reale: reale, movs: presi, stato: stato, esito: e, ibanNuovo: ibanNuovo });
+    });
+    perId[v.id] = out;
+  });
+  return { periodi: perId, usati: usati };
+}
+
+/* ── suggerimenti: la voce ha cambiato importo o giorno? (mai applicati da soli) ── */
+function rcoSuggerimenti(v, periodi){
+  var arr = (periodi || []).filter(function(p){ return p.stato === 'arrivato' || p.stato === 'diverso'; }).slice(-4), s = [];
+  if(arr.length >= 2 && !(v.regola && v.regola.tipo === 'presenze')){
+    var ult = arr.slice(-2).map(function(p){ return p.reale; });
+    if(!v.variabile && Math.abs(ult[0] - ult[1]) <= Math.max(1, ult[1] * 0.01) && v.importo && Math.abs(ult[1] - v.importo) > Math.max(1, v.importo * 0.03)) s.push({ tipo: 'importo', valore: rcoR2(ult[1]), testo: 'Le ultime due volte è stato ' + ult[1].toFixed(2).replace('.', ',') + ' € invece di ' + (+v.importo).toFixed(2).replace('.', ',') + ' €' });
+    var gg = rcoMed(arr.map(function(p){ return +p.movs[0].data.slice(8, 10); }));
+    if(gg && v.giorno && Math.abs(gg - v.giorno) >= 3 && arr.length >= 3) s.push({ tipo: 'giorno', valore: Math.round(gg), testo: 'Ultimamente arriva intorno al ' + Math.round(gg) + ' invece del ' + v.giorno });
+  }
+  return s;
+}
+
+/* ── PROPOSTE: cose che si ripetono e che non sono ancora ricorrenze ── */
+// opz: { oggi, copertura, chiaviNote:{chiave:1}, usati:{movId:1}, nomeDiMov(m) }
+function rcoProponi(movs, ctx, opz){
+  opz = opz || {}; var oggi = opz.oggi || rcoIso(new Date()), note = opz.chiaviNote || {}, usati = opz.usati || {};
+  var cop = opz.copertura || {}, copTutti = Object.keys(cop).reduce(function(m, k){ return !m || cop[k] > m ? cop[k] : m; }, '');
+  var gruppi = {}, pres = { dipendenti: [], soci: [] };
+  (movs || []).forEach(function(m){
+    if(!m || !m.data || usati[String(m.id)] || rcoInterno(m)) return;
+    if(Math.abs(+m.importo || 0) < 3) return;
+    var g = rcoPresenzeDi(m, ctx); if(g){ pres[g].push(m); return; }
+    if(m.cat === 'stipendio') return;   // ex dipendenti o bonifici a persone che Presenze non conta più
+    var cp = rcoCp(m), k, nome = cp.nome;
+    // assegni: la banca non dice a chi vanno, e quelli ai fornitori li prevede già lo scadenzario delle fatture
+    if(cp.tipo === 'assegno' || !cp.valore) return;
+    else k = cp.tipo + ':' + cp.valore;
+    k += m.importo > 0 ? ':e' : ':u';
+    (gruppi[k] = gruppi[k] || { k: k, cp: cp, nome: nome, movs: [] }).movs.push(m);
+  });
+  var out = [];
+  var valuta = function(chiave, nome, cp, L, extra){
+    L = L.slice().sort(function(a, b){ return a.data < b.data ? -1 : 1; });
+    var perMese = {}; L.forEach(function(m){ var mk = m.data.slice(0, 7); (perMese[mk] = perMese[mk] || []).push(m); });
+    var mesi = Object.keys(perMese).sort(); if(mesi.length < 2) return null;
+    var idx = mesi.map(rcoMeseIdx), gaps = []; for(var i = 1; i < idx.length; i++) gaps.push(idx[i] - idx[i - 1]);
+    var cand = [1, 2, 3, 4, 6, 12], best = null;
+    cand.forEach(function(g){ var ok = gaps.filter(function(x){ return g >= 3 ? Math.abs(x - g) <= 1 : x === g; }).length / gaps.length; if(!best || ok > best.ok + 0.001 || (Math.abs(ok - best.ok) < 0.001 && g < best.g)) best = { g: g, ok: ok }; });
+    var recente = rcoGiorni(L[0].data, oggi) <= 130;
+    var minimo = best.g >= 4 ? 3 : (recente ? 2 : 3);
+    if(mesi.length < minimo || best.ok < (mesi.length >= 8 ? 0.6 : 0.7)) return null;
+    if(mesi.length === 2 && best.g !== 1) return null;
+    var somme = mesi.map(function(mk){ return rcoR2(perMese[mk].reduce(function(s, m){ return s + Math.abs(+m.importo || 0); }, 0)); });
+    var multi = mesi.filter(function(mk){ return perMese[mk].length > 1; }).length / mesi.length;
+    var giorni = mesi.map(function(mk){ return +perMese[mk][0].data.slice(8, 10); }), gMed = Math.round(rcoMed(giorni)), spread = rcoMed(giorni.map(function(x){ return Math.abs(x - gMed); }));
+    if(mesi.length === 2 && (spread > 4 || Math.abs(somme[0] - somme[1]) > Math.max(2, somme[1] * 0.1))) return null;
+    var ult = somme.slice(-6), med = rcoMed(ult), mn = Math.min.apply(null, ult), mx = Math.max.apply(null, ult);
+    var fisso = med > 0 && (mx - mn) / med <= 0.03, duo = false;
+    if(!fisso && ult.length >= 3){ var lo = ult.filter(function(x){ return Math.abs(x - mn) <= mn * 0.03; }), hi = ult.filter(function(x){ return Math.abs(x - mx) <= mx * 0.03; }); duo = lo.length + hi.length === ult.length; }
+    var variabile = !fisso && !duo;
+    var tipico = fisso ? rcoR2(med) : (duo ? rcoR2(rcoMed(ult)) : rcoR2(rcoMed(somme.slice(-3))));
+    if(tipico < 5) return null;
+    var ultimo = L[L.length - 1], ultMk = mesi[mesi.length - 1], prossMk = rcoMeseDa(rcoMeseIdx(ultMk) + best.g);
+    var v0 = { giorno: gMed, ogni: best.g };
+    var prossima = rcoAtteso(v0, prossMk), toll = best.g <= 1 ? 8 : (best.g <= 3 ? 12 : 20);
+    var conti = {}; L.forEach(function(m){ conti[m.conto || ''] = 1; }); var conto = Object.keys(conti).length === 1 ? Object.keys(conti)[0] : '';
+    var copre = (conto && cop[conto]) || copTutti;
+    var interrotta = !!copre && rcoPiu(prossima, toll) < copre;
+    var forte = /^(mandato|mutuo|nome|presenze)$/.test(cp.tipo);
+    var score = (mesi.length >= 6 ? 75 : mesi.length >= 4 ? 65 : mesi.length === 3 ? 55 : 40) + (forte ? 12 : 0) + (best.ok === 1 && spread <= 3 ? 8 : 0) - (variabile && (mx - mn) / (med || 1) > 0.5 ? 12 : 0) - (interrotta ? 15 : 0);
+    score = Math.max(10, Math.min(98, score));
+    // quante rate? se la causale lo dice ("rata 2 di 12", "2/12")
+    var rate = null, rx;
+    L.slice(-3).forEach(function(m){ if((rx = String(m.descrizione || '').match(/\brata\s*(\d{1,3})\s*(?:di|\/|su)\s*(\d{1,3})\b/i))) rate = { n: +rx[1], tot: +rx[2] }; });
+    var dir = L[0].importo > 0 ? 'entrata' : 'uscita';
+    var regola = extra && extra.regola ? extra.regola : { tipo: cp.tipo === 'testo' ? 'testo' : cp.tipo, valore: cp.tipo === 'testo' ? cp.valore : cp.valore };
+    if(cp.tipo === 'assegno') regola = { tipo: 'nessuna' };
+    if(extra && extra.min != null){ regola.min = extra.min; regola.max = extra.max; }
+    var ogniTxt = { 1: 'ogni mese', 2: 'ogni 2 mesi', 3: 'ogni 3 mesi', 4: 'ogni 4 mesi', 6: 'ogni 6 mesi', 12: 'ogni anno' }[best.g];
+    var eur = function(n){ return n.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €'; };
+    var perche = 'Trovato ' + L.length + (L.length === 1 ? ' volta' : ' volte') + ' in ' + mesi.length + ' mesi (dal ' + L[0].data.slice(8, 10) + '/' + L[0].data.slice(5, 7) + '/' + L[0].data.slice(2, 4) + '), ' + ogniTxt + ' intorno al ' + gMed + ', ' + (fisso ? 'sempre ' + eur(tipico) : duo ? 'tra ' + eur(mn) + ' e ' + eur(mx) : 'importo variabile ' + eur(mn) + '–' + eur(mx)) + '.';
+    return {
+      chiave: chiave, nome: nome, dir: dir, cp: cp, regola: regola, ogni: best.g, base: ultMk, giorno: gMed, toll: toll,
+      importo: tipico, min: rcoR2(mn), max: rcoR2(mx), variabile: variabile, conto: conto, aggrega: multi >= 0.3,
+      storia: L.map(function(m){ return { id: m.id, data: m.data, importo: rcoR2(Math.abs(m.importo)), conto: m.conto }; }),
+      prossima: { data: prossima, importo: tipico }, ultima: ultimo.data, mesi: mesi.length, score: score,
+      fiducia: score >= 75 ? 'alta' : score >= 55 ? 'media' : 'bassa', interrotta: interrotta, nuova: rcoGiorni(L[0].data, oggi) <= 130,
+      rate: rate, perche: perche, cat: extra && extra.cat || ''
+    };
+  };
+  // se lo storico intero non è regolare, guarda solo l'ultimo tratto: «da agosto si ripete ogni mese»
+  var valutaCoda = function(chiave, nome, cp, L, extra){
+    var p = valuta(chiave, nome, cp, L, extra); if(p) return p;
+    L = L.slice().sort(function(a, b){ return a.data < b.data ? -1 : 1; });
+    var perMese = {}; L.forEach(function(m){ var mk = m.data.slice(0, 7); (perMese[mk] = perMese[mk] || []).push(m); });
+    var mesi = Object.keys(perMese).sort(); if(mesi.length < 3) return null;
+    var som = function(mk){ return perMese[mk].reduce(function(s, m){ return s + Math.abs(+m.importo || 0); }, 0); };
+    var fine = mesi.length - 1, gap = rcoMeseIdx(mesi[fine]) - rcoMeseIdx(mesi[fine - 1]), rif = som(mesi[fine]), ini = fine;
+    if(gap < 1 || gap > 12) return null;
+    while(ini > 0 && rcoMeseIdx(mesi[ini]) - rcoMeseIdx(mesi[ini - 1]) === gap && Math.abs(som(mesi[ini - 1]) - rif) <= Math.max(2, rif * 0.1)) ini--;
+    if(ini === 0 || fine - ini + 1 < 2) return null;
+    var coda = []; mesi.slice(ini).forEach(function(mk){ coda = coda.concat(perMese[mk]); });
+    var q = valuta(chiave, nome, cp, coda, extra);
+    if(q){ q.cambiata = true; q.perche = 'Da ' + rcoData(coda[0].data).toLocaleDateString('it-IT', { month: 'long', year: 'numeric' }) + ' si ripete: ' + q.perche.charAt(0).toLowerCase() + q.perche.slice(1) + ' Prima c\'erano pagamenti diversi.'; }
+    return q;
+  };
+  Object.keys(gruppi).forEach(function(k){
+    if(note[k]) return;
+    var G = gruppi[k], L = G.movs;
+    // serie a importo fisso dentro un gruppo che varia (es. una rata dentro gli F24)
+    if(/^(f24|testo|nome)/.test(k) && L.length >= 6){
+      var vals = L.map(function(m){ return Math.abs(m.importo); }), medAll = rcoMed(vals), mnA = Math.min.apply(null, vals), mxA = Math.max.apply(null, vals);
+      if((mxA - mnA) / (medAll || 1) > 0.4){
+        var cl = {};
+        L.forEach(function(m){ var a = Math.abs(m.importo), key = null; Object.keys(cl).forEach(function(c){ if(!key && Math.abs(a - +c) <= +c * 0.03) key = c; }); (cl[key || a] = cl[key || a] || []).push(m); });
+        Object.keys(cl).forEach(function(c){
+          var S = cl[c]; if(S.length < 3) return;
+          var mesiS = {}; S.forEach(function(m){ mesiS[m.data.slice(0, 7)] = 1; }); if(Object.keys(mesiS).length < 3) return;
+          var vS = S.map(function(m){ return Math.abs(m.importo); }), lo = Math.min.apply(null, vS), hi = Math.max.apply(null, vS);
+          var kS = k + ':' + Math.round(rcoMed(vS));
+          if(note[kS]) { L = L.filter(function(m){ return S.indexOf(m) < 0; }); return; }
+          var p = valuta(kS, G.nome + ' da ~' + Math.round(rcoMed(vS)) + ' €', G.cp, S, { min: rcoR2(lo * 0.97), max: rcoR2(hi * 1.03) });
+          if(p){ p.rata = true; out.push(p); L = L.filter(function(m){ return S.indexOf(m) < 0; }); }
+        });
+      }
+    }
+    if(L.length){ var p = valutaCoda(k, G.nome, G.cp, L); if(p) out.push(p); }
+  });
+  // stipendi e compensi soci: uno per gruppo, previsione da Presenze
+  ['dipendenti', 'soci'].forEach(function(g){
+    var k = 'presenze:' + g; if(note[k] || pres[g].length < 3) return;
+    var p = valuta(k, g === 'dipendenti' ? 'Stipendi dei dipendenti' : 'Compensi dei soci', { tipo: 'presenze', valore: g, tok: [] }, pres[g], { regola: { tipo: 'presenze', gruppo: g }, cat: g === 'dipendenti' ? 'Personale' : 'Soci' });
+    if(p){ p.aggrega = true; p.variabile = true; var st = rcoStimaPresenze(g, p.prossima.data.slice(0, 7), ctx); if(st){ p.prossima.importo = st.totale; p.importo = st.totale; p.stima = st; p.perche += ' La cifra del prossimo mese viene da Presenze (' + st.righe.length + ' persone).'; } out.push(p); }
+  });
+  return out.sort(function(a, b){ return (b.nuova - a.nuova) || (b.score - a.score); });
+}
+
+/* ── avvisi del giorno (gli stessi nell'app e sul telefono) ── */
+// cfg: { giorni (predefinito per le uscite), soglia (€) }
+function rcoAvvisi(voci, calc, oggi, cfg){
+  cfg = cfg || {}; var out = [];
+  (voci || []).forEach(function(v){
+    if(!rcoViva(v)) return;
+    var ant = v.avviso != null && v.avviso !== '' ? +v.avviso : (v.dir === 'uscita' && (+v.importo || 0) >= (cfg.soglia != null ? cfg.soglia : 300) ? (cfg.giorni != null ? cfg.giorni : 3) : -1);
+    (calc.periodi[v.id] || []).forEach(function(p){
+      var g = rcoGiorni(oggi, p.data);
+      if(ant > 0 && g === ant && (p.stato === 'previsto' || p.stato === 'in_attesa')) out.push({ v: v, p: p, tipo: 'prima', giorni: g, chiave: 'rco|' + v.id + '|' + p.periodo + '|prima' });
+      if(p.stato === 'mancante' && rcoGiorni(p.fino, oggi) <= 20) out.push({ v: v, p: p, tipo: 'mancato', chiave: 'rco|' + v.id + '|' + p.periodo + '|mancato' });
+      if(p.stato === 'diverso' && rcoGiorni(p.movs[0].data, oggi) <= 20) out.push({ v: v, p: p, tipo: 'diverso', chiave: 'rco|' + v.id + '|' + p.periodo + '|diverso' });
+      if(p.ibanNuovo && rcoGiorni(p.movs[0].data, oggi) <= 20) out.push({ v: v, p: p, tipo: 'iban', chiave: 'rco|' + v.id + '|' + p.periodo + '|iban' });
+    });
+  });
+  return out;
+}
+function rcoFrase(a, eur){
+  var v = a.v, p = a.p, e = eur || function(n){ return '€ ' + (+n).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+  var gg = p.data.slice(8, 10) + '/' + p.data.slice(5, 7), entra = v.dir === 'entrata';
+  if(a.tipo === 'prima') return (a.giorni === 1 ? 'Domani' : 'Tra ' + a.giorni + ' giorni') + ' (' + gg + ') · ' + v.nome + ' — ' + (p.stima && !p.stima.certo ? 'circa ' : '') + e(p.atteso) + (entra ? ' in arrivo' : ': tieni i fondi sul conto');
+  if(a.tipo === 'mancato') return v.nome + ' del ' + gg + ' (' + e(p.atteso) + ') non risulta nell\'estratto conto';
+  if(a.tipo === 'diverso') return v.nome + ': ' + e(p.reale) + ' invece dei soliti ' + e(p.atteso);
+  if(a.tipo === 'iban') return v.nome + ' pagato su un IBAN nuovo (…' + String(p.ibanNuovo).slice(-6) + '): se non l\'hai chiesto tu, controlla';
+  return v.nome;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   ENTRATE E USCITE RICORRENTI — interfaccia e dati (v10.31.0)
+   Valerio, 15/10/2026: "voglio un sistema che impari dallo storico, mi
+   avvisi prima, mi dica cosa manca o è cambiato, preveda gli stipendi con
+   Presenze, e mi lasci dire nell'app cosa si è aggiunto e cosa non c'è più,
+   senza dover cambiare il codice". E la parte predittiva: "ho trovato
+   questo movimento ricorrente: vuoi ricordarlo? per quanto tempo?".
+   Dati: un documento in ceraldi_stato_condiviso (stessi permessi di
+   Fatture, sincronizzato tra i dispositivi). Movimenti e fatture: solo letti.
+   ══════════════════════════════════════════════════════════════════ */
+var RCO_KEY = 'fatture_ricorrenze', RCO_LS = 'fatture_ricorrenze_cache';
+var RCO = { doc: null, presenze: null, ibanNoti: {}, memo: null, ver: 0, carico: null, aperto: {} };
+var RCO_OGNI = { 1: 'ogni mese', 2: 'ogni 2 mesi', 3: 'ogni 3 mesi', 4: 'ogni 4 mesi', 6: 'ogni 6 mesi', 12: 'ogni anno' };
+var RCO_STATO = { arrivato: ['ok', 'arrivato'], previsto: ['nd', 'previsto'], in_attesa: ['nd', 'in attesa dell\'estratto'], mancante: ['ko', 'non arrivato'], diverso: ['warn', 'importo diverso'], saltato: ['nd', 'non c\'era'], sospeso: ['nd', 'sospeso'], da_segnare: ['warn', 'da segnare'] };
+var RCO_REGOLE = [['nome', 'Nome di chi paga o riceve'], ['testo', 'Testo nella descrizione'], ['iban', 'IBAN'], ['mandato', 'Mandato SDD (addebito diretto)'], ['mutuo', 'Numero del mutuo'], ['f24', 'F24'], ['presenze', 'Da Presenze'], ['nessuna', 'Nessuna: solo promemoria']];
+
+function rcoDocVuoto(){ return { voci: [], esiti: {}, viste: {} }; }
+function rcoOggi(){ return rcoIso(new Date()); }
+function rcoEur(n){ return typeof fmt === 'function' ? fmt(n) : '€ ' + (+n || 0).toFixed(2); }
+function rcoGg(iso){ iso = String(iso || ''); return iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(2, 4) : '—'; }
+function rcoGgCorto(iso){ var d = rcoData(iso); return d.toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric', month: 'short' }); }
+function rcoMeseNome(mk){ return rcoData(mk + '-15').toLocaleDateString('it-IT', { month: 'long', year: 'numeric' }); }
+function rcoMaiusc(s){ s = String(s || ''); return s.charAt(0).toUpperCase() + s.slice(1); }
+
+/* ── archivio ── */
+async function rcoCarica(forza){
+  if(RCO.doc && !forza) return RCO.doc;
+  if(RCO.carico && !forza) return RCO.carico;
+  RCO.carico = (async function(){
+    var d = null;
+    try{ var r = await sbFetch('ceraldi_stato_condiviso?id=eq.' + RCO_KEY + '&select=data'); d = r && r[0] && r[0].data; if(d) try{ localStorage.setItem(RCO_LS, JSON.stringify(d)); }catch(e){} }
+    catch(e){ try{ d = JSON.parse(localStorage.getItem(RCO_LS) || 'null'); }catch(e2){} }
+    RCO.doc = Object.assign(rcoDocVuoto(), d || {}); RCO.ver++; RCO.memo = null; RCO.carico = null;
+    return RCO.doc;
+  })();
+  return RCO.carico;
+}
+// legge l'ultima versione, applica la modifica, salva: così due telefoni non si cancellano a vicenda
+async function rcoSalva(modifica){
+  var base = null;
+  try{ var r = await sbFetch('ceraldi_stato_condiviso?id=eq.' + RCO_KEY + '&select=data'); base = r && r[0] && r[0].data; }catch(e){ throw new Error('nessuna connessione'); }
+  var doc = Object.assign(rcoDocVuoto(), base || {});
+  modifica(doc);
+  await sbFetch('ceraldi_stato_condiviso?on_conflict=id', { method: 'POST', headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify({ id: RCO_KEY, data: doc, updated_at: new Date().toISOString() }) });
+  RCO.doc = doc; RCO.ver++; RCO.memo = null;
+  try{ localStorage.setItem(RCO_LS, JSON.stringify(doc)); }catch(e){}
+  return doc;
+}
+function rcoVoce(id){ return ((RCO.doc || {}).voci || []).find(function(v){ return String(v.id) === String(id); }); }
+function rcoTraccia(v, cosa){ v.storico = (v.storico || []).concat([{ quando: new Date().toISOString(), cosa: cosa }]).slice(-40); v.agg = new Date().toISOString(); }
+async function rcoModificaVoce(id, fn, cosa){
+  await rcoSalva(function(doc){ var v = doc.voci.find(function(x){ return String(x.id) === String(id); }); if(!v) throw new Error('voce non trovata'); fn(v, doc); if(cosa) rcoTraccia(v, cosa); });
+}
+
+/* ── Presenze: chi sono i dipendenti e i soci, quanto prendono ── */
+async function rcoCaricaPresenze(forza){
+  if(RCO.presenze && !forza) return RCO.presenze;
+  var P = { dipendenti: [], soci: [], bonifici: {}, liquidazioni: {}, compensi: {} }, a = new Date().getFullYear() - 1;
+  try{
+    var res = await Promise.all([
+      sbFetch('presenze_profili?select=id,nome,cognome,ruolo,attivo,eliminato,data_fine_rapporto,iban,netto_fisso_mensile').catch(function(){ return []; }),
+      sbFetch('presenze_bonifici_stipendio?select=dipendente_id,anno_riferimento,mese_riferimento,importo&anno_riferimento=gte.' + a).catch(function(){ return []; }),
+      sbFetch('presenze_liquidazioni?select=dipendente_id,anno,mese,bonifico&anno=gte.' + a).catch(function(){ return []; }),
+      sbFetch('presenze_compensi_soci?select=dipendente_id,anno,mese,netto&anno=gte.' + a).catch(function(){ return []; })
+    ]);
+    (res[0] || []).forEach(function(p){
+      if(p.eliminato || p.attivo === false) return;
+      var nome = ((p.nome || '') + ' ' + (p.cognome || '')).trim(), tok = rcoTok(nome); if(!tok.length) return;
+      var x = { id: p.id, nome: typeof ricvBello === 'function' ? ricvBello(nome) : nome, tok: tok, fine: p.data_fine_rapporto || null, netto: +p.netto_fisso_mensile || 0 };
+      (p.ruolo === 'admin' ? P.soci : P.dipendenti).push(x);
+      var ib = typeof ricIbanDi === 'function' ? ricIbanDi(p.iban) : String(p.iban || '').replace(/\s/g, '').toUpperCase(); if(ib) RCO.ibanNoti[ib] = 1;
+    });
+    var mk = function(y, m){ return y + '-' + String(m).padStart(2, '0'); };
+    (res[1] || []).forEach(function(b){ var o = P.bonifici[b.dipendente_id] = P.bonifici[b.dipendente_id] || {}, k = mk(b.anno_riferimento, b.mese_riferimento); o[k] = rcoR2((o[k] || 0) + (+b.importo || 0)); });
+    (res[2] || []).forEach(function(l){ if(+l.bonifico > 0){ (P.liquidazioni[l.dipendente_id] = P.liquidazioni[l.dipendente_id] || {})[mk(l.anno, l.mese)] = +l.bonifico; } });
+    (res[3] || []).forEach(function(c){ if(+c.netto > 0){ (P.compensi[c.dipendente_id] = P.compensi[c.dipendente_id] || {})[mk(c.anno, c.mese)] = +c.netto; } });
+  }catch(e){ console.warn('ricorrenti, presenze:', e); }
+  // IBAN già noti anche dalle fatture dei fornitori
+  try{ (typeof fatture !== 'undefined' ? fatture : []).forEach(function(f){ var ib = typeof ricIbanDi === 'function' ? ricIbanDi(f.bonIban) : ''; if(ib) RCO.ibanNoti[ib] = 1; }); }catch(e){}
+  RCO.presenze = P; RCO.memo = null;
+  return P;
+}
+
+/* ── movimenti dell'app nel formato del motore ── */
+function rcoMovimenti(){
+  var L = typeof ricvTuttiMovimenti === 'function' ? ricvTuttiMovimenti() : [], ctx = (typeof RICV !== 'undefined' && RICV.ctx) || {};
+  return L.filter(function(M){ return !M.ignorata; }).map(function(M){
+    var c = null; try{ c = typeof ricvCatM === 'function' ? ricvCatM(M, ctx) : null; }catch(e){}
+    return { id: M.id, key: M.key, data: M.data, importo: M.importo, descrizione: M.descrizione, conto: M.conto, sottotipo: M.sottotipo, cat: c && c.cat || '' };
+  });
+}
+function rcoCopertura(movs){ var c = {}; movs.forEach(function(m){ var k = m.conto || 'BPM'; if(!c[k] || m.data > c[k]) c[k] = m.data; }); return c; }
+// tutto il calcolo, una volta per versione dei dati
+function rcoStato(){
+  var doc = RCO.doc || rcoDocVuoto(), movs = rcoMovimenti();
+  var firma = RCO.ver + '|' + movs.length + '|' + (movs[0] ? movs[0].id : '') + '|' + (RCO.presenze ? 1 : 0) + '|' + rcoOggi();
+  if(RCO.memo && RCO.memo.firma === firma) return RCO.memo;
+  var ctx = { presenze: RCO.presenze }, oggi = rcoOggi(), cop = rcoCopertura(movs);
+  var voci = (doc.voci || []).map(function(v){ return Object.assign({}, v); });
+  var calc = rcoCalcola(voci, movs, ctx, { oggi: oggi, copertura: cop, esiti: doc.esiti || {}, ibanNoti: RCO.ibanNoti });
+  var note = {};
+  (doc.voci || []).forEach(function(v){ if(v.chiave) note[v.chiave] = 1; });
+  Object.keys(doc.viste || {}).forEach(function(k){ var x = doc.viste[k]; if(x && x.fino && x.fino > oggi) note[k] = 1; });
+  var proposte = rcoProponi(movs, ctx, { oggi: oggi, copertura: cop, chiaviNote: note, usati: calc.usati });
+  RCO.memo = { firma: firma, voci: voci, calc: calc, proposte: proposte, movs: movs, cop: cop, oggi: oggi, ctx: ctx };
+  return RCO.memo;
+}
+async function rcoPrepara(){
+  var job = [rcoCarica(), rcoCaricaPresenze()];
+  if(typeof _bancaMovimenti !== 'undefined' && !_bancaMovimenti.length && typeof caricaMovimentiBanca === 'function') job.push(caricaMovimentiBanca().catch(function(){}));
+  if(typeof RICV !== 'undefined' && !RICV.ctx && typeof ricvCaricaContesto === 'function') job.push(ricvCaricaContesto().catch(function(){}));
+  await Promise.all(job);
+  return rcoStato();
+}
+// eventi attesi (per previsione, calendario e scadenze): {data, v, p}
+function rcoProssimi(giorni, opz){
+  if(!RCO.doc) return [];
+  var S = rcoStato(), oggi = S.oggi, fine = rcoPiu(oggi, giorni), out = [];
+  S.voci.forEach(function(v){
+    if(!rcoViva(v)) return;
+    (S.calc.periodi[v.id] || []).forEach(function(p){
+      if(p.data > fine) return;
+      if(p.stato === 'previsto' && p.data >= oggi || p.stato === 'in_attesa' && (opz && opz.inAttesa)) out.push({ data: p.data < oggi ? oggi : p.data, v: v, p: p });
+    });
+  });
+  return out.sort(function(a, b){ return a.data < b.data ? -1 : 1; });
+}
+function rcoDaControllare(){
+  if(!RCO.doc) return [];
+  var S = rcoStato(), out = [], meno = rcoPiu(S.oggi, -75);
+  S.voci.forEach(function(v){
+    if(!rcoViva(v)) return;
+    (S.calc.periodi[v.id] || []).forEach(function(p){
+      if(p.data < meno) return;
+      if(p.stato === 'mancante' || p.stato === 'diverso' || p.stato === 'da_segnare' || p.ibanNuovo) out.push({ v: v, p: p });
+    });
+  });
+  return out;
+}
+
+/* ══ FOGLIO PRINCIPALE ══ */
+async function rcoApri(){
+  var mo = pnFoglio('rcoFoglio', { titolo: 'Entrate e uscite ricorrenti', sotto: 'pagamenti e incassi che si ripetono', alto: true, piede: true });
+  mo.querySelector('.pn-sh-bd').innerHTML = '<div class="rco-vuoto">Leggo i movimenti di banca e Presenze…</div>';
+  mo.querySelector('.pn-sh-ft').innerHTML = '<button class="btn btn-p" style="width:100%" onclick="rcoEditor()">+ Nuova voce</button>';
+  try{ await rcoPrepara(); }catch(e){ console.warn(e); }
+  rcoRender(); try{ rcoAggiornaMenu(); }catch(e){}
+}
+function rcoRidisegna(){ RCO.memo = null; if(document.getElementById('rcoFoglio')) rcoRender(); if(document.getElementById('rcoScheda') && RCO.aperto.scheda) rcoScheda(RCO.aperto.scheda, true); try{ _fsRenderMenu(); }catch(e){} try{ rcoAggiornaMenu(); }catch(e){} }
+function rcoPill(stato){ var s = RCO_STATO[stato] || ['nd', stato]; return '<span class="rco-pill ' + s[0] + '">' + s[1] + '</span>'; }
+function rcoCadenza(v){ return (RCO_OGNI[v.ogni] || 'ogni ' + v.ogni + ' mesi') + (v.regola && v.regola.tipo === 'presenze' ? ', intorno al ' + v.giorno : (v.giorno ? ', il ' + v.giorno : '')); }
+function rcoImportoTxt(v){
+  if(v.regola && v.regola.tipo === 'presenze') return 'da Presenze';
+  if(v.variabile) return 'circa ' + rcoEur(v.importo) + (v.min != null && v.max != null ? ' (' + rcoEur(v.min) + '–' + rcoEur(v.max) + ')' : '');
+  if(v.min != null && v.max != null && Math.abs(v.max - v.min) > 0.5) return rcoEur(v.min) + ' o ' + rcoEur(v.max);
+  return rcoEur(v.importo);
+}
+function rcoRender(){
+  var mo = document.getElementById('rcoFoglio'); if(!mo) return;
+  var bd = mo.querySelector('.pn-sh-bd'), S = rcoStato(), h = '';
+  if(!S.movs.length){ bd.innerHTML = '<div class="rco-vuoto">Non ci sono ancora movimenti di banca: importa un estratto conto da Fiscale → Importazioni.</div>'; return; }
+  var attive = S.voci.filter(function(v){ return v.stato === 'attiva'; });
+  // riepilogo del mese
+  var mk = S.oggi.slice(0, 7), arr = 0, tot = 0, manc = 0;
+  attive.forEach(function(v){ (S.calc.periodi[v.id] || []).forEach(function(p){ if(p.periodo !== mk || p.stato === 'saltato' || p.stato === 'sospeso') return; tot++; if(p.stato === 'arrivato' || p.stato === 'diverso') arr++; if(p.stato === 'mancante') manc++; }); });
+  var pros = rcoProssimi(30), usc = pros.filter(function(x){ return x.v.dir === 'uscita'; }).reduce(function(s, x){ return s + x.p.atteso; }, 0), ent = pros.filter(function(x){ return x.v.dir === 'entrata'; }).reduce(function(s, x){ return s + x.p.atteso; }, 0);
+  if(attive.length) h += '<div class="rco-kpi"><div><span>Questo mese</span><b>' + arr + ' di ' + tot + '</b><small>' + (manc ? '<i class="neg">' + manc + ' non arrivat' + (manc === 1 ? 'o' : 'i') + '</i>' : 'arrivati') + '</small></div><div><span>Prossimi 30 giorni</span><b>−' + rcoEur(usc) + '</b><small>' + (ent ? '+' + rcoEur(ent) + ' in entrata' : pros.length + ' pagamenti previsti') + '</small></div></div>';
+  // 1) proposte: la parte predittiva
+  var prop = S.proposte.filter(function(p){ return !p.interrotta; }), ferme = S.proposte.filter(function(p){ return p.interrotta && p.score >= 55; });
+  if(prop.length){
+    h += '<div class="rco-sez"><h4>Ho trovato ' + (prop.length === 1 ? 'un movimento che si ripete' : prop.length + ' movimenti che si ripetono') + '</h4><small>Vuoi che li ricordi? Decidi tu per quanto tempo. Nulla viene aggiunto senza la tua conferma.</small></div>';
+    h += prop.map(rcoCardProposta).join('');
+  }
+  // 2) da controllare
+  var dc = rcoDaControllare();
+  if(dc.length || ferme.length){
+    h += '<div class="rco-sez"><h4>Da controllare</h4></div>';
+    h += dc.map(function(x){
+      var v = x.v, p = x.p, t, az = '';
+      if(p.ibanNuovo) t = 'Pagato su un IBAN nuovo (…' + esc(String(p.ibanNuovo).slice(-6)) + ') il ' + rcoGg(p.movs[0].data) + '. Non risulta né in Presenze né nelle fatture: se non l\'hai chiesto tu, controlla.';
+      else if(p.stato === 'mancante') { t = 'Doveva esserci il ' + rcoGg(p.data) + ' (' + rcoEur(p.atteso) + ') ma l\'estratto, che arriva fino al ' + rcoGg((S.cop[(v.regola || {}).conto || v.conto] || Object.keys(S.cop).map(function(k){ return S.cop[k]; }).sort().pop())) + ', non lo mostra.'; az = rcoBtn('Questo mese non c\'era', 'rcoEsito(' + v.id + ',\'' + p.periodo + '\',\'saltato\')') + rcoBtn('Non c\'è più', 'rcoFine(' + v.id + ')'); }
+      else if(p.stato === 'diverso') { t = rcoEur(p.reale) + ' il ' + rcoGg(p.movs[0].data) + ' invece di ' + rcoEur(p.atteso) + '.'; az = rcoBtn('Va bene così', 'rcoEsito(' + v.id + ',\'' + p.periodo + '\',\'va_bene\')'); }
+      else { t = 'Il ' + rcoGg(p.data) + ' era previsto ' + rcoEur(p.atteso) + ': questa voce non si riconosce in banca, dimmi tu se è stata pagata.'; az = rcoBtn('Pagato', 'rcoEsito(' + v.id + ',\'' + p.periodo + '\',\'va_bene\')') + rcoBtn('Non c\'era', 'rcoEsito(' + v.id + ',\'' + p.periodo + '\',\'saltato\')'); }
+      return '<div class="rco-card ' + (p.stato === 'mancante' || p.ibanNuovo ? 'ko' : 'warn') + '"><div class="rco-card-h" onclick="rcoScheda(' + v.id + ')"><b>' + esc(v.nome) + '</b>' + rcoPill(p.ibanNuovo ? 'diverso' : p.stato) + '</div><p>' + t + '</p>' + (az ? '<div class="rco-az">' + az + '</div>' : '') + '</div>';
+    }).join('');
+    h += ferme.map(function(p){
+      return '<div class="rco-card warn"><div class="rco-card-h"><b>' + esc(rcoNomeBello(p.nome)) + '</b><span class="rco-pill warn">sembra finito</span></div><p>Si ripeteva ' + esc(RCO_OGNI[p.ogni] || '') + ' (' + rcoEur(p.importo) + '), l\'ultima volta il ' + rcoGg(p.ultima) + '. Da allora non c\'è più, anche se l\'estratto copre quei giorni.</p>' +
+        '<div class="rco-az">' + rcoBtn('Non c\'è più, va bene', 'rcoProposta(\'' + encodeURIComponent(p.chiave) + '\',\'finito\')') + rcoBtn('Dovrebbe esserci: ricordamelo', 'rcoProposta(\'' + encodeURIComponent(p.chiave) + '\',\'si\',\'sempre\')') + '</div></div>';
+    }).join('');
+  }
+  // 3) calendario
+  var cal = rcoProssimi(45, { inAttesa: true });
+  h += '<div class="rco-sez"><h4>Cosa arriva</h4><small>prossimi 45 giorni · sabato e festivi già spostati</small></div>';
+  if(!cal.length) h += '<div class="rco-vuoto">' + (attive.length ? 'Niente di previsto nei prossimi 45 giorni.' : 'Quando confermi le voci qui sopra, qui vedi le date e gli importi attesi.') + '</div>';
+  else h += '<div class="rco-cal">' + cal.map(function(x){
+    var v = x.v, p = x.p, entra = v.dir === 'entrata';
+    return '<button class="rco-riga" onclick="rcoScheda(' + v.id + ')"><span class="rco-d">' + esc(rcoGgCorto(x.data)) + '</span><span class="rco-n">' + esc(v.nome) + (p.stato === 'in_attesa' ? ' <em>in attesa dell\'estratto</em>' : '') + '</span><span class="rco-v ' + (entra ? 'pos' : '') + '">' + (p.stima && !p.stima.certo || v.variabile ? '≈ ' : '') + (entra ? '+' : '−') + rcoEur(p.atteso) + '</span></button>';
+  }).join('') + '</div>';
+  // 4) le voci
+  var tutte = S.voci.filter(function(v){ return v.stato !== 'esclusa'; });
+  if(tutte.length){
+    var cats = {}; tutte.forEach(function(v){ (cats[v.cat || 'Altro'] = cats[v.cat || 'Altro'] || []).push(v); });
+    h += '<div class="rco-sez"><h4>Le tue voci</h4><small>tocca una voce per vederne lo storico, cambiarla o dire che non c\'è più</small></div>';
+    Object.keys(cats).sort().forEach(function(c){
+      h += '<div class="rco-cat">' + esc(c) + '</div>' + cats[c].map(function(v){
+        var per = (S.calc.periodi[v.id] || []).filter(function(p){ return p.data <= S.oggi || p.stato !== 'previsto'; }), ult = per[per.length - 1];
+        var st = v.stato === 'attiva' ? (ult ? rcoPill(ult.stato) : '') : '<span class="rco-pill nd">' + ({ sospesa: 'sospesa', conclusa: 'non c\'è più' }[v.stato] || v.stato) + '</span>';
+        return '<button class="rco-voce' + (v.stato !== 'attiva' ? ' spenta' : '') + '" onclick="rcoScheda(' + v.id + ')"><span><b>' + esc(v.nome) + '</b><small>' + esc(rcoCadenza(v)) + ' · ' + esc(rcoImportoTxt(v)) + '</small></span>' + st + '</button>';
+      }).join('');
+    });
+  }
+  var escl = S.voci.filter(function(v){ return v.stato === 'esclusa'; });
+  if(escl.length) h += '<details class="rco-escl"><summary>' + escl.length + (escl.length === 1 ? ' movimento che hai detto non essere ricorrente' : ' movimenti che hai detto non essere ricorrenti') + '</summary>' + escl.map(function(v){ return '<div><span>' + esc(v.nome) + '</span>' + rcoBtn('Riproponi', 'rcoRiproponi(' + v.id + ')') + '</div>'; }).join('') + '</details>';
+  bd.innerHTML = h;
+}
+function rcoBtn(t, on, cls){ return '<button class="rco-b' + (cls ? ' ' + cls : '') + '" onclick="' + on + '">' + esc(t) + '</button>'; }
+function rcoNomeBello(n){ return typeof ricvBello === 'function' ? ricvBello(n) : n; }
+function rcoCatDi(p){
+  if(p.cat) return p.cat;
+  var t = (p.nome + ' ' + (p.regola && p.regola.valore || '')).toLowerCase();
+  if(p.cp && p.cp.tipo === 'mutuo') return 'Mutui e finanziamenti';
+  if(p.cp && p.cp.tipo === 'f24' || /agenzia|entrate|comune|inps|inail|tribut|cbill/.test(t)) return 'Tasse e contributi';
+  if(/enel|eni|energia|gas|acqua|fastweb|tim|vodafone|wind|iliad|telecom|abc|a2a|hera|edison|iren/.test(t)) return 'Utenze';
+  if(/lease|leasing|leasys|automotive|noleggio|rent/.test(t)) return 'Noleggi e leasing';
+  if(/assicura|generali|unipol|allianz|axa|reale mutua|zurich/.test(t)) return 'Assicurazioni';
+  if(/bollo|competenze|commission|canone|numia|american express|amex|worldpay/.test(t)) return 'Banca e commissioni';
+  return p.dir === 'entrata' ? 'Entrate' : 'Servizi e altro';
+}
+function rcoCardProposta(p){
+  var id = encodeURIComponent(p.chiave), aperta = RCO.aperto.prop === p.chiave, nome = rcoNomeBello(p.nome);
+  var storia = p.storia.slice(-6).map(function(s){ return '<span>' + rcoGg(s.data).slice(0, 5) + ' <b>' + rcoEur(s.importo) + '</b></span>'; }).join('');
+  var h = '<div class="rco-card prop"><div class="rco-card-h"><b>' + esc(nome) + '</b><span class="rco-pill ' + ({ alta: 'ok', media: 'warn', bassa: 'nd' }[p.fiducia]) + '">' + (p.nuova ? 'nuovo · ' : '') + 'sicurezza ' + p.fiducia + '</span></div>' +
+    '<p>' + esc(p.perche) + '</p><div class="rco-storia">' + storia + '</div>' +
+    '<p class="rco-pross">Prossimo atteso: <b>' + esc(rcoGgCorto(p.prossima.data)) + '</b> · ' + (p.variabile ? 'circa ' : '') + rcoEur(p.prossima.importo) + (p.stima ? ' <em>(' + p.stima.righe.length + ' persone, da Presenze)</em>' : '') + '</p>';
+  if(!aperta) h += '<div class="rco-az">' + rcoBtn('Sì, ricordamelo', 'rcoPropApri(\'' + id + '\')', 'pri') + rcoBtn('Non è ricorrente', 'rcoProposta(\'' + id + '\',\'no\')') + rcoBtn('Più tardi', 'rcoProposta(\'' + id + '\',\'dopo\')') + '</div>';
+  else {
+    var rRim = p.rate ? Math.max(1, p.rate.tot - p.rate.n) : '';
+    h += '<div class="rco-durata"><div class="rco-q">Per quanto tempo?</div>' +
+      '<label><input type="radio" name="rcoDur" value="sempre" checked> Finché continua <small>se smette, te lo dico io</small></label>' +
+      '<label><input type="radio" name="rcoDur" value="rate"> Ancora <input type="number" id="rcoDurN" min="1" max="360" value="' + (rRim || 12) + '" inputmode="numeric"> ' + (p.ogni === 1 ? 'mesi / rate' : 'volte') + (p.rate ? ' <small>la causale dice rata ' + p.rate.n + ' di ' + p.rate.tot + '</small>' : '') + '</label>' +
+      '<label><input type="radio" name="rcoDur" value="al"> Fino al <input type="date" id="rcoDurAl" value="' + rcoPiu(p.prossima.data, 365) + '"></label>' +
+      '<div class="rco-q">Avvisami prima</div><select id="rcoDurAvv"><option value="-1">Nessun avviso</option><option value="1">1 giorno prima</option><option value="3"' + (p.dir === 'uscita' && p.importo >= 300 ? ' selected' : '') + '>3 giorni prima</option><option value="7">7 giorni prima</option></select>' +
+      '<div class="rco-q">Categoria</div><input id="rcoDurCat" list="rcoCatList" value="' + esc(rcoCatDi(p)) + '">' + rcoCatDatalist() +
+      '</div><div class="rco-az">' + rcoBtn('Conferma', 'rcoProposta(\'' + id + '\',\'si\')', 'pri') + rcoBtn('Cambia i dettagli…', 'rcoEditorDaProposta(\'' + id + '\')') + rcoBtn('Annulla', 'rcoPropApri(null)') + '</div>';
+  }
+  return h + '</div>';
+}
+function rcoCatDatalist(){
+  var c = { 'Utenze': 1, 'Mutui e finanziamenti': 1, 'Tasse e contributi': 1, 'Personale': 1, 'Soci': 1, 'Noleggi e leasing': 1, 'Assicurazioni': 1, 'Banca e commissioni': 1, 'Affitti': 1, 'Servizi e altro': 1, 'Entrate': 1 };
+  ((RCO.doc || {}).voci || []).forEach(function(v){ if(v.cat) c[v.cat] = 1; });
+  return '<datalist id="rcoCatList">' + Object.keys(c).sort().map(function(x){ return '<option value="' + esc(x) + '">'; }).join('') + '</datalist>';
+}
+function rcoPropApri(id){ RCO.aperto.prop = id ? decodeURIComponent(id) : null; rcoRender(); }
+function rcoPropDa(chiave){ return (rcoStato().proposte || []).find(function(p){ return p.chiave === chiave; }); }
+function rcoVoceDaProposta(p){
+  return { id: Date.now(), nome: rcoNomeBello(p.nome), dir: p.dir, cat: rcoCatDi(p), stato: 'attiva', origine: 'app', chiave: p.chiave, regola: p.regola,
+    ogni: p.ogni, base: p.base, giorno: p.giorno, toll: p.toll, importo: p.importo, min: p.min, max: p.max, variabile: p.variabile, aggrega: !!p.aggrega,
+    conto: p.conto || '', dal: p.storia[0] ? p.storia[0].data : null, al: null, rate: null, avviso: null, note: '', storico: [], creato: new Date().toISOString() };
+}
+async function rcoProposta(chiaveEnc, scelta, durata){
+  var chiave = decodeURIComponent(chiaveEnc), p = rcoPropDa(chiave); if(!p) return;
+  try{
+    if(scelta === 'dopo'){ await rcoSalva(function(doc){ doc.viste[chiave] = { fino: rcoPiu(rcoOggi(), 30), quando: new Date().toISOString() }; }); toast('Te lo richiedo tra un mese', { forza: true }); }
+    else if(scelta === 'no' || scelta === 'finito'){
+      var v = rcoVoceDaProposta(p); v.stato = scelta === 'no' ? 'esclusa' : 'conclusa'; if(scelta === 'finito') v.al = p.ultima;
+      rcoTraccia(v, scelta === 'no' ? 'detto: non è ricorrente' : 'detto: non c\'è più (ultima volta ' + rcoGg(p.ultima) + ')');
+      await rcoSalva(function(doc){ doc.voci.push(v); });
+      toast(scelta === 'no' ? 'Ok, non te lo propongo più' : 'Segnato: non c\'è più', { forza: true });
+    } else {
+      var v2 = rcoVoceDaProposta(p), dur = durata || ((document.querySelector('input[name="rcoDur"]:checked') || {}).value) || 'sempre';
+      if(dur === 'rate'){ var n = parseInt((document.getElementById('rcoDurN') || {}).value, 10); if(n > 0){ v2.dal = p.prossima.data; v2.base = p.prossima.data.slice(0, 7); v2.rate = n; } }
+      if(dur === 'al'){ var al = (document.getElementById('rcoDurAl') || {}).value; if(al) v2.al = al; }
+      var avv = document.getElementById('rcoDurAvv'); if(avv) v2.avviso = parseInt(avv.value, 10);
+      var cat = document.getElementById('rcoDurCat'); if(cat && cat.value.trim()) v2.cat = cat.value.trim();
+      rcoTraccia(v2, 'confermata dalla proposta (' + (dur === 'rate' ? 'ancora ' + v2.rate + ' volte' : dur === 'al' ? 'fino al ' + rcoGg(v2.al) : 'finché continua') + ')');
+      await rcoSalva(function(doc){ doc.voci.push(v2); });
+      toast('✓ ' + v2.nome + ': la ricorderò', { forza: true });
+    }
+    RCO.aperto.prop = null; rcoRidisegna();
+  }catch(e){ toast('⚠️ Non salvato: ' + (e.message || e)); }
+}
+async function rcoRiproponi(id){
+  try{ await rcoSalva(function(doc){ doc.voci = doc.voci.filter(function(v){ return String(v.id) !== String(id); }); }); rcoRidisegna(); }catch(e){ toast('⚠️ Non salvato: ' + (e.message || e)); }
+}
+async function rcoEsito(id, periodo, esito, nota){
+  try{
+    await rcoSalva(function(doc){ doc.esiti[id + '|' + periodo] = { esito: esito, nota: nota || '', quando: new Date().toISOString() }; var v = doc.voci.find(function(x){ return String(x.id) === String(id); }); if(v) rcoTraccia(v, rcoMeseNome(periodo) + ': ' + ({ saltato: 'non c\'era', va_bene: 'va bene così' }[esito] || esito)); });
+    rcoRidisegna();
+  }catch(e){ toast('⚠️ Non salvato: ' + (e.message || e)); }
+}
+async function rcoEsitoTogli(id, periodo){
+  try{ await rcoSalva(function(doc){ delete doc.esiti[id + '|' + periodo]; }); rcoRidisegna(); }catch(e){ toast('⚠️ Non salvato: ' + (e.message || e)); }
+}
+
+/* ══ SCHEDA DI UNA VOCE ══ */
+function rcoScheda(id, ridisegna){
+  var S = rcoStato(), v = S.voci.find(function(x){ return String(x.id) === String(id); }); if(!v) return;
+  RCO.aperto.scheda = id;
+  var mo = ridisegna && document.getElementById('rcoScheda') ? document.getElementById('rcoScheda') : pnFoglio('rcoScheda', { titolo: v.nome, sotto: esc(v.cat || ''), alto: true, z: 300 });
+  var per = (S.calc.periodi[v.id] || []).slice(-16), h = '';
+  var reg = v.regola || {}, regTxt = { nome: 'pagamenti a/da «' + (reg.valore || '') + '»', testo: 'descrizione che contiene «' + (reg.valore || '') + '»', iban: 'IBAN ' + (reg.valore || ''), mandato: 'mandato SDD ' + (reg.valore || ''), mutuo: 'mutuo n° ' + (reg.valore || ''), f24: 'pagamenti F24', presenze: (reg.gruppo === 'soci' ? 'bonifici ai soci' : 'bonifici ai dipendenti') + ' registrati in Presenze', nessuna: 'non si riconosce in banca: la segni tu' }[reg.tipo] || '—';
+  if(reg.min != null && reg.min !== '' || reg.max != null && reg.max !== '') regTxt += ', tra ' + rcoEur(reg.min || 0) + ' e ' + rcoEur(reg.max || 0);
+  if(reg.conto) regTxt += ', solo sul conto ' + reg.conto;
+  h += '<dl class="rco-dl"><dt>Stato</dt><dd>' + ({ attiva: 'attiva', sospesa: 'sospesa' + (v.sospesaFino ? ' fino al ' + rcoGg(v.sospesaFino) : ''), conclusa: 'non c\'è più' + (v.al ? ' (dal ' + rcoGg(v.al) + ')' : ''), esclusa: 'esclusa' }[v.stato] || v.stato) + '</dd>' +
+    '<dt>Quando</dt><dd>' + esc(rcoCadenza(v)) + (v.rate ? ' · ' + v.rate + ' volte dal ' + rcoGg(v.dal) : '') + (v.al && v.stato === 'attiva' ? ' · fino al ' + rcoGg(v.al) : '') + '</dd>' +
+    '<dt>Importo</dt><dd>' + esc(rcoImportoTxt(v)) + ' · ' + (v.dir === 'entrata' ? 'entrata' : 'uscita') + '</dd>' +
+    '<dt>Si riconosce da</dt><dd>' + esc(regTxt) + '</dd>' +
+    '<dt>Avviso</dt><dd>' + (v.avviso === -1 ? 'nessuno' : v.avviso > 0 ? v.avviso + ' giorni prima' : (v.dir === 'uscita' && v.importo >= 300 ? '3 giorni prima (predefinito)' : 'nessuno')) + '</dd>' +
+    (v.note ? '<dt>Note</dt><dd>' + esc(v.note) + '</dd>' : '') + '</dl>';
+  // stima da Presenze per il prossimo pagamento
+  var nx = per.find(function(p){ return p.stato === 'previsto' || p.stato === 'in_attesa'; });
+  if(nx && nx.stima) h += '<div class="rco-sez"><h4>Prossimo: ' + esc(rcoGgCorto(nx.data)) + ' · ' + rcoEur(nx.stima.totale) + '</h4><small>' + (v.regola.gruppo === 'soci' ? 'compensi' : 'stipendi') + ' di ' + esc(rcoMeseNome(nx.stima.rif)) + ', solo la parte con bonifico · da Presenze</small></div><div class="rco-pers">' + nx.stima.righe.map(function(r){ return '<div><span>' + esc(r.nome) + '</span><em>' + esc(r.come) + '</em><b>' + rcoEur(r.importo) + '</b></div>'; }).join('') + '</div>';
+  // suggerimenti
+  var sug = rcoSuggerimenti(v, per);
+  if(sug.length && v.stato === 'attiva') h += sug.map(function(s){ return '<div class="rco-card warn"><p>' + esc(s.testo) + '.</p><div class="rco-az">' + rcoBtn('Aggiorna', 'rcoApplicaSug(' + v.id + ',\'' + s.tipo + '\',' + s.valore + ')') + '</div></div>'; }).join('');
+  // storico mese per mese
+  h += '<div class="rco-sez"><h4>Mese per mese</h4></div><div class="rco-per">' + per.slice().reverse().map(function(p){
+    var az = '';
+    if(p.esito && (p.esito.esito === 'saltato' || p.esito.esito === 'va_bene')) az = rcoBtn('Annulla', 'rcoEsitoTogli(' + v.id + ',\'' + p.periodo + '\')');
+    else if(p.stato === 'mancante' || p.stato === 'in_attesa' || p.stato === 'da_segnare') az = rcoBtn('Non c\'era', 'rcoEsito(' + v.id + ',\'' + p.periodo + '\',\'saltato\')') + (p.stato === 'da_segnare' ? rcoBtn('Pagato', 'rcoEsito(' + v.id + ',\'' + p.periodo + '\',\'va_bene\')') : '');
+    else if(p.stato === 'diverso') az = rcoBtn('Va bene così', 'rcoEsito(' + v.id + ',\'' + p.periodo + '\',\'va_bene\')');
+    var movs = p.movs.map(function(m){ return '<button class="rco-mov" onclick="rcoApriMov(\'' + esc(String(m.id)).replace(/'/g, '') + '\')">' + rcoGg(m.data) + ' · ' + rcoEur(Math.abs(m.importo)) + (m.conto && m.conto !== 'BPM' ? ' · ' + esc(m.conto) : '') + ' ›</button>'; }).join('');
+    var tit = p.stima ? (v.regola.gruppo === 'soci' ? 'Compensi di ' : 'Stipendi di ') + rcoMeseNome(p.stima.rif) : rcoMaiusc(rcoMeseNome(p.periodo));
+    return '<div class="rco-p"><div class="rco-p-h"><b>' + esc(tit) + '</b>' + rcoPill(p.stato) + '</div><small>atteso ' + rcoGg(p.data) + ' · ' + (p.stima && !p.stima.certo || v.variabile ? 'circa ' : '') + rcoEur(p.atteso) + (p.reale ? ' · arrivato ' + rcoEur(p.reale) : '') + '</small>' + (movs ? '<div class="rco-movs">' + movs + '</div>' : '') + (az ? '<div class="rco-az">' + az + '</div>' : '') + '</div>';
+  }).join('') + '</div>';
+  // azioni sulla voce
+  h += '<div class="rco-az rco-az-voce">' + rcoBtn('Modifica', 'rcoEditor(' + v.id + ')') +
+    (v.stato === 'attiva' ? rcoBtn('Non c\'è più', 'rcoFine(' + v.id + ')') + rcoBtn('Sospendi', 'rcoSospendi(' + v.id + ')') : rcoBtn('Riattiva', 'rcoRiattiva(' + v.id + ')')) +
+    (v.origine === 'manuale' ? rcoBtn('Elimina', 'rcoElimina(' + v.id + ')', 'neg') : '') + '</div>';
+  if((v.storico || []).length) h += '<details class="rco-escl"><summary>Storico delle decisioni</summary>' + v.storico.slice().reverse().map(function(s){ return '<div><span>' + rcoGg(s.quando) + '</span><span>' + esc(s.cosa) + '</span></div>'; }).join('') + '</details>';
+  mo.querySelector('.pn-sh-bd').innerHTML = h;
+}
+function rcoApriMov(id){ try{ if(typeof _movSchedaApri === 'function') _movSchedaApri(id); }catch(e){} }
+async function rcoApplicaSug(id, tipo, val){
+  try{ await rcoModificaVoce(id, function(v){ if(tipo === 'importo'){ v.importo = val; if(v.min != null && val < v.min) v.min = val; if(v.max != null && val > v.max) v.max = val; } if(tipo === 'giorno') v.giorno = val; }, tipo === 'importo' ? 'importo aggiornato a ' + rcoEur(val) : 'giorno aggiornato al ' + val); rcoRidisegna(); }
+  catch(e){ toast('⚠️ Non salvato: ' + (e.message || e)); }
+}
+// «Non c'è più» / «Sospendi»: piccolo foglio con data e motivo, niente finestre di sistema
+function rcoFine(id){ rcoMiniFoglio(id, 'fine'); }
+function rcoSospendi(id){ rcoMiniFoglio(id, 'sospendi'); }
+function rcoMiniFoglio(id, cosa){
+  var v = rcoVoce(id); if(!v) return;
+  var mo = pnFoglio('rcoMini', { titolo: cosa === 'fine' ? 'Non c\'è più: ' + v.nome : 'Sospendi: ' + v.nome, z: 310, piede: true });
+  mo.querySelector('.pn-sh-bd').innerHTML = '<div class="rco-form"><label>' + (cosa === 'fine' ? 'Da quando non c\'è più?' : 'Sospesa fino al') + '<input type="date" id="rcoMiniData" value="' + (cosa === 'fine' ? rcoOggi() : rcoPiu(rcoOggi(), 30)) + '"></label>' +
+    '<label>Perché <small>(facoltativo, resta nello storico)</small><input id="rcoMiniNota" placeholder="' + (cosa === 'fine' ? 'es. contratto disdetto, mutuo estinto' : 'es. pausa estiva') + '"></label>' +
+    '<p class="rco-nota">' + (cosa === 'fine' ? 'Lo storico resta. Da quella data non la aspetto più e non ti avviso più. Se ricompare in banca, te lo propongo di nuovo.' : 'Fino a quella data non la aspetto e non ti avviso; poi riparte da sola.') + '</p></div>';
+  mo.querySelector('.pn-sh-ft').innerHTML = '<button class="btn btn-p" style="width:100%" onclick="rcoMiniSalva(' + v.id + ',\'' + cosa + '\')">' + (cosa === 'fine' ? 'Segna che non c\'è più' : 'Sospendi') + '</button>';
+}
+async function rcoMiniSalva(id, cosa){
+  var d = (document.getElementById('rcoMiniData') || {}).value, nota = ((document.getElementById('rcoMiniNota') || {}).value || '').trim();
+  if(!d){ toast('⚠️ Manca la data'); return; }
+  try{
+    await rcoModificaVoce(id, function(v, doc){
+      if(cosa === 'fine'){ v.stato = 'conclusa'; v.al = d; if(v.chiave){ /* se ricompare dopo, la proposta riparte con una chiave nuova */ v.chiaveFinita = v.chiave; v.chiave = v.chiave + '|fino:' + d; } }
+      else { v.sospesaFino = d; }
+    }, (cosa === 'fine' ? 'non c\'è più dal ' + rcoGg(d) : 'sospesa fino al ' + rcoGg(d)) + (nota ? ' — ' + nota : ''));
+    pnChiudi('rcoMini'); rcoRidisegna();
+  }catch(e){ toast('⚠️ Non salvato: ' + (e.message || e)); }
+}
+async function rcoRiattiva(id){
+  try{ await rcoModificaVoce(id, function(v){ v.stato = 'attiva'; v.sospesaFino = null; if(v.chiaveFinita){ v.chiave = v.chiaveFinita; delete v.chiaveFinita; } if(v.al && v.al < rcoOggi()) v.al = null; }, 'riattivata'); rcoRidisegna(); }
+  catch(e){ toast('⚠️ Non salvato: ' + (e.message || e)); }
+}
+async function rcoElimina(id){
+  var b = document.querySelector('#rcoScheda .rco-b.neg'); if(b && !b.dataset.ok){ b.dataset.ok = '1'; b.textContent = 'Tocca di nuovo per eliminare'; return; }
+  try{ await rcoSalva(function(doc){ doc.voci = doc.voci.filter(function(v){ return String(v.id) !== String(id); }); Object.keys(doc.esiti).forEach(function(k){ if(k.split('|')[0] === String(id)) delete doc.esiti[k]; }); }); pnChiudi('rcoScheda'); rcoRidisegna(); }
+  catch(e){ toast('⚠️ Non salvato: ' + (e.message || e)); }
+}
+
+/* ══ NUOVA VOCE / MODIFICA: tutto si cambia da qui, senza toccare il codice ══ */
+function rcoEditorDaProposta(chiaveEnc){ var p = rcoPropDa(decodeURIComponent(chiaveEnc)); if(p) rcoEditor(null, rcoVoceDaProposta(p)); }
+function rcoEditor(id, pre){
+  var v = id ? rcoVoce(id) : (pre || { dir: 'uscita', ogni: 1, giorno: +rcoOggi().slice(8, 10), regola: { tipo: 'nome' }, stato: 'attiva', origine: 'manuale', dal: rcoOggi() });
+  if(!v) return;
+  var r = v.regola || {}, nuova = !id;
+  var mo = pnFoglio('rcoEdit', { titolo: nuova ? (pre ? 'Conferma con questi dettagli' : 'Nuova voce ricorrente') : 'Modifica: ' + v.nome, z: 320, alto: true, piede: true });
+  var opt = function(val, cur, t){ return '<option value="' + val + '"' + (String(cur) === String(val) ? ' selected' : '') + '>' + t + '</option>'; };
+  var dur = v.rate ? 'rate' : (v.al ? 'al' : 'sempre');
+  mo.querySelector('.pn-sh-bd').innerHTML = '<div class="rco-form">' +
+    '<label>Nome<input id="rceNome" value="' + esc(v.nome || '') + '" placeholder="es. Affitto locale, Assicurazione furgone"></label>' +
+    '<div class="rco-2"><label>Tipo<select id="rceDir">' + opt('uscita', v.dir, 'Uscita') + opt('entrata', v.dir, 'Entrata') + '</select></label>' +
+    '<label>Categoria<input id="rceCat" list="rcoCatList" value="' + esc(v.cat || '') + '" placeholder="scrivi o scegli">' + rcoCatDatalist() + '</label></div>' +
+    '<div class="rco-2"><label>Importo €<input id="rceImp" type="number" step="0.01" inputmode="decimal" value="' + (v.importo != null ? v.importo : '') + '"' + (r.tipo === 'presenze' ? ' disabled placeholder="da Presenze"' : '') + '></label>' +
+    '<label>Importo<select id="rceVar">' + opt('0', v.variabile ? 1 : 0, 'Fisso') + opt('1', v.variabile ? 1 : 0, 'Variabile') + '</select></label></div>' +
+    '<div class="rco-2"><label>Normale da €<input id="rceMin" type="number" step="0.01" value="' + (v.min != null ? v.min : '') + '"></label><label>fino a €<input id="rceMax" type="number" step="0.01" value="' + (v.max != null ? v.max : '') + '"></label></div>' +
+    '<p class="rco-nota">Se arriva un importo fuori da questo intervallo te lo segnalo. Vuoto = solo l\'importo scritto sopra.</p>' +
+    '<div class="rco-2"><label>Ogni<select id="rceOgni">' + [1, 2, 3, 4, 6, 12].map(function(n){ return opt(n, v.ogni || 1, RCO_OGNI[n].replace('ogni ', '')); }).join('') + '</select></label>' +
+    '<label>Giorno del mese<input id="rceGiorno" type="number" min="1" max="31" value="' + (v.giorno || 1) + '"></label></div>' +
+    '<div class="rco-2"><label>A partire da<input id="rceDal" type="date" value="' + esc(v.dal ? String(v.dal).slice(0, 10) : rcoOggi()) + '"></label>' +
+    '<label>Tolleranza giorni<input id="rceToll" type="number" min="0" max="60" value="' + (v.toll != null ? v.toll : rcoFinestra(v).dopo) + '"></label></div>' +
+    '<label>Per quanto tempo<select id="rceDur" onchange="rcoEditorDur()">' + opt('sempre', dur, 'Finché continua') + opt('rate', dur, 'Un numero di volte (rate)') + opt('al', dur, 'Fino a una data') + '</select></label>' +
+    '<div class="rco-2" id="rceDurBox"><label id="rceRateL">Quante volte in tutto<input id="rceRate" type="number" min="1" value="' + (v.rate || '') + '"></label><label id="rceAlL">Fino al<input id="rceAl" type="date" value="' + esc(v.al ? String(v.al).slice(0, 10) : '') + '"></label></div>' +
+    '<div class="rco-q">Come la riconosco in banca</div>' +
+    '<div class="rco-2"><label>Regola<select id="rceReg" onchange="rcoEditorDur()">' + RCO_REGOLE.map(function(x){ return opt(x[0], r.tipo || 'nome', x[1]); }).join('') + '</select></label>' +
+    '<label id="rceValL">Cosa cercare<input id="rceVal" value="' + esc(r.tipo === 'presenze' ? '' : (r.valori || [r.valore || '']).join(', ')) + '" placeholder="es. Comune di Napoli"></label></div>' +
+    '<div class="rco-2"><label>Solo sul conto<select id="rceConto">' + opt('', r.conto || '', 'Qualsiasi') + opt('BPM', r.conto, 'Banco BPM') + opt('SumUp', r.conto, 'SumUp') + opt('Nexi', r.conto, 'Carta Nexi') + '</select></label>' +
+    '<label id="rceGrL">Gruppo<select id="rceGr">' + opt('dipendenti', r.gruppo, 'Dipendenti') + opt('soci', r.gruppo, 'Soci') + '</select></label></div>' +
+    '<p class="rco-nota" id="rceProva"></p>' +
+    '<label>Avviso<select id="rceAvv">' + opt('', v.avviso == null ? '' : v.avviso, 'Predefinito (3 giorni prima le uscite da 300 € in su)') + opt('-1', v.avviso, 'Nessun avviso') + opt('1', v.avviso, '1 giorno prima') + opt('3', v.avviso, '3 giorni prima') + opt('7', v.avviso, '7 giorni prima') + '</select></label>' +
+    '<label>Note<input id="rceNote" value="' + esc(v.note || '') + '"></label></div>';
+  mo.querySelector('.pn-sh-ft').innerHTML = '<button class="btn btn-p" style="width:100%" onclick="rcoEditorSalva(' + (id || 'null') + ')">' + (nuova ? 'Salva la voce' : 'Salva le modifiche') + '</button>';
+  RCO.aperto.pre = pre || null;
+  rcoEditorDur();
+  ['rceVal', 'rceReg', 'rceConto', 'rceDir', 'rceMin', 'rceMax'].forEach(function(k){ var e = document.getElementById(k); if(e) e.addEventListener('input', rcoEditorProva); });
+}
+function rcoEditorDur(){
+  var g = function(id){ return document.getElementById(id); }, d = (g('rceDur') || {}).value, reg = (g('rceReg') || {}).value;
+  if(g('rceRateL')) g('rceRateL').style.display = d === 'rate' ? '' : 'none';
+  if(g('rceAlL')) g('rceAlL').style.display = d === 'al' ? '' : 'none';
+  if(g('rceDurBox')) g('rceDurBox').style.display = d === 'sempre' ? 'none' : '';
+  if(g('rceValL')) g('rceValL').style.display = /^(f24|presenze|nessuna)$/.test(reg) ? 'none' : '';
+  if(g('rceGrL')) g('rceGrL').style.display = reg === 'presenze' ? '' : 'none';
+  rcoEditorProva();
+}
+function rcoEditorRegola(){
+  var g = function(id){ var e = document.getElementById(id); return e ? String(e.value || '').trim() : ''; };
+  var r = { tipo: g('rceReg') || 'nome' }, val = g('rceVal');
+  if(/^(nome|testo|iban|mandato|mutuo)$/.test(r.tipo)){ var L = val.split(/\s*,\s*/).filter(Boolean); if(L.length > 1) r.valori = L; else r.valore = L[0] || ''; }
+  if(r.tipo === 'nome' && r.valore) r.valore = rcoTok(r.valore).join(' ');
+  if(r.tipo === 'presenze') r.gruppo = g('rceGr') || 'dipendenti';
+  if(g('rceConto')) r.conto = g('rceConto');
+  var pre = RCO.aperto.pre && RCO.aperto.pre.regola; if(pre && pre.min != null && pre.tipo === r.tipo){ r.min = pre.min; r.max = pre.max; }
+  return r;
+}
+// mentre scrivi la regola: quanti movimenti riconosce, e gli ultimi
+function rcoEditorProva(){
+  var el = document.getElementById('rceProva'); if(!el) return;
+  var r = rcoEditorRegola(); if(r.tipo === 'nessuna'){ el.textContent = 'Non verrà cercata in banca: a ogni scadenza la segni tu come pagata.'; return; }
+  if(/^(nome|testo|iban|mandato|mutuo)$/.test(r.tipo) && !(r.valore || (r.valori && r.valori.length))){ el.textContent = 'Scrivi cosa cercare: ti dico subito quanti movimenti riconosce.'; return; }
+  var S = RCO.memo || rcoStato(), dir = (document.getElementById('rceDir') || {}).value || 'uscita';
+  var trov = S.movs.filter(function(m){ return rcoRiconosce({ dir: dir, regola: r }, m, S.ctx); }).sort(function(a, b){ return a.data < b.data ? 1 : -1; });
+  el.innerHTML = trov.length ? 'Riconosce <b>' + trov.length + '</b> movimenti. Gli ultimi: ' + trov.slice(0, 4).map(function(m){ return rcoGg(m.data) + ' ' + rcoEur(Math.abs(m.importo)); }).join(' · ') : 'Per ora non riconosce nessun movimento: va bene se è una spesa nuova.';
+}
+async function rcoEditorSalva(id){
+  var g = function(k){ var e = document.getElementById(k); return e ? String(e.value || '').trim() : ''; }, num = function(k){ var s = g(k).replace(',', '.'); return s === '' ? null : rcoR2(parseFloat(s)); };
+  var nome = g('rceNome'); if(!nome){ toast('⚠️ Manca il nome'); return; }
+  var r = rcoEditorRegola(), dur = g('rceDur');
+  var dati = { nome: nome, dir: g('rceDir') || 'uscita', cat: g('rceCat'), importo: num('rceImp'), variabile: g('rceVar') === '1', min: num('rceMin'), max: num('rceMax'),
+    ogni: parseInt(g('rceOgni'), 10) || 1, giorno: Math.min(31, Math.max(1, parseInt(g('rceGiorno'), 10) || 1)), dal: g('rceDal') || null, toll: g('rceToll') === '' ? null : parseInt(g('rceToll'), 10),
+    rate: dur === 'rate' ? (parseInt(g('rceRate'), 10) || null) : null, al: dur === 'al' ? (g('rceAl') || null) : null, regola: r, avviso: g('rceAvv') === '' ? null : parseInt(g('rceAvv'), 10), note: g('rceNote') };
+  if(dati.dal) dati.base = dati.dal.slice(0, 7);
+  if(dati.min != null && dati.max != null && dati.min > dati.max){ var t = dati.min; dati.min = dati.max; dati.max = t; }
+  if(dati.importo == null && r.tipo !== 'presenze'){ toast('⚠️ Manca l\'importo'); return; }
+  if(dati.importo != null && dati.min == null && dati.max == null && !dati.variabile){ dati.min = dati.importo; dati.max = dati.importo; }
+  try{
+    if(id){
+      var prima = rcoVoce(id), diff = ['nome', 'importo', 'giorno', 'ogni', 'al', 'rate'].filter(function(k){ return String(prima[k] == null ? '' : prima[k]) !== String(dati[k] == null ? '' : dati[k]); });
+      await rcoModificaVoce(id, function(v){ Object.assign(v, dati); }, 'modificata' + (diff.length ? ' (' + diff.join(', ') + ')' : ''));
+    } else {
+      var pre = RCO.aperto.pre, v = Object.assign(pre ? Object.assign({}, pre) : { origine: 'manuale', storico: [], creato: new Date().toISOString() }, dati, { id: Date.now(), stato: 'attiva' });
+      if(!v.base) v.base = (v.dal || rcoOggi()).slice(0, 7);
+      rcoTraccia(v, pre ? 'confermata con dettagli cambiati' : 'aggiunta a mano');
+      await rcoSalva(function(doc){ doc.voci.push(v); });
+    }
+    pnChiudi('rcoEdit'); RCO.aperto.prop = null; RCO.aperto.pre = null; rcoRidisegna();
+    toast('✓ Salvato', { forza: true });
+  }catch(e){ toast('⚠️ Non salvato: ' + (e.message || e)); }
+}
+
+/* ══ COLLEGAMENTI CON IL RESTO DELL'APP ══ */
+// riga nel menu Fiscale con il riassunto
+function rcoAggiornaMenu(){
+  var el = document.getElementById('rcoMenuDesc'); if(!el || !RCO.doc) return;
+  var S = rcoStato(), nP = S.proposte.filter(function(p){ return !p.interrotta; }).length, dc = rcoDaControllare().length, att = S.voci.filter(function(v){ return v.stato === 'attiva'; }).length;
+  var parti = [];
+  if(nP) parti.push(nP + (nP === 1 ? ' nuova trovata' : ' nuove trovate'));
+  if(dc) parti.push(dc + ' da controllare');
+  if(!parti.length) parti.push(att ? att + (att === 1 ? ' voce attiva' : ' voci attive') : 'Utenze, mutui, F24, stipendi: l\'app le trova da sola');
+  el.textContent = parti.join(' · ');
+  var b = document.getElementById('rcoMenuBadge'); if(b){ b.textContent = nP + dc; b.style.display = nP + dc ? '' : 'none'; }
+}
+// la parte predittiva: quando trova qualcosa di nuovo te lo dice, una volta
+function rcoBanner(){
+  try{
+    if(!RCO.doc || document.getElementById('rcoBanner')) return;
+    var S = rcoStato(), oggi = S.oggi, k = 'fatture_rco_banner';
+    var nuove = S.proposte.filter(function(p){ return p.nuova && !p.interrotta && p.fiducia !== 'bassa'; });
+    if(!nuove.length) return;
+    var visti = {}; try{ visti = JSON.parse(localStorage.getItem(k) || '{}'); }catch(e){}
+    var p = nuove.find(function(x){ return !visti[x.chiave]; }); if(!p) return;
+    visti[p.chiave] = oggi; try{ localStorage.setItem(k, JSON.stringify(visti)); }catch(e){}
+    var b = document.createElement('div'); b.id = 'rcoBanner'; b.className = 'rco-banner'; b.setAttribute('role', 'status');
+    b.innerHTML = '<div><b>Ho trovato un movimento che si ripete</b><span>' + esc(rcoNomeBello(p.nome)) + ' · ' + esc(RCO_OGNI[p.ogni] || '') + ' intorno al ' + p.giorno + ' · ' + (p.variabile ? 'circa ' : '') + rcoEur(p.importo) + '. Vuoi che te lo ricordi?</span></div>' +
+      '<button class="rco-b pri" onclick="document.getElementById(\'rcoBanner\').remove();RCO.aperto.prop=\'' + esc(p.chiave).replace(/'/g, '') + '\';rcoApri()">Vedi</button><button class="pn-x" aria-label="Chiudi" onclick="document.getElementById(\'rcoBanner\').remove()">✕</button>';
+    document.body.appendChild(b);
+    setTimeout(function(){ var x = document.getElementById('rcoBanner'); if(x) x.remove(); }, 15000);
+  }catch(e){ console.warn('ricorrenti:', e); }
+}
+async function rcoAvvio(){
+  try{
+    await rcoCarica(); await rcoCaricaPresenze();
+    if(typeof _bancaMovimenti === 'undefined' || !_bancaMovimenti.length) return;
+    RCO.memo = null; rcoAggiornaMenu(); try{ _fsRenderMenu(); }catch(e){}
+    setTimeout(rcoBanner, 2500);
+  }catch(e){ console.warn('ricorrenti avvio:', e); }
+}
+
+/* ── agganci al resto dell'app (senza cambiare le funzioni originali) ── */
+(function(){
+  // dopo ogni caricamento dei movimenti: ricalcolo e, se c'è qualcosa di nuovo, la domanda
+  if(typeof caricaMovimentiBanca === 'function'){
+    var origB = caricaMovimentiBanca, t = null;
+    caricaMovimentiBanca = async function(){
+      var r = await origB.apply(this, arguments);
+      clearTimeout(t); t = setTimeout(function(){ RCO.memo = null; rcoAvvio(); if(document.getElementById('rcoFoglio')) rcoRender(); }, 1200);
+      return r;
+    };
+  }
+  // «Prossime scadenze» in Fiscale: anche le ricorrenti, nella stessa lista
+  if(typeof _fsRenderMenu === 'function'){
+    var origF = _fsRenderMenu;
+    _fsRenderMenu = function(){
+      origF.apply(this, arguments);
+      try{
+        if(!RCO.doc) return;
+        var box = document.getElementById('fsScadBox'); if(!box) return;
+        var oggi = new Date(); oggi.setHours(12, 0, 0, 0);
+        var F = _fsScadenze(45).slice(0, 6).map(function(s){ return { d: s.d, gg: s.gg, html: null, s: s }; });
+        var R = rcoProssimi(21).filter(function(x){ return x.v.dir === 'uscita' && (x.p.atteso >= 100 || x.v.avviso > 0); }).slice(0, 6).map(function(x){ var d = rcoData(x.data); return { d: d, gg: Math.round((d - oggi) / 86400000), r: x }; });
+        if(!R.length) return;
+        var L = F.concat(R).sort(function(a, b){ return a.d - b.d; }).slice(0, 6);
+        box.innerHTML = '<div class="fs-card"><div class="fs-hd"><span>Prossime scadenze</span><em>con le uscite ricorrenti · sabato e festivi già spostati</em></div>' + L.map(function(x){
+          var urg = x.gg <= 3 ? ' fs-urg' : (x.gg <= 10 ? ' fs-vic' : '');
+          if(x.s){ var s = x.s, az = s.tipo === 'pacchetto' ? ' data-m="' + s.mese + '" onclick="_fsPacchettoApri(this.dataset.m)"' : (s.tipo === 'f24' ? ' onclick="apriFiscaleSezione(\'liquidazione\')"' : '');
+            return '<div class="fs-row' + urg + '"' + az + '><div class="fs-cal"><b>' + s.d.getDate() + '</b><span>' + _GR_MESI[s.d.getMonth()] + '</span></div><div class="fs-body"><div class="fs-tit">' + esc(s.tit) + (s.promemoria ? ' <i>promemoria</i>' : '') + '</div><div class="fs-desc">' + esc(s.desc) + '</div></div><div class="fs-gg">' + _fsQuando(s.gg) + '</div></div>'; }
+          var v = x.r.v, p = x.r.p;
+          return '<div class="fs-row' + urg + '" onclick="rcoApri();setTimeout(function(){rcoScheda(' + v.id + ')},400)"><div class="fs-cal"><b>' + x.d.getDate() + '</b><span>' + _GR_MESI[x.d.getMonth()] + '</span></div><div class="fs-body"><div class="fs-tit">' + esc(v.nome) + ' <i>ricorrente</i></div><div class="fs-desc">' + (v.variabile || (p.stima && !p.stima.certo) ? 'circa ' : '') + rcoEur(p.atteso) + '</div></div><div class="fs-gg">' + _fsQuando(x.gg) + '</div></div>';
+        }).join('') + '</div>';
+      }catch(e){ console.warn('ricorrenti in scadenze:', e); }
+    };
+  }
+  // Riepilogo → «Situazione»: cosa non è arrivato, cosa ha trovato di nuovo
+  if(typeof ricdRender === 'function'){
+    var origR = ricdRender;
+    ricdRender = function(){
+      origR.apply(this, arguments);
+      try{
+        if(!RCO.doc) return;
+        var card = document.querySelector('#rdBox .rd-card'); if(!card) return;
+        var dc = rcoDaControllare(), S = rcoStato(), nP = S.proposte.filter(function(p){ return p.nuova && !p.interrotta; }).length;
+        var manc = dc.filter(function(x){ return x.p.stato === 'mancante'; }).length, altro = dc.length - manc;
+        if(!dc.length && !nP) return;
+        var cose = card.querySelector('.rd-cose'); if(!cose){ cose = document.createElement('div'); cose.className = 'rd-cose'; card.appendChild(cose); }
+        var b = document.createElement('button'); b.className = 'rd-cosa' + (manc ? ' ko' : ' warn'); b.onclick = rcoApri;
+        b.innerHTML = '<b>' + (manc ? manc + (manc === 1 ? ' pagamento ricorrente non arrivato' : ' pagamenti ricorrenti non arrivati') : (altro ? altro + ' ricorrenti da controllare' : nP + (nP === 1 ? ' nuovo movimento ricorrente trovato' : ' nuovi movimenti ricorrenti trovati'))) + '</b><span>' + esc(dc.slice(0, 3).map(function(x){ return x.v.nome; }).join(', ') || 'vuoi che li ricordi?') + '</span>';
+        cose.appendChild(b);
+      }catch(e){ console.warn('ricorrenti in situazione:', e); }
+    };
+  }
+  // collegamento #ricorrenti (avvisi sul telefono)
+  if(typeof ricvVaiLink === 'function'){
+    var origL = ricvVaiLink;
+    ricvVaiLink = function(link){
+      var h = typeof ricvLinkHash === 'function' ? ricvLinkHash(link) : '';
+      if(h && /^ricorrenti\b/i.test(h)){ setTimeout(rcoApri, 300); return true; }
+      return origL.apply(this, arguments);
+    };
+    var daIndirizzo = function(){ if(/^#ricorrenti\b/i.test(String(location.hash || ''))){ try{ history.replaceState(null, '', location.pathname + location.search); }catch(e){} setTimeout(rcoApri, 800); } };
+    if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', daIndirizzo); else setTimeout(daIndirizzo, 0);
+    window.addEventListener('hashchange', daIndirizzo);
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function(){ setTimeout(rcoAvvio, 3000); }); else setTimeout(rcoAvvio, 3000);
 })();
 
 </script>
