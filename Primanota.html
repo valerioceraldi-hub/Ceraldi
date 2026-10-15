@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.28.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.29.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -2724,7 +2724,18 @@ var AI_TOOLS = [
       stato: {type:'string', enum:['pagata','da_pagare','parziale'], description:'Filtra per stato. Omesso = tutti.'},
       riconciliata: {type:'boolean', description:'true = solo riconciliate con un movimento banca, false = solo non riconciliate. Omesso = entrambe.'},
       importo_min: {type:'number'}, importo_max: {type:'number'},
+      data_da: {type:'string', description:'YYYY-MM-DD, data fattura da (inclusa).'}, data_a: {type:'string', description:'YYYY-MM-DD, data fattura fino a (inclusa).'},
       limit: {type:'integer', description:'Massimo risultati, default 60.'}
+    }}
+  },
+  {
+    name: 'leggi_righe_fatture',
+    description: 'Legge le RIGHE (articoli) dentro le fatture elettroniche XML: descrizione, codice articolo, quantità, unità di misura, prezzo unitario e totale. Usalo per domande su QUANTO di un prodotto è stato comprato (pezzi, kg, litri, confezioni) o a che prezzo. Calcola già i totali: per i chili usa kg_totali (certi) e segnala kg_incerti se presenti; non rifare i conti a mano.',
+    input_schema: {type:'object', properties:{
+      fornitore: {type:'string', description:'Testo nel nome del fornitore (parziale). Consigliato.'},
+      cerca: {type:'string', description:'Parole che devono comparire tutte nella descrizione della riga, es. "extreme" oppure "kimbo extreme". Omesso = tutte le righe.'},
+      codice_articolo: {type:'string', description:'Codice articolo esatto del fornitore, se noto.'},
+      data_da: {type:'string', description:'YYYY-MM-DD'}, data_a: {type:'string', description:'YYYY-MM-DD'}
     }}
   },
   {
@@ -2772,6 +2783,8 @@ function _aiLeggiFatture(input){
     if(input.riconciliata!==undefined && !!f.riconciliata!==input.riconciliata) return false;
     if(input.importo_min!=null && (f.importo||0)<input.importo_min) return false;
     if(input.importo_max!=null && (f.importo||0)>input.importo_max) return false;
+    if(input.data_da && String(f.data||'') < input.data_da) return false;
+    if(input.data_a && String(f.data||'') > input.data_a) return false;
     return true;
   }).slice(0, input.limit||60).map(function(f){
     return {id:f.id, fornitore:f.fornitore, numero:f.numero, data:f.data, scadenza:f.scadenza||null,
@@ -2779,6 +2792,77 @@ function _aiLeggiFatture(input){
       riconciliazione:f.riconciliazione||null};
   });
   return JSON.stringify({trovate:res.length, fatture:res});
+}
+
+
+/* ══ RIGHE DELLE FATTURE PER L'ASSISTENTE (v10.29.0) ══
+   Legge gli articoli dagli XML e calcola le quantità in modo deterministico.
+   Chili: (1) unità di misura kg/g → è già il peso; (2) unità diversa (CF, PZ, CT)
+   → peso per unità ricavato dal prezzo al kg dello STESSO articolo nelle righe in kg
+   (es. Kimbo: 1 CF a 102,25 € = 6 × 17,04 €/kg → 6 kg); (3) altrimenti peso letto
+   dal nome, ma segnato come incerto (un "CF" può essere un cartone di più pezzi). */
+function _aiPesoDalNome(d){
+  var m = String(d || '').toLowerCase().replace(',', '.').match(/(\d+(?:\.\d+)?)\s*(kg|kgm|chili|gr|g)\b/);
+  if(!m) return null; var v = parseFloat(m[1]); if(!(v > 0)) return null;
+  return /^g/.test(m[2]) ? v / 1000 : v;
+}
+async function _aiLeggiRighe(input){
+  var norm = function(x){ return String(x || '').toLowerCase(); };
+  var parole = norm(input.cerca).split(/\s+/).filter(Boolean);
+  var docs = (fatture || []).filter(function(f){
+    if(!f || f.tipo === 'ddt' || f.deletedAt) return false;
+    if(input.fornitore && norm(f.fornitore).indexOf(norm(input.fornitore)) < 0 && norm(f.denominazioneXml).indexOf(norm(input.fornitore)) < 0) return false;
+    if(input.data_da && String(f.data || '') < input.data_da) return false;
+    if(input.data_a && String(f.data || '') > input.data_a) return false;
+    return true;
+  }).sort(function(a, b){ return String(a.data).localeCompare(String(b.data)); });
+  if(docs.length > 150) return JSON.stringify({ errore: 'Troppe fatture (' + docs.length + '): restringi con fornitore o date.' });
+  var righe = [], senzaXml = [];
+  for(var i = 0; i < docs.length; i++){
+    var f = docs[i], xml = typeof _xmlDaAllegata === 'function' ? _xmlDaAllegata(f.fatturaAllegata) : '';
+    if(!xml && typeof fetchAllegataSingola === 'function'){ try{ xml = _xmlDaAllegata(await fetchAllegataSingola(f.id)); }catch(e){} }
+    if(!xml && f.xmlGithubPath){ try{ var rr = await fetch(XML_REPO_BASE + f.xmlGithubPath); if(rr.ok) xml = _xmlDaAllegata(await rr.text()); }catch(e){} }
+    if(!xml){ senzaXml.push((f.fornitore || '') + ' n° ' + (f.numero || '') + ' del ' + (f.data || '')); continue; }
+    var doc; try{ doc = new DOMParser().parseFromString(xml, 'text/xml'); }catch(e){ senzaXml.push(f.numero); continue; }
+    var tutti = function(ctx, tag){ return Array.prototype.filter.call(ctx.getElementsByTagName('*'), function(e){ return e.localName === tag; }); };
+    var uno = function(ctx, tag){ var e = tutti(ctx, tag)[0]; return e ? e.textContent.trim() : ''; };
+    var nc = f.tipo === 'nota_credito' || /TD04/.test(uno(doc, 'TipoDocumento')), seg = nc ? -1 : 1;
+    tutti(doc, 'DettaglioLinee').forEach(function(L){
+      var desc = uno(L, 'Descrizione').replace(/\s+/g, ' '), cod = uno(L, 'CodiceValore');
+      if(input.codice_articolo && cod !== String(input.codice_articolo).trim()) return;
+      if(parole.length && !parole.every(function(w){ return norm(desc).indexOf(w) >= 0; })) return;
+      var q = parseFloat(uno(L, 'Quantita').replace(',', '.')) || (uno(L, 'Quantita') ? 0 : 1), pu = parseFloat(uno(L, 'PrezzoUnitario').replace(',', '.')) || 0, pt = parseFloat(uno(L, 'PrezzoTotale').replace(',', '.')) || 0;
+      var omaggio = Math.abs(pt) < 0.005 && Math.abs(pu) < 0.005;
+      if(omaggio && !parole.length && !input.codice_articolo) return;   // senza una ricerca precisa, gli omaggi (tazzine, tovaglioli…) sono solo rumore
+      righe.push({ omaggio: omaggio, fattura: f.numero, fattura_id: String(f.id), data: f.data, fornitore: f.fornitore, nota_credito: nc, codice: cod, descrizione: desc, quantita: seg * q, unita: (uno(L, 'UnitaMisura') || '').toUpperCase(), prezzo_unitario: pu, totale_riga: Math.round(seg * pt * 100) / 100, iva: parseFloat(uno(L, 'AliquotaIVA')) || 0 });
+    });
+  }
+  // prezzo al kg per articolo, dalle righe già in kg
+  var ppk = {};
+  righe.forEach(function(r){ if(/^KG/.test(r.unita) && r.prezzo_unitario > 0){ var k = norm(r.fornitore) + '|' + (r.codice || norm(r.descrizione)); (ppk[k] = ppk[k] || []).push(r.prezzo_unitario); } });
+  Object.keys(ppk).forEach(function(k){ var l = ppk[k].sort(function(a, b){ return a - b; }); ppk[k] = l[Math.floor(l.length / 2)]; });
+  var kgCerti = 0, kgIncerti = 0, kgOmaggio = 0, perArt = {};
+  righe.forEach(function(r){
+    var k = norm(r.fornitore) + '|' + (r.codice || norm(r.descrizione)), kg = null, come = '';
+    if(/^KG/.test(r.unita)){ kg = r.quantita; come = 'unità di misura kg'; }
+    else if(/^(G|GR)$/.test(r.unita)){ kg = r.quantita / 1000; come = 'unità di misura grammi'; }
+    else if(ppk[k] && r.prezzo_unitario > 0){
+      var fx = r.prezzo_unitario / ppk[k], n = Math.round(fx);
+      if(n >= 1 && Math.abs(fx - n) / n <= 0.03){ kg = r.quantita * n; come = 'ogni ' + (r.unita || 'unità') + ' = ' + n + ' kg (prezzo ' + r.prezzo_unitario.toFixed(2) + ' € = ' + n + ' × ' + ppk[k].toFixed(2) + ' €/kg dello stesso articolo)'; }
+    }
+    if(kg == null){ var pn = _aiPesoDalNome(r.descrizione); if(pn){ r.kg_incerti = Math.round(r.quantita * pn * 1000) / 1000; r.kg_come = 'stimato dal nome (' + pn + ' kg per ' + (r.unita || 'unità') + '): incerto, un ' + (r.unita || 'unità') + ' può contenere più pezzi'; if(!r.omaggio) kgIncerti += r.kg_incerti; } }
+    else { r.kg = Math.round(kg * 1000) / 1000; r.kg_come = come; if(r.omaggio){ kgOmaggio += r.kg; r.kg_come += ' · OMAGGIO (prezzo 0)'; } else kgCerti += r.kg; }
+    var a = perArt[k] = perArt[k] || { articolo: r.descrizione, codice: r.codice, fornitore: r.fornitore, righe: 0, quantita_per_unita: {}, kg: 0, kg_incerti: 0, spesa: 0 };
+    a.righe++; a.quantita_per_unita[r.unita || '—'] = Math.round(((a.quantita_per_unita[r.unita || '—'] || 0) + r.quantita) * 1000) / 1000;
+    if(r.omaggio){ a.kg_omaggio = Math.round(((a.kg_omaggio || 0) + (r.kg || 0)) * 1000) / 1000; return; }
+    a.kg = Math.round((a.kg + (r.kg || 0)) * 1000) / 1000; a.kg_incerti = Math.round((a.kg_incerti + (r.kg_incerti || 0)) * 1000) / 1000; a.spesa = Math.round((a.spesa + r.totale_riga) * 100) / 100;
+  });
+  return JSON.stringify({
+    fatture_lette: docs.length - senzaXml.length, fatture_senza_xml: senzaXml.slice(0, 20), righe_trovate: righe.length,
+    totali: { kg_totali: Math.round(kgCerti * 1000) / 1000, kg_incerti: Math.round(kgIncerti * 1000) / 1000, kg_omaggio: Math.round(kgOmaggio * 1000) / 1000, spesa_imponibile: Math.round(righe.reduce(function(t, r){ return t + r.totale_riga; }, 0) * 100) / 100 },
+    per_articolo: Object.keys(perArt).map(function(k){ return perArt[k]; }),
+    righe: righe.slice(0, 250)
+  });
 }
 
 function _aiLeggiMovimenti(input){
@@ -2833,6 +2917,7 @@ async function _aiProponiCorrezione(input){
 async function _aiEseguiStrumento(toolUse){
   var name = toolUse.name, input = toolUse.input||{};
   if(name==='leggi_fatture') return _aiLeggiFatture(input);
+  if(name==='leggi_righe_fatture') return await _aiLeggiRighe(input);
   if(name==='leggi_movimenti_banca') return _aiLeggiMovimenti(input);
   if(name==='leggi_chiusure') return _aiLeggiChiusure(input);
   if(name==='proponi_correzione_fattura') return await _aiProponiCorrezione(input);
@@ -2842,6 +2927,7 @@ async function _aiEseguiStrumento(toolUse){
 
 var AI_STATI_STRUMENTI = {
   leggi_fatture: '🔍 Sto controllando le fatture…',
+  leggi_righe_fatture: '📄 Sto leggendo le righe delle fatture…',
   leggi_movimenti_banca: '🏦 Sto controllando l\'estratto conto…',
   leggi_chiusure: '💰 Sto controllando le chiusure di cassa…',
   proponi_correzione_fattura: '✍️ Sto preparando una correzione…',
@@ -2880,6 +2966,7 @@ async function inviaAiAssistente(){
     'Rispondi sempre in italiano, breve e diretto. Usa gli strumenti di lettura per verificare i dati reali invece di supporre — non inventare mai numeri, date o importi.\n'+
     'Quando indaghi discrepanze di riconciliazione (es. un pagamento SDD collegato alla fattura sbagliata), confronta la data del movimento con la scadenza della fattura quando disponibile (di norma l\'addebito avviene entro pochi giorni dalla scadenza); se la scadenza manca, cerca uno schema regolare nella storia di quel fornitore prima di proporre una correzione.\n'+
     'I movimenti bancari con "PayPal" nella descrizione non mostrano MAI il vero beneficiario (solo "PayPal Europe S.a.r.l."): per questi, usa leggi_transazioni_paypal con una finestra di qualche giorno intorno alla data del movimento bancario per scoprire chi ha ricevuto i soldi, poi cerca con leggi_fatture una fattura di quel fornitore con importo e data compatibili.\n'+
+    'Per domande su QUANTITÀ o PREZZI di prodotti acquistati (es. quanti kg di un caffè, quante bottiglie, a che prezzo) usa leggi_righe_fatture, che legge gli articoli dagli XML: riporta i totali che restituisce (kg_totali, spesa_imponibile, per_articolo; se kg_omaggio > 0 dillo a parte: è merce ricevuta gratis), indica quante fatture hai letto e, se ci sono kg_incerti o fatture senza XML, dillo chiaramente. Le note di credito hanno quantità negative e sono già sottratte. Spese imponibili sono senza IVA.\n'+
     'Prima di proporre una correzione con proponi_correzione_fattura, spiega in una frase perché — Valerio deve poter capire il ragionamento prima di confermare, non solo vedere il risultato.\n'+
     'Se i dati non bastano per essere sicuro, dillo chiaramente invece di proporre una correzione incerta.';
 
