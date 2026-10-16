@@ -423,7 +423,7 @@ html[data-theme="dark"] .todo-ft{background:rgba(255,255,255,.03)}
 </nav>
 
 <script>
-var APP_VERSION='8.7.1';
+var APP_VERSION='8.8.0';
 var BUILD_VERSION=APP_VERSION, BUILD_NUM=APP_VERSION;
 var APP={key:'ordini',nome:'Ordini',versione:APP_VERSION,authKey:'or_auth_v2',oldAuthKey:'ceraldi_ordini_auth_session',
   markBg:'linear-gradient(145deg,#FFC04D 0%,#FF9F0A 50%,#C2410C 100%)',
@@ -2096,18 +2096,42 @@ function somiglianza(a, b){
 }
 function candidati(nome, lista, n, forn){
   return (lista || CAT).map(function(c){
-    var s = somiglianza(nome, (c.name || '') + ' ' + (c.conf || ''));
+    var s = Math.max.apply(null, nomiDi(c).map(function(n){ return somiglianza(nome, (n || '') + ' ' + (c.conf || '')); }));
     if(forn && prezzoDi(c, forn) != null && s > 0) s += 10;
     return { c: c, s: Math.min(100, Math.round(s * 10) / 10) };
   }).filter(function(x){ return x.s > 0; }).sort(function(a, b){ return b.s - a.s; }).slice(0, n || 8);
 }
+/* ── NOMI DI UN PRODOTTO (v8.8.0, 16/10/2026) ─────────────────────────
+   Valerio: "voglio chiamare AQV BABY CRNT CALI STRA 35G 3.15KG «cornetto
+   piccolo Calise» senza perdere il collegamento con le fatture o con il
+   nome che usa il fornitore". Il nome del catalogo è quello che vedi tu
+   (e Richieste); i nomi originali restano accanto e valgono per
+   riconoscere fatture, codici, prezzi e doppioni come prima.
+   Dove: or8_conf.nomiOrig[id] = [nomi] + tabella alias (fattura → id). */
+var _NOMI_VER = 0;
+function nomiOriginali(p){ var c = docDati('or8_conf').nomiOrig || {}; return p && c[p.id] ? c[p.id].slice() : []; }
+function nomiDi(p){
+  if(!p) return [];
+  var out = [p.name], vis = {}; vis[norm(p.name)] = 1;
+  nomiOriginali(p).forEach(function(n){ var k = norm(n); if(k && !vis[k]){ vis[k] = 1; out.push(n); } });
+  return out;
+}
+// il nome più descrittivo per formato, pezzi e peso: l'originale se c'è
+function nomeTecnico(p){ var o = nomiOriginali(p); return o.length ? o[0] : (p ? p.name : ''); }
+// confronto con tutti i nomi del prodotto: vale il migliore (sicuro > probabile > nessun contrasto > contrasto)
+function confrontaNomi(nome, p, opz){
+  var best = null, voto = function(r){ return r.livello === 'sicuro' ? 3 : r.livello === 'probabile' ? 2 : (MOTIVI_DIVERSI.test(r.motivo || '') ? 0 : 1); };
+  nomiDi(p).forEach(function(n){ var r = DUP.confronta(nome, n, opz || {}); if(!best || voto(r) > voto(best)) { best = r; best.nomeUsato = n; } });
+  return best || DUP.confronta(nome, p.name, opz || {});
+}
+function testoNomi(p){ return nomiDi(p).join(' '); }
 function aliasNorm(s){ return norm(s); }
 function aliasDi(nome){
   var k = aliasNorm(nome), m = docDati('or8_conf').alias || {}, id = m[k] != null ? m[k] : ALIAS_TAB[k];
   var p = id != null && CATMAP[id] ? CATMAP[id] : null;
   if(!p) return null;
   // un nome imparato in passato non vale se contraddice formato, pezzi o numeri (es. "N.7" imparato come "N1")
-  var r = DUP.confronta(nome, p.name, {});
+  var r = confrontaNomi(nome, p, {});
   if(!r.livello && /formato|pezzi|numeri|zero|contenitore|invecchiamento|peso/.test(r.motivo || '')) return null;
   return p;
 }
@@ -2118,6 +2142,51 @@ function salvaAlias(nome, id){
   if((docDati('or8_conf').alias || {})[k] === id) return;
   docModifica('or8_conf', function(d){ d.alias = d.alias || {}; d.alias[k] = id; });
   api('ceraldi_alias_prodotti?on_conflict=alias_norm', { method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: { alias_norm: k, product_id: id } }).catch(function(){});
+}
+// rinomina: il nome di prima diventa un nome «in fattura» (e un alias: le fatture con quel testo si collegano da sole)
+async function ricordaNomeOriginale(id, vecchio, nuovo){
+  vecchio = String(vecchio || '').trim(); if(!vecchio) return;
+  await docModifica('or8_conf', function(d){
+    d.nomiOrig = d.nomiOrig || {};
+    var l = (d.nomiOrig[id] || []).filter(function(n){ return norm(n) !== norm(vecchio) && norm(n) !== norm(nuovo || ''); });
+    d.nomiOrig[id] = [vecchio].concat(l).slice(0, 8);
+  }, true);
+  salvaAlias(vecchio, id); _NOMI_VER++;
+}
+async function aggiungiNomeOriginale(id, nome){
+  nome = String(nome || '').trim(); var p = CATMAP[id]; if(!nome || !p) return;
+  if(nomiDi(p).some(function(n){ return norm(n) === norm(nome); })){ toast('È già tra i nomi'); return; }
+  await docModifica('or8_conf', function(d){ d.nomiOrig = d.nomiOrig || {}; d.nomiOrig[id] = (d.nomiOrig[id] || []).concat([nome]).slice(0, 8); }, true);
+  salvaAlias(nome, id); _NOMI_VER++;
+}
+async function togliNomeOriginale(id, i){
+  var p = CATMAP[id], n = nomiOriginali(p)[i]; if(!n) return;
+  if(!(await conferma('Togliere questo nome?', '«' + esc(n) + '» non servirà più a riconoscere ' + esc(nomeBreve(p.name, 40)) + ' nelle fatture. Il collegamento delle fatture già lavorate resta.', 'Togli', true))) return;
+  await docModifica('or8_conf', function(d){ d.nomiOrig = d.nomiOrig || {}; d.nomiOrig[id] = (d.nomiOrig[id] || []).filter(function(x){ return norm(x) !== norm(n); }); if(d.alias && d.alias[aliasNorm(n)] === id) delete d.alias[aliasNorm(n)]; }, true);
+  api('ceraldi_alias_prodotti?alias_norm=eq.' + encodeURIComponent(aliasNorm(n)) + '&product_id=eq.' + id, { method: 'DELETE', prefer: 'return=minimal' }).catch(function(){});
+  delete ALIAS_TAB[aliasNorm(n)]; _NOMI_VER++; renderScheda();
+}
+// come lo scrivono i fornitori nelle fatture già collegate (per proporli come nomi)
+function nomiDaFatture(p, forn){
+  var visti = {}, out = [];
+  Object.keys(MEMF.righe || {}).forEach(function(k){
+    var x = MEMF.righe[k]; if(x.p !== p.id || !x.d || !/approved|matched_auto|storico/.test(x.s || '')) return;
+    if(forn){ var fr = risolviFornitore(x.f, x.iv); if(!fr || fr.nome !== forn) return; }
+    var kn = norm(x.d); if(visti[kn]){ if(x.t > visti[kn].t) visti[kn].t = x.t; return; }
+    visti[kn] = { d: x.d, c: x.c, t: x.t || '' }; out.push(visti[kn]);
+  });
+  return out.sort(function(a, b){ return String(b.t).localeCompare(String(a.t)); });
+}
+// nel messaggio al fornitore: se il prodotto l'hai rinominato, anche il nome (e il codice) che usa lui
+function rifFornitore(p, forn){
+  if(!p || !nomiOriginali(p).length) return '';
+  var l = nomiDaFatture(p, forn).filter(function(x){ return norm(x.d) !== norm(p.name); });
+  if(l.length) return 'vostro: ' + l[0].d + (l[0].c ? ' cod. ' + l[0].c : '');
+  return 'nome originale: ' + nomiOriginali(p)[0];
+}
+function aggiungiNomeDaScheda(){
+  var p = CATMAP[_schedaId]; if(!p) return;
+  chiediTesto('Un altro nome', 'Come lo scrive il fornitore o la fattura', '', 'Es. AQV BABY CRNT CALI STRA 35G').then(function(v){ if(v) aggiungiNomeOriginale(p.id, v).then(renderScheda); });
 }
 /* ── Riconoscimento dei nomi scritti dai dipendenti (motore RIC) ─────
    Storia: quante volte ogni prodotto è stato ordinato (decide il formato
@@ -2139,7 +2208,7 @@ function salvaNoRic(nome, id){
 // Ricerca per le schermate "scegli un prodotto": prima chi contiene tutte le parole, poi i più simili anche scritti male
 function cercaCatalogo(q, n){
   n = n || 30; q = String(q || '').trim(); if(!q) return [];
-  var esatti = CAT.filter(function(p){ return cercaTutte(p.name, q) || barcodeHa(p, q); });
+  var esatti = CAT.filter(function(p){ return cercaTutte(testoNomi(p), q) || barcodeHa(p, q); });
   if(esatti.length >= n || q.length < 3) return esatti.slice(0, n);
   var simili = RIC.cerca(q, { storia: storiaProdotti() }).cand.filter(function(x){ return x.s >= 30; }).map(function(x){ return x.c; }).filter(function(p){ return esatti.indexOf(p) < 0; });
   return esatti.concat(simili).slice(0, n);
@@ -2312,9 +2381,9 @@ var DOPPI = { firma: '', gruppi: [], forse: [] };
 var _indice = { firma: '', mappa: {} };
 function chiaviIndice(nome){ var a = DUP.analizza(nome), k = {}; a.core.forEach(function(t){ if(t.length >= 2 && !/^\d+$/.test(t)) k[t.slice(0, 3)] = 1; }); return Object.keys(k); }
 function indiceCatalogo(){
-  var f = CAT.length + '|' + (CAT[0] ? CAT[0].id : '') + '|' + (CAT.length ? CAT[CAT.length - 1].id : '') + '|' + DOPPI_ver;
+  var f = CAT.length + '|' + (CAT[0] ? CAT[0].id : '') + '|' + (CAT.length ? CAT[CAT.length - 1].id : '') + '|' + DOPPI_ver + '|' + _NOMI_VER;
   if(_indice.firma === f) return _indice.mappa;
-  var m = {}; CAT.forEach(function(p){ chiaviIndice(p.name).forEach(function(k){ (m[k] = m[k] || []).push(p); }); });
+  var m = {}; CAT.forEach(function(p){ var vis = {}; nomiDi(p).forEach(function(n){ chiaviIndice(n).forEach(function(k){ if(vis[k]) return; vis[k] = 1; (m[k] = m[k] || []).push(p); }); }); });
   _indice = { firma: f, mappa: m }; return m;
 }
 var DOPPI_ver = 0;
@@ -2329,14 +2398,14 @@ function segnatiDiversi(){ return docDati('or8_conf').nonDoppioni || {}; }
 function confrontaProdotti(a, b){
   if(settoreDi(a) !== settoreDi(b)) return { livello: null, motivo: 'reparti diversi' };
   if(segnatiDiversi()[coppia(a.id, b.id)]) return { livello: null, motivo: 'segnati da te come diversi' };
-  return DUP.confronta(a.name, b.name, { prezziA: a.prices, prezziB: b.prices });
+  return DUP.confronta(nomeTecnico(a), nomeTecnico(b), { prezziA: a.prices, prezziB: b.prices });
 }
 // Quanto due nomi concordano su formato, pezzi, peso, contenitore (serve a scegliere tra più candidati)
 function accordo(nome, p){
-  var A = DUP.analizza(nome), B = DUP.analizza(p.name), s = 0;
+  var A = DUP.analizza(nome), B = DUP.analizza(nomeTecnico(p)), s = 0;
   if(A.vol != null && A.vol === B.vol) s += 2; if(A.pack != null && A.pack === B.pack) s += 2;
   if(A.peso != null && A.peso === B.peso) s += 1; if(A.cont && A.cont === B.cont) s += 1;
-  if(norm(nome) === norm(p.name)) s += 5;
+  if(nomiDi(p).some(function(n){ return norm(nome) === norm(n); })) s += 5;
   return s;
 }
 /* Cerca nel catalogo lo stesso prodotto. o: { forn, prezzo, prezzi, settore, lista, escludi }
@@ -2349,7 +2418,7 @@ function trovaUguale(nome, o){
   lista.forEach(function(p){
     if(o.escludi && o.escludi.indexOf(p.id) >= 0) return;
     if(o.settore && settoreDi(p) !== o.settore) return;
-    var r = DUP.confronta(nome, p.name, { prezziA: prezzi, prezziB: p.prices });
+    var r = confrontaNomi(nome, p, { prezziA: prezzi, prezziB: p.prices });
     if(r.livello === 'sicuro') sic.push({ p: p, a: accordo(nome, p), r: r }); else if(r.livello === 'probabile') forse.push({ p: p, a: accordo(nome, p), r: r });
   });
   sic.sort(function(x, y){ return y.a - x.a || Object.keys(y.p.prices || {}).length - Object.keys(x.p.prices || {}).length; });
@@ -2694,7 +2763,7 @@ async function caricaMemoriaFatture(forza){
   return MEMF;
 }
 // prodotti del codice compatibili con le descrizioni viste in fattura (un formato diverso esclude)
-function idsDelCodice(k, e){ var descr = Object.keys(e.descr || {}); return Object.keys(e.ids).map(Number).filter(function(i){ return CATMAP[i] && !negato(k, null, i) && !descr.some(function(d){ return formatoDiverso(CATMAP[i].name, d); }); }); }
+function idsDelCodice(k, e){ var descr = Object.keys(e.descr || {}); return Object.keys(e.ids).map(Number).filter(function(i){ return CATMAP[i] && !negato(k, null, i) && !descr.some(function(d){ return formatoDiverso(nomeTecnico(CATMAP[i]), d); }); }); }
 function indicizzaMemoria(){
   var cod = {}, st = {}, ds = {};
   Object.keys(MEMF.righe).forEach(function(id){
@@ -2718,7 +2787,7 @@ function indicizzaMemoria(){
     var x = MEMF.righe[id], p = x.p != null ? CATMAP[x.p] : null; if(!p || ver[id] || (x.t && x.t < lim)) return;
     if(!/approved|matched_auto/.test(x.s) || /a mano/i.test(x.n)) return;
     var k = norm(x.d) + '|' + x.p; if(visti[k]) return;
-    var mot = formatoDiverso(p.name, x.d) || (negato(null, x.d, x.p) ? 'hai detto che non è questo prodotto' : '');
+    var mot = formatoDiverso(nomeTecnico(p), x.d) || (negato(null, x.d, x.p) ? 'hai detto che non è questo prodotto' : '');
     if(!mot){ var fr = risolviFornitore(x.f), kc = fr && fr.nome ? chiaveCod(fr.nome, x.c) : ''; var sc = (conf().codici || {})[kc]; if(kc && sc != null && sc !== x.p && CATMAP[sc]) mot = 'il codice ' + x.c + ' è di «' + nomeBreve(CATMAP[sc].name, 40) + '»'; }
     if(mot){ visti[k] = 1; MEMF.sospetti.push({ id: +id, forn: x.f, descr: x.d, pid: x.p, prezzo: x.v, data: x.t, motivo: mot }); }
   });
@@ -2773,7 +2842,7 @@ function coerenzaPrezzo(p, forn, prezzo){
   }
   var q = prezzo / rif, lo = larga ? 0.5 : 0.65, hi = larga ? 2 : 1.5;
   if(q >= lo && q <= hi) return { stato: 'ok', q: q, rif: rif, da: da };
-  var pz = (typeof DUP !== 'undefined' ? DUP.analizza(p.name).pack : null);
+  var pz = (typeof DUP !== 'undefined' ? DUP.analizza(nomeTecnico(p)).pack : null);
   var perPezzo = pz > 1 && Math.abs(q * pz - 1) < 0.12, perCartone = pz > 1 && Math.abs(q / pz - 1) < 0.12;
   return { stato: 'no', q: q, rif: rif, da: da, perPezzo: perPezzo, perCartone: perCartone };
 }
@@ -2811,8 +2880,8 @@ function valutaCandidato(r, forn, p, ctx){
       pro.push({ k: 'descr', t: 'stessa descrizione già confermata da ' + forn + (r.cod_articolo && vecchi.length && !(c && c.id === p.id) ? ' (il fornitore ha cambiato codice: prima ' + ed.cod[vecchi[0]] + ')' : '') }); forte = true;
     }
   }
-  var d = DUP.confronta(desc, p.name, {});
-  if(d.livello === 'sicuro'){ pro.push({ k: 'nome', t: 'stesso prodotto nel nome' }); forte = true; }
+  var d = confrontaNomi(desc, p, {});
+  if(d.livello === 'sicuro'){ pro.push({ k: 'nome', t: 'stesso prodotto nel nome' + (d.nomeUsato && d.nomeUsato !== p.name ? ' originale' : '') }); forte = true; }
   else if(d.livello === 'probabile') pro.push({ k: 'simile', t: 'nome simile (' + d.motivo + ')' });
   else if(MOTIVI_DIVERSI.test(d.motivo || '')) contro.push({ k: 'attributi', t: d.motivo, duro: true });
   else if(ctx.simileId === p.id && !paroleInContrasto(d.motivo)) pro.push({ k: 'simile', t: 'il nome più simile nel catalogo' });
@@ -2860,7 +2929,7 @@ function riconosciRiga(r, forn, ctx){
   var cs = candidati(desc, CAT, 6, forn); cs.filter(function(x){ return x.s >= 30; }).forEach(function(x){ metti(x.c); });
   // il più simile per distacco netto sugli altri è un indizio (mai da solo una prova)
   if(cs[0] && cs[0].s >= 30 && (!cs[1] || cs[0].s >= 1.6 * cs[1].s)) ctx.simileId = cs[0].c.id;
-  Object.keys(ctx.ordinati).forEach(function(i){ var p = CATMAP[i]; if(p && DUP.confronta(desc, p.name, {}).livello) metti(p); });
+  Object.keys(ctx.ordinati).forEach(function(i){ var p = CATMAP[i]; if(p && confrontaNomi(desc, p, {}).livello) metti(p); });
   if(ctx.extra) ctx.extra.forEach(metti);
   var val = Object.keys(lista).map(function(i){ return valutaCandidato(r, forn, lista[i], ctx); }).filter(function(v){ return !v.contro.some(function(c){ return c.k === 'no'; }); });
   function forza(v){ var s = 0; v.pro.forEach(function(x){ s += { codice: 50, alias: 40, descr: 40, nome: 30, ia: 30, simile: 12, prezzo: 15, ordine: 15 }[x.k] || 0; }); v.contro.forEach(function(x){ s -= x.duro ? 60 : 25; }); return s; }
@@ -3008,7 +3077,7 @@ function filtraProdotti(){
     var f = fornDi(q);
     if(f) l = l.filter(function(p){ return prezzoDi(p, f.nome) != null; });
     else if(/^\d{8,14}$/.test(q)) l = l.filter(function(p){ return barcodeHa(p, q); });
-    else l = l.filter(function(p){ return cercaTutte(p.name + ' ' + (p.conf || '') + ' ' + catDi(p) + ' ' + fornitoriTesto(p), q); });
+    else l = l.filter(function(p){ return cercaTutte(testoNomi(p) + ' ' + (p.conf || '') + ' ' + catDi(p) + ' ' + fornitoriTesto(p), q); });
     var qn = norm(q);
     l.sort(function(a, b){ var sa = norm(a.name).indexOf(qn) === 0, sb = norm(b.name).indexOf(qn) === 0; if(sa !== sb) return sa ? -1 : 1; return a.name.localeCompare(b.name, 'it'); });
   } else l = l.slice().sort(function(a, b){ var pa = preferito(a.id), pb = preferito(b.id); if(pa !== pb) return pa ? -1 : 1; return a.name.localeCompare(b.name, 'it'); });
@@ -3310,6 +3379,12 @@ function renderScheda(){
   // Dati
   h += '<div class="sec-title">Dati del prodotto' + (ro ? '' : '<button class="lnk" onclick="modificaDati(' + p.id + ')">Modifica</button>') + '</div><div class="grp">' +
     [['Nome', p.name], ['Confezione', p.conf], ['Categoria', catDi(p)], ['Reparto', repartiDi(p).join(' + ')], ['IVA', p.iva ? p.iva + '%' : ''], ['Codici a barre', barcodeLista(p).join(', ')]].map(function(x){ return '<div class="row"><div class="row-main row-s" style="margin:0">' + x[0] + '</div><div class="row-r" style="color:var(--ink);max-width:62%;overflow:hidden;text-overflow:ellipsis">' + esc(x[1] || '—') + '</div></div>'; }).join('') + '</div>';
+  // Nomi per fatture e fornitori (v8.8.0)
+  var origs = nomiOriginali(p), daF = nomiDaFatture(p).filter(function(x){ return !nomiDi(p).some(function(n){ return norm(n) === norm(x.d); }); }).slice(0, 4);
+  h += '<div class="sec-title">Nomi in fattura e dai fornitori' + (ro ? '' : '<button class="lnk" onclick="aggiungiNomeDaScheda()">+ nome</button>') + '</div><div class="grp">' +
+    (origs.length ? origs.map(function(n, i){ return '<div class="row"><div class="row-main"><div class="row-t" style="font-size:14px;word-break:break-word">' + esc(n) + '</div><div class="row-s">' + (i === 0 ? 'nome originale · ' : '') + 'riconosce fatture e richieste con questo nome</div></div>' + (ro ? '' : '<button class="more-b" aria-label="Togli" onclick="togliNomeOriginale(' + p.id + ',' + i + ')">✕</button>') + '</div>'; }).join('')
+      : '<div class="row"><div class="row-main row-s">Se lo rinomini (Modifica), il nome di adesso resta qui: fatture e fornitori continuano a riconoscerlo.</div></div>') +
+    (ro ? '' : daF.map(function(x){ return '<button class="row" data-n="' + esc(x.d) + '" onclick="aggiungiNomeOriginale(' + p.id + ',this.dataset.n).then(renderScheda)"><div class="row-main"><div class="row-t" style="font-size:13.5px;word-break:break-word">' + esc(x.d) + '</div><div class="row-s">visto in fattura' + (x.c ? ' · cod. ' + esc(x.c) : '') + ' · tocca per tenerlo come nome</div></div><span class="chev">+</span></button>'; }).join('')) + '</div>';
   // Storia acquisti: richiesta → ordine → fattura
   h += '<div class="sec-title">Storia acquisti</div><div id="storiaAcq"><div class="grp"><div class="row"><div class="row-main row-s">Carico…</div></div></div></div>';
   h += '<div class="sec-title">Modifiche al listino</div><div class="grp" id="storPrezzi"><div class="row"><div class="row-main row-s">Carico…</div></div></div>';
@@ -3459,7 +3534,7 @@ function formProdotto(p, opz){
   var iva = String(p.iva || (nuovo ? pr.iva : '') || '22');
   var spiega = nuovo && pr.simili.length ? '<div class="hint" style="margin:-4px 2px 10px">Ho proposto reparto, categoria, confezione e IVA guardando i prodotti simili: ' + pr.simili.map(function(n){ return esc(nomeBreve(n, 34)); }).join(', ') + '. Controlla e cambia se serve.</div>'
     : nuovo && pr.catDaFornitore ? '<div class="hint" style="margin:-4px 2px 10px">Nessun prodotto simile in catalogo: ho proposto la categoria che usi di più per ' + (opz.forn ? esc(opz.forn) : 'questo reparto') + '. Controlla e cambia se serve.</div>' : '';
-  return '<div class="field"><label>Nome</label><input class="inp" id="fpN" autocapitalize="characters" value="' + esc(p.name || '') + '"' + (nuovo ? ' onchange="fpRiproponi()"' : '') + '></div>' + spiega +
+  return '<div class="field"><label>Nome</label><input class="inp" id="fpN" autocapitalize="characters" value="' + esc(p.name || '') + '"' + (nuovo ? ' onchange="fpRiproponi()"' : '') + '>' + (nuovo ? '' : '<div class="hint" style="font-size:12.5px;margin-top:5px">Chiamalo come preferisci: il nome di prima resta tra i nomi in fattura, così fatture e fornitori lo riconoscono ancora.</div>') + '</div>' + spiega +
     '<div class="field"><label>Reparto principale</label><div class="seg" id="fpR">' + SETTORI_BASE.map(function(s){ return '<button type="button" class="seg-b' + (settore === s ? ' active' : '') + '" onclick="fpReparto(this)">' + s + '</button>'; }).join('') + '</div>' +
       '<div class="row-s" style="font-size:12.5px;margin:8px 2px 6px">Compare anche in (tocca per aggiungere):</div><div class="chips" id="fpRx" style="flex-wrap:wrap;gap:6px">' + fpChipExtra(settore, p.settori_extra || []) + '</div></div>' +
     '<div class="field"><label>Categoria</label><select class="inp" id="fpKs" onchange="fpCategoria()">' + (cat ? '' : '<option value="">Scegli…</option>') + opzioni(cats, cat, '+ Altra categoria…') + '</select><input class="inp hidden" id="fpK" autocapitalize="characters" placeholder="Nome della nuova categoria" style="margin-top:6px" value="' + esc(cat) + '"></div>' +
@@ -3522,7 +3597,13 @@ async function salvaDati(id){
   var p = CATMAP[id], camb = {};
   Object.keys(c).forEach(function(k){ if(String(c[k] || '') !== String(p[k] || '')) camb[k] = c[k]; });
   if(!Object.keys(camb).length){ chiudiSheet('shDati'); return; }
-  try{ await aggiornaProdotto(id, camb); chiudiSheet('shDati'); renderScheda(); aggiornaRiga(id); toast('Salvato ✓'); }catch(e){ toast('⚠️ ' + e.message); }
+  var vecchioNome = p.name, rinominato = camb.name && norm(camb.name) !== norm(vecchioNome);
+  try{
+    await aggiornaProdotto(id, camb);
+    if(rinominato) await ricordaNomeOriginale(id, vecchioNome, camb.name);
+    chiudiSheet('shDati'); renderScheda(); aggiornaRiga(id);
+    toast(rinominato ? 'Rinominato ✓ «' + nomeBreve(vecchioNome, 28) + '» resta tra i nomi in fattura' : 'Salvato ✓', { durata: rinominato ? 3500 : 1500 });
+  }catch(e){ toast('⚠️ ' + e.message); }
 }
 function usaEsistenteNP(){ var p = window._npEsistente, cb = window._npOnCreato, n = document.getElementById('fpN'); if(n && n.value) salvaAlias(n.value, p.id); chiudiSheet('shNP'); if(!p) return; if(cb) cb(p); else apriProdotto(p.id); }
 function apriNuovoProdotto(nome, opz){
@@ -3676,7 +3757,7 @@ function testoOrdine(forn, items, nota, totale, conPrezzi, idOrdine){
   var oggi = new Date(idOrdine || Date.now()).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric' }), az = conf().azienda || {};
   // il riferimento aiuta il fornitore a citarlo in fattura: così l'abbinamento ordine ↔ fattura è sicuro
   var l = ['Buongiorno *' + forn + '*,', 'vi inviamo l\'ordine di ' + (az.nome || 'Caffetteria Ceraldi') + ' del ' + oggi + '.', 'Rif. ordine: *' + codiceOrdine(idOrdine || Date.now()) + '* (vi preghiamo di riportarlo in fattura)', '', '*PRODOTTI RICHIESTI:*'];
-  items.forEach(function(i){ l.push('• ' + i.name + (i.conf ? ' (' + i.conf + ')' : '') + ' x' + i.qty + (conPrezzi && i.price ? ' = EUR ' + (i.price * i.qty).toFixed(2) : '')); if(i.note) l.push('   📝 _' + i.note + '_'); });
+  items.forEach(function(i){ l.push('• ' + i.name + (i.rif ? ' [' + i.rif + ']' : '') + (i.conf ? ' (' + i.conf + ')' : '') + ' x' + i.qty + (conPrezzi && i.price ? ' = EUR ' + (i.price * i.qty).toFixed(2) : '')); if(i.note) l.push('   📝 _' + i.note + '_'); });
   if(conPrezzi && totale){ l.push('------------------'); l.push('*Totale indicativo: EUR ' + totale.toFixed(2) + '*'); }
   if(nota){ l.push(''); l.push('*📝 NOTA:* ' + nota); }
   l.push(''); l.push('Grazie per la disponibilità e buona giornata!'); l.push(az.nome || 'Caffetteria Ceraldi');
@@ -3686,6 +3767,7 @@ function snapshotOrdine(forn){
   var rr = righeDiForn(forn), nota = ((carr().note || {})[forn] || '').trim();
   var items = rr.map(function(x){
     var it = { id: x.r.id, name: x.r.nome, conf: x.r.conf || '', qty: x.r.qty, price: x.prezzo != null ? x.prezzo : 0, note: x.r.nota || '' };
+    var rf = x.r.id != null ? rifFornitore(CATMAP[x.r.id], forn) : ''; if(rf) it.rif = rf;
     var rich = (x.r.da || []).map(function(d){ return d.r; }).filter(Boolean); if(rich.length) it.rich = rich;
     if(x.r.sost) it.sost = x.r.sost;
     return it;
@@ -3782,7 +3864,7 @@ function creaPDF(forn, s, titolo){
     doc.setFont('helvetica', 'normal'); y += 7; }
   testata();
   s.items.forEach(function(i){
-    var righe = doc.splitTextToSize(i.name + (i.note ? '  — ' + i.note : ''), cp ? 100 : 130);
+    var righe = doc.splitTextToSize(i.name + (i.rif ? ' [' + i.rif + ']' : '') + (i.note ? '  — ' + i.note : ''), cp ? 100 : 130);
     if(y + righe.length * 4.5 > 275){ doc.addPage(); y = 20; testata(); }
     doc.setFontSize(9.5); doc.text(righe, col[0], y);
     if(cp){ doc.text(String(i.conf || ''), col[1], y); doc.text(String(i.qty), col[2], y); doc.text(i.price ? i.price.toFixed(2) : '—', col[3], y, { align: 'right' }); doc.text(i.price ? (i.price * i.qty).toFixed(2) : '—', col[4], y, { align: 'right' }); }
@@ -4792,7 +4874,7 @@ function rigaVariazione(r){
   var giorni = r.data_fattura ? (Date.now() - Date.parse(r.data_fattura)) / 86400000 : 0, vecchia = giorni > 150;
   // le prove: cosa dice che è lui, cosa no
   var ev = typeof verificaCollegamento === 'function' ? verificaCollegamento(r) : null, avvisi = [];
-  var cf = typeof DUP !== 'undefined' ? DUP.confronta(p.name, descrPulita(r.descrizione)) : null, diff = cf && cf.livello !== 'sicuro' && /in più: (.+)/.exec(cf.motivo || '');
+  var cf = typeof DUP !== 'undefined' ? confrontaNomi(descrPulita(r.descrizione), p, {}) : null, diff = cf && cf.livello !== 'sicuro' && /in più: (.+)/.exec(cf.motivo || '');
   if(ev) ev.contro.forEach(function(c){ avvisi.push(c.t.charAt(0).toUpperCase() + c.t.slice(1) + '.'); });
   if(diff && !(ev && ev.contro.some(function(c){ return c.k === 'ia'; }))) avvisi.push('Il nome non è identico: <b>' + esc(diff[1]) + '</b> c\'è solo da una parte.');
   else if(cf && !cf.livello && !(ev && (ev.forte || ev.contro.length))) avvisi.push('Il nome in fattura è abbastanza diverso da quello del catalogo.');
@@ -4869,7 +4951,7 @@ function pfRighe(id, l){
   var r = PF.find(function(x){ return x.id === id; }), f = r ? pfForn(r) : '', pr = r ? pfPrezzo(r) : 0;
   if(!l.length) return '<div class="row-s" style="padding:8px 4px">Nessun prodotto trovato.</div>';
   return '<div class="grp">' + l.map(function(p){
-    var a = prezzoDi(p, f), fd = r ? formatoDiverso(p.name, r.descrizione) : '', m = migliore(p), fo = pfFormato(p.name), c = (typeof CTX !== 'undefined' && CTX.per) ? CTX.per[p.id] : null;
+    var a = prezzoDi(p, f), fd = r ? formatoDiverso(nomeTecnico(p), r.descrizione) : '', m = migliore(p), fo = pfFormato(nomeTecnico(p)), c = (typeof CTX !== 'undefined' && CTX.per) ? CTX.per[p.id] : null;
     // confronto col prezzo in fattura: stesso fornitore prima, altrimenti il migliore del catalogo
     var rif = a != null ? a : (m.forn ? m.prezzo : null), d = rif && pr ? (pr - rif) / rif * 100 : null;
     var conf = d == null ? '' : Math.abs(d) < 1 ? '<span class="bdg g">stesso prezzo</span>' : '<span class="bdg ' + (Math.abs(d) <= 15 ? 'n' : 'o') + '">' + (d > 0 ? 'in fattura +' : 'in fattura ') + d.toFixed(1).replace('.', ',') + '%</span>';
@@ -5177,7 +5259,7 @@ function listaMagazzino(){
   if(VM.filtro === 'sotto') l = l.filter(sottoScorta);
   else if(VM.filtro === 'senza') l = l.filter(function(p){ return p.scorta_min == null; });
   else if(VM.filtro === 'contati') l = l.filter(function(p){ return p.giacenza != null; });
-  if(VM.q) l = l.filter(function(p){ return cercaTutte(p.name + ' ' + catDi(p), VM.q); });
+  if(VM.q) l = l.filter(function(p){ return cercaTutte(testoNomi(p) + ' ' + catDi(p), VM.q); });
   return l.slice().sort(function(a, b){ return catDi(a).localeCompare(catDi(b), 'it') || a.name.localeCompare(b.name, 'it'); });
 }
 function renderMagazzino(){
