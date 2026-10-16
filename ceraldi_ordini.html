@@ -139,6 +139,7 @@ button.row:active{background:var(--surface2)}
 .pr-name{font-size:14.5px;font-weight:700;line-height:1.28;word-break:break-word}
 .pr-name mark{background:rgba(0,122,255,.14);color:inherit;border-radius:3px;padding:0 1px}
 .pr-meta{font-size:12px;color:var(--ink3);margin-top:2px}
+.pr-orig{font-size:11.5px;color:var(--ink2);margin-top:2px;word-break:break-word;line-height:1.3}.pr-orig i{font-style:normal;font-size:10px;font-weight:700;letter-spacing:.3px;color:var(--ink3);text-transform:uppercase;margin-right:4px}
 .pr-res{margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:0}
 .pr-side{flex-shrink:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px 12px 8px 4px;gap:3px}
 .pr-side label{font-size:9.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--ink3)}
@@ -423,7 +424,7 @@ html[data-theme="dark"] .todo-ft{background:rgba(255,255,255,.03)}
 </nav>
 
 <script>
-var APP_VERSION='8.8.0';
+var APP_VERSION='8.8.1';
 var BUILD_VERSION=APP_VERSION, BUILD_NUM=APP_VERSION;
 var APP={key:'ordini',nome:'Ordini',versione:APP_VERSION,authKey:'or_auth_v2',oldAuthKey:'ceraldi_ordini_auth_session',
   markBg:'linear-gradient(145deg,#FFC04D 0%,#FF9F0A 50%,#C2410C 100%)',
@@ -2125,6 +2126,9 @@ function confrontaNomi(nome, p, opz){
   return best || DUP.confronta(nome, p.name, opz || {});
 }
 function testoNomi(p){ return nomiDi(p).join(' '); }
+// il nome originale si vede sempre sotto il tuo nome, ovunque compare il prodotto
+function nomeOriginale(p){ var o = nomiOriginali(p); return o.length && norm(o[0]) !== norm(p.name) ? o[0] : ''; }
+function origHtml(p, q){ var o = nomeOriginale(p); return o ? '<div class="pr-orig"><i>orig.</i>' + (q ? evidenzia(o, q) : esc(o)) + '</div>' : ''; }
 function aliasNorm(s){ return norm(s); }
 function aliasDi(nome){
   var k = aliasNorm(nome), m = docDati('or8_conf').alias || {}, id = m[k] != null ? m[k] : ALIAS_TAB[k];
@@ -2148,8 +2152,10 @@ async function ricordaNomeOriginale(id, vecchio, nuovo){
   vecchio = String(vecchio || '').trim(); if(!vecchio) return;
   await docModifica('or8_conf', function(d){
     d.nomiOrig = d.nomiOrig || {};
-    var l = (d.nomiOrig[id] || []).filter(function(n){ return norm(n) !== norm(vecchio) && norm(n) !== norm(nuovo || ''); });
-    d.nomiOrig[id] = [vecchio].concat(l).slice(0, 8);
+    // il primo resta sempre il nome originale (anche se poi torni a chiamarlo così); gli altri nomi di prima si aggiungono dopo
+    var l = (d.nomiOrig[id] || []).slice();
+    if(!l.some(function(n){ return norm(n) === norm(vecchio); })) l.push(vecchio);
+    d.nomiOrig[id] = l.slice(0, 8);
   }, true);
   salvaAlias(vecchio, id); _NOMI_VER++;
 }
@@ -3104,7 +3110,7 @@ function rigaProdotto(p){
   var dx = r ? '<span class="stp" onclick="event.stopPropagation()"><button aria-label="Meno" onclick="cambiaQ(\'p' + p.id + '\',-1)">−</button><b class="tq" data-q="p' + p.id + '" onclick="chiediQuantita(\'p' + p.id + '\')">' + r.qty + '</b><button aria-label="Più" onclick="cambiaQ(\'p' + p.id + '\',1)">+</button></span>'
     : (U.lettura ? '' : '<button class="add-b" aria-label="Aggiungi" onclick="event.stopPropagation();aggiungi(' + p.id + ')">+</button>');
   return '<div class="pr' + (r ? ' on' : '') + '" id="pr-' + p.id + '"><span class="pr-stripe"></span><div class="pr-main" onclick="apriProdotto(' + p.id + ')">' +
-    '<div class="pr-name">' + evidenzia(p.name, VIEW.q) + '</div><div class="pr-meta">' + esc(meta) + '</div>' + (badges ? '<div class="pr-res">' + badges + '</div>' : '') + '</div>' +
+    '<div class="pr-name">' + evidenzia(p.name, VIEW.q) + '</div>' + origHtml(p, VIEW.q) + '<div class="pr-meta">' + esc(meta) + '</div>' + (badges ? '<div class="pr-res">' + badges + '</div>' : '') + '</div>' +
     '<div class="pr-price"><div style="text-align:right"><div class="pp">' + (b.forn ? eur(b.prezzo) : '—') + '</div><div class="ps">' + esc(b.forn || 'nessun fornitore') + '</div></div>' + dx + '</div></div>';
 }
 function aggiornaRiga(id){ var el = document.getElementById('pr-' + id), p = CATMAP[id]; if(el && p){ var t = document.createElement('div'); t.innerHTML = rigaProdotto(p); el.replaceWith(t.firstChild); } }
@@ -3348,7 +3354,7 @@ var _schedaId = null;
 function apriProdotto(id){
   var p = CATMAP[id]; if(!p) return;
   _schedaId = id;
-  apriSheet('shProd', { titolo: nomeBreve(p.name, 40), sotto: esc([p.conf, catDi(p), repartiDi(p).join(' + ')].filter(Boolean).join(' · ')), corpo: '<div id="prodBody"></div>', piede: '<div id="prodPiede"></div>', alto: true, onChiudi: function(){ _schedaId = null; } });
+  apriSheet('shProd', { titolo: nomeBreve(p.name, 40), sotto: (nomeOriginale(p) ? 'orig. ' + esc(nomeOriginale(p)) + '<br>' : '') + esc([p.conf, catDi(p), repartiDi(p).join(' + ')].filter(Boolean).join(' · ')), corpo: '<div id="prodBody"></div>', piede: '<div id="prodPiede"></div>', alto: true, onChiudi: function(){ _schedaId = null; } });
   renderScheda();
 }
 function renderScheda(){
@@ -3378,11 +3384,11 @@ function renderScheda(){
     '<div class="row"><div class="row-ico ic-r">⚠️</div><div class="row-main"><div class="row-t">Scorta minima</div><div class="row-s">Sotto questa quantità va riordinato · la usa anche Richieste</div></div><input class="num-in' + (p.scorta_min != null ? ' filled' : '') + '" inputmode="numeric" value="' + (p.scorta_min == null ? '' : p.scorta_min) + '" placeholder="–" ' + (ro ? 'disabled' : '') + ' onchange="salvaNumero(' + p.id + ',\'scorta_min\',this)"></div></div>';
   // Dati
   h += '<div class="sec-title">Dati del prodotto' + (ro ? '' : '<button class="lnk" onclick="modificaDati(' + p.id + ')">Modifica</button>') + '</div><div class="grp">' +
-    [['Nome', p.name], ['Confezione', p.conf], ['Categoria', catDi(p)], ['Reparto', repartiDi(p).join(' + ')], ['IVA', p.iva ? p.iva + '%' : ''], ['Codici a barre', barcodeLista(p).join(', ')]].map(function(x){ return '<div class="row"><div class="row-main row-s" style="margin:0">' + x[0] + '</div><div class="row-r" style="color:var(--ink);max-width:62%;overflow:hidden;text-overflow:ellipsis">' + esc(x[1] || '—') + '</div></div>'; }).join('') + '</div>';
+    [['Nome', p.name]].concat(nomeOriginale(p) ? [['Nome originale', nomeOriginale(p)]] : []).concat([['Confezione', p.conf], ['Categoria', catDi(p)], ['Reparto', repartiDi(p).join(' + ')], ['IVA', p.iva ? p.iva + '%' : ''], ['Codici a barre', barcodeLista(p).join(', ')]]).map(function(x){ return '<div class="row"><div class="row-main row-s" style="margin:0">' + x[0] + '</div><div class="row-r" style="color:var(--ink);max-width:62%;overflow:hidden;text-overflow:ellipsis">' + esc(x[1] || '—') + '</div></div>'; }).join('') + '</div>';
   // Nomi per fatture e fornitori (v8.8.0)
   var origs = nomiOriginali(p), daF = nomiDaFatture(p).filter(function(x){ return !nomiDi(p).some(function(n){ return norm(n) === norm(x.d); }); }).slice(0, 4);
   h += '<div class="sec-title">Nomi in fattura e dai fornitori' + (ro ? '' : '<button class="lnk" onclick="aggiungiNomeDaScheda()">+ nome</button>') + '</div><div class="grp">' +
-    (origs.length ? origs.map(function(n, i){ return '<div class="row"><div class="row-main"><div class="row-t" style="font-size:14px;word-break:break-word">' + esc(n) + '</div><div class="row-s">' + (i === 0 ? 'nome originale · ' : '') + 'riconosce fatture e richieste con questo nome</div></div>' + (ro ? '' : '<button class="more-b" aria-label="Togli" onclick="togliNomeOriginale(' + p.id + ',' + i + ')">✕</button>') + '</div>'; }).join('')
+    (origs.some(function(n){ return norm(n) !== norm(p.name); }) ? origs.map(function(n, i){ if(norm(n) === norm(p.name)) return ''; return '<div class="row"><div class="row-main"><div class="row-t" style="font-size:14px;word-break:break-word">' + esc(n) + '</div><div class="row-s">' + (i === 0 ? 'nome originale · ' : '') + 'riconosce fatture e richieste con questo nome</div></div>' + (ro ? '' : '<button class="more-b" aria-label="Togli" onclick="togliNomeOriginale(' + p.id + ',' + i + ')">✕</button>') + '</div>'; }).join('')
       : '<div class="row"><div class="row-main row-s">Se lo rinomini (Modifica), il nome di adesso resta qui: fatture e fornitori continuano a riconoscerlo.</div></div>') +
     (ro ? '' : daF.map(function(x){ return '<button class="row" data-n="' + esc(x.d) + '" onclick="aggiungiNomeOriginale(' + p.id + ',this.dataset.n).then(renderScheda)"><div class="row-main"><div class="row-t" style="font-size:13.5px;word-break:break-word">' + esc(x.d) + '</div><div class="row-s">visto in fattura' + (x.c ? ' · cod. ' + esc(x.c) : '') + ' · tocca per tenerlo come nome</div></div><span class="chev">+</span></button>'; }).join('')) + '</div>';
   // Storia acquisti: richiesta → ordine → fattura
@@ -3664,7 +3670,7 @@ function renderCarrello(){
       if(r.nota) bd += '<span class="bdg n">📝 ' + esc(nomeBreve(r.nota, 26)) + '</span>';
       if(r.sost) bd += '<span class="bdg b">🔄 al posto di ' + esc(nomeBreve(r.sost, 26)) + '</span>';
       else if(r.orig && r.id != null && norm(r.orig) !== norm(r.nome)) bd += '<span class="bdg n">scritto «' + esc(nomeBreve(r.orig, 24)) + '»</span>';
-      h += '<div class="cr"><div class="row-main" onclick="' + (r.id != null ? 'apriProdotto(' + r.id + ')' : '') + '"><div class="cr-t">' + esc(r.nome) + '</div><div class="cr-s">' + esc(r.conf || '') + (x.prezzo != null ? ' · ' + eur(x.prezzo) + ' cad.' : '') + '</div>' + (bd ? '<div class="pr-res">' + bd + '</div>' : '') + '</div>' +
+      h += '<div class="cr"><div class="row-main" onclick="' + (r.id != null ? 'apriProdotto(' + r.id + ')' : '') + '"><div class="cr-t">' + esc(r.nome) + '</div>' + (r.id != null ? origHtml(CATMAP[r.id]) : '') + '<div class="cr-s">' + esc(r.conf || '') + (x.prezzo != null ? ' · ' + eur(x.prezzo) + ' cad.' : '') + '</div>' + (bd ? '<div class="pr-res">' + bd + '</div>' : '') + '</div>' +
         '<div class="cr-r"><b class="tnum">' + (x.prezzo != null ? eur(x.sub) : '—') + '</b><div style="display:flex;gap:6px;align-items:center"><span class="stp"><button onclick="cambiaQ(\'' + x.k + '\',-1)">−</button><b class="tq" data-q="' + x.k + '" onclick="chiediQuantita(\'' + x.k + '\')">' + r.qty + '</b><button onclick="cambiaQ(\'' + x.k + '\',1)">+</button></span><button class="more-b" onclick="menuRiga(\'' + x.k + '\')">⋯</button></div></div></div>';
     });
     h += '</div>';
@@ -3715,7 +3721,7 @@ function apriSostituisci(k){
     corpo: impara + '<div class="sw"><span class="si">🔎</span><input id="sostQ" placeholder="Cerca nel catalogo e nei listini" oninput="sostCerca(\'' + k + '\')"></div><div id="sostRis">' + (l.length ? '<div class="sec-title">Simili</div>' : '') + sostRighe(k, l) + '</div>' });
   pickerListini('sostRis', r.orig || r.nome, function(id){ sostituisciRiga(k, id); });
 }
-function sostRighe(k, l){ return '<div class="grp">' + (l.length ? l.map(function(p){ var m = migliore(p); return '<button class="row" onclick="sostituisciRiga(\'' + k + '\',' + p.id + ')"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p.name) + '</div><div class="row-s">' + esc([p.conf, m.forn ? m.forn + ' ' + eur(m.prezzo) : ''].filter(Boolean).join(' · ')) + '</div></div><span class="chev">›</span></button>'; }).join('') : '<div class="row"><div class="row-main row-s">Scrivi per cercare.</div></div>') + '</div>'; }
+function sostRighe(k, l){ return '<div class="grp">' + (l.length ? l.map(function(p){ var m = migliore(p); return '<button class="row" onclick="sostituisciRiga(\'' + k + '\',' + p.id + ')"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p.name) + '</div>' + origHtml(p) + '<div class="row-s">' + esc([p.conf, m.forn ? m.forn + ' ' + eur(m.prezzo) : ''].filter(Boolean).join(' · ')) + '</div></div><span class="chev">›</span></button>'; }).join('') : '<div class="row"><div class="row-main row-s">Scrivi per cercare.</div></div>') + '</div>'; }
 function sostCerca(k){ var r = carr().righe[k], q = document.getElementById('sostQ').value; document.getElementById('sostRis').innerHTML = sostRighe(k, cercaCatalogo(q, 30).filter(function(p){ return !r || p.id !== r.id; })); pickerListini('sostRis', q, function(id){ sostituisciRiga(k, id); }); }
 function sostituisciRiga(k, id){
   var r = carr().righe[k], p = CATMAP[id]; if(!r || !p) return;
@@ -3739,7 +3745,7 @@ async function collegaProvvisorio(k){
     piede: '<button class="btn btn-s" onclick="chiudiSheet(\'shCol\');creaDaProvvisorio(\'' + k + '\')">Non c\'è: crea nuovo prodotto</button>' });
   pickerListini('colRis', r.orig || r.nome, function(id){ collegaA(k, id); });
 }
-function colRighe(k, l){ return '<div class="grp">' + (l.length ? l.map(function(p){ return '<button class="row" onclick="collegaA(\'' + k + '\',' + p.id + ')"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p.name) + '</div><div class="row-s">' + esc([p.conf, migliore(p).forn].filter(Boolean).join(' · ')) + '</div></div><span class="chev">›</span></button>'; }).join('') : '<div class="row"><div class="row-main row-s">Nessun prodotto simile.</div></div>') + '</div>'; }
+function colRighe(k, l){ return '<div class="grp">' + (l.length ? l.map(function(p){ return '<button class="row" onclick="collegaA(\'' + k + '\',' + p.id + ')"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p.name) + '</div>' + origHtml(p) + '<div class="row-s">' + esc([p.conf, migliore(p).forn].filter(Boolean).join(' · ')) + '</div></div><span class="chev">›</span></button>'; }).join('') : '<div class="row"><div class="row-main row-s">Nessun prodotto simile.</div></div>') + '</div>'; }
 function colCerca(k){ var q = document.getElementById('colQ').value; document.getElementById('colRis').innerHTML = colRighe(k, cercaCatalogo(q, 30)); pickerListini('colRis', q, function(id){ collegaA(k, id); }); }
 function collegaA(k, id){
   var r = carr().righe[k], p = CATMAP[id]; if(!r || !p) return;
@@ -4755,7 +4761,7 @@ function scegliPerRichiesta(k){
   document.getElementById('srRis').innerHTML = (l.length ? '<div class="sec-title">Più simili</div>' : '') + srRighe(k, l);
   pickerListini('srRis', it.name, function(id){ srScegli(k, id); });
 }
-function srRighe(k, l){ return '<div class="grp">' + l.map(function(p){ return '<button class="row" onclick="srScegli(\'' + k + '\',' + p.id + ')"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p.name) + '</div><div class="row-s">' + esc(p.conf || '') + '</div></div><span class="chev">›</span></button>'; }).join('') + '</div>'; }
+function srRighe(k, l){ return '<div class="grp">' + l.map(function(p){ return '<button class="row" onclick="srScegli(\'' + k + '\',' + p.id + ')"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p.name) + '</div>' + origHtml(p) + '<div class="row-s">' + esc(p.conf || '') + '</div></div><span class="chev">›</span></button>'; }).join('') + '</div>'; }
 function srCerca(k){ var q = document.getElementById('srQ').value; document.getElementById('srRis').innerHTML = srRighe(k, cercaCatalogo(q, 30)); pickerListini('srRis', q, function(id){ srScegli(k, id); }); }
 function srScegli(k, id){
   var a = k.split(':'), z = _itemRich(k); DF.ris[a[0]] = DF.ris[a[0]] || [];
@@ -4835,7 +4841,7 @@ function sezioneSospetti(){
     var p = CATMAP[x.pid], f = nomeFornitore(x.forn), att = prezzoDi(p, f), uguale = att != null && Math.abs(att - x.prezzo) < 0.01;
     return '<div class="todo-it"><div class="row-s" style="font-size:12px">' + esc(f) + (x.data ? ' · fattura del ' + esc(dataIt(x.data)) : '') + linkFattura({ id: x.id }) + '</div>' +
       '<div class="row-s" style="font-size:12px;margin-top:2px">In fattura</div><div class="row-t" style="font-size:14px">' + esc(x.descr) + ' <span class="muted tnum" style="font-weight:400">' + eur(x.prezzo) + '</span></div>' +
-      '<div class="row-s" style="font-size:12px;margin-top:4px">Era stato collegato a</div><div class="row-t" style="font-size:14px;font-weight:600">' + esc(p.name) + (att != null ? ' <span class="muted tnum" style="font-weight:400">' + eur(att) + '</span>' : '') + '</div>' +
+      '<div class="row-s" style="font-size:12px;margin-top:4px">Era stato collegato a</div><div class="row-t" style="font-size:14px;font-weight:600">' + esc(p.name) + (att != null ? ' <span class="muted tnum" style="font-weight:400">' + eur(att) + '</span>' : '') + '</div>' + origHtml(p) +
       '<div class="banner o" style="margin:8px 0 0;padding:8px 10px;font-size:12.5px"><span>⚠️</span><div>' + esc(x.motivo.charAt(0).toUpperCase() + x.motivo.slice(1)) + '.' + (uguale ? ' Il prezzo in catalogo (' + eur(att) + ') viene proprio da questa riga.' : '') + '</div></div>' +
       '<div style="font-weight:700;font-size:13.5px;margin-top:10px">Era lo stesso prodotto?</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">' +
       '<button class="btn-sm" onclick="esitoSospetto(' + x.id + ',true)">Sì, era giusto</button>' +
@@ -4887,7 +4893,7 @@ function rigaVariazione(r){
   return '<div class="todo-it">' +
     '<div class="row-s" style="font-size:12px">' + esc(f) + ' · fattura del ' + esc(dataIt(r.data_fattura)) + (r.qta ? ' · q.tà ' + num(r.qta) : '') + linkFattura(r) + '</div>' +
     '<div style="display:flex;gap:10px;margin-top:2px"><div class="row-main"><div class="row-s" style="font-size:12px">In fattura' + (r.cod_articolo ? ' · cod. ' + esc(r.cod_articolo) : '') + '</div><div class="row-t" style="font-size:14px">' + esc(descrPulita(r.descrizione)) + '</div></div><div style="text-align:right;flex-shrink:0"><b class="tnum" style="font-size:16px">' + eur(nuovo) + '</b>' + (v != null ? '<br><span class="' + (v > 0 ? 'var-up' : 'var-dn') + '" style="font-size:12px">' + (v > 0 ? '+' : '') + v.toFixed(1) + '%</span>' : '') + '</div></div>' +
-    '<div style="display:flex;gap:10px;margin-top:6px"><div class="row-main"><div class="row-s" style="font-size:12px">Nel catalogo</div><div class="row-t" style="font-size:14px;font-weight:600">' + esc(p.name) + '</div></div><div style="text-align:right;flex-shrink:0">' + (att != null ? '<span class="tnum muted" style="font-size:14px">' + eur(att) + '</span>' : '<span class="bdg b">nessun prezzo da ' + esc(f) + '</span>') + '</div></div>' +
+    '<div style="display:flex;gap:10px;margin-top:6px"><div class="row-main"><div class="row-s" style="font-size:12px">Nel catalogo</div><div class="row-t" style="font-size:14px;font-weight:600">' + esc(p.name) + '</div>' + origHtml(p) + '</div><div style="text-align:right;flex-shrink:0">' + (att != null ? '<span class="tnum muted" style="font-size:14px">' + eur(att) + '</span>' : '<span class="bdg b">nessun prezzo da ' + esc(f) + '</span>') + '</div></div>' +
     prove + (avvisi.length ? '<div class="banner o" style="margin:8px 0 0;padding:8px 10px;font-size:12.5px"><span>⚠️</span><div>' + (sicuro ? '' : '<b>Non sono sicuro che sia lui:</b><br>') + avvisi.join('<br>') + '</div></div>' : '') +
     (U.lettura ? '' : (certo
       // prodotto già certo (imparato dalle tue conferme o abbinato a mano): resta da decidere solo il prezzo
@@ -4957,7 +4963,7 @@ function pfRighe(id, l){
     var conf = d == null ? '' : Math.abs(d) < 1 ? '<span class="bdg g">stesso prezzo</span>' : '<span class="bdg ' + (Math.abs(d) <= 15 ? 'n' : 'o') + '">' + (d > 0 ? 'in fattura +' : 'in fattura ') + d.toFixed(1).replace('.', ',') + '%</span>';
     var ult = c && (c.ultimo_ordine || c.ultima_fattura) ? [c.ultimo_ordine, c.ultima_fattura].filter(Boolean).sort().pop() : null;
     var extra = [fo ? 'formato ' + fo : '', a == null && m.forn ? 'migliore: ' + m.forn + ' ' + eur(m.prezzo) : (m.forn && m.forn !== f && m.prezzo < (a || 0) - 0.01 ? 'da ' + m.forn + ' ' + eur(m.prezzo) : ''), ult ? 'ultimo acquisto ' + dataIt(ult) : ''].filter(Boolean);
-    return '<button class="row" onclick="associaPF(' + id + ',' + p.id + ')"' + (fd ? ' style="opacity:.55"' : '') + '><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p.name) + '</div>' +
+    return '<button class="row" onclick="associaPF(' + id + ',' + p.id + ')"' + (fd ? ' style="opacity:.55"' : '') + '><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p.name) + '</div>' + origHtml(p) + '' +
       '<div class="row-s">' + esc(p.conf || '') + (a != null ? ' · ' + esc(f) + ' ' + eur(a) : ' · nessun prezzo da ' + esc(f || 'questo fornitore')) + (fd ? ' · <span style="color:var(--orange-ink)">' + esc(fd) + '</span>' : '') + '</div>' +
       (conf || extra.length ? '<div class="row-s" style="font-size:12px;margin-top:3px">' + conf + (extra.length ? (conf ? ' ' : '') + esc(extra.join(' · ')) : '') + '</div>' : '') +
       '</div><span class="chev">›</span></button>';
