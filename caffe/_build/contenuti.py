@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Contenuti del sito di Ceraldi Caffè. Modifica qui i testi, poi esegui build.py.
-# Fatti sul bar: solo da fonti del bar (Instagram @ceraldicaffe, menu ceraldicaffe.qromo.it,
-# scheda Google). Fatti storici negli articoli: verificati sulle fonti elencate in ogni articolo.
+# Fatti sul bar: da Ceraldi (logo, menu ceraldicaffe.qromo.it, Instagram, scheda Google).
+# Foto: tutte di Ceraldi Caffè, prese dal menu online del bar.
 
 BASE = "https://valerioceraldi-hub.github.io/Ceraldi/caffe/"
 OGGI = "2026-10-18"
@@ -15,6 +15,8 @@ BAR = {
     "cap_citta": "80134 Napoli (NA)",
     "telefono": "081 552 3488",
     "tel_link": "+390815523488",
+    "cellulare": "328 438 8404",
+    "cell_link": "+393284388404",
     "whatsapp": "https://wa.me/390815523488",
     "orari": "Tutti i giorni, 6:30 – 20:30",
     "orari_en": "Every day, 6:30 am – 8:30 pm",
@@ -22,7 +24,9 @@ BAR = {
     "menu": "https://ceraldicaffe.qromo.it",
     "instagram": "https://www.instagram.com/ceraldicaffe/",
     "facebook": "https://www.facebook.com/ceraldicaffe",
-    "descrizione_google": "Pasticcini artigianali, buffet freddi e aperitivi in un elegante bar con specchi e sedie di pelle rossa.",
+    "google_recensioni": "https://search.google.com/local/reviews?placeid=ChIJj5ui8loIOxMRCpGd6YqmVy0",
+    "google_scrivi": "https://search.google.com/local/writereview?placeid=ChIJj5ui8loIOxMRCpGd6YqmVy0",
+    "tripadvisor": "https://www.tripadvisor.it/Restaurant_Review-g187785-d2695184-Reviews-Ceraldi_Caffe-Naples_Province_of_Naples_Campania.html",
 }
 
 # Specialità prese dal menu online del bar (senza prezzi: cambiano).
@@ -42,6 +46,14 @@ DOLCI_CASA = [
     ("Torta di mele", "Con mela Annurca IGP, crema pasticcera e cannella."),
     ("Sfogliata Santa Rosa", "La sfogliatella con crema e amarene, come nella ricetta delle origini."),
 ]
+COLAZIONE = [
+    ("Croissant", "Vuoto, alla crema, crema e amarena, cioccolato, albicocca, lampone, mela e cannella, limone."),
+    ("Croissant integrali e vegani", "Integrale vuoto, ai frutti di bosco, al miele; vegano vuoto."),
+    ("Croissant ischitano", "Doppio strato di sfoglia e pasta brioche, con crema e amarena."),
+    ("Brioche, kranz e pain au chocolat", "I classici della colazione all'italiana."),
+    ("Graffa napoletana", "Fritta e zuccherata, morbida come vuole la tradizione."),
+    ("Maritozzo e nuvoletta", "Brioche morbide ripiene di panna o di crema al latte."),
+]
 
 CAFFE_CASA_EN = [
     ("Caffè Ceraldi", "Hot chocolate at the bottom, coffee cream and fresh whipped cream."),
@@ -59,24 +71,29 @@ DOLCI_CASA_EN = [
     ("Torta di mele", "Annurca IGP apples, custard and cinnamon."),
     ("Sfogliata Santa Rosa", "Sfogliatella with custard and black cherries, like the original."),
 ]
+COLAZIONE_EN = [
+    ("Croissants", "Plain, custard, custard and black cherry, chocolate, apricot, raspberry, apple and cinnamon, lemon."),
+    ("Wholemeal and vegan croissants", "Plain wholemeal, berries, honey; plain vegan."),
+    ("Ischia-style croissant", "Puff pastry and brioche dough in one, with custard and black cherry."),
+    ("Brioche, kranz and pain au chocolat", "The classics of an Italian breakfast."),
+    ("Graffa napoletana", "Neapolitan fried sugar doughnut, soft and fragrant."),
+    ("Maritozzo and nuvoletta", "Soft buns filled with whipped cream or milk custard."),
+]
 
-# Crediti delle foto (Wikimedia Commons). Obbligatori per le licenze CC.
+# Foto di Ceraldi Caffè (dal menu online). larghezze disponibili, proporzioni.
 FOTO = {
-    "sfogliatella-riccia": {"alt": "Sfogliatella riccia napoletana tagliata a metà, con il ripieno di ricotta e canditi",
-        "autore": "Saggittarius A", "licenza": "CC BY-SA 4.0", "lic_url": "https://creativecommons.org/licenses/by-sa/4.0/",
-        "fonte": "https://commons.wikimedia.org/wiki/File:Sfogliatella_riccia_napoletana.jpg"},
-    "sfogliatella-frolla": {"alt": "Sfogliatella frolla napoletana con il ripieno in vista",
-        "autore": "Saggittarius A", "licenza": "CC BY-SA 4.0", "lic_url": "https://creativecommons.org/licenses/by-sa/4.0/",
-        "fonte": "https://commons.wikimedia.org/wiki/File:Sfogliatella_frolla_napoletana.jpg"},
-    "baba": {"alt": "Babà al rum lucidi di sciroppo",
-        "autore": "Marica Massaro", "licenza": "CC BY-SA 4.0", "lic_url": "https://creativecommons.org/licenses/by-sa/4.0/",
-        "fonte": "https://commons.wikimedia.org/wiki/File:Bab%C3%A0_rum.jpg"},
-    "pastiera": {"alt": "Pastiera napoletana intera con le strisce di pasta frolla incrociate",
-        "autore": "Mattia Luigi Nappi", "licenza": "CC BY-SA 3.0", "lic_url": "https://creativecommons.org/licenses/by-sa/3.0/",
-        "fonte": "https://commons.wikimedia.org/wiki/File:Pastiera_Napoletana.JPG"},
-    "zeppole": {"alt": "Zeppola di San Giuseppe con crema e amarena",
-        "autore": "Salvatore Capalbi", "licenza": "CC BY-SA 2.0", "lic_url": "https://creativecommons.org/licenses/by-sa/2.0/",
-        "fonte": "https://commons.wikimedia.org/wiki/File:Zeppole,_popular_pastries_eaten_in_Naples_on_Saint_Joseph%27s_Day.jpg"},
+    "sfogliatella-riccia": {"alt": "Sfogliatelle ricce di Ceraldi Caffè su un piattino", "w": [1024, 640], "r": (4, 3)},
+    "sfogliatella-frolla": {"alt": "Sfogliatella frolla di Ceraldi Caffè aperta, con il ripieno di ricotta", "w": [1024, 640], "r": (4, 3)},
+    "baba": {"alt": "Babà al rum di Ceraldi Caffè sul bancone", "w": [1024, 640], "r": (4, 3)},
+    "baba-amarena": {"alt": "Babà con crema e amarena di Ceraldi Caffè", "w": [1024, 640], "r": (4, 3)},
+    "pastiera": {"alt": "Fetta di pastiera napoletana di Ceraldi Caffè spolverata di zucchero a velo", "w": [1016, 640], "r": (4, 3)},
+    "zeppola": {"alt": "Zeppola di San Giuseppe di Ceraldi Caffè con crema e amarena", "w": [1024, 640], "r": (4, 3)},
+    "cestino": {"alt": "Il Cestino di Ceraldi Caffè: riccio di sfogliatella con chantilly e frutti di bosco", "w": [768, 480], "r": (3, 4)},
+    "babamisu": {"alt": "Babàmisù di Ceraldi Caffè", "w": [800, 480], "r": (1, 1)},
+    "pellecchiella": {"alt": "Torta Pellecchiella di Ceraldi Caffè con albicocche del Vesuvio", "w": [800, 480], "r": (1, 1)},
+    "squadra": {"alt": "La squadra di Ceraldi Caffè al bancone del bar in Piazza Carità", "w": [1600, 800], "r": (3, 2)},
+    "sala": {"alt": "La sala di Ceraldi Caffè con le poltroncine in pelle rossa e una colazione servita al tavolo", "w": [1024, 640], "r": (3, 2)},
+    "aperitivo": {"alt": "Aperitivo da Ceraldi Caffè: spritz e cocktail al tavolo", "w": [960, 640], "r": (4, 3)},
 }
 
 # ── Articoli ──────────────────────────────────────────────────────────
@@ -88,7 +105,7 @@ ARTICOLI = [
  "titolo_seo": "Il caffè napoletano: storia, rito e la cuccumella",
  "descrizione": "Tazzina calda, bicchiere d'acqua, la cuccumella e il cuppetiello: perché a Napoli il caffè è un rito che si ripete ogni giorno, al bar e a casa.",
  "dek": "Tazzina calda, un sorso d'acqua prima, due parole al bancone. Perché a Napoli il caffè si beve in un modo tutto suo.",
- "foto": None,
+ "foto": "sala",
  "lettura": 4,
  "corpo": """
 <p>A Napoli il caffè non si "prende": si fa una pausa. Dura pochi minuti, si ripete più volte al giorno e ha regole che nessuno ha mai scritto ma che tutti conoscono. Al bancone di un bar napoletano si capisce subito: si chiede il caffè, si scambiano due parole con il barista, si beve in piedi e si riparte.</p>
@@ -118,7 +135,7 @@ ARTICOLI = [
  "titolo_seo": "Caffè sospeso: cos'è e com'è nata la tradizione napoletana",
  "descrizione": "Pagare un caffè in più per chi verrà dopo: cos'è il caffè sospeso, da dove nasce e perché il 10 dicembre gli è dedicata una giornata.",
  "dek": "Si paga un caffè in più, per chi entrerà dopo e non potrà permetterselo. Un'abitudine piccola, nata nei bar di Napoli.",
- "foto": None,
+ "foto": "squadra",
  "lettura": 3,
  "corpo": """
 <p>Il caffè sospeso è semplice: chi entra al bar paga due caffè e ne beve uno. L'altro resta "in sospeso", pagato e in attesa di qualcuno che entrerà più tardi e chiederà se c'è un sospeso. Nessuno sa chi l'ha offerto, nessuno deve ringraziare.</p>
@@ -230,7 +247,7 @@ ARTICOLI = [
  "titolo_seo": "Zeppole di San Giuseppe: storia e tradizione napoletana",
  "descrizione": "Crema pasticcera, amarena e zucchero a velo: la storia delle zeppole di San Giuseppe, dal ricettario di Ippolito Cavalcanti del 1837 alla festa del papà.",
  "dek": "Una corona di pasta, crema pasticcera e un'amarena al centro. A Napoli il 19 marzo si festeggia così.",
- "foto": "zeppole",
+ "foto": "zeppola",
  "lettura": 3,
  "corpo": """
 <p>Il 19 marzo è San Giuseppe, ed è anche la festa del papà. A Napoli è soprattutto il giorno delle zeppole: anelli di pasta, crema pasticcera, un'amarena sciroppata e una nuvola di zucchero a velo.</p>
@@ -251,16 +268,230 @@ ARTICOLI = [
 },
 ]
 
+ARTICOLI += [
+{
+ "slug": "colazione-napoletana",
+ "titolo": "La colazione a Napoli: cornetto, sfogliatella o graffa?",
+ "titolo_seo": "Colazione a Napoli: cornetto, brioche, sfogliatella e caffè al bar",
+ "descrizione": "Come si fa colazione a Napoli: la colazione all'italiana al bancone con cornetto e cappuccino, la sfogliatella, la graffa e il caffè. Differenze tra cornetto, brioche e croissant.",
+ "dek": "In piedi al bancone, in pochi minuti, con il profumo del forno. Guida alla colazione napoletana, tra classici italiani e dolci della città.",
+ "foto": "sfogliatella-frolla",
+ "lettura": 4,
+ "corpo": """
+<p>In Italia la colazione al bar è un piccolo rito quotidiano: un cappuccino o un caffè, un cornetto caldo, due parole con il barista. A Napoli questo rito si arricchisce dei dolci della città, e la scelta al bancone diventa più difficile.</p>
+
+<h2>La colazione all'italiana</h2>
+<p>La colazione all'italiana è dolce e veloce. Al centro c'è il <strong>cornetto</strong>, vuoto o farcito con crema, cioccolato o marmellata, accompagnato da un cappuccino, un caffè o una spremuta. Accanto ci sono la <strong>brioche</strong>, più soffice e ricca di uova, e i lievitati sfogliati come il pain au chocolat e il kranz.</p>
+
+<h2>Cornetto, brioche o croissant?</h2>
+<p>Le parole cambiano da una regione all'altra. Al Nord molti chiamano "brioche" quello che al Centro e al Sud è il cornetto. Cornetto e croissant hanno un antenato comune, il <em>kipferl</em> viennese, ma sono diversi: il croissant francese non ha uova e ha più burro, il cornetto italiano ha un impasto arricchito con uova e burro, più morbido e profumato.</p>
+<p>Una leggenda racconta che il kipferl sia nato a Vienna nel 1683, per festeggiare la fine dell'assedio ottomano, con la forma della mezzaluna. È una bella storia, ma il kipferl è documentato già secoli prima.</p>
+
+<h2>La colazione napoletana</h2>
+<p>A Napoli al cornetto si affiancano i dolci della tradizione: la <a href="../sfogliatella/">sfogliatella</a> riccia o frolla, appena sfornata; la <strong>graffa</strong>, una ciambella fritta e zuccherata dall'impasto morbido; il <a href="../baba/">babà</a> per chi ama i sapori decisi fin dal mattino. E naturalmente il caffè, corto e denso, servito nella tazzina calda.</p>
+
+<h2>Come ordinare al bancone</h2>
+<ul>
+<li>Si ordina e si paga, spesso prima alla cassa e poi al banco.</li>
+<li>Il cappuccino è una bevanda del mattino: dopo pranzo si passa al caffè.</li>
+<li>Se c'è fila, si beve in piedi e si lascia il posto: la colazione al bar è rapida per definizione.</li>
+</ul>
+""",
+ "provare": [("Croissant", "vuoto, crema, crema e amarena, cioccolato, albicocca, integrali e vegani"), ("Graffa napoletana", "fritta e zuccherata"), ("Sfogliatella riccia e frolla", "calda, con il caffè"), ("Maritozzo", "brioche ripiena di panna")],
+},
+{
+ "slug": "pasticceria-artigianale",
+ "titolo": "La nostra pasticceria: produzione propria e ricette di famiglia",
+ "titolo_seo": "Pasticceria artigianale a Napoli: la produzione propria di Ceraldi Caffè",
+ "descrizione": "Da Ceraldi Caffè in Piazza Carità i dolci sono di produzione propria, fatti con ricette di famiglia custodite da oltre cento anni: sfogliatelle, babà, pastiera e creazioni della casa.",
+ "dek": "Quello che vedi in vetrina nasce da noi, con ricette di famiglia tramandate da oltre cento anni e custodite con cura.",
+ "foto": "cestino",
+ "lettura": 3,
+ "corpo": """
+<p>Da Ceraldi Caffè la pasticceria è di <strong>produzione propria</strong>. Sfogliatelle, babà, pastiere, zeppole, torte e pasticcini nascono da ricette di famiglia, tramandate da oltre cento anni e custodite con la stessa cura di allora. È il significato del nostro motto: <em>artigiani per passione</em>, dal 1973 in Piazza Carità.</p>
+
+<h2>Le ricette della tradizione</h2>
+<p>I classici napoletani seguono le ricette di sempre: la sfogliatella riccia e frolla con ricotta, semola, canditi e cannella; il babà bagnato al rum; la pastiera con grano, ricotta e fiori d'arancio; la zeppola di San Giuseppe con crema e amarena. Sono dolci che a Napoli tutti conoscono, e proprio per questo vanno fatti bene.</p>
+
+<h2>Le creazioni della casa</h2>
+<p>Accanto ai classici ci sono i dolci nati da Ceraldi, che uniscono la tradizione a ingredienti del territorio:</p>
+<ul>
+<li><strong>Cestino</strong>: il riccio della sfogliatella diventa un cesto croccante, farcito con chantilly e frutti di bosco.</li>
+<li><strong>Segreto amalfitano</strong>: babà al limoncello con un cuore di chantilly ai limoni di Amalfi.</li>
+<li><strong>Babàmisù</strong>: una cupola di babà con crema al mascarpone e caffè.</li>
+<li><strong>Pellecchiella</strong>: torta con le albicocche Pellecchielle del Vesuvio, presidio Slow Food.</li>
+<li><strong>Torta di mele</strong>: con mela Annurca IGP, crema pasticcera e cannella.</li>
+</ul>
+
+<h2>Anche al bancone</h2>
+<p>La stessa idea vale per i caffè della casa: il Caffè Ceraldi con cioccolata, crema di caffè e panna fresca, il Caffè Babà, il Michelino. Sono il modo più semplice per assaggiare la nostra pasticceria anche in una tazza.</p>
+""",
+ "provare": [("Cestino", "riccio della sfogliatella, chantilly e frutti di bosco"), ("Segreto amalfitano", "babà al limoncello e chantilly ai limoni di Amalfi"), ("Pellecchiella", "albicocche del Vesuvio, presidio Slow Food")],
+},
+{
+ "slug": "dolci-dei-conventi",
+ "titolo": "I dolci nati nei conventi di Napoli",
+ "titolo_seo": "Dolci napoletani nati nei conventi: storia e leggende",
+ "descrizione": "Sfogliatella, pastiera, roccocò, susamielli, raffioli: molti dolci napoletani sono nati nei conventi della città e della costiera. Ecco la loro storia.",
+ "dek": "Dietro molti dolci napoletani ci sono le cucine dei monasteri. Un viaggio tra suore pasticcere, ricette segrete e festività.",
+ "foto": None,
+ "lettura": 4,
+ "corpo": """
+<p>Per secoli i conventi sono stati tra i più grandi laboratori di pasticceria di Napoli. Le monache avevano tempo, ingredienti preziosi come zucchero, mandorle e spezie, e ricette custodite all'interno delle mura. Molti dei dolci che oggi troviamo nelle pasticcerie vengono da lì.</p>
+
+<h2>La sfogliatella di Santa Rosa</h2>
+<p>La storia più famosa è quella della <a href="../sfogliatella/">sfogliatella</a>, che la tradizione fa nascere nel Seicento nel monastero di Santa Rosa a Conca dei Marini, sulla Costiera Amalfitana. Da lì arrivò a Napoli all'inizio dell'Ottocento.</p>
+
+<h2>La pastiera di San Gregorio Armeno</h2>
+<p>Per la <a href="../pastiera/">pastiera</a> si indica spesso il convento di San Gregorio Armeno, nel centro antico. Le monache la preparavano nella settimana santa per le famiglie nobili. Allo stesso convento si attribuiscono altri dolci, come il <strong>divino amore</strong>, a base di pasta di mandorle e canditi, e i <strong>raffioli</strong>, dischi di pan di Spagna con marmellata di albicocche e glassa bianca.</p>
+
+<h2>I dolci di Natale delle monache</h2>
+<p>I <strong>roccocò</strong>, ciambelle dure con mandorle, scorza d'arancia e pisto, sono legati alle monache del Real Convento della Maddalena, e la loro storia viene fatta risalire al Trecento. I <strong>susamielli</strong>, biscotti al miele coperti di sesamo, vengono associati alle clarisse. Sono i dolci che ancora oggi annunciano il <a href="../dolci-di-natale/">Natale a Napoli</a>.</p>
+
+<h2>Perché proprio i conventi</h2>
+<p>Lo zucchero e le spezie erano costosi, e i monasteri erano tra i pochi luoghi in grado di permetterseli. I dolci servivano anche come doni per benefattori e famiglie nobili, e a volte come fonte di guadagno. Così le ricette passarono, nel tempo, dalle cucine delle suore alle botteghe dei pasticceri.</p>
+""",
+ "provare": [("Sfogliatella riccia e frolla", "la più famosa delle ricette conventuali"), ("Pastiera napoletana", "grano, ricotta e fiori d'arancio"), ("Sfogliata Santa Rosa", "crema e amarene")],
+},
+{
+ "slug": "dolci-di-natale",
+ "titolo": "I dolci di Natale a Napoli: struffoli, roccocò e mostaccioli",
+ "titolo_seo": "Dolci di Natale napoletani: struffoli, roccocò, mostaccioli, susamielli",
+ "descrizione": "Struffoli, roccocò, mostaccioli, susamielli, raffioli e divino amore: i dolci del Natale napoletano, i loro ingredienti e la loro storia.",
+ "dek": "Miele, mandorle, pisto e diavulilli colorati. A Napoli il Natale si riconosce prima di tutto dai dolci.",
+ "foto": None,
+ "lettura": 4,
+ "corpo": """
+<p>Il Natale a Napoli ha un profumo preciso: miele caldo, mandorle tostate, scorza d'arancia e <strong>pisto</strong>, la miscela di spezie (cannella, chiodi di garofano, noce moscata e altre) che entra in quasi tutti i dolci delle feste.</p>
+
+<h2>Struffoli</h2>
+<p>Piccole palline di pasta fritte, raccolte con il miele e decorate con canditi e confettini colorati, i <em>diavulilli</em>. Gli struffoli si preparano in grandi quantità, si regalano e restano in tavola per giorni. Somigliano a dolci di altre tradizioni mediterranee, come i <em>loukoumades</em> greci.</p>
+
+<h2>Roccocò</h2>
+<p>Ciambelle dure e croccanti con mandorle, scorza d'arancia e pisto. La tradizione li fa risalire al Trecento e alle monache del Real Convento della Maddalena. Sono duri per natura: molti li ammorbidiscono nel vino, come il marsala.</p>
+
+<h2>Mostaccioli</h2>
+<p>Biscotti morbidi al miele e spezie, ricoperti di cioccolato. In origine l'impasto conteneva il mosto d'uva, da cui viene il nome.</p>
+
+<h2>Susamielli, raffioli e divino amore</h2>
+<ul>
+<li><strong>Susamielli</strong>: biscotti a forma di S con miele, mandorle e pisto, coperti di sesamo.</li>
+<li><strong>Raffioli</strong>: dischi di pan di Spagna con marmellata di albicocche e glassa bianca.</li>
+<li><strong>Divino amore</strong>: pasta di mandorle con canditi e marmellata, sotto una glassa rosa.</li>
+</ul>
+
+<h2>Il Natale nei bar</h2>
+<p>Durante le feste i dolci natalizi entrano anche nei bar, accanto al caffè. E la <a href="../pastiera/">pastiera</a>, dolce di Pasqua per eccellenza, a Napoli si trova sempre più spesso anche a Natale.</p>
+""",
+ "provare": [("Pastiera napoletana", "a Napoli ormai si mangia anche a Natale"), ("Biscotto all'amarena", "dolce tradizionale napoletano di pasta frolla")],
+},
+{
+ "slug": "piazza-carita-via-toledo",
+ "titolo": "Piazza Carità e via Toledo: una passeggiata nel cuore di Napoli",
+ "titolo_seo": "Piazza Carità e via Toledo a Napoli: storia e cosa vedere",
+ "descrizione": "La storia di Piazza Carità e di via Toledo, aperta nel 1536 dal viceré Pedro de Toledo: il monumento a Salvo D'Acquisto, la Pignasecca, i Quartieri Spagnoli e la metro Toledo.",
+ "dek": "La piazza dove si trova Ceraldi Caffè ha cambiato nome e monumenti più volte. Ecco la sua storia e cosa c'è intorno.",
+ "foto": None,
+ "lettura": 4,
+ "corpo": """
+<p>Piazza Carità si apre lungo via Toledo, a metà strada tra piazza Dante e piazza del Plebiscito. È uno snodo della Napoli di tutti i giorni: da qui si sale verso la Pignasecca e i Quartieri Spagnoli, si scende verso il porto, si attraversa il centro a piedi.</p>
+
+<h2>Via Toledo, dal 1536</h2>
+<p>Via Toledo fu aperta nel 1536 per volere del viceré spagnolo Pedro de Toledo, da cui prende il nome. È lunga quasi un chilometro e duecento metri ed è una delle strade dello shopping più frequentate d'Italia. Dal 1870 al 1980 si chiamò ufficialmente via Roma, ma per i napoletani è sempre rimasta "Toledo".</p>
+
+<h2>Una piazza dai molti nomi</h2>
+<p>La piazza nacque insieme a via Toledo e per secoli ospitò un mercato molto animato. Nel Cinquecento vi fu costruita la chiesa di Santa Maria della Carità, che le ha dato il nome con cui tutti la conoscono. Nel tempo è stata chiamata largo della Carità, piazza Carlo Poerio e piazza Costanzo Ciano.</p>
+<p>Anche i monumenti sono cambiati: nel 1887 vi fu collocata la statua di Carlo Poerio, trasferita nel 1939 a piazza San Pasquale a Chiaia. Dal 1971 al centro della piazza c'è il monumento a <strong>Salvo D'Acquisto</strong>, il vicebrigadiere dei carabinieri eroe nazionale.</p>
+
+<h2>Cosa c'è intorno</h2>
+<ul>
+<li><strong>La Pignasecca</strong>: il mercato storico, con banchi di frutta, pesce e friggitorie.</li>
+<li><strong>I Quartieri Spagnoli</strong>: i vicoli nati per alloggiare le truppe spagnole, oggi tra le zone più vive della città.</li>
+<li><strong>La stazione Toledo</strong> della metropolitana Linea 1, aperta nel 2012 e famosa per le sue decorazioni.</li>
+<li><strong>Piazza Dante</strong> e, verso il mare, la Galleria Umberto I e piazza del Plebiscito.</li>
+</ul>
+<p>In mezzo a tutto questo, dal 1973, c'è Ceraldi Caffè: un caffè al bancone è il modo più napoletano per cominciare la passeggiata.</p>
+""",
+ "provare": [("Espresso al bancone", "prima di partire per via Toledo"), ("Sfogliatella riccia", "da mangiare calda, anche passeggiando")],
+},
+{
+ "slug": "a-tazza-e-cafe",
+ "titolo": "'A tazza 'e cafè: il caffè nella canzone e nel teatro napoletano",
+ "titolo_seo": "'A tazza 'e cafè: la canzone napoletana del 1918 e il caffè nella cultura di Napoli",
+ "descrizione": "La storia di 'A tazza 'e cafè, la canzone napoletana del 1918 di Capaldo e Fassone, e del caffè nella cultura di Napoli, da Eduardo De Filippo a Luciano De Crescenzo.",
+ "dek": "Una cassiera che non sorrideva mai, un poeta innamorato e una canzone del 1918 che paragona l'amore a una tazza di caffè.",
+ "foto": None,
+ "lettura": 3,
+ "corpo": """
+<p>A Napoli il caffè non è solo una bevanda: è entrato nelle canzoni, nel teatro e nei libri. Ed è uno dei modi in cui la città racconta sé stessa.</p>
+
+<h2>La storia di 'A tazza 'e cafè</h2>
+<p><em>'A tazza 'e cafè</em> è una canzone del 1918, con il testo di Giuseppe Capaldo e la musica di Vittorio Fassone. La portò al successo Elvira Donnarumma, una delle voci più amate dell'epoca.</p>
+<p>Dietro la canzone c'è una storia vera. Capaldo era innamorato di Brigida, la cassiera di un caffè del centro, che respingeva tutti i corteggiatori, lui compreso. Così le dedicò una canzone in cui la paragona a una tazza di caffè: amara in superficie, ma con lo zucchero sul fondo. Basta girare il cucchiaino, con pazienza, per trovare la dolcezza.</p>
+<p>Nel corso del Novecento l'hanno cantata, tra gli altri, Roberto Murolo, Claudio Villa, Milva, Gabriella Ferri e l'Orchestra Italiana di Renzo Arbore.</p>
+
+<h2>Il caffè di Eduardo</h2>
+<p>Il teatro napoletano ha regalato al caffè la sua scena più celebre: in <em>Questi fantasmi!</em> di Eduardo De Filippo il protagonista, affacciato al balcone, spiega come si prepara il caffè con la <a href="../caffe-napoletano/">cuccumella</a>, cuppetiello compreso.</p>
+
+<h2>Il caffè di De Crescenzo</h2>
+<p>Luciano De Crescenzo ha raccontato il <a href="../caffe-sospeso/">caffè sospeso</a> come il gesto di chi, essendo felice, offre un caffè al resto del mondo. Una frase che ha fatto conoscere l'usanza ben oltre Napoli.</p>
+""",
+ "provare": [("Caffè Ceraldi", "la nostra tazza più dolce"), ("Michelino", "espresso, crema di zucchero e panna")],
+},
+{
+ "slug": "tradizioni-napoletane",
+ "titolo": "Napoli in sette tradizioni: dal panaro al miracolo di San Gennaro",
+ "titolo_seo": "Tradizioni napoletane: panaro, cornicello, smorfia, presepe, San Gennaro",
+ "descrizione": "Sette tradizioni napoletane da conoscere: il caffè sospeso, il panaro, il cornicello, la smorfia, il presepe di San Gregorio Armeno, il miracolo di San Gennaro e i dolci delle feste.",
+ "dek": "Piccoli gesti, credenze e feste che raccontano Napoli meglio di qualsiasi guida.",
+ "foto": None,
+ "lettura": 4,
+ "corpo": """
+<p>Napoli è una città di tradizioni vive, che si vedono per strada ogni giorno. Eccone sette, dalle più quotidiane alle più solenni.</p>
+
+<h2>Il caffè sospeso</h2>
+<p>Si paga un caffè in più per chi entrerà dopo e non potrà permetterselo. Un gesto piccolo, nato nei bar della città, che ha fatto il giro del mondo. Ne parliamo nell'articolo sul <a href="../caffe-sospeso/">caffè sospeso</a>.</p>
+
+<h2>Il panaro</h2>
+<p>Il <em>panaro</em> è il cesto che si cala dal balcone con una corda, per ricevere la spesa, il pane o un pacco senza scendere le scale. Nei vicoli si vede ancora oggi.</p>
+
+<h2>Il cornicello</h2>
+<p>Il corno rosso è il portafortuna napoletano per eccellenza. Secondo la tradizione deve essere regalato, non comprato per sé, per proteggere davvero dalla sfortuna.</p>
+
+<h2>La smorfia</h2>
+<p>La smorfia napoletana associa a ogni numero da 1 a 90 un significato: si usa per "tradurre" i sogni e gli avvenimenti in numeri da giocare al lotto e alla tombola.</p>
+
+<h2>Il presepe di San Gregorio Armeno</h2>
+<p>Nel centro antico, via San Gregorio Armeno è la strada degli artigiani del presepe. Tutto l'anno, e soprattutto a Natale, le botteghe espongono pastori, case e scene di vita napoletana fatte a mano.</p>
+
+<h2>Il miracolo di San Gennaro</h2>
+<p>Tre volte l'anno, a Napoli si attende lo scioglimento del sangue di San Gennaro, il patrono della città: il sabato prima della prima domenica di maggio, il 19 settembre, giorno della festa, e il 16 dicembre, in ricordo dell'eruzione del Vesuvio del 1631.</p>
+
+<h2>I dolci delle feste</h2>
+<p>Ogni festa ha il suo dolce: le <a href="../zeppole-di-san-giuseppe/">zeppole</a> il 19 marzo, la <a href="../pastiera/">pastiera</a> a Pasqua, gli <a href="../dolci-di-natale/">struffoli e i roccocò</a> a Natale. Il calendario napoletano si può seguire anche dalla vetrina di una pasticceria.</p>
+""",
+ "provare": [("Zeppolina di San Giuseppe", "il dolce del 19 marzo"), ("Pastiera napoletana", "il dolce di Pasqua"), ("Un caffè sospeso", "il gesto più napoletano")],
+},
+]
+
 FAQ = [
-    ("Quali sono gli orari di Ceraldi Caffè?", "Siamo aperti tutti i giorni, domenica compresa, dalle 6:30 alle 20:30."),
-    ("Dove si trova il bar?", "In Piazza Carità 14, nel centro di Napoli, tra via Toledo e il quartiere Pignasecca. Le stazioni Toledo e Dante della metropolitana Linea 1 sono a pochi minuti a piedi."),
-    ("Posso vedere il menu prima di venire?", "Sì, il menu completo con caffè, dolci, cocktail e allergeni è online su ceraldicaffe.qromo.it."),
-    ("Cosa si può mangiare?", "Colazione con la pasticceria napoletana (sfogliatelle, babà, pastiera, zeppole), torte, buffet freddi e, la sera, aperitivo con cocktail, birre e alcolici."),
-    ("Come posso contattarvi?", "Al telefono o su WhatsApp allo 081 552 3488, oppure su Instagram @ceraldicaffe."),
+    ("Quali sono gli orari di Ceraldi Caffè?", "Siamo aperti tutti i giorni, domenica compresa, dalle 6:30 alle 20:30.", None),
+    ("Dove si trova il bar?", "In Piazza Carità 14, nel centro di Napoli, lungo via Toledo e vicino alla Pignasecca. Le stazioni Toledo e Dante della metropolitana Linea 1 sono a pochi minuti a piedi.", None),
+    ("Posso vedere il menu prima di venire?", "Sì, il menu completo con caffè, dolci, cocktail e allergeni è online: https://ceraldicaffe.qromo.it",
+     'Sì, il menu completo con caffè, dolci, cocktail e allergeni è online: <a href="https://ceraldicaffe.qromo.it" rel="noopener">apri il menu di Ceraldi Caffè</a>.'),
+    ("I dolci sono fatti da voi?", "Sì. La pasticceria è di produzione propria, con ricette di famiglia custodite da oltre cento anni: sfogliatelle, babà, pastiera, zeppole e le creazioni della casa.", None),
+    ("Cosa posso mangiare a colazione?", "La classica colazione all'italiana con croissant (vuoti, alla crema, al cioccolato, integrali, vegani), brioche, kranz e pain au chocolat, insieme ai dolci napoletani come sfogliatella, graffa e babà.", None),
+    ("Fate anche l'aperitivo?", "Sì, dal pomeriggio alla sera con cocktail, spritz, birre e buffet freddi.", None),
+    ("Come posso contattarvi?", "Al telefono fisso 081 552 3488 (anche WhatsApp), al cellulare 328 438 8404 oppure su Instagram @ceraldicaffe.", None),
+    ("Dove posso leggere le recensioni?", "Su Google e su Tripadvisor, dove trovi quasi 2.000 recensioni dei nostri clienti.",
+     'Su <a href="https://search.google.com/local/reviews?placeid=ChIJj5ui8loIOxMRCpGd6YqmVy0" rel="noopener">Google</a> e su <a href="https://www.tripadvisor.it/Restaurant_Review-g187785-d2695184-Reviews-Ceraldi_Caffe-Naples_Province_of_Naples_Campania.html" rel="noopener">Tripadvisor</a>, dove trovi quasi 2.000 recensioni dei nostri clienti.'),
 ]
 FAQ_EN = [
-    ("What are the opening hours?", "We are open every day, Sundays included, from 6:30 am to 8:30 pm."),
-    ("Where is the café?", "At Piazza Carità 14 in central Naples, between Via Toledo and the Pignasecca market. Toledo and Dante stations on Metro Line 1 are a few minutes' walk away."),
-    ("Can I see the menu online?", "Yes, the full menu with coffee, pastries, cocktails and allergens is online at ceraldicaffe.qromo.it."),
-    ("What can I eat there?", "Breakfast with Neapolitan pastries (sfogliatella, babà, pastiera, zeppole), cakes, a cold buffet and, in the evening, aperitivo with cocktails, beer and spirits."),
+    ("What are the opening hours?", "We are open every day, Sundays included, from 6:30 am to 8:30 pm.", None),
+    ("Where is the café?", "At Piazza Carità 14 in central Naples, on Via Toledo near the Pignasecca market. Toledo and Dante stations on Metro Line 1 are a few minutes' walk away.", None),
+    ("Can I see the menu online?", "Yes, the full menu with coffee, pastries, cocktails and allergens is online: https://ceraldicaffe.qromo.it",
+     'Yes, the full menu with coffee, pastries, cocktails and allergens is online: <a href="https://ceraldicaffe.qromo.it" rel="noopener">open the Ceraldi Caffè menu</a>.'),
+    ("Do you make your own pastries?", "Yes. Our pastries are made in-house from family recipes kept for over a hundred years.", None),
+    ("What can I have for breakfast?", "A classic Italian breakfast with croissants, brioche, kranz and pain au chocolat, plus Neapolitan pastries such as sfogliatella, graffa and babà.", None),
+    ("How can I contact you?", "Call +39 081 552 3488 (also WhatsApp) or mobile +39 328 438 8404, or find us on Instagram @ceraldicaffe.", None),
 ]
