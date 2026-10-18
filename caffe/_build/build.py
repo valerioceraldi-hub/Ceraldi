@@ -4,13 +4,23 @@ Uso:  python3 caffe/_build/build.py   (dalla radice del repository)
 La cartella _build non viene pubblicata da GitHub Pages (Jekyll ignora le cartelle con _)."""
 import json, os, html
 from contenuti import *
+from pagine import *
 
 QUI = os.path.dirname(os.path.abspath(__file__))
 SITO = os.path.dirname(QUI)
 e = html.escape
 
-FONT = ('<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
-        '<link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,400..600;1,6..96,400&family=Work+Sans:wght@400;600&display=swap" rel="stylesheet">')
+# Font ospitati sul sito (nessuna chiamata a server esterni: niente dati dei visitatori a terzi)
+def font(rr):
+    return (f'<link rel="preload" href="{rr}assets/font/BodoniModa-normal-400_600-latin.woff2" as="font" type="font/woff2" crossorigin>'
+            f'<link rel="preload" href="{rr}assets/font/WorkSans-normal-400-latin.woff2" as="font" type="font/woff2" crossorigin>'
+            f'<link rel="stylesheet" href="{rr}assets/font.css">')
+FOTO.update({
+    "aspritz": {"alt": "Aspritz di Ceraldi Caffè al bancone, con fetta d'arancia", "w": [1024, 640], "r": (4, 3)},
+    "caffe-ceraldi": {"alt": "Il Caffè Ceraldi con cioccolata, crema di caffè e panna sul bancone in marmo", "w": [1024, 640], "r": (3, 2)},
+    "saltimbocca": {"alt": "Saltimbocca con porchetta e provola di Ceraldi Caffè", "w": [768, 480], "r": (3, 4)},
+    "frittatina": {"alt": "Frittatina napoletana di bucatini aperta a metà", "w": [800, 480], "r": (4, 5)},
+})
 GIORNI = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 def scrivi(rel, testo):
@@ -43,7 +53,7 @@ def testa(lang, titolo, descr, url, rr, og_img="img/og.jpg", ld=None, alternates
 <meta name="geo.region" content="IT-NA"><meta name="geo.placename" content="Napoli">
 <link rel="icon" href="{rr}favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="{rr}img/apple-touch-icon.png">
-{pre}{FONT}
+{pre}{font(rr)}
 <link rel="stylesheet" href="{rr}assets/sito.css">
 {lds}
 </head>
@@ -51,13 +61,22 @@ def testa(lang, titolo, descr, url, rr, og_img="img/og.jpg", ld=None, alternates
 <a class="salta" href="#contenuto">{'Vai al contenuto' if lang == 'it' else 'Skip to content'}</a>
 '''
 
+VOCI_NAV = [("bar/", "Il bar"), ("pasticceria/", "Pasticceria"), ("rosticceria/", "Rosticceria"), ("aspritz/", "Aspritz"),
+            ("menu/", "Menu"), ("storie/", "Storie"), ("contatti/", "Contatti")]
 def barra(rr, lang='it'):
     logo = f'<img src="{rr}img/logo-ceraldi-chiaro.svg" width="150" height="52" alt="Ceraldi Caffè">'
     if lang == 'en':
-        return f'''<div class="barra"><a class="marchio" href="{rr}en/">{logo}</a>
-<nav aria-label="Main"><a href="#breakfast">Breakfast</a><a class="nasconde" href="#specialities">Specialities</a><a href="#find-us">Find us</a><a href="{rr}" hreflang="it" lang="it">Italiano</a></nav></div>'''
-    return f'''<div class="barra"><a class="marchio" href="{rr}">{logo}</a>
-<nav aria-label="Principale"><a class="nasconde" href="{rr}#colazione">Colazione</a><a href="{rr}#specialita">Specialità</a><a href="{rr}storie/">Storie</a><a class="nasconde" href="{rr}#dove">Dove siamo</a><a href="{rr}en/" hreflang="en" lang="en">EN</a></nav></div>'''
+        voci = [("#breakfast", "Breakfast"), ("#specialities", "Specialities"), (f"{rr}menu/", "Menu"), ("#find-us", "Find us")]
+        lingua = f'<a href="{rr}" hreflang="it" lang="it">Italiano</a>'
+        home = f"{rr}en/"
+    else:
+        voci = [(rr + h, t) for h, t in VOCI_NAV]
+        lingua = f'<a href="{rr}en/" hreflang="en" lang="en">English</a>'
+        home = rr or "./"
+    links = ''.join(f'<a href="{h}">{t}</a>' for h, t in voci) + lingua
+    return f'''<div class="barra"><a class="marchio" href="{home}">{logo}</a>
+<nav class="nav-larga" aria-label="{'Main' if lang == 'en' else 'Principale'}">{links}</nav>
+<details class="nav-mobile"><summary>{'Menu' if lang == 'en' else 'Menu'}<span aria-hidden="true"></span></summary><nav aria-label="{'Main' if lang == 'en' else 'Principale'}">{links}</nav></details></div>'''
 
 def piede(rr, lang='it'):
     it = lang == 'it'
@@ -66,9 +85,9 @@ def piede(rr, lang='it'):
 <p style="margin-top:12px">{e(BAR['indirizzo'])}, {e(BAR['cap_citta'])}</p><p>{e(BAR['orari'] if it else BAR['orari_en'])}</p></div>
 <div><p><a href="tel:{BAR['tel_link']}">{'Tel.' if it else 'Phone'} {BAR['telefono']}</a></p><p><a href="tel:{BAR['cell_link']}">{'Cell.' if it else 'Mobile'} {BAR['cellulare']}</a></p>
 <p><a href="{BAR['whatsapp']}" rel="noopener">WhatsApp</a></p></div>
-<div><p><a href="{BAR['menu']}" rel="noopener">{'Menu online' if it else 'Online menu'}</a></p><p><a href="{BAR['google_recensioni']}" rel="noopener">{'Recensioni Google' if it else 'Google reviews'}</a></p><p><a href="{BAR['tripadvisor']}" rel="noopener">Tripadvisor</a></p></div>
-<div><p><a href="{BAR['instagram']}" rel="noopener">Instagram</a></p><p><a href="{BAR['facebook']}" rel="noopener">Facebook</a></p><p><a href="{rr}storie/">{'Storie dal caffè' if it else 'Stories (Italian)'}</a></p></div>
-<p class="legale">© Ceraldi Group S.r.l. <a href="{rr}../privacy.html">Privacy</a></p>
+<div><p><a href="{rr}menu/">{'Il menu' if it else 'Menu'}</a></p><p><a href="{BAR['google_recensioni']}" rel="noopener">{'Recensioni Google' if it else 'Google reviews'}</a></p><p><a href="{BAR['tripadvisor']}" rel="noopener">Tripadvisor</a></p></div>
+<div><p><a href="{BAR['instagram']}" rel="noopener">Instagram</a></p><p><a href="{BAR['facebook']}" rel="noopener">Facebook</a></p><p><a href="{rr}storie/">{'Storie dal caffè' if it else 'Stories (Italian)'}</a></p><p><a href="{rr}contatti/">{'Contatti' if it else 'Contact'}</a></p></div>
+<p class="legale">© {RAGIONE_SOCIALE}, Piazza Carità 14, 80134 Napoli. P. IVA {PIVA}. <a href="{rr}privacy/">Privacy e cookie</a></p>
 </div></footer>
 </body>
 </html>
@@ -108,7 +127,7 @@ def ld_bar(lang='it'):
         "address": {"@type": "PostalAddress", "streetAddress": "Piazza Carità, 14", "postalCode": "80134",
                     "addressLocality": "Napoli", "addressRegion": "NA", "addressCountry": "IT"},
         "openingHoursSpecification": [{"@type": "OpeningHoursSpecification", "dayOfWeek": GIORNI, "opens": "06:30", "closes": "20:30"}],
-        "hasMap": BAR["mappa"], "hasMenu": BAR["menu"],
+        "hasMap": BAR["mappa"], "hasMenu": BASE + "menu/", "vatID": "IT" + PIVA, "legalName": RAGIONE_SOCIALE,
         "servesCuisine": ["Caffetteria", "Pasticceria napoletana", "Colazione italiana", "Aperitivo"],
         "knowsAbout": ["caffè napoletano", "sfogliatella", "babà", "pastiera napoletana", "zeppole di San Giuseppe", "pasticceria napoletana", "colazione all'italiana"],
         "sameAs": [BAR["instagram"], BAR["facebook"], BAR["tripadvisor"], BAR["mappa"]],
@@ -142,6 +161,12 @@ def recensioni(lang='it'):
 <a class="btn scuro-vuoto" href="{BAR["google_scrivi"]}" rel="noopener">{'Lascia una recensione' if it else 'Write a review'}</a></div></div>
 </div></section>'''
 
+ACCESSI = [("bar/", "caffe-ceraldi", "Il bar", "Caffè, colazione ed English breakfast"),
+           ("pasticceria/", "baba", "Pasticceria", "Produzione propria, ricette di famiglia"),
+           ("rosticceria/", "frittatina", "Rosticceria", "Frittatine, freselle e pranzo veloce"),
+           ("aspritz/", "aspritz", "Aspritz", "Lo spritz napoletano fatto in casa"),
+           ("storia/", "squadra", "La nostra storia", "Dal 1973, una famiglia di baristi")]
+
 def home_it():
     alt = [("it", BASE), ("en", BASE + "en/"), ("x-default", BASE)]
     h = testa("it", "Ceraldi Caffè | Bar e pasticceria artigianale a Napoli dal 1973, Piazza Carità",
@@ -156,7 +181,7 @@ def home_it():
 <p class="dal">Artigiani per passione dal 1973</p>
 <h1>Bar e pasticceria napoletana in Piazza Carità</h1>
 <p class="tag">{e(BAR["tagline"])} Dolci di produzione propria, con ricette di famiglia custodite da oltre cento anni.</p>
-<div class="azioni sinistra"><a class="btn pieno" href="{BAR["mappa"]}" rel="noopener">Come arrivare</a><a class="btn" href="{BAR["menu"]}" rel="noopener">Guarda il menu</a><a class="btn" href="tel:{BAR["tel_link"]}">Chiama</a></div>
+<div class="azioni sinistra"><a class="btn pieno" href="{BAR["mappa"]}" rel="noopener">Come arrivare</a><a class="btn" href="menu/">Guarda il menu</a><a class="btn" href="tel:{BAR["tel_link"]}">Chiama</a></div>
 <p class="aperto">Aperto tutti i giorni dalle 6:30 alle 20:30<br><a href="#recensioni">Valutazione 4,3 su Google</a></p>
 </div>
 <figure class="specchio">{immagine("sala", "", "(max-width: 900px) 92vw, 480px", eager=True)}</figure>
@@ -164,11 +189,15 @@ def home_it():
 </header>
 <main id="contenuto">
 
+<nav class="accessi" aria-label="Cosa trovi da Ceraldi"><div class="contenitore accessi-griglia">
+{''.join(f'<a href="{h}"><figure>{immagine(k, "", "(max-width: 640px) 50vw, 220px")}</figure><b>{t}</b><span>{d}</span></a>' for h, k, t, d in ACCESSI)}
+</div></nav>
+
 <section class="sezione"><div class="contenitore storia">
 <div><h2>Artigiani per passione, dal 1973</h2>
 <p>La storia della famiglia Ceraldi nei bar di Napoli comincia nei primi anni Settanta in Piazza Garibaldi. Nel 2002 l'arrivo in Piazza Carità, lungo via Toledo, a due passi dalla Pignasecca e dai Quartieri Spagnoli: da allora è il nostro bar. Si entra la mattina presto per il primo caffè e una sfogliatella calda, si torna a metà giornata per un dolce dalla vetrina, ci si ferma la sera per l'aperitivo.</p>
 <p>La nostra pasticceria è di <strong>produzione propria</strong>: sfogliatelle, babà, pastiere e torte nascono da ricette di famiglia custodite da oltre cento anni, insieme alle creazioni della casa. Il locale è quello di un bar napoletano elegante, con specchi, poltroncine in pelle rossa e un bancone sempre affollato.</p>
-<p><a class="link-forte" href="storie/pasticceria-artigianale/">Scopri la nostra pasticceria</a></p></div>
+<p><a class="link-forte" href="storia/">Leggi la nostra storia</a></p></div>
 <figure class="foto-larga">{immagine("squadra", "", "(max-width: 900px) 100vw, 560px")}<figcaption>La squadra di Ceraldi Caffè al bancone.</figcaption></figure>
 </div></section>
 
@@ -182,7 +211,7 @@ def home_it():
 <div><dt>Specialità</dt><dd>Sfogliatella riccia e frolla, babà, pastiera, Caffè Ceraldi, Cestino, Segreto amalfitano</dd></div>
 <div><dt>Colazione</dt><dd>Croissant, brioche, graffa napoletana, cappuccino e caffè</dd></div>
 <div><dt>Contatti</dt><dd>Telefono <a href="tel:{BAR["tel_link"]}">081 552 3488</a>, cellulare <a href="tel:{BAR["cell_link"]}">328 438 8404</a></dd></div>
-<div><dt>Menu</dt><dd><a href="{BAR["menu"]}" rel="noopener">ceraldicaffe.qromo.it</a></dd></div>
+<div><dt>Menu</dt><dd><a href="menu/">Menu completo con prezzi</a></dd></div>
 </dl>
 </div></section>
 
@@ -199,7 +228,7 @@ def home_it():
 <p class="intro">Oltre all'espresso e ai classici napoletani, caffè e dolci nati da Ceraldi.</p>
 <div class="trittico">{immagine("cestino", "", "(max-width: 640px) 33vw, 300px")}{immagine("babamisu", "", "(max-width: 640px) 33vw, 300px")}{immagine("pellecchiella", "", "(max-width: 640px) 33vw, 300px")}</div>
 {carta("Al bancone", CAFFE_CASA, "In vetrina", DOLCI_CASA)}
-<p class="nota">Il menu completo, con prezzi e allergeni: <a href="{BAR["menu"]}" rel="noopener">guarda il menu online</a>.</p>
+<p class="nota">Tutti i prodotti, con prezzi e allergeni: <a href="menu/">guarda il menu completo</a>.</p>
 </div></section>
 
 <section class="sezione"><div class="contenitore">
@@ -212,7 +241,7 @@ def home_it():
 <figure class="foto-alta">{immagine("aperitivo", "", "(max-width: 900px) 100vw, 520px")}</figure>
 <div><h2>E la sera, l'aperitivo</h2>
 <p class="intro">Spritz, cocktail, birre e buffet freddi: la giornata in Piazza Carità finisce al tavolo, con gli amici.</p>
-<div class="azioni sinistra"><a class="btn scuro" href="{BAR["menu"]}" rel="noopener">Cocktail e drink nel menu</a></div></div>
+<div class="azioni sinistra"><a class="btn scuro" href="aspritz/">Scopri l'Aspritz</a><a class="btn scuro-vuoto" href="menu/#cocktails-birre-alcolici">Cocktail e drink</a></div></div>
 </div></section>
 
 {recensioni('it')}
@@ -254,7 +283,7 @@ def home_en():
 <p class="dal">Craftspeople by passion since 1973</p>
 <h1>Neapolitan café and pastry shop in Piazza Carità</h1>
 <p class="tag">From breakfast to aperitivo, in the heart of Naples. Pastries made in-house from family recipes kept for over a hundred years.</p>
-<div class="azioni sinistra"><a class="btn pieno" href="{BAR["mappa"]}" rel="noopener">Get directions</a><a class="btn" href="{BAR["menu"]}" rel="noopener">See the menu</a><a class="btn" href="tel:{BAR["tel_link"]}">Call</a></div>
+<div class="azioni sinistra"><a class="btn pieno" href="{BAR["mappa"]}" rel="noopener">Get directions</a><a class="btn" href="../menu/">See the menu</a><a class="btn" href="tel:{BAR["tel_link"]}">Call</a></div>
 <p class="aperto">Open every day from 6:30 am to 8:30 pm<br><a href="#reviews">Rated 4.3 on Google</a></p>
 </div>
 <figure class="specchio">{immagine("sala", "../", "(max-width: 900px) 92vw, 480px", eager=True)}</figure>
@@ -278,7 +307,7 @@ def home_en():
 <p class="intro">Besides espresso and Neapolitan classics, coffees and cakes created at Ceraldi.</p>
 <div class="trittico">{immagine("cestino", "../", "(max-width: 640px) 33vw, 300px")}{immagine("babamisu", "../", "(max-width: 640px) 33vw, 300px")}{immagine("pellecchiella", "../", "(max-width: 640px) 33vw, 300px")}</div>
 {carta("At the counter", CAFFE_CASA_EN, "From the pastry case", DOLCI_CASA_EN)}
-<p class="nota">The full menu, with prices, allergens and an English version: <a href="{BAR["menu"]}" rel="noopener">see the online menu</a>.</p>
+<p class="nota">The full menu with prices (in Italian): <a href="../menu/">see the menu</a>. An English version is available on our <a href="{BAR["menu"]}" rel="noopener">interactive menu</a>.</p>
 </div></section>
 <section class="sezione"><div class="contenitore">
 <h2>Neapolitan tradition, made in-house</h2>
@@ -330,7 +359,7 @@ def articolo(a):
 {fig}
 <div class="corpo">{a["corpo"]}</div>
 <aside class="cartellino"><h2>Da provare da Ceraldi</h2><p>Piazza Carità 14, Napoli. Tutti i giorni dalle 6:30 alle 20:30. Dolci di produzione propria.</p><ul>{prova}</ul>
-<div class="azioni sinistra"><a class="btn" href="{BAR["menu"]}" rel="noopener">Guarda il menu</a><a class="btn" href="{BAR["mappa"]}" rel="noopener">Come arrivare</a></div></aside>
+<div class="azioni sinistra"><a class="btn" href="../../menu/">Guarda il menu</a><a class="btn" href="{BAR["mappa"]}" rel="noopener">Come arrivare</a></div></aside>
 </article>
 <section class="altre"><h2>Altre storie</h2><ul class="storie">{altre}</ul></section>
 </div></main>
@@ -352,8 +381,205 @@ def indice_storie():
 </div></main>
 ''' + piede("../")
 
+
+# ── Menu completo (da menu_grezzo.json, scaricato da qromo con aggiorna_menu.py) ──
+ALLERGENI = {1: "sedano", 2: "molluschi", 3: "solfiti", 4: "uova", 5: "pesce", 6: "glutine", 7: "lupini", 8: "latte",
+             9: "senape", 10: "arachidi", 11: "sesamo", 12: "crostacei", 13: "soia", 14: "frutta a guscio", 15: "mandorle",
+             16: "orzo", 17: "noci del Brasile", 18: "anacardi", 19: "nocciole", 20: "macadamia", 21: "avena", 22: "noci pecan",
+             23: "pistacchi", 24: "segale", 25: "farro", 26: "noci", 27: "frumento", 28: "kamut"}
+ETICHETTE = {29: "contiene alcol", 32: "vegano", 33: "vegetariano", 35: "senza glutine", 43: "prodotto surgelato", 44: "prodotto abbattuto"}
+import re as _re
+
+def _slug(t):
+    t = t.lower().replace('&', ' ').replace("'", ' ')
+    for a, b in (('à', 'a'), ('á', 'a'), ('è', 'e'), ('é', 'e'), ('ì', 'i'), ('ò', 'o'), ('ù', 'u')):
+        t = t.replace(a, b)
+    return _re.sub(r'[^a-z0-9]+', '-', t).strip('-')
+
+def _pulisci(t):
+    t = (t or '').replace('⏳', ' ').strip()
+    t = _re.sub(r'\s*\d+/\d+\s*mi[nm]\b|\s*\d+\s*min\b', '', t)
+    return _re.sub(r'\s+', ' ', t).strip()
+
+def _prezzo(c):
+    return ('€ ' + f"{c / 100:.2f}".replace('.', ',')) if c else ''
+
+def dati_menu():
+    d = json.load(open(os.path.join(QUI, 'menu_grezzo.json'), encoding='utf-8'))
+    all_by = {}
+    for a in d['menusItemsAllergens']:
+        all_by.setdefault(a['menu_item_id'], []).append(a['allergen_id'])
+    menus = [m for m in sorted(d['menus'], key=lambda m: m['order_number'] or 0)
+             if m['available'] and not m['name'].upper().startswith('BANCO') and m['name'].strip() != 'Comunicazioni']
+    out = []
+    for m in menus:
+        cats = []
+        cc = [c for c in d['menusCategories'] if c['menu_id'] == m['menu_id'] and c['active'] in (1, None)]
+        for c in sorted(cc, key=lambda c: c['order_number'] or 0):
+            ii = [i for i in d['menusItems'] if i['category_id'] == c['menu_category_id'] and i['available']]
+            voci = []
+            for i in sorted(ii, key=lambda i: i['order_number'] or 0):
+                ids = all_by.get(i['menu_item_id'], [])
+                voci.append({"nome": _pulisci(i['name']), "desc": _re.sub(r'\s+', ' ', (i['ingredients'] or '')).strip(),
+                             "prezzo": i['price'] or 0,
+                             "allergeni": [ALLERGENI[x] for x in ids if x in ALLERGENI],
+                             "etichette": [ETICHETTE[x] for x in ids if x in ETICHETTE]})
+            if voci:
+                cats.append({"nome": _pulisci(c['name']), "voci": voci})
+        if cats:
+            out.append({"nome": _pulisci(m['name']), "id": _slug(_pulisci(m['name'])), "categorie": cats})
+    return out
+
+def ld_breadcrumb(voci):
+    lst = [{"@type": "ListItem", "position": 1, "name": "Ceraldi Caffè", "item": BASE}]
+    lst += [{"@type": "ListItem", "position": i + 2, "name": n, "item": u} for i, (n, u) in enumerate(voci)]
+    return {"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": lst}
+
+def _voce_ld(v):
+    x = {"@type": "MenuItem", "name": v['nome']}
+    if v['desc']:
+        x["description"] = v['desc']
+    if v['prezzo']:
+        x["offers"] = {"@type": "Offer", "price": f"{v['prezzo'] / 100:.2f}", "priceCurrency": "EUR"}
+    return x
+
+def _voce_html(v):
+    extra = []
+    if v['allergeni']:
+        extra.append('Allergeni: ' + ', '.join(v['allergeni']))
+    if v['etichette']:
+        extra.append(', '.join(v['etichette']).capitalize())
+    ex = '<small>' + e('. '.join(extra)) + '</small>' if extra else ''
+    de = '<span>' + e(v['desc']) + '</span>' if v['desc'] else ''
+    return '<li><div class="voce-testa"><b>' + e(v['nome']) + '</b><i>' + _prezzo(v['prezzo']) + '</i></div>' + de + ex + '</li>'
+
+def pagina_menu():
+    url = BASE + "menu/"
+    M = dati_menu()
+    n_voci = sum(len(c['voci']) for m in M for c in m['categorie'])
+    ld = {"@context": "https://schema.org", "@type": "Menu", "name": "Menu di Ceraldi Caffè", "url": url, "inLanguage": "it-IT",
+          "hasMenuSection": [{"@type": "MenuSection", "name": m['nome'],
+                              "hasMenuSection": [{"@type": "MenuSection", "name": c['nome'], "hasMenuItem": [_voce_ld(v) for v in c['voci']]}
+                                                 for c in m['categorie']]} for m in M]}
+    h = testa("it", "Menu di Ceraldi Caffè, Napoli | Caffetteria, colazione, pasticceria, rosticceria e cocktail",
+              f"Il menu completo di Ceraldi Caffè in Piazza Carità, Napoli: {n_voci} proposte tra caffè, colazione, dolci, rosticceria, freselle, spritz e cocktail, con prezzi e allergeni.",
+              url, "../", ld=[ld, ld_breadcrumb([("Menu", url)])])
+    chips = ''.join('<a href="#' + m['id'] + '">' + e(m['nome']) + '</a>' for m in M)
+    sezioni = ''
+    for m in M:
+        sezioni += '<section class="menu-sezione" id="' + m['id'] + '"><h2>' + e(m['nome']) + '</h2>'
+        for c in m['categorie']:
+            sezioni += '<h3>' + e(c['nome']) + '</h3><ul class="menu-voci">' + ''.join(_voce_html(v) for v in c['voci']) + '</ul>'
+        sezioni += '</section>'
+    data = OGGI[8:10] + '/' + OGGI[5:7] + '/' + OGGI[:4]
+    return h + f"""<header class="testata-scura">{barra("../")}</header>
+<main id="contenuto" class="articolo pagina-menu"><div class="contenitore">
+<p class="briciole"><a href="../">Ceraldi Caffè</a></p>
+<h1>Il menu</h1>
+<p class="dek">Caffetteria, colazione, pasticceria di produzione propria, rosticceria napoletana, freselle, spritz e cocktail. Prezzi aggiornati al {data}.</p>
+<nav class="chips" aria-label="Sezioni del menu">{chips}</nav>
+<p class="avviso">Le informazioni sugli allergeni vengono dal nostro menu digitale. In caso di allergie o intolleranze chiedi sempre al personale prima di ordinare. Puoi anche consultare il <a href="{BAR['menu']}" rel="noopener">menu interattivo</a>, con filtro allergeni e versione inglese.</p>
+{sezioni}
+</div></main>
+""" + piede("../")
+
+CTA_LINK = {"mappa": (BAR["mappa"], True), "menu_interno": ("../menu/", False), "menu_bar": ("../menu/#bar-dolci", False),
+            "menu_dolci": ("../menu/#bar-dolci", False), "menu_food": ("../menu/#food", False),
+            "menu_drink": ("../menu/#cocktails-birre-alcolici", False)}
+
+def pagina(p):
+    url = BASE + p["slug"] + "/"
+    k = p["foto"]
+    og = f"img/{k}-{FOTO[k]['w'][0]}.webp"
+    ld = [ld_breadcrumb([(p["nav"], url)]),
+          {"@context": "https://schema.org", "@type": "WebPage", "name": p["titolo"], "description": p["descrizione"], "url": url,
+           "isPartOf": {"@id": BASE + "#sito"}, "about": {"@id": BASE + "#bar"}, "primaryImageOfPage": BASE + og, "inLanguage": "it-IT"}]
+    h = testa("it", p["titolo_seo"] + " | Ceraldi Caffè", p["descrizione"], url, "../", og_img=og, ld=ld)
+    gal = p.get("galleria") or []
+    galleria = ''
+    if gal:
+        galleria = '<div class="galleria">' + ''.join('<figure>' + immagine(g, "../", "(max-width: 640px) 50vw, 360px") + '</figure>' for g in gal) + '</div>'
+    cta = ''
+    for i, (t, c) in enumerate(p.get("cta", [])):
+        href, est = CTA_LINK[c]
+        cta += '<a class="btn' + (' pieno' if i == 0 else '') + '" href="' + href + '"' + (' rel="noopener"' if est else '') + '>' + e(t) + '</a>'
+    return h + f"""<header class="hero hero-pagina">{barra("../")}
+<div class="contenitore hero-griglia">
+<div class="hero-testo"><p class="dal"><a href="../">Ceraldi Caffè</a> / {e(p["nav"])}</p>
+<h1>{e(p["titolo"])}</h1>
+<p class="tag">{e(p["dek"])}</p>
+<div class="azioni sinistra">{cta}</div></div>
+<figure class="specchio">{immagine(k, "../", "(max-width: 900px) 92vw, 480px", eager=True)}</figure>
+</div></header>
+<main id="contenuto" class="articolo"><div class="contenitore">
+<div class="corpo">{p["corpo"]}</div>
+{galleria}
+<aside class="cartellino"><h2>Vieni a trovarci</h2><p>Piazza Carità 14, Napoli, lungo via Toledo. Tutti i giorni dalle 6:30 alle 20:30.</p>
+<div class="azioni sinistra"><a class="btn" href="{BAR["mappa"]}" rel="noopener">Come arrivare</a><a class="btn" href="tel:{BAR["tel_link"]}">Chiama {BAR["telefono"]}</a></div></aside>
+</div></main>
+""" + piede("../")
+
+def pagina_contatti():
+    url = BASE + "contatti/"
+    h = testa("it", "Contatti e orari di Ceraldi Caffè | Piazza Carità 14, Napoli",
+              "Ceraldi Caffè, Piazza Carità 14, 80134 Napoli. Aperto tutti i giorni dalle 6:30 alle 20:30. Telefono 081 552 3488, cellulare 328 438 8404, WhatsApp. Come arrivare con la metro Linea 1.",
+              url, "../", ld=[ld_bar('it'), ld_breadcrumb([("Contatti", url)])])
+    return h + f"""<header class="testata-scura">{barra("../")}</header>
+<main id="contenuto" class="articolo"><div class="contenitore">
+<p class="briciole"><a href="../">Ceraldi Caffè</a></p>
+<h1>Contatti e orari</h1>
+<p class="dek">Siamo in Piazza Carità, nel centro di Napoli, lungo via Toledo. Aperti tutti i giorni, domenica compresa.</p>
+<dl class="scheda contatti">
+<div><dt>Indirizzo</dt><dd>Piazza Carità 14<br>80134 Napoli (NA)</dd></div>
+<div><dt>Orari</dt><dd>Tutti i giorni<br>dalle 6:30 alle 20:30</dd></div>
+<div><dt>Telefono</dt><dd><a href="tel:{BAR["tel_link"]}">081 552 3488</a><br>anche <a href="{BAR["whatsapp"]}" rel="noopener">WhatsApp</a></dd></div>
+<div><dt>Cellulare</dt><dd><a href="tel:{BAR["cell_link"]}">328 438 8404</a></dd></div>
+</dl>
+<div class="azioni sinistra"><a class="btn scuro" href="{BAR["mappa"]}" rel="noopener">Apri in Google Maps</a><a class="btn scuro-vuoto" href="tel:{BAR["tel_link"]}">Chiama</a><a class="btn scuro-vuoto" href="{BAR["whatsapp"]}" rel="noopener">Scrivi su WhatsApp</a></div>
+<div class="corpo">
+<h2>Come arrivare</h2>
+<ul>
+<li><strong>In metropolitana</strong>: Linea 1, fermate <strong>Toledo</strong> o <strong>Dante</strong>, a pochi minuti a piedi.</li>
+<li><strong>A piedi</strong>: siamo lungo via Toledo, tra piazza Dante e piazza del Plebiscito, all'ingresso della Pignasecca e dei Quartieri Spagnoli.</li>
+<li><strong>In auto</strong>: il centro è in gran parte zona a traffico limitato; conviene lasciare l'auto in un parcheggio e proseguire a piedi o con la metro.</li>
+</ul>
+<h2>Recensioni</h2>
+<p>Leggi cosa dicono di noi su <a href="{BAR["google_recensioni"]}" rel="noopener">Google</a> e su <a href="{BAR["tripadvisor"]}" rel="noopener">Tripadvisor</a>. Se sei stato da noi, <a href="{BAR["google_scrivi"]}" rel="noopener">lascia una recensione</a>: ci aiuta a migliorare.</p>
+<h2>Social</h2>
+<p>Seguici su <a href="{BAR["instagram"]}" rel="noopener">Instagram</a> e <a href="{BAR["facebook"]}" rel="noopener">Facebook</a>.</p>
+<h2>Dati aziendali</h2>
+<p>{RAGIONE_SOCIALE}<br>Piazza Carità 14, 80134 Napoli (NA)<br>P. IVA {PIVA}</p>
+</div>
+</div></main>
+""" + piede("../")
+
+def pagina_privacy():
+    url = BASE + "privacy/"
+    data = OGGI[8:10] + '/' + OGGI[5:7] + '/' + OGGI[:4]
+    h = testa("it", "Privacy e cookie | Ceraldi Caffè", "Informativa sulla privacy e sui cookie del sito di Ceraldi Caffè, Piazza Carità 14, Napoli.", url, "../")
+    return h + f"""<header class="testata-scura">{barra("../")}</header>
+<main id="contenuto" class="articolo"><div class="contenitore">
+<p class="briciole"><a href="../">Ceraldi Caffè</a></p>
+<h1>Privacy e cookie</h1>
+<p class="meta">Ultimo aggiornamento: {data}</p>
+<div class="corpo">
+<h2>Titolare</h2>
+<p>{RAGIONE_SOCIALE}, Piazza Carità 14, 80134 Napoli (NA), P. IVA {PIVA}. Per qualsiasi richiesta sui dati personali puoi contattarci al numero <a href="tel:{BAR["tel_link"]}">081 552 3488</a> o presso la sede.</p>
+<h2>Cosa raccoglie questo sito</h2>
+<p>Questo sito è una vetrina informativa. <strong>Non usa cookie, non usa strumenti di statistica o di profilazione e non contiene moduli</strong> che raccolgono dati personali. Anche i caratteri tipografici sono ospitati sul sito stesso, senza chiamate a servizi esterni.</p>
+<h2>Hosting</h2>
+<p>Il sito è ospitato su GitHub Pages (GitHub, Inc.). Come ogni server web, il fornitore di hosting può registrare dati tecnici delle visite, come l'indirizzo IP, per motivi di sicurezza e di funzionamento del servizio, secondo la propria informativa.</p>
+<h2>Link esterni</h2>
+<p>Alcuni link portano a servizi di terzi: Google Maps e Google (recensioni), Tripadvisor, Instagram, Facebook, WhatsApp e il nostro menu interattivo su qromo. Quando li apri si applicano le informative privacy e cookie di quei servizi.</p>
+<h2>I tuoi diritti</h2>
+<p>In base al Regolamento UE 2016/679 (GDPR) puoi chiedere l'accesso, la rettifica o la cancellazione dei dati che ti riguardano e proporre reclamo al Garante per la protezione dei dati personali.</p>
+</div>
+</div></main>
+""" + piede("../")
+
+
 def sitemap():
-    urls = [(BASE, "1.0"), (BASE + "en/", "0.8"), (BASE + "storie/", "0.7")] + [(BASE + f"storie/{a['slug']}/", "0.6") for a in ARTICOLI]
+    urls = [(BASE, "1.0"), (BASE + "menu/", "0.9")] + [(BASE + p["slug"] + "/", "0.9") for p in PAGINE] + [(BASE + "contatti/", "0.8"), (BASE + "en/", "0.8"), (BASE + "storie/", "0.7")] + [(BASE + f"storie/{a['slug']}/", "0.6") for a in ARTICOLI]
     righe = ''.join(f'<url><loc>{u}</loc><lastmod>{OGGI}</lastmod><priority>{p}</priority></url>' for u, p in urls)
     return f'<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{righe}</urlset>\n'
 
@@ -367,7 +593,8 @@ def llms():
 - Indirizzo: Piazza Carità 14, 80134 Napoli, Italia (lungo via Toledo, vicino alle stazioni metro Toledo e Dante, Linea 1)
 - Orari: tutti i giorni, domenica compresa, 6:30 – 20:30
 - Telefono: +39 081 552 3488 (anche WhatsApp); cellulare: +39 328 438 8404
-- Menu online con prezzi e allergeni: {BAR["menu"]}
+- Menu completo con prezzi: {BASE}menu/ (menu interattivo con allergeni: {BAR["menu"]})
+- Ragione sociale: {RAGIONE_SOCIALE}, P. IVA {PIVA}
 - Recensioni: Google ({BAR["google_recensioni"]}), Tripadvisor ({BAR["tripadvisor"]}); valutazione 4,3/5 su Google con quasi 2.000 recensioni
 - Instagram: {BAR["instagram"]}
 - Mappa: {BAR["mappa"]}
@@ -377,10 +604,19 @@ def llms():
 - Pasticceria napoletana di produzione propria: sfogliatella riccia e frolla, sfogliata Santa Rosa, babà al rum, pastiera napoletana, zeppola di San Giuseppe, codina di aragosta
 - Dolci della casa: Cestino, Segreto amalfitano, Babàmisù, Pellecchiella (albicocche del Vesuvio, presidio Slow Food), torta di mele Annurca IGP
 - Caffè della casa: Caffè Ceraldi, Caffè Babà, Michelino, Nocciolato, Pistacchiotto, Caldo freddo
-- Aperitivo: spritz, cocktail, birre, buffet freddi
+- Rosticceria napoletana: frittatina, crocchè, pizza fritta, pizza di scarole, saltimbocca, zingara ischitana; freselle e insalate
+- English breakfast tutte le mattine (uova, bacon, salsicce, fagioli, funghi, pomodori, pane tostato, tè)
+- Aperitivo: Aspritz fatto in casa (bitter con agrumi della Costiera Amalfitana, erbe e radici, con spumante Asprinio di Aversa), spritz, negroni, gin tonic, vini campani, birre
 
 ## Pagine
 - [Home]({BASE})
+- [Menu completo con prezzi]({BASE}menu/)
+- [La nostra storia]({BASE}storia/)
+- [Il bar, la colazione e l'English breakfast]({BASE}bar/)
+- [La pasticceria]({BASE}pasticceria/)
+- [Rosticceria napoletana, freselle e insalate]({BASE}rosticceria/)
+- [Aspritz e aperitivi]({BASE}aspritz/)
+- [Contatti e orari]({BASE}contatti/)
 - [English]({BASE}en/)
 - [Storie dal caffè]({BASE}storie/)
 {righe}
@@ -392,6 +628,11 @@ if __name__ == "__main__":
     scrivi("storie/index.html", indice_storie())
     for a in ARTICOLI:
         scrivi(f"storie/{a['slug']}/index.html", articolo(a))
+    for p in PAGINE:
+        scrivi(f"{p['slug']}/index.html", pagina(p))
+    scrivi("menu/index.html", pagina_menu())
+    scrivi("contatti/index.html", pagina_contatti())
+    scrivi("privacy/index.html", pagina_privacy())
     scrivi("sitemap.xml", sitemap())
     scrivi("llms.txt", llms())
-    print("Pagine generate:", 3 + len(ARTICOLI))
+    print("Pagine generate:", 6 + len(ARTICOLI) + len(PAGINE))
