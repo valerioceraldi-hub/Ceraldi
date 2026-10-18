@@ -308,7 +308,7 @@ ARTICOLI += [
  "foto": "cestino",
  "lettura": 3,
  "corpo": """
-<p>Da Ceraldi Caffè la pasticceria è di <strong>produzione propria</strong>. Sfogliatelle, babà, pastiere, zeppole, torte e pasticcini nascono da ricette di famiglia, tramandate da oltre cento anni e custodite con la stessa cura di allora. È il significato del nostro motto: <em>artigiani per passione</em>, dal 1973 in Piazza Carità.</p>
+<p>Da Ceraldi Caffè la pasticceria è di <strong>produzione propria</strong>. Sfogliatelle, babà, pastiere, zeppole, torte e pasticcini nascono da ricette di famiglia, tramandate da oltre cento anni e custodite con la stessa cura di allora. È il significato del nostro motto: <em>artigiani per passione</em>, dal 1973.</p>
 
 <h2>Le ricette della tradizione</h2>
 <p>I classici napoletani seguono le ricette di sempre: la sfogliatella riccia e frolla con ricotta, semola, canditi e cannella; il babà bagnato al rum; la pastiera con grano, ricotta e fiori d'arancio; la zeppola di San Giuseppe con crema e amarena. Sono dolci che a Napoli tutti conoscono, e proprio per questo vanno fatti bene.</p>
@@ -410,7 +410,7 @@ ARTICOLI += [
 <li><strong>La stazione Toledo</strong> della metropolitana Linea 1, aperta nel 2012 e famosa per le sue decorazioni.</li>
 <li><strong>Piazza Dante</strong> e, verso il mare, la Galleria Umberto I e piazza del Plebiscito.</li>
 </ul>
-<p>In mezzo a tutto questo, dal 1973, c'è Ceraldi Caffè: un caffè al bancone è il modo più napoletano per cominciare la passeggiata.</p>
+<p>In mezzo a tutto questo, dal 2002, c'è Ceraldi Caffè, la cui storia era cominciata nei primi anni Settanta in Piazza Garibaldi: un caffè al bancone è il modo più napoletano per cominciare la passeggiata.</p>
 """,
  "provare": [("Espresso al bancone", "prima di partire per via Toledo"), ("Sfogliatella riccia", "da mangiare calda, anche passeggiando")],
 },

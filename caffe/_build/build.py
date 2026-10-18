@@ -100,8 +100,8 @@ def ld_bar(lang='it'):
         "slogan": "Artigiani per passione dal 1973", "url": BASE,
         "logo": BASE + "img/logo-ceraldi.svg",
         "image": [BASE + "img/sala-1024.webp", BASE + "img/squadra-1600.webp", BASE + "img/sfogliatella-riccia-1024.webp", BASE + "img/baba-1024.webp"],
-        "description": ("Bar e pasticceria napoletana dal 1973 in Piazza Carità, Napoli. Pasticceria di produzione propria con ricette di famiglia custodite da oltre cento anni: sfogliatelle, babà, pastiera, zeppole. Colazione all'italiana con croissant e brioche, caffè della casa, buffet freddi e aperitivo."
-                        if lang == 'it' else "Neapolitan café and pastry shop since 1973 in Piazza Carità, Naples. In-house pastries from family recipes kept for over a hundred years: sfogliatella, babà, pastiera, zeppole. Italian breakfast with croissants and brioche, house coffees, cold buffet and aperitivo."),
+        "description": ("Bar e pasticceria napoletana della famiglia Ceraldi, attiva dal 1973 (prima in Piazza Garibaldi, dal 2002 in Piazza Carità, Napoli). Pasticceria di produzione propria con ricette di famiglia custodite da oltre cento anni: sfogliatelle, babà, pastiera, zeppole. Colazione all'italiana con croissant e brioche, caffè della casa, buffet freddi e aperitivo."
+                        if lang == 'it' else "Neapolitan café and pastry shop run by the Ceraldi family since 1973 (first in Piazza Garibaldi, in Piazza Carità, Naples, since 2002). In-house pastries from family recipes kept for over a hundred years: sfogliatella, babà, pastiera, zeppole. Italian breakfast with croissants and brioche, house coffees, cold buffet and aperitivo."),
         "foundingDate": "1973", "telephone": "+39 081 552 3488", "priceRange": "€",
         "contactPoint": [{"@type": "ContactPoint", "telephone": "+39 081 552 3488", "contactType": "customer service", "availableLanguage": ["it", "en"]},
                          {"@type": "ContactPoint", "telephone": "+39 328 438 8404", "contactType": "customer service", "availableLanguage": ["it"]}],
@@ -166,7 +166,7 @@ def home_it():
 
 <section class="sezione"><div class="contenitore storia">
 <div><h2>Artigiani per passione, dal 1973</h2>
-<p>Da oltre cinquant'anni Ceraldi Caffè è il bar di Piazza Carità, lungo via Toledo, a due passi dalla Pignasecca e dai Quartieri Spagnoli. Si entra la mattina presto per il primo caffè e una sfogliatella calda, si torna a metà giornata per un dolce dalla vetrina, ci si ferma la sera per l'aperitivo.</p>
+<p>La storia della famiglia Ceraldi nei bar di Napoli comincia nei primi anni Settanta in Piazza Garibaldi. Nel 2002 l'arrivo in Piazza Carità, lungo via Toledo, a due passi dalla Pignasecca e dai Quartieri Spagnoli: da allora è il nostro bar. Si entra la mattina presto per il primo caffè e una sfogliatella calda, si torna a metà giornata per un dolce dalla vetrina, ci si ferma la sera per l'aperitivo.</p>
 <p>La nostra pasticceria è di <strong>produzione propria</strong>: sfogliatelle, babà, pastiere e torte nascono da ricette di famiglia custodite da oltre cento anni, insieme alle creazioni della casa. Il locale è quello di un bar napoletano elegante, con specchi, poltroncine in pelle rossa e un bancone sempre affollato.</p>
 <p><a class="link-forte" href="storie/pasticceria-artigianale/">Scopri la nostra pasticceria</a></p></div>
 <figure class="foto-larga">{immagine("squadra", "", "(max-width: 900px) 100vw, 560px")}<figcaption>La squadra di Ceraldi Caffè al bancone.</figcaption></figure>
@@ -176,7 +176,7 @@ def home_it():
 <h2 id="breve">Ceraldi Caffè in breve</h2>
 <dl class="scheda">
 <div><dt>Che cos'è</dt><dd>Bar, caffetteria e pasticceria napoletana di produzione propria</dd></div>
-<div><dt>Dal</dt><dd>1973, in Piazza Carità</dd></div>
+<div><dt>Storia</dt><dd>Famiglia Ceraldi dal 1973, in Piazza Carità dal 2002</dd></div>
 <div><dt>Indirizzo</dt><dd>Piazza Carità 14, 80134 Napoli, vicino a via Toledo e alla metro Toledo</dd></div>
 <div><dt>Orari</dt><dd>Tutti i giorni, 6:30 – 20:30</dd></div>
 <div><dt>Specialità</dt><dd>Sfogliatella riccia e frolla, babà, pastiera, Caffè Ceraldi, Cestino, Segreto amalfitano</dd></div>
@@ -263,7 +263,7 @@ def home_en():
 <main id="contenuto">
 <section class="sezione"><div class="contenitore storia">
 <div><h2>Craftspeople by passion, since 1973</h2>
-<p>For more than fifty years Ceraldi Caffè has been the café of Piazza Carità, on Via Toledo, steps from the Pignasecca market and the Spanish Quarter. Locals come in early for their first espresso and a warm sfogliatella, stop by during the day for something from the pastry case, and come back in the evening for aperitivo.</p>
+<p>The Ceraldi family's story in Naples cafés began in the early 1970s in Piazza Garibaldi. In 2002 we moved to Piazza Carità, on Via Toledo, steps from the Pignasecca market and the Spanish Quarter. Locals come in early for their first espresso and a warm sfogliatella, stop by during the day for something from the pastry case, and come back in the evening for aperitivo.</p>
 <p>Our pastries are <strong>made in-house</strong> from family recipes kept for over a hundred years, alongside our own creations. It is an elegant Neapolitan bar, with mirrors, red leather armchairs and a busy counter.</p></div>
 <figure class="foto-larga">{immagine("squadra", "../", "(max-width: 900px) 100vw, 560px")}<figcaption>The Ceraldi Caffè team at the counter.</figcaption></figure>
 </div></section>
@@ -361,7 +361,7 @@ def llms():
     righe = '\n'.join(f'- [{a["titolo"]}]({BASE}storie/{a["slug"]}/): {a["descrizione"]}' for a in ARTICOLI)
     return f'''# Ceraldi Caffè
 
-> Bar e pasticceria napoletana in Piazza Carità 14, Napoli (80134), dal 1973. Motto: "Artigiani per passione dal 1973". Pasticceria di produzione propria con ricette di famiglia custodite da oltre cento anni.
+> Bar e pasticceria napoletana in Piazza Carità 14, Napoli (80134). Attività della famiglia Ceraldi dal 1973 (primi anni a Piazza Garibaldi), in Piazza Carità dal 2002. Motto: "Artigiani per passione dal 1973". Pasticceria di produzione propria con ricette di famiglia custodite da oltre cento anni.
 
 ## Informazioni essenziali
 - Indirizzo: Piazza Carità 14, 80134 Napoli, Italia (lungo via Toledo, vicino alle stazioni metro Toledo e Dante, Linea 1)
