@@ -127,6 +127,7 @@ def ld_bar(lang='it'):
         "address": {"@type": "PostalAddress", "streetAddress": "Piazza Carità, 14", "postalCode": "80134",
                     "addressLocality": "Napoli", "addressRegion": "NA", "addressCountry": "IT"},
         "openingHoursSpecification": [{"@type": "OpeningHoursSpecification", "dayOfWeek": GIORNI, "opens": "06:30", "closes": "20:30"}],
+        "geo": {"@type": "GeoCoordinates", "latitude": GEO[0], "longitude": GEO[1]},
         "hasMap": BAR["mappa"], "hasMenu": BASE + "menu/", "vatID": "IT" + PIVA, "legalName": RAGIONE_SOCIALE,
         "servesCuisine": ["Caffetteria", "Pasticceria napoletana", "Colazione italiana", "Aperitivo"],
         "knowsAbout": ["caffè napoletano", "sfogliatella", "babà", "pastiera napoletana", "zeppole di San Giuseppe", "pasticceria napoletana", "colazione all'italiana"],
@@ -331,14 +332,25 @@ def home_en():
 ''' + piede("../", "en")
 
 # ── Articoli ──────────────────────────────────────────────────────────
+MESI = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"]
+def data_it(d):
+    return f"{int(d[8:10])} {MESI[int(d[5:7]) - 1]} {d[:4]}"
+
+def meta_articolo(a):
+    pub = a.get("pubblicato", PUBBLICATO); agg = a.get("aggiornato")
+    riga = f'Di <a href="../../storia/">{e(AUTORE)}</a>. Pubblicato il <time datetime="{pub}">{data_it(pub)}</time>'
+    if agg and agg != pub:
+        riga += f', aggiornato il <time datetime="{agg}">{data_it(agg)}</time>'
+    return riga + f'. {a["lettura"]} minuti di lettura'
+
 def articolo(a):
     url = BASE + f"storie/{a['slug']}/"
     k = a['foto']
     img = BASE + (f"img/{k}-{FOTO[k]['w'][0]}.webp" if k else "img/og.jpg")
     ld = [{"@context": "https://schema.org", "@type": "Article", "headline": a["titolo"], "description": a["descrizione"],
-           "image": [img], "datePublished": OGGI, "dateModified": OGGI, "inLanguage": "it-IT", "mainEntityOfPage": url,
+           "image": [img], "datePublished": a.get("pubblicato", PUBBLICATO), "dateModified": a.get("aggiornato", a.get("pubblicato", PUBBLICATO)), "inLanguage": "it-IT", "mainEntityOfPage": url,
            "isPartOf": {"@id": BASE + "#sito"},
-           "author": {"@type": "Organization", "name": "Ceraldi Caffè", "url": BASE},
+           "author": {"@type": "Organization", "name": AUTORE, "url": BASE + "storia/"},
            "publisher": {"@type": "Organization", "name": "Ceraldi Caffè", "logo": {"@type": "ImageObject", "url": BASE + "img/apple-touch-icon.png"}}},
           {"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [
               {"@type": "ListItem", "position": 1, "name": "Ceraldi Caffè", "item": BASE},
@@ -355,7 +367,7 @@ def articolo(a):
 <article>
 <h1>{e(a["titolo"])}</h1>
 <p class="dek">{e(a["dek"])}</p>
-<p class="meta">{a["lettura"]} minuti di lettura</p>
+<p class="meta">{meta_articolo(a)}</p>
 {fig}
 <div class="corpo">{a["corpo"]}</div>
 <aside class="cartellino"><h2>Da provare da Ceraldi</h2><p>Piazza Carità 14, Napoli. Tutti i giorni dalle 6:30 alle 20:30. Dolci di produzione propria.</p><ul>{prova}</ul>
@@ -579,8 +591,8 @@ def pagina_privacy():
 
 
 def sitemap():
-    urls = [(BASE, "1.0"), (BASE + "menu/", "0.9")] + [(BASE + p["slug"] + "/", "0.9") for p in PAGINE] + [(BASE + "contatti/", "0.8"), (BASE + "en/", "0.8"), (BASE + "storie/", "0.7")] + [(BASE + f"storie/{a['slug']}/", "0.6") for a in ARTICOLI]
-    righe = ''.join(f'<url><loc>{u}</loc><lastmod>{OGGI}</lastmod><priority>{p}</priority></url>' for u, p in urls)
+    urls = [(BASE, "1.0"), (BASE + "menu/", "0.9")] + [(BASE + p["slug"] + "/", "0.9") for p in PAGINE] + [(BASE + "contatti/", "0.8"), (BASE + "en/", "0.8"), (BASE + "storie/", "0.7")] + [(BASE + f"storie/{a['slug']}/", "0.6", a.get("aggiornato", a.get("pubblicato", PUBBLICATO))) for a in ARTICOLI]
+    righe = ''.join(f'<url><loc>{x[0]}</loc><lastmod>{x[2] if len(x) > 2 else OGGI}</lastmod><priority>{x[1]}</priority></url>' for x in urls)
     return f'<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{righe}</urlset>\n'
 
 def llms():
@@ -622,6 +634,33 @@ def llms():
 {righe}
 '''
 
+# ── Pagina non trovata ────────────────────────────────────────────────
+def pagina_404(rr):
+    h = testa("it", "Pagina non trovata | Ceraldi Caffè Napoli", "La pagina cercata non esiste. Torna alla home di Ceraldi Caffè, Piazza Carità 14, Napoli.", BASE, rr)
+    h = h.replace('<meta name="robots" content="index, follow, max-image-preview:large">', '<meta name="robots" content="noindex">')
+    h = _re.sub(r'<link rel="canonical"[^>]*>', '', h)
+    return h + f'''<header class="testata-scura">{barra(rr)}</header>
+<main id="contenuto" class="articolo"><div class="contenitore">
+<h1>Questa pagina non c'è</h1>
+<p class="dek">L'indirizzo potrebbe essere cambiato o contenere un errore. Il bancone invece è sempre lì, in Piazza Carità 14, tutti i giorni dalle 6:30 alle 20:30.</p>
+<div class="azioni sinistra"><a class="btn scuro" href="{rr}">Vai alla home</a><a class="btn scuro-vuoto" href="{rr}menu/">Guarda il menu</a><a class="btn scuro-vuoto" href="{rr}contatti/">Orari e contatti</a></div>
+</div></main>
+''' + piede(rr)
+
+# Vecchi indirizzi di ceraldicaffe.it che cambiano nome: pagina di rimando (GitHub Pages non fa redirect 301)
+RIMANDI = {"1973-2": "storia", "gastronomia": "rosticceria"}
+def rimando(dest):
+    u = BASE + dest + "/"
+    return f'''<!DOCTYPE html>
+<html lang="it"><head><meta charset="utf-8"><title>Ceraldi Caffè</title>
+<meta name="robots" content="noindex"><link rel="canonical" href="{u}">
+<meta http-equiv="refresh" content="0; url=../{dest}/"></head>
+<body><p><a href="../{dest}/">Vai alla pagina</a></p></body></html>
+'''
+
+def robots():
+    return f"User-agent: *\nAllow: /\n\nSitemap: {BASE}sitemap.xml\n"
+
 if __name__ == "__main__":
     scrivi("index.html", home_it())
     scrivi("en/index.html", home_en())
@@ -635,4 +674,12 @@ if __name__ == "__main__":
     scrivi("privacy/index.html", pagina_privacy())
     scrivi("sitemap.xml", sitemap())
     scrivi("llms.txt", llms())
+    scrivi("404.html", pagina_404(BASE))
+    # GitHub Pages usa solo il 404.html alla radice del repository: per gli indirizzi fuori da /caffe/ (le app) mostra un messaggio neutro
+    neutro = ("<script>if(location.pathname.indexOf('/Ceraldi/caffe/')!==0){document.title='Pagina non trovata';"
+              "document.body.innerHTML='<main style=\"font-family:system-ui,sans-serif;padding:48px 24px;text-align:center\"><h1>Pagina non trovata</h1><p>Controlla l\\'indirizzo.</p></main>';}</script>")
+    scrivi("../404.html", pagina_404(BASE).replace("</body>", neutro + "</body>", 1))
+    for vecchio, nuovo in RIMANDI.items():
+        scrivi(f"{vecchio}/index.html", rimando(nuovo))
+    scrivi("robots.txt", robots())
     print("Pagine generate:", 6 + len(ARTICOLI) + len(PAGINE))

@@ -5,6 +5,11 @@
 
 BASE = "https://valerioceraldi-hub.github.io/Ceraldi/caffe/"
 OGGI = "2026-10-18"
+# Firma e data di prima pubblicazione degli articoli (un articolo può avere "pubblicato" e "aggiornato" propri)
+AUTORE = "Famiglia Ceraldi"
+PUBBLICATO = "2026-10-18"
+# Coordinate della scheda Google di Ceraldi Caffè (Google Places, place_id ChIJj5ui8loIOxMRCpGd6YqmVy0)
+GEO = (40.8445035, 14.2488753)
 
 BAR = {
     "nome": "Ceraldi Caffè",
