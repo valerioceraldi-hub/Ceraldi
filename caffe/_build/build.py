@@ -2,7 +2,7 @@
 """Genera le pagine del sito di Ceraldi Caffè.
 Uso:  python3 caffe/_build/build.py   (dalla radice del repository)
 La cartella _build non viene pubblicata da GitHub Pages (Jekyll ignora le cartelle con _)."""
-import json, os, html
+import json, os, html, hashlib, datetime, urllib.parse
 from contenuti import *
 from pagine import *
 from pagine_en import *
@@ -24,9 +24,16 @@ FOTO.update({
 })
 GIORNI = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
+# Pagine indicizzabili scritte in questo build: alimentano la sitemap in automatico
+PAGINE_SITEMAP = []
+
 def scrivi(rel, testo):
     p = os.path.join(SITO, rel); os.makedirs(os.path.dirname(p), exist_ok=True)
     open(p, 'w', encoding='utf-8').write(testo)
+    indicizzabile = (rel.endswith("index.html") and not rel.startswith("..") and 'name="robots" content="noindex' not in testo
+                     and 'http-equiv="refresh"' not in testo)
+    if indicizzabile:
+        PAGINE_SITEMAP.append((BASE + rel[:-len("index.html")], hashlib.sha256(testo.encode()).hexdigest()))
 
 # ── Pezzi comuni ──────────────────────────────────────────────────────
 def testa(lang, titolo, descr, url, rr, og_img="img/og.jpg", ld=None, alternates=None, tipo="website", preload=None):
@@ -541,7 +548,8 @@ def pagina_menu(lang='it'):
         for c in m['categorie']:
             sezioni += '<h3>' + e(c['nome']) + '</h3><ul class="menu-voci"' + ('' if it else ' lang="it"') + '>' + ''.join(_voce_html(v, rr, it) for v in c['voci']) + '</ul>'
         sezioni += '</section>'
-    data = OGGI[8:10] + '/' + OGGI[5:7] + '/' + OGGI[:4]
+    scaricato = json.load(open(os.path.join(QUI, 'menu_grezzo.json'), encoding='utf-8')).get('_scaricato', MENU_SCARICATO)
+    data = scaricato[8:10] + '/' + scaricato[5:7] + '/' + scaricato[:4]
     if it:
         testo = f"""<h1>Il menu</h1>
 <p class="dek">Caffetteria, colazione, pasticceria di produzione propria, rosticceria napoletana, freselle, spritz e cocktail. Prezzi aggiornati al {data}.</p>
@@ -778,8 +786,19 @@ def pagina_specialita(lang='it'):
 
 
 def sitemap():
-    urls = [(BASE, "1.0"), (BASE + "menu/", "0.9"), (BASE + "specialita/", "0.9"), (BASE + "en/specialita/", "0.7")] + [(BASE + p["slug"] + "/", "0.9") for p in PAGINE] + [(BASE + "contatti/", "0.8"), (BASE + "en/", "0.8"), (BASE + "storie/", "0.7")] + [(BASE + "en/" + x, "0.7") for x in ["storia/", "bar/", "pasticceria/", "rosticceria/", "aspritz/", "menu/", "contatti/"]] + [(BASE + "privacy/", "0.2"), (BASE + "en/privacy/", "0.2")] + [(BASE + f"storie/{c['slug']}/", "0.6") for c in CATEGORIE] + [(BASE + f"storie/{a['slug']}/", "0.6", a.get("aggiornato", a.get("pubblicato", PUBBLICATO))) for a in ARTICOLI]
-    righe = ''.join(f'<url><loc>{x[0]}</loc><lastmod>{x[2] if len(x) > 2 else OGGI}</lastmod><priority>{x[1]}</priority></url>' for x in urls)
+    """Sitemap generata dalle pagine indicizzabili effettivamente scritte.
+    lastmod = data dell'ultima modifica reale del contenuto: il registro lastmod.json conserva l'impronta di ogni
+    pagina e la data cambia solo se cambia il contenuto (non a ogni pubblicazione)."""
+    reg_path = os.path.join(QUI, "lastmod.json")
+    reg = json.load(open(reg_path, encoding="utf-8")) if os.path.exists(reg_path) else {}
+    oggi = datetime.date.today().isoformat()
+    righe = ''
+    for url, impronta in sorted(set(PAGINE_SITEMAP)):
+        voce = reg.get(url)
+        if not voce or voce[0] != impronta:
+            reg[url] = [impronta, oggi]
+        righe += f'<url><loc>{url}</loc><lastmod>{reg[url][1]}</lastmod></url>'
+    json.dump(reg, open(reg_path, "w", encoding="utf-8"), indent=1, sort_keys=True)
     return f'<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{righe}</urlset>\n'
 
 def llms():
@@ -869,14 +888,15 @@ if __name__ == "__main__":
     scrivi("menu/index.html", pagina_menu())
     scrivi("contatti/index.html", pagina_contatti())
     scrivi("privacy/index.html", pagina_privacy())
-    scrivi("sitemap.xml", sitemap())
     scrivi("llms.txt", llms())
     scrivi("404.html", pagina_404(BASE))
     # GitHub Pages usa solo il 404.html alla radice del repository: per gli indirizzi fuori da /caffe/ (le app) mostra un messaggio neutro
-    neutro = ("<script>if(location.pathname.indexOf('/Ceraldi/caffe/')!==0){document.title='Pagina non trovata';"
-              "document.body.innerHTML='<main style=\"font-family:system-ui,sans-serif;padding:48px 24px;text-align:center\"><h1>Pagina non trovata</h1><p>Controlla l\\'indirizzo.</p></main>';}</script>")
+    percorso = urllib.parse.urlparse(BASE).path
+    neutro = (f"<script>if(location.pathname.indexOf('{percorso}')!==0){{document.title='Pagina non trovata';"
+              "document.body.innerHTML='<main style=\"font-family:system-ui,sans-serif;padding:48px 24px;text-align:center\"><h1>Pagina non trovata</h1><p>Controlla l\\'indirizzo.</p></main>';}}</script>")
     scrivi("../404.html", pagina_404(BASE).replace("</body>", neutro + "</body>", 1))
     for vecchio, nuovo in RIMANDI.items():
         scrivi(f"{vecchio}/index.html", rimando(nuovo))
     scrivi("robots.txt", robots())
+    scrivi("sitemap.xml", sitemap())
     print("Pagine generate:", 6 + len(ARTICOLI) + len(PAGINE) + len(CATEGORIE) + len(PAGINE_EN) + 5)

@@ -21,5 +21,7 @@ def main(percorso=None):
 
 if __name__ == "__main__":
     d = main(sys.argv[1] if len(sys.argv) > 1 else None)
+    import datetime
+    d["_scaricato"] = datetime.date.today().isoformat()  # data mostrata come "Prezzi aggiornati al"
     json.dump(d, open(os.path.join(QUI, "menu_grezzo.json"), "w", encoding="utf-8"), ensure_ascii=False)
     print({k: len(v) for k, v in d.items()})

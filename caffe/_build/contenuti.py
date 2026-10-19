@@ -5,6 +5,8 @@
 
 BASE = "https://valerioceraldi-hub.github.io/Ceraldi/caffe/"
 OGGI = "2026-10-18"
+# Data in cui è stato scaricato l'attuale menu_grezzo.json (i file nuovi la contengono in "_scaricato")
+MENU_SCARICATO = "2026-10-18"
 # Firma e data di prima pubblicazione degli articoli (un articolo può avere "pubblicato" e "aggiornato" propri)
 AUTORE = "Famiglia Ceraldi"
 PUBBLICATO = "2026-10-18"
