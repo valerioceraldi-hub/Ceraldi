@@ -393,7 +393,7 @@ body.has-fbar{padding-bottom:calc(150px + var(--safe-b))}
 
 <script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js" defer></script>
 <script>
-var APP_VERSION='8.5.0';
+var APP_VERSION='8.6.0';
 var BUILD_NUM=APP_VERSION;
 var APP={key:'richieste',nome:'Richieste',versione:APP_VERSION,authKey:'rq_auth_v2',oldAuthKey:'ceraldi_richieste_auth_session',
   markBg:'linear-gradient(145deg,#C4A1FF 0%,#8B5CF6 50%,#5B21B6 100%)',
@@ -845,13 +845,38 @@ async function _authEsci(silenzioso){
   _authApplica(null); lsDel(APP.key + '_acc'); if(APP.oldAuthKey) lsDel(APP.oldAuthKey);
   location.reload();
 }
+
+/* ── Link di invito (v8.6.0) ─────────────────────────────────────────
+   L'admin manda un link: chi lo apre trova già pronto il modulo
+   «Richiedi l'accesso» (con il nome scritto, se l'hai indicato).
+   Il link non dà nessun permesso da solo: la persona conferma la sua
+   email con un codice e resta in attesa finché non la abiliti tu da
+   Utenti e accessi. Così il link può girare su WhatsApp senza rischi. */
+function _invitoDaLink(){
+  try{
+    var q = new URLSearchParams(location.search); if(q.get('richiedi') !== '1') return false;
+    var n = (q.get('nome') || '').trim().slice(0, 80); if(n && !_authStato.nome) _authStato.nome = n;
+    history.replaceState(null, '', location.pathname);
+    return true;
+  }catch(e){ return false; }
+}
+function linkInvito(nome){ return location.origin + location.pathname + '?richiedi=1' + (nome ? '&nome=' + encodeURIComponent(nome) : ''); }
+async function invitaPersona(){
+  var nome = await chiediTesto('Invita una persona', 'Nome e cognome (facoltativo, lo trova già scritto)', '', 'Mario Rossi');
+  if(nome === null) return;
+  var url = linkInvito(nome), testo = 'Ciao' + (nome ? ' ' + nome.split(' ')[0] : '') + ', per usare Ceraldi Richieste di Caffetteria Ceraldi apri questo link, compila i tuoi dati e tocca «Richiedi l\'accesso». Ti abilito io appena arriva la richiesta.';
+  if(navigator.share){ try{ await navigator.share({ title: 'Invito a Ceraldi Richieste', text: testo, url: url }); return; }catch(e){ if(e && e.name === 'AbortError') return; } }
+  try{ await navigator.clipboard.writeText(testo + '\n' + url); toast('Link di invito copiato: incollalo su WhatsApp o in un SMS'); }
+  catch(e){ window.prompt('Copia il link di invito', url); }
+}
 async function _authAvvio(){
   _authMostra('caricamento');
   fetch(SB_URL + '/auth/v1/settings', { headers: { apikey: SB_KEY } }).then(function(r){ return r.ok ? r.json() : null; }).then(function(c){ _authCfg = c; if(_authStato.vista === 'login') _authRender(); }).catch(function(){});
   var d = await _authDaIndirizzo();
   if(d && d.errore){ _authMostra('login', 'Accesso non riuscito: ' + d.errore); return; }
   var s = _authSess || _authLeggi();
-  if(!s || !s.access_token){ _authMostra('login'); return; }
+  var invitato = _invitoDaLink();
+  if(!s || !s.access_token){ _authMostra(invitato ? 'richiesta' : 'login'); return; }
   _authApplica(s);
   await _authPronto();
   if(!_authSess) return;
@@ -2116,6 +2141,8 @@ function renderGestione(){
   var top = Object.keys(perProd).sort(function(a, b){ return perProd[b].n - perProd[a].n; }).slice(0, 8);
   if(top.length) h += '<div class="sec-title">Più richiesti</div><div class="grp">' + top.map(function(n){ return '<div class="row"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(n) + '</div></div><div class="row-r tnum">' + perProd[n].n + ' volte</div></div>'; }).join('') + '</div>';
   if(Object.keys(perDip).length) h += '<div class="sec-title">Per persona</div><div class="grp">' + Object.keys(perDip).sort(function(a, b){ return perDip[b] - perDip[a]; }).map(function(n){ return '<div class="row"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(n) + '</div></div><div class="row-r tnum">' + perDip[n] + '</div></div>'; }).join('') + '</div>';
+  // Nuove persone: link di invito
+  h += '<div class="sec-title">Nuove persone</div><div class="grp"><button class="row" onclick="invitaPersona()"><div class="row-ico ic-b">🔗</div><div class="row-main"><div class="row-t">Invita una persona</div><div class="row-s">Manda un link: chiede l\'accesso da sola, poi la abiliti tu</div></div><span class="chev">›</span></button></div>';
   // Reparti per persona
   h += '<div class="sec-title">Reparti che ogni persona vede</div><div class="banner b" style="font-size:12.5px"><span>ℹ️</span><div>Chi entra in Richieste lo decidi in <b>Fatture → Impostazioni → Utenti e accessi</b>. Qui scegli quali reparti del catalogo vede ciascuno (nessuna scelta = tutti).</div></div><div class="grp">';
   h += GEST.persone.length ? GEST.persone.map(function(p, ix){

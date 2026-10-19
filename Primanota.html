@@ -518,7 +518,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.31.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.32.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -30676,6 +30676,29 @@ function _authRigaImpostazioni(){
   return h + '</div>';
 }
 
+/* ── Link di invito (v10.32.0) ─────────────────────────────────────────
+   L'admin manda un link: chi lo apre trova già pronto il modulo
+   «Richiedi l'accesso» (con il nome scritto, se l'hai indicato).
+   Il link non dà nessun permesso da solo: la persona conferma la sua
+   email con un codice e resta in attesa finché non la abiliti tu da
+   Utenti e accessi. Così il link può girare su WhatsApp senza rischi. */
+function _invitoDaLink(){
+  try{
+    var q = new URLSearchParams(location.search); if(q.get('richiedi') !== '1') return false;
+    var n = (q.get('nome') || '').trim().slice(0, 80); if(n && !_authStato.nome) _authStato.nome = n;
+    history.replaceState(null, '', location.pathname);
+    return true;
+  }catch(e){ return false; }
+}
+function linkInvito(nome){ return location.origin + location.pathname + '?richiedi=1' + (nome ? '&nome=' + encodeURIComponent(nome) : ''); }
+async function invitaPersona(){
+  var nome = await Promise.resolve(window.prompt('Nome e cognome della persona da invitare (facoltativo: lo troverà già scritto)', ''));
+  if(nome === null) return; nome = String(nome).trim();
+  var url = linkInvito(nome), testo = 'Ciao' + (nome ? ' ' + nome.split(' ')[0] : '') + ', per usare Ceraldi Fatture di Caffetteria Ceraldi apri questo link, compila i tuoi dati e tocca «Richiedi l\'accesso». Ti abilito io appena arriva la richiesta.';
+  if(navigator.share){ try{ await navigator.share({ title: 'Invito a Ceraldi Fatture', text: testo, url: url }); return; }catch(e){ if(e && e.name === 'AbortError') return; } }
+  try{ await navigator.clipboard.writeText(testo + '\n' + url); toast('Link di invito copiato: incollalo su WhatsApp o in un SMS'); }
+  catch(e){ window.prompt('Copia il link di invito', url); }
+}
 async function _authAvvio(){
   _authMostra('caricamento');
   fetch(SB_URL + '/auth/v1/settings', { headers: { apikey: SB_KEY } }).then(function(r){ return r.ok ? r.json() : null; })
@@ -30683,7 +30706,8 @@ async function _authAvvio(){
   var daInd = await _authDaIndirizzo();
   if(daInd && daInd.errore){ _authMostra('login', 'Accesso non riuscito: ' + daInd.errore); return; }
   var s = _authSess || _authLeggi();
-  if(!s || !s.access_token){ _authMostra('login'); return; }
+  var invitato = _invitoDaLink();
+  if(!s || !s.access_token){ _authMostra(invitato ? 'richiesta' : 'login'); return; }
   _authApplica(s);
   await _authPronto();
   if(!_authSess){ return; } // rinnovo rifiutato: la schermata di accesso è già visibile
@@ -30777,6 +30801,7 @@ function _accRender(){
   if(!_accStato.caricate){
     h += '<div class="acc-vuoto"><div class="fa-spin"></div><span>Carico…</span></div>';
   } else {
+    h += '<div class="acc-azioni" style="margin:0 0 14px"><button class="acc-b acc-b-pri" onclick="invitaPersona()">🔗 Invita una persona</button></div>';
     h += '<div class="acc-sez">Richieste di accesso' + (attesa.length ? ' · ' + attesa.length : '') + '</div>';
     if(!attesa.length) h += '<div class="acc-nota">Nessuna richiesta in sospeso. Chi vuole accedere apre l\'app, preme "Richiedi l\'accesso" e compare qui.</div>';
     attesa.forEach(function(r){ h += _accCard(r, true); });
