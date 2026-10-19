@@ -10,6 +10,8 @@ AUTORE = "Famiglia Ceraldi"
 PUBBLICATO = "2026-10-18"
 # Coordinate della scheda Google di Ceraldi Caffè (Google Places, place_id ChIJj5ui8loIOxMRCpGd6YqmVy0)
 GEO = (40.8445035, 14.2488753)
+# ID di misurazione di Google Analytics 4 (G-...). Vuoto = nessuno script di statistica e nessun banner.
+GA_ID = ""
 
 BAR = {
     "nome": "Ceraldi Caffè",

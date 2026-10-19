@@ -55,6 +55,7 @@ def testa(lang, titolo, descr, url, rr, og_img="img/og.jpg", ld=None, alternates
 <link rel="apple-touch-icon" href="{rr}img/apple-touch-icon.png">
 {pre}{font(rr)}
 <link rel="stylesheet" href="{rr}assets/sito.css">
+{f'<script src="{rr}assets/consenso.js" data-ga="{GA_ID}" defer></script>' if GA_ID else ''}
 {lds}
 </head>
 <body>
@@ -87,7 +88,7 @@ def piede(rr, lang='it'):
 <p><a href="{BAR['whatsapp']}" rel="noopener">WhatsApp</a></p></div>
 <div><p><a href="{rr}menu/">{'Il menu' if it else 'Menu'}</a></p><p><a href="{BAR['google_recensioni']}" rel="noopener">{'Recensioni Google' if it else 'Google reviews'}</a></p><p><a href="{BAR['tripadvisor']}" rel="noopener">Tripadvisor</a></p></div>
 <div><p><a href="{BAR['instagram']}" rel="noopener">Instagram</a></p><p><a href="{BAR['facebook']}" rel="noopener">Facebook</a></p><p><a href="{rr}storie/">{'Storie dal caffè' if it else 'Stories (Italian)'}</a></p><p><a href="{rr}contatti/">{'Contatti' if it else 'Contact'}</a></p></div>
-<p class="legale">© {RAGIONE_SOCIALE}, Piazza Carità 14, 80134 Napoli. P. IVA {PIVA}. <a href="{rr}privacy/">Privacy e cookie</a></p>
+<p class="legale">© {RAGIONE_SOCIALE}, Piazza Carità 14, 80134 Napoli. P. IVA {PIVA}. <a href="{rr}privacy/">Privacy e cookie</a>{f' <a href="#" data-preferenze-cookie>{"Preferenze cookie" if it else "Cookie preferences"}</a>' if GA_ID else ''}</p>
 </div></footer>
 <nav class="barra-fissa" aria-label="{'Contatti rapidi' if it else 'Quick contacts'}"><a href="tel:{BAR['tel_link']}">{'Chiama' if it else 'Call'}</a><a href="{BAR['mappa']}" rel="noopener">{'Indicazioni' if it else 'Directions'}</a><a href="{rr}menu/">Menu</a></nav>
 </body>
@@ -599,6 +600,13 @@ def pagina_contatti():
 </div></main>
 """ + piede("../")
 
+PRIVACY_NESSUN_COOKIE = """<p>Questo sito è una vetrina informativa. <strong>Non usa cookie, non usa strumenti di statistica o di profilazione e non contiene moduli</strong> che raccolgono dati personali. Anche i caratteri tipografici sono ospitati sul sito stesso, senza chiamate a servizi esterni.</p>"""
+PRIVACY_STATISTICHE = """<p>Questo sito è una vetrina informativa e <strong>non contiene moduli</strong> che raccolgono dati personali. I caratteri tipografici sono ospitati sul sito stesso.</p>
+<h2>Statistiche (Google Analytics 4), solo con il tuo consenso</h2>
+<p>Se accetti nel banner, il sito usa Google Analytics 4, servizio di Google Ireland Limited, per contare le visite e i clic su Chiama, Indicazioni, WhatsApp e Menu. Servono a capire quali informazioni sono utili, non a fare pubblicità: non attiviamo funzioni pubblicitarie né la condivisione dei dati per la pubblicità.</p>
+<p>Cookie usati: <strong>_ga</strong> e <strong>_ga_&lt;ID&gt;</strong>, che distinguono le visite; durata fino a 2 anni. Senza il tuo consenso Google Analytics non viene caricato e non viene installato alcun cookie. La scelta resta salvata nel tuo browser per 6 mesi e puoi cambiarla in qualsiasi momento dal link <em>Preferenze cookie</em> in fondo a ogni pagina.</p>
+<p>Base giuridica: il tuo consenso (art. 6.1.a GDPR). I dati possono essere trattati da Google anche fuori dall'Unione europea, secondo le garanzie previste dalla sua informativa: <a href="https://policies.google.com/privacy" rel="noopener">policies.google.com/privacy</a>.</p>"""
+
 def pagina_privacy():
     url = BASE + "privacy/"
     data = OGGI[8:10] + '/' + OGGI[5:7] + '/' + OGGI[:4]
@@ -612,7 +620,7 @@ def pagina_privacy():
 <h2>Titolare</h2>
 <p>{RAGIONE_SOCIALE}, Piazza Carità 14, 80134 Napoli (NA), P. IVA {PIVA}. Per qualsiasi richiesta sui dati personali puoi contattarci al numero <a href="tel:{BAR["tel_link"]}">081 552 3488</a> o presso la sede.</p>
 <h2>Cosa raccoglie questo sito</h2>
-<p>Questo sito è una vetrina informativa. <strong>Non usa cookie, non usa strumenti di statistica o di profilazione e non contiene moduli</strong> che raccolgono dati personali. Anche i caratteri tipografici sono ospitati sul sito stesso, senza chiamate a servizi esterni.</p>
+{PRIVACY_STATISTICHE if GA_ID else PRIVACY_NESSUN_COOKIE}
 <h2>Hosting</h2>
 <p>Il sito è ospitato su GitHub Pages (GitHub, Inc.). Come ogni server web, il fornitore di hosting può registrare dati tecnici delle visite, come l'indirizzo IP, per motivi di sicurezza e di funzionamento del servizio, secondo la propria informativa.</p>
 <h2>Link esterni</h2>
