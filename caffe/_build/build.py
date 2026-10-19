@@ -89,6 +89,7 @@ def piede(rr, lang='it'):
 <div><p><a href="{BAR['instagram']}" rel="noopener">Instagram</a></p><p><a href="{BAR['facebook']}" rel="noopener">Facebook</a></p><p><a href="{rr}storie/">{'Storie dal caffè' if it else 'Stories (Italian)'}</a></p><p><a href="{rr}contatti/">{'Contatti' if it else 'Contact'}</a></p></div>
 <p class="legale">© {RAGIONE_SOCIALE}, Piazza Carità 14, 80134 Napoli. P. IVA {PIVA}. <a href="{rr}privacy/">Privacy e cookie</a></p>
 </div></footer>
+<nav class="barra-fissa" aria-label="{'Contatti rapidi' if it else 'Quick contacts'}"><a href="tel:{BAR['tel_link']}">{'Chiama' if it else 'Call'}</a><a href="{BAR['mappa']}" rel="noopener">{'Indicazioni' if it else 'Directions'}</a><a href="{rr}menu/">Menu</a></nav>
 </body>
 </html>
 '''
@@ -170,7 +171,7 @@ ACCESSI = [("bar/", "caffe-ceraldi", "Il bar", "Caffè, colazione ed English bre
 
 def home_it():
     alt = [("it", BASE), ("en", BASE + "en/"), ("x-default", BASE)]
-    h = testa("it", "Ceraldi Caffè | Bar e pasticceria artigianale a Napoli dal 1973, Piazza Carità",
+    h = testa("it", "Ceraldi Caffè | Bar e pasticceria a Napoli, Piazza Carità",
               "Ceraldi Caffè, Piazza Carità 14, Napoli: bar e pasticceria di produzione propria dal 1973. Sfogliatelle, babà, pastiera, colazione con croissant e brioche, aperitivo. Aperti tutti i giorni 6:30–20:30.",
               BASE, "", ld=[ld_bar('it'), ld_sito(), ld_faq(FAQ)], alternates=alt, preload="img/sala-1024.webp")
     storie = ''.join(f'<li><a href="storie/{a["slug"]}/"><b>{e(a["titolo"])}</b><span>{e(a["dek"])}</span><small>{a["lettura"]} min di lettura</small></a></li>' for a in ARTICOLI)
@@ -272,7 +273,7 @@ def home_it():
 # ── Home inglese ──────────────────────────────────────────────────────
 def home_en():
     alt = [("it", BASE), ("en", BASE + "en/"), ("x-default", BASE)]
-    h = testa("en", "Ceraldi Caffè | Neapolitan café and pastry shop since 1973, Piazza Carità, Naples",
+    h = testa("en", "Ceraldi Caffè | Café and pastry shop in Naples, Piazza Carità",
               "Ceraldi Caffè, Piazza Carità 14, Naples: café and in-house pastry shop since 1973. Sfogliatella, babà, pastiera, Italian breakfast with croissants, aperitivo. Open every day 6:30 am – 8:30 pm.",
               BASE + "en/", "../", ld=[ld_bar('en'), ld_faq(FAQ_EN)], alternates=alt, preload="../img/sala-1024.webp")
     vetr = ''.join(f'<a href="../storie/{s}/" hreflang="it"><figure>{immagine(k, "../", "(max-width: 900px) 50vw, 25vw")}<h3>{t}</h3><p>{e(d)}</p></figure></a>'
@@ -357,7 +358,7 @@ def articolo(a):
               {"@type": "ListItem", "position": 2, "name": "Storie", "item": BASE + "storie/"},
               {"@type": "ListItem", "position": 3, "name": a["titolo"], "item": url}]}]
     og = f"img/{k}-{FOTO[k]['w'][0]}.webp" if k else "img/og.jpg"
-    h = testa("it", a["titolo_seo"] + " | Ceraldi Caffè Napoli", a["descrizione"], url, "../../", og_img=og, ld=ld, tipo="article")
+    h = testa("it", a["titolo_seo"] + " | Ceraldi Caffè", a["descrizione"], url, "../../", og_img=og, ld=ld, tipo="article")
     fig = f'<figure class="{"verticale" if FOTO[k]["r"][1] > FOTO[k]["r"][0] else ""}">{immagine(k, "../../", "(max-width: 800px) 100vw, 760px", eager=True)}</figure>' if k else ''
     prova = ''.join(f'<li><b>{e(n)}</b><br><span>{e(d)}</span></li>' for n, d in a["provare"])
     altre = ''.join(f'<li><a href="../{b["slug"]}/"><b>{e(b["titolo"])}</b><span>{e(b["dek"])}</span><small>{b["lettura"]} min</small></a></li>' for b in ARTICOLI if b is not a)
@@ -379,7 +380,7 @@ def articolo(a):
 
 def indice_storie():
     url = BASE + "storie/"
-    h = testa("it", "Storie dal caffè: tradizioni, dolci e cultura napoletana | Ceraldi Caffè Napoli",
+    h = testa("it", "Storie di Napoli: caffè, dolci e tradizioni | Ceraldi Caffè",
               "Caffè napoletano, caffè sospeso, sfogliatella, babà, pastiera, dolci di Natale, Piazza Carità e tradizioni di Napoli: le storie raccontate da Ceraldi Caffè.", url, "../",
               ld=[{"@context": "https://schema.org", "@type": "CollectionPage", "name": "Storie dal caffè", "url": url, "isPartOf": {"@id": BASE + "#sito"},
                    "hasPart": [{"@type": "Article", "headline": a["titolo"], "url": url + a["slug"] + "/"} for a in ARTICOLI]}])
@@ -473,7 +474,7 @@ def pagina_menu():
           "hasMenuSection": [{"@type": "MenuSection", "name": m['nome'],
                               "hasMenuSection": [{"@type": "MenuSection", "name": c['nome'], "hasMenuItem": [_voce_ld(v) for v in c['voci']]}
                                                  for c in m['categorie']]} for m in M]}
-    h = testa("it", "Menu di Ceraldi Caffè, Napoli | Caffetteria, colazione, pasticceria, rosticceria e cocktail",
+    h = testa("it", "Menu e prezzi | Ceraldi Caffè, Napoli",
               f"Il menu completo di Ceraldi Caffè in Piazza Carità, Napoli: {n_voci} proposte tra caffè, colazione, dolci, rosticceria, freselle, spritz e cocktail, con prezzi e allergeni.",
               url, "../", ld=[ld, ld_breadcrumb([("Menu", url)])])
     chips = ''.join('<a href="#' + m['id'] + '">' + e(m['nome']) + '</a>' for m in M)
@@ -533,7 +534,7 @@ def pagina(p):
 
 def pagina_contatti():
     url = BASE + "contatti/"
-    h = testa("it", "Contatti e orari di Ceraldi Caffè | Piazza Carità 14, Napoli",
+    h = testa("it", "Orari e contatti | Ceraldi Caffè, Piazza Carità 14",
               "Ceraldi Caffè, Piazza Carità 14, 80134 Napoli. Aperto tutti i giorni dalle 6:30 alle 20:30. Telefono 081 552 3488, cellulare 328 438 8404, WhatsApp. Come arrivare con la metro Linea 1.",
               url, "../", ld=[ld_bar('it'), ld_breadcrumb([("Contatti", url)])])
     return h + f"""<header class="testata-scura">{barra("../")}</header>

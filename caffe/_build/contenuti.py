@@ -137,7 +137,7 @@ ARTICOLI = [
 {
  "slug": "caffe-sospeso",
  "titolo": "Il caffè sospeso: un gesto napoletano che ha fatto il giro del mondo",
- "titolo_seo": "Caffè sospeso: cos'è e com'è nata la tradizione napoletana",
+ "titolo_seo": "Caffè sospeso: cos'è e come è nato",
  "descrizione": "Pagare un caffè in più per chi verrà dopo: cos'è il caffè sospeso, da dove nasce e perché il 10 dicembre gli è dedicata una giornata.",
  "dek": "Si paga un caffè in più, per chi entrerà dopo e non potrà permetterselo. Un'abitudine piccola, nata nei bar di Napoli.",
  "foto": "squadra",
@@ -221,7 +221,7 @@ ARTICOLI = [
 {
  "slug": "pastiera",
  "titolo": "La pastiera napoletana: il profumo della Pasqua",
- "titolo_seo": "Pastiera napoletana: storia, leggende e ingredienti",
+ "titolo_seo": "Pastiera napoletana: storia e leggende",
  "descrizione": "Grano, ricotta e fiori d'arancio: la storia e le leggende della pastiera napoletana, dalla sirena Partenope al convento di San Gregorio Armeno.",
  "dek": "Grano cotto, ricotta, fiori d'arancio. Nessun dolce racconta la primavera a Napoli come la pastiera, e nessuno ha tante leggende.",
  "foto": "pastiera",
@@ -249,7 +249,7 @@ ARTICOLI = [
 {
  "slug": "zeppole-di-san-giuseppe",
  "titolo": "Zeppole di San Giuseppe: il dolce del 19 marzo",
- "titolo_seo": "Zeppole di San Giuseppe: storia e tradizione napoletana",
+ "titolo_seo": "Zeppole di San Giuseppe: storia e tradizione",
  "descrizione": "Crema pasticcera, amarena e zucchero a velo: la storia delle zeppole di San Giuseppe, dal ricettario di Ippolito Cavalcanti del 1837 alla festa del papà.",
  "dek": "Una corona di pasta, crema pasticcera e un'amarena al centro. A Napoli il 19 marzo si festeggia così.",
  "foto": "zeppola",
@@ -277,7 +277,7 @@ ARTICOLI += [
 {
  "slug": "colazione-napoletana",
  "titolo": "La colazione a Napoli: cornetto, sfogliatella o graffa?",
- "titolo_seo": "Colazione a Napoli: cornetto, brioche, sfogliatella e caffè al bar",
+ "titolo_seo": "Colazione a Napoli: cornetto, sfogliatella e caffè",
  "descrizione": "Come si fa colazione a Napoli: la colazione all'italiana al bancone con cornetto e cappuccino, la sfogliatella, la graffa e il caffè. Differenze tra cornetto, brioche e croissant.",
  "dek": "In piedi al bancone, in pochi minuti, con il profumo del forno. Guida alla colazione napoletana, tra classici italiani e dolci della città.",
  "foto": "sfogliatella-frolla",
@@ -307,7 +307,7 @@ ARTICOLI += [
 {
  "slug": "pasticceria-artigianale",
  "titolo": "La nostra pasticceria: produzione propria e ricette di famiglia",
- "titolo_seo": "Pasticceria artigianale a Napoli: la produzione propria di Ceraldi Caffè",
+ "titolo_seo": "Produzione propria: la pasticceria di Ceraldi",
  "descrizione": "Da Ceraldi Caffè in Piazza Carità i dolci sono di produzione propria, fatti con ricette di famiglia custodite da oltre cento anni: sfogliatelle, babà, pastiera e creazioni della casa.",
  "dek": "Quello che vedi in vetrina nasce da noi, con ricette di famiglia tramandate da oltre cento anni e custodite con cura.",
  "foto": "cestino",
@@ -336,7 +336,7 @@ ARTICOLI += [
 {
  "slug": "dolci-dei-conventi",
  "titolo": "I dolci nati nei conventi di Napoli",
- "titolo_seo": "Dolci napoletani nati nei conventi: storia e leggende",
+ "titolo_seo": "Dolci dei conventi napoletani: storia e leggende",
  "descrizione": "Sfogliatella, pastiera, roccocò, susamielli, raffioli: molti dolci napoletani sono nati nei conventi della città e della costiera. Ecco la loro storia.",
  "dek": "Dietro molti dolci napoletani ci sono le cucine dei monasteri. Un viaggio tra suore pasticcere, ricette segrete e festività.",
  "foto": None,
@@ -361,7 +361,7 @@ ARTICOLI += [
 {
  "slug": "dolci-di-natale",
  "titolo": "I dolci di Natale a Napoli: struffoli, roccocò e mostaccioli",
- "titolo_seo": "Dolci di Natale napoletani: struffoli, roccocò, mostaccioli, susamielli",
+ "titolo_seo": "Dolci di Natale napoletani: struffoli e roccocò",
  "descrizione": "Struffoli, roccocò, mostaccioli, susamielli, raffioli e divino amore: i dolci del Natale napoletano, i loro ingredienti e la loro storia.",
  "dek": "Miele, mandorle, pisto e diavulilli colorati. A Napoli il Natale si riconosce prima di tutto dai dolci.",
  "foto": None,
@@ -393,7 +393,7 @@ ARTICOLI += [
 {
  "slug": "piazza-carita-via-toledo",
  "titolo": "Piazza Carità e via Toledo: una passeggiata nel cuore di Napoli",
- "titolo_seo": "Piazza Carità e via Toledo a Napoli: storia e cosa vedere",
+ "titolo_seo": "Piazza Carità e via Toledo: storia e cosa vedere",
  "descrizione": "La storia di Piazza Carità e di via Toledo, aperta nel 1536 dal viceré Pedro de Toledo: il monumento a Salvo D'Acquisto, la Pignasecca, i Quartieri Spagnoli e la metro Toledo.",
  "dek": "La piazza dove si trova Ceraldi Caffè ha cambiato nome e monumenti più volte. Ecco la sua storia e cosa c'è intorno.",
  "foto": None,
@@ -422,7 +422,7 @@ ARTICOLI += [
 {
  "slug": "a-tazza-e-cafe",
  "titolo": "'A tazza 'e cafè: il caffè nella canzone e nel teatro napoletano",
- "titolo_seo": "'A tazza 'e cafè: la canzone napoletana del 1918 e il caffè nella cultura di Napoli",
+ "titolo_seo": "'A tazza 'e cafè: la canzone del 1918 e il caffè",
  "descrizione": "La storia di 'A tazza 'e cafè, la canzone napoletana del 1918 di Capaldo e Fassone, e del caffè nella cultura di Napoli, da Eduardo De Filippo a Luciano De Crescenzo.",
  "dek": "Una cassiera che non sorrideva mai, un poeta innamorato e una canzone del 1918 che paragona l'amore a una tazza di caffè.",
  "foto": None,
@@ -446,7 +446,7 @@ ARTICOLI += [
 {
  "slug": "tradizioni-napoletane",
  "titolo": "Napoli in sette tradizioni: dal panaro al miracolo di San Gennaro",
- "titolo_seo": "Tradizioni napoletane: panaro, cornicello, smorfia, presepe, San Gennaro",
+ "titolo_seo": "Tradizioni napoletane: panaro, smorfia e presepe",
  "descrizione": "Sette tradizioni napoletane da conoscere: il caffè sospeso, il panaro, il cornicello, la smorfia, il presepe di San Gregorio Armeno, il miracolo di San Gennaro e i dolci delle feste.",
  "dek": "Piccoli gesti, credenze e feste che raccontano Napoli meglio di qualsiasi guida.",
  "foto": None,
