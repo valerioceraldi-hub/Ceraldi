@@ -279,7 +279,7 @@ def home_it():
 <p class="intro">In Piazza Carità, lungo via Toledo, a pochi minuti a piedi dalle stazioni Toledo e Dante della Linea 1.</p>
 <dl><div><dt>Indirizzo</dt><dd>{e(BAR["indirizzo"])}<br>{e(BAR["cap_citta"])}</dd></div>
 <div><dt>Orari</dt><dd>Tutti i giorni<br>dalle 6:30 alle 20:30</dd></div>
-<div><dt>Telefono</dt><dd><a href="tel:{BAR["tel_link"]}">081 552 3488</a> (anche <a href="{BAR["whatsapp"]}" rel="noopener">WhatsApp</a>)<br>Cellulare <a href="tel:{BAR["cell_link"]}">328 438 8404</a></dd></div></dl>
+<div><dt>Telefono</dt><dd><a href="tel:{BAR["tel_link"]}">081 552 3488</a><br>Cellulare <a href="tel:{BAR["cell_link"]}">328 438 8404</a> (anche <a href="{BAR["whatsapp"]}" rel="noopener">WhatsApp</a>)</dd></div></dl>
 <div class="azioni sinistra" style="margin-top:36px"><a class="btn pieno" href="{BAR["mappa"]}" rel="noopener">Apri in Google Maps</a><a class="btn" href="{BAR["instagram"]}" rel="noopener">Seguici su Instagram</a></div>
 </div></section>
 
@@ -342,7 +342,7 @@ def home_en():
 <p class="intro">In Piazza Carità on Via Toledo, a few minutes' walk from Toledo and Dante stations on Metro Line 1.</p>
 <dl><div><dt>Address</dt><dd>Piazza Carità, 14<br>80134 Naples, Italy</dd></div>
 <div><dt>Opening hours</dt><dd>Every day<br>6:30 am – 8:30 pm</dd></div>
-<div><dt>Phone</dt><dd><a href="tel:{BAR["tel_link"]}">+39 081 552 3488</a> (also <a href="{BAR["whatsapp"]}" rel="noopener">WhatsApp</a>)<br>Mobile <a href="tel:{BAR["cell_link"]}">+39 328 438 8404</a></dd></div></dl>
+<div><dt>Phone</dt><dd><a href="tel:{BAR["tel_link"]}">+39 081 552 3488</a><br>Mobile <a href="tel:{BAR["cell_link"]}">+39 328 438 8404</a> (also <a href="{BAR["whatsapp"]}" rel="noopener">WhatsApp</a>)</dd></div></dl>
 <div class="azioni sinistra" style="margin-top:36px"><a class="btn pieno" href="{BAR["mappa"]}" rel="noopener">Open in Google Maps</a><a class="btn" href="{BAR["instagram"]}" rel="noopener">Follow us on Instagram</a></div>
 </div></section>
 <section class="sezione"><div class="contenitore">
@@ -609,7 +609,7 @@ def pagina(p, lang='it'):
 def pagina_contatti():
     url = BASE + "contatti/"
     h = testa("it", "Orari e contatti | Ceraldi Caffè, Piazza Carità 14",
-              "Ceraldi Caffè, Piazza Carità 14, Napoli: aperto tutti i giorni 6:30–20:30. Telefono 081 552 3488, WhatsApp e come arrivare con la metro Linea 1.",
+              "Ceraldi Caffè, Piazza Carità 14, Napoli: aperto tutti i giorni 6:30–20:30. Telefono 081 552 3488, WhatsApp 328 438 8404 e come arrivare in metro.",
               url, "../", ld=[ld_bar('it'), ld_breadcrumb([("Contatti", url)])], alternates=alt_coppia("contatti/"))
     return h + f"""<header class="testata-scura">{barra("../", "it", "contatti/")}</header>
 <main id="contenuto" class="articolo"><div class="contenitore">
@@ -619,8 +619,8 @@ def pagina_contatti():
 <dl class="scheda contatti">
 <div><dt>Indirizzo</dt><dd>Piazza Carità 14<br>80134 Napoli (NA)</dd></div>
 <div><dt>Orari</dt><dd>Tutti i giorni<br>dalle 6:30 alle 20:30</dd></div>
-<div><dt>Telefono</dt><dd><a href="tel:{BAR["tel_link"]}">081 552 3488</a><br>anche <a href="{BAR["whatsapp"]}" rel="noopener">WhatsApp</a></dd></div>
-<div><dt>Cellulare</dt><dd><a href="tel:{BAR["cell_link"]}">328 438 8404</a></dd></div>
+<div><dt>Telefono</dt><dd><a href="tel:{BAR["tel_link"]}">081 552 3488</a></dd></div>
+<div><dt>Cellulare e WhatsApp</dt><dd><a href="tel:{BAR["cell_link"]}">328 438 8404</a><br>scrivici su <a href="{BAR["whatsapp"]}" rel="noopener">WhatsApp</a></dd></div>
 </dl>
 <div class="azioni sinistra"><a class="btn scuro" href="{BAR["mappa"]}" rel="noopener">Apri in Google Maps</a><a class="btn scuro-vuoto" href="tel:{BAR["tel_link"]}">Chiama</a><a class="btn scuro-vuoto" href="{BAR["whatsapp"]}" rel="noopener">Scrivi su WhatsApp</a></div>
 <div class="corpo">
@@ -675,7 +675,7 @@ def pagina_privacy():
 def pagina_contatti_en():
     url = BASE + "en/contatti/"
     h = testa("en", "Opening hours and contact | Ceraldi Caffè, Naples",
-              "Ceraldi Caffè, Piazza Carità 14, Naples: open daily 6:30 am – 8:30 pm. Phone +39 081 552 3488, WhatsApp, and how to get here by metro Line 1.",
+              "Ceraldi Caffè, Piazza Carità 14, Naples: open daily 6:30 am – 8:30 pm. Phone +39 081 552 3488, WhatsApp +39 328 438 8404 and how to get here by metro.",
               url, "../../", ld=[ld_bar('en'), ld_breadcrumb([("Contact", url)])], alternates=alt_coppia("contatti/"))
     return h + f"""<header class="testata-scura">{barra("../../", "en", "contatti/")}</header>
 <main id="contenuto" class="articolo"><div class="contenitore">
@@ -685,8 +685,8 @@ def pagina_contatti_en():
 <dl class="scheda contatti">
 <div><dt>Address</dt><dd>Piazza Carità 14<br>80134 Naples, Italy</dd></div>
 <div><dt>Opening hours</dt><dd>Every day<br>6:30 am – 8:30 pm</dd></div>
-<div><dt>Phone</dt><dd><a href="tel:{BAR["tel_link"]}">+39 081 552 3488</a><br>also on <a href="{BAR["whatsapp"]}" rel="noopener">WhatsApp</a></dd></div>
-<div><dt>Mobile</dt><dd><a href="tel:{BAR["cell_link"]}">+39 328 438 8404</a></dd></div>
+<div><dt>Phone</dt><dd><a href="tel:{BAR["tel_link"]}">+39 081 552 3488</a></dd></div>
+<div><dt>Mobile and WhatsApp</dt><dd><a href="tel:{BAR["cell_link"]}">+39 328 438 8404</a><br>message us on <a href="{BAR["whatsapp"]}" rel="noopener">WhatsApp</a></dd></div>
 </dl>
 <div class="azioni sinistra"><a class="btn scuro" href="{BAR["mappa"]}" rel="noopener">Open in Google Maps</a><a class="btn scuro-vuoto" href="tel:{BAR["tel_link"]}">Call</a><a class="btn scuro-vuoto" href="{BAR["whatsapp"]}" rel="noopener">Message us on WhatsApp</a></div>
 <div class="corpo">
@@ -810,7 +810,7 @@ def llms():
 ## Informazioni essenziali
 - Indirizzo: Piazza Carità 14, 80134 Napoli, Italia (lungo via Toledo, vicino alle stazioni metro Toledo e Dante, Linea 1)
 - Orari: tutti i giorni, domenica compresa, 6:30 – 20:30
-- Telefono: +39 081 552 3488 (anche WhatsApp); cellulare: +39 328 438 8404
+- Telefono: +39 081 552 3488; cellulare e WhatsApp: +39 328 438 8404
 - Menu completo con prezzi: {BASE}menu/ (menu interattivo con allergeni: {BAR["menu"]})
 - Ragione sociale: {RAGIONE_SOCIALE}, P. IVA {PIVA}
 - Recensioni: Google ({BAR["google_recensioni"]}), Tripadvisor ({BAR["tripadvisor"]}); valutazione 4,3/5 su Google con quasi 2.000 recensioni

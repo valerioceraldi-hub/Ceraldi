@@ -26,7 +26,7 @@ BAR = {
     "tel_link": "+390815523488",
     "cellulare": "328 438 8404",
     "cell_link": "+393284388404",
-    "whatsapp": "https://wa.me/390815523488",
+    "whatsapp": "https://wa.me/393284388404",  # WhatsApp è sul cellulare, non sul fisso
     "orari": "Tutti i giorni, 6:30 – 20:30",
     "orari_en": "Every day, 6:30 am – 8:30 pm",
     "mappa": "https://maps.google.com/?cid=3267263170235699466",
@@ -483,7 +483,7 @@ FAQ = [
     ("Fate anche l'aperitivo?", "Sì, fino alle 20:30, con il nostro Aspritz fatto in casa, spritz, negroni, gin tonic, vini campani al calice e birre.", None),
     ("Si può pranzare?", "Sì, con la rosticceria napoletana (frittatine, crocchè, pizza fritta), saltimbocca e panini, freselle e insalate.", None),
     ("Servite la colazione inglese?", "Sì, tutte le mattine serviamo la Full English Breakfast: uova, bacon, salsicce, fagioli, funghi, pomodori, pane tostato e tè.", None),
-    ("Come posso contattarvi?", "Al telefono fisso 081 552 3488 (anche WhatsApp), al cellulare 328 438 8404 oppure su Instagram @ceraldicaffe.", None),
+    ("Come posso contattarvi?", "Al telefono fisso 081 552 3488, al cellulare 328 438 8404 (anche WhatsApp) oppure su Instagram @ceraldicaffe.", None),
     ("Dove posso leggere le recensioni?", "Su Google e su Tripadvisor, dove trovi quasi 2.000 recensioni dei nostri clienti.",
      'Su <a href="https://search.google.com/local/reviews?placeid=ChIJj5ui8loIOxMRCpGd6YqmVy0" rel="noopener">Google</a> e su <a href="https://www.tripadvisor.it/Restaurant_Review-g187785-d2695184-Reviews-Ceraldi_Caffe-Naples_Province_of_Naples_Campania.html" rel="noopener">Tripadvisor</a>, dove trovi quasi 2.000 recensioni dei nostri clienti.'),
 ]
@@ -495,7 +495,7 @@ FAQ_EN = [
     ("Do you make your own pastries?", "Yes. Our pastries are made in-house from family recipes kept for over a hundred years.", None),
     ("What can I have for breakfast?", "A classic Italian breakfast with croissants, brioche, kranz and pain au chocolat, plus Neapolitan pastries such as sfogliatella, graffa and babà.", None),
     ("Do you serve an English breakfast?", "Yes, every morning: eggs, bacon, sausages, beans, mushrooms, tomatoes, toast and tea.", None),
-    ("How can I contact you?", "Call +39 081 552 3488 (also WhatsApp) or mobile +39 328 438 8404, or find us on Instagram @ceraldicaffe.", None),
+    ("How can I contact you?", "Call +39 081 552 3488, or mobile +39 328 438 8404 (also WhatsApp), or find us on Instagram @ceraldicaffe.", None),
 ]
 
 
