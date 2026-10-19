@@ -510,7 +510,7 @@ def _voce_html(v, rr="../", it=True):
     if ap and not it:
         ap = ap if ap.startswith("storie/") else "en/" + ap
     lk = (f'<a class="approfondisci" href="{rr}{ap}"' + ('' if it or not ap.startswith("storie/") else ' hreflang="it" lang="en"') + '>'
-          + ("La sua storia" if it and ap.startswith("storie/") else "Scopri di più" if it else "Its story (in Italian)" if ap.startswith("storie/") else "Learn more")
+          + ("La sua storia" if it and ap.startswith("storie/") else "Scopri di più" if it else "Its story (in Italian)" if ap.startswith("storie/") else next(x["nav"] for x in PAGINE_EN if "en/" + x["slug"] + "/" == ap))
           + '</a>') if ap else ''
     return '<li><div class="voce-testa"><b>' + e(v['nome']) + '</b><i>' + _prezzo(v['prezzo']) + '</i></div>' + de + ex + lk + '</li>'
 
