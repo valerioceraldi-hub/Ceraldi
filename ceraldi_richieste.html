@@ -393,7 +393,7 @@ body.has-fbar{padding-bottom:calc(150px + var(--safe-b))}
 
 <script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js" defer></script>
 <script>
-var APP_VERSION='8.4.0';
+var APP_VERSION='8.5.0';
 var BUILD_NUM=APP_VERSION;
 var APP={key:'richieste',nome:'Richieste',versione:APP_VERSION,authKey:'rq_auth_v2',oldAuthKey:'ceraldi_richieste_auth_session',
   markBg:'linear-gradient(145deg,#C4A1FF 0%,#8B5CF6 50%,#5B21B6 100%)',
@@ -617,7 +617,7 @@ function _authErrore(e){
   var m = (e && e.message) || '', c = (e && e.codice) || '';
   if(/invalid login credentials|invalid_credentials/i.test(m + c)) return 'Email o password non corretti.';
   if(/otp_expired|expired/i.test(c) || /token has expired|is invalid/i.test(m)) return 'Codice scaduto o sbagliato. Richiedine uno nuovo.';
-  if(/signups not allowed|user not found|otp_disabled/i.test(m + c)) return 'Questa email non è registrata. Chiedi a un amministratore di aggiungerti.';
+  if(/signups not allowed|user not found|otp_disabled/i.test(m + c)) return 'Questa email non ha ancora un account: tocca «Richiedi l\'accesso» qui sotto.';
   if(/rate limit|over_email_send_rate_limit/i.test(m + c)) return 'Troppe email inviate di recente. Riprova tra qualche minuto o usa la password.';
   if(/failed to fetch|network|load failed/i.test(m)) return 'Nessuna connessione. Controlla la rete e riprova.';
   return m || 'Qualcosa non è andato. Riprova.';
@@ -706,9 +706,28 @@ function _authRender(){
     '<div class="ag-tit">' + esc(APP.nome) + '</div><div class="ag-sub">Caffetteria Ceraldi</div>';
   if(S.vista === 'caricamento'){
     h += '<div class="ag-attesa"><div class="spinner"></div><span>Controllo l\'accesso…</span></div>';
+  } else if(S.vista === 'attesa'){
+    // v8.5.0: chi non è in Presenze chiede l'accesso direttamente da qui
+    h += '<div class="ag-neg"><b>Richiesta inviata</b><span>' + esc((_authSess && _authSess.user && _authSess.user.email) || '') + '</span>' +
+      '<span>Ora serve il via libera di un amministratore: riceve la tua richiesta e decide cosa puoi vedere. Ti conviene avvisarlo.</span></div>' +
+      '<button class="ag-btn ag-pri" onclick="_authEntra()">Ho ricevuto il via libera, entra</button>' +
+      '<button class="ag-link" onclick="_authEsci(true)">Esci</button>';
+  } else if(S.vista === 'richiesta'){
+    h += '<div class="ag-nota">Lascia i tuoi dati: ricevi un codice via email per confermare l\'indirizzo, poi un amministratore ti abilita.</div>' +
+      '<label class="ag-lbl" for="agNome">Nome e cognome *</label>' +
+      '<input id="agNome" class="ag-in" type="text" autocomplete="name" value="' + esc(S.nome || '') + '" oninput="_authStato.nome=this.value;_authRichiestaAggiorna()" placeholder="Mario Rossi">' +
+      '<label class="ag-lbl" for="agEmail">Email *</label>' +
+      '<input id="agEmail" class="ag-in" type="email" autocomplete="email" inputmode="email" value="' + esc(S.email) + '" oninput="_authStato.email=this.value;_authRichiestaAggiorna()" placeholder="nome@esempio.it">' +
+      '<label class="ag-lbl" for="agTel">Telefono *</label>' +
+      '<input id="agTel" class="ag-in" type="tel" autocomplete="tel" inputmode="tel" value="' + esc(S.telefono || '') + '" oninput="_authStato.telefono=this.value;_authRichiestaAggiorna()" placeholder="333 1234567">' +
+      '<label style="display:flex;gap:8px;align-items:flex-start;margin:10px 2px;font-size:13px;line-height:1.35">' +
+        '<input id="agConsenso" type="checkbox" style="margin-top:3px;width:auto" ' + (S.consenso ? 'checked' : '') + ' onchange="_authStato.consenso=this.checked;_authRichiestaAggiorna()">' +
+        '<span>Ho letto l\'informativa privacy e acconsento al trattamento dei miei dati per gestire l\'accesso a questa app. *</span></label>' +
+      '<button class="ag-btn ag-pri" onclick="_authRichiedi()"' + ((S.attesa || !_authRichiestaValida()) ? ' disabled' : '') + '>' + (S.attesa ? 'Invio…' : 'Richiedi l\'accesso') + '</button>' +
+      '<button class="ag-link" onclick="_authStato.vista=\'login\';_authStato.msg=\'\';_authRender()">Ho già un account: accedi</button>';
   } else if(S.vista === 'negato'){
     var em = (_authSess && _authSess.user && _authSess.user.email) || '';
-    h += '<div class="ag-neg"><b>Questo account non ha accesso a ' + esc(APP.nome) + '.</b><span>' + esc(em) + '</span><span>' + esc(S.msg || 'Chiedi a un amministratore di abilitarti da Fatture → Impostazioni → Utenti e accessi.') + '</span></div>' +
+    h += '<div class="ag-neg"><b>Questo account non ha accesso a ' + esc(APP.nome) + '.</b><span>' + esc(em) + '</span><span>' + esc(S.msg || 'Chiedi a un amministratore di abilitarti.') + '</span></div>' +
       '<button class="ag-btn ag-sec" onclick="_authEsci(true)">Esci e usa un altro account</button>';
     S.msg = '';
   } else {
@@ -732,6 +751,7 @@ function _authRender(){
         '<button class="ag-btn ag-pri" onclick="_authVerificaCodice()"' + (S.attesa ? ' disabled' : '') + '>' + (S.attesa ? 'Verifica…' : 'Verifica ed entra') + '</button>' +
         '<button class="ag-link" onclick="_authStato.codiceInviato=false;_authRender()">Non è arrivato? Invia di nuovo</button>';
     }
+    h += '<button class="ag-link" style="margin-top:14px" onclick="_authStato.vista=\'richiesta\';_authStato.codiceInviato=false;_authStato.msg=\'\';_authRender()">Non hai un account? <b>Richiedi l\'accesso</b></button>';
   }
   h += '<div class="ag-msg" role="status" aria-live="polite">' + esc(S.msg || '') + '</div></div>';
   el.innerHTML = h;
@@ -756,6 +776,25 @@ async function _authInviaCodice(){
   _authStato.attesa = true; _authStato.msg = ''; _authRender();
   try{ await _authPost('otp?redirect_to=' + encodeURIComponent(_authRedirect()), { email: em, create_user: false }); _authStato.codiceInviato = true; _authStato.attesa = false; _authStato.msg = 'Codice inviato a ' + em + '. Controlla anche lo spam.'; _authRender(); }
   catch(e){ _authStato.attesa = false; _authStato.msg = _authErrore(e); _authRender(); }
+}
+function _authTelefonoValido(t){ return String(t || '').replace(/[^0-9]/g, '').length >= 8; }
+function _authRichiestaValida(){
+  var S = _authStato;
+  return String(S.nome || '').trim().length >= 3 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(S.email || '').trim()) && _authTelefonoValido(S.telefono) && !!S.consenso;
+}
+// abilita il bottone a ogni tasto senza ridisegnare (il campo non perde il focus)
+function _authRichiestaAggiorna(){ var b = document.querySelector('.ag-box .ag-pri'); if(b && b.textContent.indexOf('Richied') >= 0) b.disabled = !_authRichiestaValida(); }
+async function _authRichiedi(){
+  if(!_authRichiestaValida()){ _authStato.msg = 'Compila tutti i campi e dai il consenso.'; _authRender(); return; }
+  var em = _authEmailValida(); if(!em) return;
+  _authStato.attesa = true; _authStato.msg = ''; _authRender();
+  try{
+    await _authPost('otp?redirect_to=' + encodeURIComponent(_authRedirect()), { email: em, create_user: true,
+      data: { nome: String(_authStato.nome).trim(), origine: 'richiesta', app: 'richieste', telefono: String(_authStato.telefono).trim(), consenso_privacy: true, consenso_privacy_il: new Date().toISOString() } });
+    _authStato.attesa = false; _authStato.vista = 'login'; _authStato.modo = 'codice'; _authStato.codiceInviato = true;
+    _authStato.msg = 'Ti ho mandato un codice a ' + em + ' per confermare l\'indirizzo. Controlla anche lo spam.';
+    _authRender();
+  }catch(e){ _authStato.attesa = false; _authStato.msg = _authErrore(e); _authRender(); }
 }
 async function _authVerificaCodice(){
   var em = _authEmailValida(); if(!em) return;
@@ -789,6 +828,7 @@ async function _authEntra(){
   _authMostra('caricamento');
   try{
     var acc = await _authControllaAccesso();
+    if(!acc.ok && acc.stato === 'in_attesa'){ _authMostra('attesa'); return; }
     if(!acc.ok){ _authMostra('negato', acc.stato === 'in_attesa' ? 'La tua richiesta di accesso è in attesa: un amministratore deve ancora approvarla.' : (acc.stato === 'bloccato' ? 'Questo account non è più abilitato.' : '')); return; }
   }catch(e){
     var prima = lsGet(APP.key + '_acc', null);
