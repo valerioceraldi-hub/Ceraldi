@@ -143,7 +143,8 @@ def ld_bar(lang='it'):
         "hasMap": BAR["mappa"], "hasMenu": BASE + "menu/", "vatID": "IT" + PIVA, "legalName": RAGIONE_SOCIALE,
         "servesCuisine": ["Caffetteria", "Pasticceria napoletana", "Colazione italiana", "Aperitivo"],
         "knowsAbout": ["caffè napoletano", "sfogliatella", "babà", "pastiera napoletana", "zeppole di San Giuseppe", "pasticceria napoletana", "colazione all'italiana"],
-        "sameAs": [BAR["instagram"], BAR["facebook"], BAR["tripadvisor"], BAR["mappa"]],
+        "sameAs": [BAR["instagram"], BAR["facebook"], BAR["tripadvisor"], BAR["mappa"], BAR["gambero_rosso"]],
+        "award": "Guida Bar d'Italia del Gambero Rosso" if lang == 'it' else "Gambero Rosso Bar d'Italia guide",
     }
 
 def ld_sito():
@@ -166,7 +167,8 @@ def recensioni(lang='it'):
     it = lang == 'it'
     return f'''<section class="sezione recensioni" id="{'recensioni' if it else 'reviews'}"><div class="contenitore recensioni-griglia">
 <div><p class="voto"><span class="voto-num">4,3</span><span class="voto-stelle" aria-hidden="true">★★★★<i>★</i></span></p>
-<p class="voto-txt">{'Valutazione media su Google, con quasi 2.000 recensioni dei nostri clienti.' if it else 'Average rating on Google, from almost 2,000 customer reviews.'}</p></div>
+<p class="voto-txt">{'Valutazione media su Google, con quasi 2.000 recensioni dei nostri clienti.' if it else 'Average rating on Google, from almost 2,000 customer reviews.'}</p>
+<p class="voto-txt premio">{'Da oltre dieci anni nella guida <strong>Bar d&#39;Italia del Gambero Rosso</strong>.' if it else 'Listed for over ten years in the <strong>Gambero Rosso Bar d&#39;Italia</strong> guide.'} <a href="{BAR["gambero_rosso"]}" rel="noopener">{'Leggi la scheda' if it else 'Read the listing'}</a></p></div>
 <div><h2>{'Cosa dicono di noi' if it else 'What our customers say'}</h2>
 <p class="intro">{'Leggi le opinioni di chi è passato da Piazza Carità, o lascia la tua dopo la visita.' if it else 'Read what visitors say about us, or leave your own review after your visit.'}</p>
 <div class="azioni sinistra"><a class="btn scuro" href="{BAR["google_recensioni"]}" rel="noopener">{'Recensioni su Google' if it else 'Reviews on Google'}</a>
@@ -195,7 +197,7 @@ def home_it():
 <h1>Bar e pasticceria napoletana in Piazza Carità</h1>
 <p class="tag">{e(BAR["tagline"])} Dolci di produzione propria, con ricette di famiglia custodite da oltre cento anni.</p>
 <div class="azioni sinistra"><a class="btn pieno" href="{BAR["mappa"]}" rel="noopener">Come arrivare</a><a class="btn" href="menu/">Guarda il menu</a><a class="btn" href="tel:{BAR["tel_link"]}">Chiama</a></div>
-<p class="aperto">Aperto tutti i giorni dalle 6:30 alle 20:30<br><a href="#recensioni">Valutazione 4,3 su Google</a></p>
+<p class="aperto">Aperto tutti i giorni dalle 6:30 alle 20:30<br><a href="#recensioni">Valutazione 4,3 su Google</a><br><a href="{BAR["gambero_rosso"]}" rel="noopener">Nella guida Bar d'Italia del Gambero Rosso</a></p>
 </div>
 <figure class="specchio">{immagine("sfogliatella-riccia", "", "(max-width: 900px) 92vw, 480px", eager=True, cls="fuoco-sx")}</figure>
 </div>
@@ -297,7 +299,7 @@ def home_en():
 <h1>Neapolitan café and pastry shop in Piazza Carità</h1>
 <p class="tag">From breakfast to aperitivo, in the heart of Naples. Pastries made in-house from family recipes kept for over a hundred years.</p>
 <div class="azioni sinistra"><a class="btn pieno" href="{BAR["mappa"]}" rel="noopener">Get directions</a><a class="btn" href="menu/">See the menu</a><a class="btn" href="tel:{BAR["tel_link"]}">Call</a></div>
-<p class="aperto">Open every day from 6:30 am to 8:30 pm<br><a href="#reviews">Rated 4.3 on Google</a></p>
+<p class="aperto">Open every day from 6:30 am to 8:30 pm<br><a href="#reviews">Rated 4.3 on Google</a><br><a href="{BAR["gambero_rosso"]}" rel="noopener">Listed in Gambero Rosso's Bar d'Italia guide</a></p>
 </div>
 <figure class="specchio">{immagine("sfogliatella-riccia", "../", "(max-width: 900px) 92vw, 480px", eager=True, cls="fuoco-sx")}</figure>
 </div>
@@ -746,6 +748,7 @@ def llms():
 - Menu completo con prezzi: {BASE}menu/ (menu interattivo con allergeni: {BAR["menu"]})
 - Ragione sociale: {RAGIONE_SOCIALE}, P. IVA {PIVA}
 - Recensioni: Google ({BAR["google_recensioni"]}), Tripadvisor ({BAR["tripadvisor"]}); valutazione 4,3/5 su Google con quasi 2.000 recensioni
+- Riconoscimenti: da oltre dieci anni nella guida Bar d'Italia del Gambero Rosso (scheda: {BAR["gambero_rosso"]})
 - Instagram: {BAR["instagram"]}
 - Mappa: {BAR["mappa"]}
 

@@ -33,6 +33,8 @@ BAR = {
     "facebook": "https://www.facebook.com/ceraldicaffe",
     "google_recensioni": "https://search.google.com/local/reviews?placeid=ChIJj5ui8loIOxMRCpGd6YqmVy0",
     "google_scrivi": "https://search.google.com/local/writereview?placeid=ChIJj5ui8loIOxMRCpGd6YqmVy0",
+    # Scheda nella guida Bar d'Italia del Gambero Rosso (edizione 2026 verificata online; "da oltre dieci anni" dichiarato dal titolare)
+    "gambero_rosso": "https://www.gamberorosso.it/luoghi/locali/caffe-bar/ceraldi-caffe/",
     "tripadvisor": "https://www.tripadvisor.it/Restaurant_Review-g187785-d2695184-Reviews-Ceraldi_Caffe-Naples_Province_of_Naples_Campania.html",
 }
 
