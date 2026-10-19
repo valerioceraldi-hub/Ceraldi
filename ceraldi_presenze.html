@@ -3292,7 +3292,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     <button class="hdr-btn" id="tb-back" style="display:none" aria-label="Indietro"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
     <div class="tb-titles">
       <h1 id="tb-title">Presenze</h1>
-      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v71</span></p>
+      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v72</span></p>
     </div>
     <span class="topbar-badge" id="role-badge"></span>
     <div class="hdr-actions">
@@ -6665,11 +6665,19 @@ function buildTS(data, ora) {
 }
 const initials = n => n ? n.split(' ').map(p=>p[0]).slice(0,2).join('').toUpperCase() : '?';
 
-function toast(msg) {
+function toast(msg, opz) {
   const t = $('toast');
+  clearTimeout(toast._t);
   t.textContent = msg;
+  // v. cedolini 19/10: toast con un'azione (es. «Sistema»), resta di più e si può toccare
+  if (opz && opz.azione) {
+    const b = document.createElement('button');
+    b.textContent = opz.azione; b.style.cssText = 'margin-left:10px;border:none;background:rgba(255,255,255,.18);color:inherit;font:inherit;font-weight:700;padding:4px 10px;border-radius:99px;cursor:pointer';
+    b.onclick = () => { t.classList.remove('on'); t.style.pointerEvents = ''; opz.onAzione && opz.onAzione(); };
+    t.appendChild(b); t.style.pointerEvents = 'auto'; t.style.whiteSpace = 'normal';
+  } else { t.style.pointerEvents = ''; }
   t.classList.add('on');
-  setTimeout(() => t.classList.remove('on'), 2800);
+  toast._t = setTimeout(() => { t.classList.remove('on'); t.style.pointerEvents = ''; }, opz && opz.azione ? 9000 : 2800);
 }
 
 function showMsg(id, txt, tipo) {
@@ -7152,7 +7160,7 @@ function renderMenuAltro(filtro) {
       voce('stella','255,204,0','Recensioni Google','Nuove recensioni e ricevuta di lettura',"switchPage('pg-recensioni')"),
     ]],
     ['Documenti e comunicazioni', [
-      voce('doc','255,149,0','Documenti','Buste paga, CU, contratti',"switchPage('pg-docs-admin')"),
+      voce('doc','255,149,0','Documenti',(window._cedBozze ? '⚠️ '+window._cedBozze+' cedolin'+(window._cedBozze===1?'o':'i')+' da inviare · ' : '')+'Buste paga, CU, contratti',"switchPage('pg-docs-admin')"),
       voce('megafono','255,45,85','Avvisi','Bacheca comunicazioni staff',"switchPage('pg-bacheca-admin')"),
       voce('modelli','142,142,147','Modelli','Contratto e lettere tipo',"switchPage('pg-modelli-admin')"),
     ]],
@@ -13251,13 +13259,14 @@ function ricFinestra(m, a) { const f = _rsbFinestraMese(m, a); return f; }
 /* ── CARICAMENTO: una sola lettura per tutte le viste ── */
 async function _ricTutte(mk) { const out = []; for (let da = 0; da < 20000; da += 1000) { const { data, error } = await mk().range(da, da + 999); if (error) throw error; out.push(...(data || [])); if (!data || data.length < 1000) break; } return out; }
 async function ricCarica() {
-  const [prof, ced, bon, port, ecc, acc] = await Promise.all([
+  const [prof, ced, bon, port, ecc, acc, rnote] = await Promise.all([
     _ricTutte(() => sb.from('presenze_profili').select('id,nome,cognome,ruolo,attivo,eliminato,percepisce_stipendio,iban,codice_fiscale,data_assunzione,data_fine_rapporto').order('id')),
-    _ricTutte(() => sb.from('presenze_documenti').select('id,dipendente_id,mese,anno,netto_busta,url,nome_file,creato_il').eq('categoria', 'busta_paga').order('id')),
+    _ricTutte(() => sb.from('presenze_documenti').select('id,dipendente_id,mese,anno,netto_busta,url,nome_file,creato_il,versioni').eq('categoria', 'busta_paga').order('id')),
     _ricTutte(() => sb.from('presenze_bonifici_stipendio').select('*').order('id')),
     _ricTutte(() => sb.from('presenze_portafoglio_movimenti').select('*').order('id')),
     sb.from('presenze_riconciliazione_eccezioni').select('*').then(r => r.data || [], () => []),
     _ricTutte(() => sb.from('presenze_acconti').select('id,dipendente_id,importo,data,documento_id,modalita').not('documento_id', 'is', null).order('id')),
+    sb.from('presenze_riconciliazione_note').select('dipendente_id,importo,note').then(r => r.data || [], () => []),
   ]);
   // movimenti bancari collegati (per mostrare sempre i dati originali della banca)
   const ids = [...new Set(bon.map(b => b.movimento_banca_id).filter(Boolean))];
@@ -13278,7 +13287,7 @@ async function ricCarica() {
     const usati = new Set(bon.map(b => b.movimento_banca_id).filter(Boolean));
     liberi = liberi.filter(m => !usati.has(m.id) && !_rsbECommissione(m.descrizione));
   }
-  const D = { prof, ced, bon, port, ecc, acc, movById, bancaFinoAl, liberi, generato: new Date() };
+  const D = { prof, ced, bon, port, ecc, acc, rnote, movById, bancaFinoAl, liberi, generato: new Date() };
   RIC.D = D;
   return D;
 }
@@ -13303,7 +13312,11 @@ function ricPartitario(dip, D) {
   const nonStip = new Set(D.ecc.filter(e => e.tipo === 'non_stipendio').map(e => e.movimento_banca_id));
   const port = D.port.filter(p => p.dipendente_id === dip.id);
   const anomalie = [];
-  const add = (liv, tipo, testo, cosaFare, mese, anno) => anomalie.push({ liv, tipo, testo, cosaFare, mese, anno, dip: ricNome(dip) });
+  const add = (liv, tipo, testo, cosaFare, mese, anno, az) => anomalie.push({ liv, tipo, testo, cosaFare, mese, anno, dip: ricNome(dip), az });
+  const azSistema = (m, a) => ({ lbl: 'Sistema', fn: "cedSistema('" + dip.id + "'," + m + ',' + a + ')' });
+  // eccedenze già registrate per mese (portafoglio «eccedenza_bonifico_MM_AAAA» + note «Eccedenza bonifico MM/AAAA»)
+  const eccReg = (m, a) => _rr2(port.filter(p => p.causale === 'eccedenza_bonifico_' + String(m).padStart(2, '0') + '_' + a).reduce((s, p) => s + (parseFloat(p.importo) || 0), 0)
+    + (D.rnote || []).filter(n => n.dipendente_id === dip.id && String(n.note || '').indexOf('Eccedenza bonifico ' + String(m).padStart(2, '0') + '/' + a) === 0).reduce((s, n) => s + (parseFloat(n.importo) || 0), 0));
   // periodo analizzato: dal primo cedolino (o primo pagamento collegato) al mese scorso
   const chiavi = ced.map(c => _rK(c.mese, c.anno)).concat(bon.map(b => _rK(b.mese_riferimento, b.anno_riferimento)));
   if (!chiavi.length) return { dip, righe: [], anomalie, tot: { dovuto: 0, ricevuto: 0, saldo: 0 }, periodo: null, definitivo: true, portafoglio: 0, liberi: [] };
@@ -13347,6 +13360,7 @@ function ricPartitario(dip, D) {
       else { stato = 'manca_cedolino'; statoTxt = 'Cedolino mancante'; }
     } else if (netto == null) { stato = 'senza_netto'; statoTxt = 'Cedolino senza importo netto'; }
     else if (Math.abs(diff) <= 0.5) { stato = 'pagato'; statoTxt = 'Pagato'; }
+    else if (diff > 0.5 && eccReg(m, a) > 0 && Math.abs(diff - eccReg(m, a)) <= 0.5) { stato = 'pagato'; statoTxt = 'Pagato · ' + _rE(diff) + ' in più già registrati come eccedenza'; }
     else if (diff > 0.5) { stato = 'in_piu'; statoTxt = 'Pagato ' + _rE(diff) + ' in più'; }
     else if (ricevuto + coperturaPort > 0) { stato = finestraAperta ? 'in_corso' : 'parziale'; statoTxt = (finestraAperta ? 'Pagato in parte (c\'è tempo fino al ' + _rD(fin.al) + ')' : 'Pagato in parte') + ' · manca ' + _rE(-diff); }
     else if (finestraAperta) { stato = 'in_attesa'; statoTxt = 'Da pagare entro il ' + _rD(fin.al); }
@@ -13372,8 +13386,14 @@ function ricPartitario(dip, D) {
     if (stato === 'senza_cedolino') add('err', 'Pagamento senza cedolino', P + ': risultano bonifici per ' + _rE(ricevuto) + ' ma nessun cedolino.', 'Carica il cedolino di quel mese oppure sposta il bonifico sul mese giusto.', m, a);
     if (cedM.length > 1) add('err', 'Cedolino doppio', P + ': ci sono ' + cedM.length + ' cedolini (' + cedM.map(x => _rE(x.netto_busta)).join(', ') + '). Nel saldo conta solo il più recente.', 'Elimina da Documenti quello caricato per errore.', m, a);
     if (stato === 'senza_netto') add('err', 'Cedolino senza netto', P + ': il cedolino non ha l\'importo netto, quindi non si può confrontare.', 'Apri il cedolino in Documenti → ✏️ Modifica e scrivi il netto.', m, a);
+    if (stato === 'parziale' && eccReg(m, a) > 0.5) add('err', 'Eccedenza registrata non più giusta', P + ': manca ' + _rE(-diff) + ' ma per questo mese c\'è un\'eccedenza registrata di ' + _rE(eccReg(m, a)) + ' (il netto è cambiato dopo?).', 'Tocca «Sistema» per correggerla.', m, a, azSistema(m, a));
     if (stato === 'parziale') add('warn', 'Pagato in parte', P + ': netto ' + _rE(netto) + ', bonifici ' + _rE(ricevuto) + ' · manca ' + _rE(-diff) + '.', 'Cerca il bonifico mancante (Riconciliazione → cerca manualmente) oppure verifica se è stato pagato in contanti.', m, a);
-    if (stato === 'in_piu') add('warn', 'Pagato in più', P + ': netto ' + _rE(netto) + ', bonifici ' + _rE(ricevuto + coperturaPort) + ' · ' + _rE(diff) + ' in più.', 'Può essere un anticipo sul mese dopo, 13ª/14ª o ferie pagate insieme: verifica sul cedolino.', m, a);
+    if (stato === 'in_piu') add('warn', 'Pagato in più', P + ': netto ' + _rE(netto) + ', bonifici ' + _rE(ricevuto + coperturaPort) + ' · ' + _rE(diff) + ' in più' + (eccReg(m, a) ? ' (eccedenza registrata ' + _rE(eccReg(m, a)) + ')' : '') + '.', 'Può essere un anticipo sul mese dopo, 13ª/14ª o ferie pagate insieme: verifica sul cedolino, poi «Sistema» per registrare la differenza.', m, a, azSistema(m, a));
+    // cedolino definitivo diverso da quello di controllo: si vede sempre cosa è cambiato
+    const vPrec = c && Array.isArray(c.versioni) && c.versioni[0];
+    if (vPrec && vPrec.netto != null && netto != null && Math.abs(vPrec.netto - netto) > 0.01) add(Math.abs(diff) <= 0.5 || stato === 'in_arrivo' || stato === 'in_attesa' ? 'info' : 'warn', 'Cedolino definitivo diverso', P + ': il cedolino è stato sostituito il ' + _rD(String(vPrec.sostituito_il).slice(0, 10)) + ', netto ' + _rE(vPrec.netto) + ' → ' + _rE(netto) + ' (' + (netto > vPrec.netto ? '+' : '−') + _rE(Math.abs(netto - vPrec.netto)) + '). I bonifici si confrontano con il definitivo.', Math.abs(diff) <= 0.5 ? 'Nessuna: i pagamenti tornano.' : 'Controlla i pagamenti con «Sistema».', m, a, Math.abs(diff) <= 0.5 ? null : azSistema(m, a));
+    // eccedenza registrata che non torna più (es. il definitivo ha cambiato il netto dopo la registrazione)
+    if (netto != null && eccReg(m, a) > 0.5 && diff >= -0.5 && Math.abs(diff - eccReg(m, a)) > 0.5 && stato !== 'in_piu') add('err', 'Eccedenza registrata non più giusta', P + ': registrata un\'eccedenza di ' + _rE(eccReg(m, a)) + ', ma con il netto di ' + _rE(netto) + ' quella vera è ' + _rE(Math.max(0, diff)) + '.', 'Tocca «Sistema» per correggerla.', m, a, azSistema(m, a));
     if (stato === 'da_confermare') add('warn', 'Bonifico da confermare', P + ': in banca ' + (trovati.length === 1 ? 'c\'è un bonifico' : 'ci sono ' + trovati.length + ' bonifici') + ' a suo nome nel periodo di pagamento (' + trovatiTxt + '), non ancora ' + (trovati.length === 1 ? 'collegato' : 'collegati') + ' al cedolino.', 'Contabilità → Riconciliazione: controlla e conferma.', m, a);
     if (stato === 'non_pagato') add('warn', 'Nessun bonifico', P + ': netto ' + _rE(netto) + ' e nessun bonifico collegato (finestra ' + _rD(fin.dal) + ' – ' + _rD(fin.al) + ').', 'Riconciliazione → "Non trovi un bonifico? Cercalo manualmente", oppure è stato pagato in contanti.', m, a);
     if (reali.length > 1) add('info', 'Più bonifici per un cedolino', P + ': pagato con ' + reali.length + ' bonifici (' + reali.map(b => _rE(b.importo)).join(' + ') + ').', 'Nessuna azione se è voluto (es. acconto + saldo).', m, a);
@@ -13810,7 +13830,7 @@ async function ricQuadro(dipId) {
   const strip = `<div class="ric-strip">${P.righe.map(r => { const t = ricTono(r.stato); return `<button class="ric-strip-m ${t}" onclick="document.getElementById('ric-m-${r.k}').scrollIntoView({behavior:'smooth',block:'start'})"><small>${RIC_MESI[r.mese].slice(0, 3)}</small><b>${RIC_ICO_T[t]}</b><span>${String(r.anno).slice(2)}</span></button>`; }).join('')}</div>
     <div class="ric-legenda"><span class="ok">✓ pagato</span><span class="warn">! da verificare</span><span class="ko">✕ manca</span><span class="nd">… in attesa</span></div>`;
   const livIco = { err: '✕', warn: '!', info: 'i' };
-  const anom = P.anomalie.length ? ricSez('Da sistemare', P.anomalie.length) + P.anomalie.map(a => `<div class="ric-anom ${a.liv}"><span class="ric-anom-ico">${livIco[a.liv]}</span><div><b>${esc(a.tipo)}</b><p>${esc(a.testo)}</p><div class="ric-anom-fare"><span>Cosa fare</span>${esc(a.cosaFare)}</div></div></div>`).join('')
+  const anom = P.anomalie.length ? ricSez('Da sistemare', P.anomalie.length) + P.anomalie.map(a => `<div class="ric-anom ${a.liv}"><span class="ric-anom-ico">${livIco[a.liv]}</span><div><b>${esc(a.tipo)}</b><p>${esc(a.testo)}</p><div class="ric-anom-fare"><span>Cosa fare</span>${esc(a.cosaFare)}</div>${a.az ? `<button class="btn-sm" style="margin-top:8px" onclick="${a.az.fn}">${esc(a.az.lbl)}</button>` : ''}</div></div>`).join('')
     : '<div class="ric-vuoto ok"><span>✓</span><b>Nessuna anomalia</b><small>Cedolini completi e bonifici coerenti.</small></div>';
   const mese = r => {
     const t = ricTono(r.stato), breve = RIC_STATI_BREVE[r.stato] || '';
@@ -23469,12 +23489,17 @@ async function amAggancia(movId, data, importo, descrizione){
 async function presenzeCedoliniNonRiconciliati(){
   const risultati = [];
   try {
-    const [{ data: cedolini }, { data: coperture }, { data: dips }, { data: portaf }] = await Promise.all([
+    const [{ data: cedolini }, { data: coperture }, { data: dips }, { data: portaf }, { data: rnote }] = await Promise.all([
       sb.from('presenze_documenti').select('dipendente_id,mese,anno,netto_busta').eq('categoria','busta_paga').not('netto_busta','is',null),
       sb.from('presenze_bonifici_stipendio').select('dipendente_id,mese_riferimento,anno_riferimento,importo'),
       sb.from('presenze_profili').select('id,nome,cognome').eq('attivo',true),
-      sb.from('presenze_portafoglio_movimenti').select('dipendente_id,importo')
+      sb.from('presenze_portafoglio_movimenti').select('dipendente_id,importo,causale'),
+      sb.from('presenze_riconciliazione_note').select('dipendente_id,importo,note')
     ]);
+    // 19/10: la parte dei bonifici già registrata come eccedenza (portafoglio o acconto) non paga questo stipendio
+    const eccMap = {};
+    (portaf||[]).forEach(p => { const m = /^eccedenza_bonifico_(\d{2})_(\d{4})$/.exec(p.causale||''); if (m) { const k = p.dipendente_id+'|'+parseInt(m[1])+'|'+m[2]; eccMap[k] = (eccMap[k]||0) + (parseFloat(p.importo)||0); } });
+    (rnote||[]).forEach(n => { const m = /^Eccedenza bonifico (\d{2})\/(\d{4})/.exec(n.note||''); if (m) { const k = n.dipendente_id+'|'+parseInt(m[1])+'|'+m[2]; eccMap[k] = (eccMap[k]||0) + (parseFloat(n.importo)||0); } });
     const dipMap = {}; (dips||[]).forEach(d => { dipMap[d.id] = d; });
     const copertoMap = {};
     (coperture||[]).forEach(c => {
@@ -23488,7 +23513,7 @@ async function presenzeCedoliniNonRiconciliati(){
       const dip = dipMap[c.dipendente_id];
       if (!dip) return;
       const k = c.dipendente_id + '|' + c.mese + '|' + c.anno;
-      const coperto = Math.round((copertoMap[k]||0) * 100) / 100;
+      const coperto = Math.round(((copertoMap[k]||0) - (eccMap[k]||0)) * 100) / 100;
       const netto = parseFloat(c.netto_busta);
       const mancante = Math.round((netto - coperto) * 100) / 100;
       if (mancante <= 0.5) return; // già saldato per intero, non compare qui
@@ -25787,6 +25812,12 @@ async function aggiornaNavBadge() {
       .eq('confermata_dip', false);
     setNavBadge('pg-scan', c2||0);
 
+    // Cedolini caricati ma non ancora inviati ai dipendenti (19/10): numerino su «Altro» e avviso in Documenti
+    try {
+      const { count: cB } = await sb.from('presenze_documenti').select('id',{count:'exact',head:true}).eq('categoria','busta_paga').eq('inviato_dip', false);
+      window._cedBozze = cB || 0; setNavBadge('pg-altro', window._cedBozze);
+    } catch (e) {}
+
   } else {
     // Badge Richieste dipendente: richieste in attesa + ferie admin da confermare
     const { count: c1a } = await sb.from('presenze_assenze')
@@ -25887,7 +25918,7 @@ async function caricaDocumentiAdmin() {
     + '<button class="btn-primary" style="flex:1" onclick="openSheetCaricaDoc()">+ Carica documento</button>'
     + '<button class="btn-secondary" style="flex:1" onclick="openSheetCedolini()">📎 Carica cedolini (PDF multiplo)</button>'
     + '</div>'
-    + '<button class="btn-green-solid" style="width:100%;margin-bottom:16px" onclick="inviaCedoliniInAttesa()">📤 Invia cedolini in attesa</button>';
+    + await cedBannerBozze();
 
   if (error) {
     wrap.innerHTML = btnAdd + '<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-txt">Errore: '+esc(error.message)+'</div></div>';
@@ -26518,6 +26549,17 @@ async function caricaDocumento() {
   if (meseObbligatorio && !mese) { showMsg('cd-msg','Seleziona il mese (obbligatorio per buste paga e CU)','err'); return; }
   if (file.size > 10*1024*1024) { showMsg('cd-msg','File troppo grande (max 10MB)','err'); return; }
 
+  // Cedolino di controllo → definitivo: prima di sostituire mostro cosa cambia e cosa succede ai pagamenti
+  if (isBusta && mese && anno) {
+    try {
+      const st = await cedStatoPagamenti(dipId, mese, anno);
+      if (st.doc) {
+        const sel = $('cd-dip'), nomeDip = sel && sel.selectedOptions && sel.selectedOptions[0] ? sel.selectedOptions[0].textContent : '';
+        if (!confirm('⚠️ Per questo mese c\'è già un cedolino.\n\n' + cedConfrontoTesto(st, { netto, lordo }, nomeDip) + '\n\nSostituirlo con questo? Gli importi di quello vecchio restano registrati nello storico del cedolino.')) return;
+      }
+    } catch (e) { console.warn('confronto cedolino:', e.message || e); }
+  }
+
   const btn = $('cd-btn');
   btn.disabled = true; btn.textContent = 'Caricamento…';
 
@@ -26531,7 +26573,7 @@ async function caricaDocumento() {
   let esistente = null;
   if (isBusta) {
     const { data } = await sb.from('presenze_documenti')
-      .select('id,url').eq('dipendente_id', dipId).eq('categoria','busta_paga')
+      .select('id,url,netto_busta,lordo,contributi_dip,tfr_accantonato,nome_file,inviato_dip,inviato_il,versioni').eq('dipendente_id', dipId).eq('categoria','busta_paga')
       .eq('mese', mese).eq('anno', anno).limit(1).maybeSingle();
     esistente = data;
   }
@@ -26540,6 +26582,7 @@ async function caricaDocumento() {
   if (esistente) {
     ({ error } = await sb.from('presenze_documenti').update({
       nome_file: file.name, url: path, descrizione: desc || null,
+      ...(isBusta ? { versioni: cedVersioniDopo(esistente) } : {}),
       lordo, netto_busta: netto, contributi_dip: contributi, tfr_accantonato: tfr,
       letto_dip: false, letto_il: null,
       // Busta paga: ricaricare il file (anche uno già inviato/modifica) la
@@ -26572,6 +26615,7 @@ async function caricaDocumento() {
   }
   try { const _impF = _hexBuf(await _sha256Buf(new Uint8Array(await file.arrayBuffer()))); await sb.from('presenze_documenti').update({ file_sha256: _impF }).eq('url', path); } catch (e) { /* colonna non ancora presente: ci pensa il sigillo notturno */ }
 
+  if (isBusta && esistente) { const sel = $('cd-dip'); cedAvvisaDopoSostituzione(dipId, mese, anno, sel && sel.selectedOptions && sel.selectedOptions[0] ? sel.selectedOptions[0].textContent : ''); }
   if (isBusta) {
     // Busta paga: nessuna notifica qui, resta in bozza — si invia da
     // inviaCedolinoDoc()/inviaCedoliniInAttesa() quando l'admin decide.
@@ -26622,6 +26666,8 @@ async function modificaCedolino(docId) {
 async function inviaCedolinoDoc(docId) {
   const { data: d, error } = await sb.from('presenze_documenti').select('*').eq('id',docId).single();
   if (error || !d) { toast('Documento non trovato'); return; }
+  const problemi = await cedControlloPrimaInvio([d]);
+  if (problemi.length && !confirm('⚠️ I pagamenti già fatti non tornano con questo cedolino:\n\n'+problemi.join('\n')+'\n\nInviarlo comunque? Potrai sistemare i pagamenti dopo (Riconciliazione → «Sistema»).')) return;
   const { error: upErr } = await sb.from('presenze_documenti').update({
     inviato_dip: true, inviato_il: new Date().toISOString()
   }).eq('id', docId);
@@ -26634,13 +26680,39 @@ async function inviaCedolinoDoc(docId) {
   await caricaDocumentiAdmin();
 }
 
+// Riquadro in Documenti: cedolini caricati e non inviati, per mese, da quanto tempo
+async function cedBannerBozze() {
+  let l = [];
+  try { const { data } = await sb.from('presenze_documenti').select('id,dipendente_id,mese,anno,creato_il').eq('categoria','busta_paga').eq('inviato_dip', false); l = data || []; } catch (e) {}
+  window._cedBozze = l.length; setNavBadge('pg-altro', l.length);
+  if (!l.length) return '<div style="font-size:12.5px;color:var(--muted);margin:0 2px 16px">✓ Nessun cedolino in attesa di invio.</div>';
+  const per = {}; l.forEach(d => { const k = d.anno*100+d.mese; (per[k] = per[k] || []).push(d); });
+  const giorni = Math.max(...l.map(d => Math.floor((Date.now() - Date.parse(d.creato_il || 0)) / 86400000)));
+  const mesi = Object.keys(per).sort().reverse().map(k => MESI[k%100]+' '+Math.floor(k/100)+': '+per[k].length).join(' · ');
+  return '<div style="background:rgba(230,162,0,.12);border:1px solid rgba(230,162,0,.35);border-radius:12px;padding:12px;margin-bottom:16px">'
+    + '<div style="font-weight:800;font-size:14px;margin-bottom:2px">📤 '+l.length+' cedolin'+(l.length===1?'o caricato e non ancora inviato':'i caricati e non ancora inviati')+'</div>'
+    + '<div style="font-size:12.5px;color:var(--muted);line-height:1.45;margin-bottom:10px">'+esc(mesi)+(giorni >= 1 ? ' · il più vecchio è in attesa da '+giorni+' giorn'+(giorni===1?'o':'i') : '')+'. I dipendenti non li vedono finché non li invii.</div>'
+    + '<button class="btn-green-solid" style="width:100%" onclick="inviaCedoliniInAttesa()">Controlla e invia '+(l.length===1?'il cedolino':'i '+l.length+' cedolini')+'</button></div>';
+}
+// Prima dell'invio: per ogni cedolino, i pagamenti già fatti tornano con questo netto?
+async function cedControlloPrimaInvio(docs) {
+  const problemi = [];
+  const nomi = {}; try { const { data } = await sb.from('presenze_profili').select('id,nome,cognome'); (data || []).forEach(p => { nomi[p.id] = p.nome + (p.cognome ? ' ' + p.cognome : ''); }); } catch (e) {}
+  for (const d of docs) {
+    if (d.netto_busta == null || !d.mese || !d.anno) continue;
+    try { const st = await cedStatoPagamenti(d.dipendente_id, d.mese, d.anno), c = cedConfronto(st, d.netto_busta); if (c.tono !== 'ok' && c.esito !== 'nessun_pagamento') problemi.push('• ' + (nomi[d.dipendente_id] || '') + ' ' + MESI[d.mese] + ': ' + c.righe.slice(1).join(' ') + (c.liqRiga ? ' ' + c.liqRiga : '')); } catch (e) {}
+  }
+  return problemi;
+}
+
 // Invia in un colpo solo tutte le buste paga ancora in bozza (non inviate).
 async function inviaCedoliniInAttesa() {
   const { data, error } = await sb.from('presenze_documenti').select('*')
     .eq('categoria','busta_paga').eq('inviato_dip', false);
   if (error) { toast('Errore: '+error.message); return; }
   if (!data || !data.length) { toast('Nessun cedolino in attesa di invio'); return; }
-  if (!confirm('Invia '+data.length+' cedolin'+(data.length===1?'o':'i')+' in attesa ai rispettivi dipendenti?')) return;
+  const problemi = await cedControlloPrimaInvio(data);
+  if (!confirm((problemi.length ? '⚠️ Per '+problemi.length+' cedolin'+(problemi.length===1?'o':'i')+' i pagamenti già fatti non tornano con il netto:\n\n'+problemi.join('\n')+'\n\nPuoi sistemarli anche dopo (Riconciliazione → «Sistema»).\n\n' : '✓ Per tutti i cedolini con bonifici già fatti gli importi tornano.\n\n')+'Invia '+data.length+' cedolin'+(data.length===1?'o':'i')+' in attesa ai rispettivi dipendenti?')) return;
   let ok = 0, ko = 0;
   for (const d of data) {
     try {
@@ -26957,6 +27029,11 @@ async function analizzaCedolini() {
           g.periodoControllato = { mese, anno };
           g.giaEsistente = !!(mese && anno && setEsistenti.has(g.dipId+'_'+mese+'_'+anno));
         });
+        // Cedolino di controllo → definitivo: confronto importi e pagamenti già fatti
+        for (const g of _cedGruppi) {
+          if (!g.giaEsistente) { g.prec = null; continue; }
+          try { g.prec = await cedStatoPagamenti(g.dipId, g.periodoControllato.mese, g.periodoControllato.anno); } catch (e) { g.prec = null; }
+        }
       }
     }
 
@@ -27052,7 +27129,11 @@ function renderReviewCedolini() {
   $('ced-btn-conferma').style.display = 'inline-block';
 
   const nRicon = _cedGruppi.filter(g=>g.dipId).length;
-  $('ced-review-titolo').textContent = _cedGruppi.length+' buste rilevate — '+nRicon+' abbinate automaticamente. Controlla ogni riga: puoi caricarle una alla volta col tasto sotto ciascuna, oppure assegnarle tutte e usare "Carica assegnate" in fondo.';
+  const gia = _cedGruppi.filter(g => g.giaEsistente && g.prec && g.prec.doc);
+  const giaUguali = gia.filter(g => g.netto != null && g.prec.doc.netto_busta != null && Math.abs(_cedR2(g.netto) - _cedR2(g.prec.doc.netto_busta)) <= 0.01).length;
+  $('ced-review-titolo').textContent = _cedGruppi.length+' buste rilevate — '+nRicon+' abbinate automaticamente.'
+    + (gia.length ? ' '+gia.length+' già caricate per questo mese: '+giaUguali+' uguali, '+(gia.length-giaUguali)+' diverse (vedi il confronto su ogni riga).' : '')
+    + ' Controlla ogni riga: puoi caricarle una alla volta col tasto sotto ciascuna, oppure assegnarle tutte e usare "Carica assegnate" in fondo.';
 
   const opzDip = '<option value="">— seleziona —</option>' + _cedDipendenti.map(d =>
     '<option value="'+d.id+'">'+esc(d.nome)+(d.cognome?' '+esc(d.cognome):'')+'</option>').join('');
@@ -27065,7 +27146,9 @@ function renderReviewCedolini() {
     const avvisoPeriodo = periodoDiverso
       ? '<div style="font-size:11px;color:var(--red);font-weight:700;background:rgba(217,48,37,.08);border-radius:6px;padding:6px 8px;margin-bottom:8px">⚠️ Il PDF riporta <b>'+MESI[g.periodoRilevato.mese]+' '+g.periodoRilevato.anno+'</b>, ma hai selezionato <b>'+MESI[meseSelezionato]+' '+annoSelezionato+'</b> — controlla prima di caricare</div>'
       : '';
-    const avvisoDoppione = g.giaEsistente
+    const avvisoDoppione = g.giaEsistente && g.prec && g.prec.doc
+      ? '<div id="ced-cmp-'+i+'">'+cedConfrontoHtml(g.prec, { netto: g.netto, lordo: g.lordo })+'</div>'
+      : g.giaEsistente
       ? '<div style="font-size:11px;color:var(--yellow);font-weight:700;background:rgba(230,162,0,.1);border-radius:6px;padding:6px 8px;margin-bottom:8px">⚠️ Busta già presente per questo dipendente in <b>'+(g.periodoControllato?MESI[g.periodoControllato.mese]+' '+g.periodoControllato.anno:'questo periodo')+'</b> — caricandola ora la sostituirai</div>'
       : '';
     return '<div class="card" style="margin-bottom:8px;padding:12px">'
@@ -27080,8 +27163,8 @@ function renderReviewCedolini() {
       + '<button class="btn-sm" style="width:100%;margin-bottom:10px;white-space:normal;line-height:1.4;padding:10px" onclick="mostraAnteprimaCedolino('+i+')">👁 Vedi la'+(g.pagine.length>1?' '+g.pagine.length+' pagine vere':' pagina vera')+' — controlla che sia il dipendente giusto</button>'
       + '<div id="ced-preview-'+i+'" style="display:none;margin-bottom:10px;border:1px solid var(--border);border-radius:8px;overflow:auto;max-height:400px"></div>'
       + '<div style="display:flex;gap:8px">'
-      + '<div style="flex:1"><div class="field-lbl">Netto busta (€)</div><input class="field-inp" type="number" step="0.01" id="ced-netto-'+i+'" value="'+(g.netto!=null?g.netto:'')+'" onchange="_cedGruppi['+i+'].netto=parseFloat(this.value)||null"></div>'
-      + '<div style="flex:1"><div class="field-lbl">Lordo (€)</div><input class="field-inp" type="number" step="0.01" id="ced-lordo-'+i+'" value="'+(g.lordo!=null?g.lordo:'')+'" onchange="_cedGruppi['+i+'].lordo=parseFloat(this.value)||null"></div>'
+      + '<div style="flex:1"><div class="field-lbl">Netto busta (€)</div><input class="field-inp" type="number" step="0.01" id="ced-netto-'+i+'" value="'+(g.netto!=null?g.netto:'')+'" onchange="_cedGruppi['+i+'].netto=parseFloat(this.value)||null;cedAggiornaCmp('+i+')"></div>'
+      + '<div style="flex:1"><div class="field-lbl">Lordo (€)</div><input class="field-inp" type="number" step="0.01" id="ced-lordo-'+i+'" value="'+(g.lordo!=null?g.lordo:'')+'" onchange="_cedGruppi['+i+'].lordo=parseFloat(this.value)||null;cedAggiornaCmp('+i+')"></div>'
       + '</div>'
       + '<div style="display:flex;gap:8px">'
       + '<div style="flex:1"><div class="field-lbl" style="font-size:11px;color:var(--muted)">Contributi INPS (€)</div><input class="field-inp" type="number" step="0.01" id="ced-contr-'+i+'" value="'+(g.contributiDip!=null?g.contributiDip:'')+'" onchange="_cedGruppi['+i+'].contributiDip=parseFloat(this.value)||null"></div>'
@@ -27089,11 +27172,149 @@ function renderReviewCedolini() {
       + '</div>'
       + (g.netto==null ? '<div style="font-size:11px;color:var(--yellow)">Netto non riconosciuto automaticamente — inseriscilo a mano</div>' : '')
       + (g.giaEsistente
-          ? '<button class="btn-sm" id="ced-btn-singolo-'+i+'" style="width:100%;margin-top:10px;background:var(--yellow);color:#fff" onclick="confermaCedolinoSingolo('+i+')">⚠️ Già presente — sostituisci comunque</button>'
+          ? '<button class="btn-sm" id="ced-btn-singolo-'+i+'" style="width:100%;margin-top:10px;background:var(--yellow);color:#fff" onclick="confermaCedolinoSingolo('+i+')">⚠️ Già presente — sostituiscila con questa (definitiva)</button>'
           : '<button class="btn-sm primary" id="ced-btn-singolo-'+i+'" style="width:100%;margin-top:10px" onclick="confermaCedolinoSingolo('+i+')">✓ Carica questa busta</button>')
       + '</div>';
   }).join('');
 }
+
+/* ═════════════════════════════════════════════════════════════════
+   CEDOLINO DI CONTROLLO → CEDOLINO DEFINITIVO (19/10/2026, richiesto da Valerio)
+   Flusso reale: si caricano i cedolini di CONTROLLO (non inviati), si fanno
+   i bonifici, poi arrivano i DEFINITIVI che si inviano ai dipendenti. I
+   bonifici devono tornare AL CENTESIMO con il definitivo, non con il controllo.
+   Una sola logica, usata ovunque (caricamento, invio, riconciliazione):
+     pagato    = bonifici collegati al mese + coperture dal portafoglio
+     eccedenza = eccedenze di quel mese già registrate (portafoglio
+                 "eccedenza_bonifico_MM_AAAA" + note di riconciliazione)
+     scarto    = pagato − eccedenza − netto del cedolino
+   scarto 0 → tutto torna · < 0 → manca qualcosa (o l'eccedenza registrata
+   è troppo alta) · > 0 → pagato in più non ancora registrato.
+   Nessuna correzione parte da sola: l'app mostra la situazione e propone
+   le scritture, decide Valerio (cedSistema).
+   ═════════════════════════════════════════════════════════════════ */
+const _cedR2 = v => Math.round((parseFloat(v) || 0) * 100) / 100;
+const _cedE = v => '€ ' + _cedR2(v).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const _cedMM = m => String(m).padStart(2, '0');
+async function cedStatoPagamenti(dipId, mese, anno) {
+  const [{ data: bon }, { data: port }, { data: note }, { data: liq }, { data: doc }] = await Promise.all([
+    sb.from('presenze_bonifici_stipendio').select('importo,fonte_copertura').eq('dipendente_id', dipId).eq('mese_riferimento', mese).eq('anno_riferimento', anno),
+    sb.from('presenze_portafoglio_movimenti').select('importo').eq('dipendente_id', dipId).eq('causale', 'eccedenza_bonifico_' + _cedMM(mese) + '_' + anno),
+    sb.from('presenze_riconciliazione_note').select('importo,note').eq('dipendente_id', dipId),
+    sb.from('presenze_liquidazioni').select('bonifico,contanti,importo_netto').eq('dipendente_id', dipId).eq('mese', mese).eq('anno', anno).maybeSingle(),
+    sb.from('presenze_documenti').select('id,netto_busta,lordo,inviato_dip,inviato_il,creato_il,versioni,nome_file').eq('dipendente_id', dipId).eq('categoria', 'busta_paga').eq('mese', mese).eq('anno', anno).limit(1).maybeSingle(),
+  ]);
+  let saldaCed = 0;
+  if (doc) { const { data: acc } = await sb.from('presenze_acconti').select('importo').eq('documento_id', doc.id); saldaCed = _cedR2((acc || []).reduce((s, a) => s + (parseFloat(a.importo) || 0), 0)); }
+  const reali = (bon || []).filter(b => b.fonte_copertura !== 'portafoglio');
+  const pagatoBanca = _cedR2(reali.reduce((s, b) => s + (parseFloat(b.importo) || 0), 0));
+  const coperturaPort = _cedR2((bon || []).filter(b => b.fonte_copertura === 'portafoglio').reduce((s, b) => s + (parseFloat(b.importo) || 0), 0));
+  const eccPort = _cedR2((port || []).reduce((s, p) => s + (parseFloat(p.importo) || 0), 0));
+  const pref = 'Eccedenza bonifico ' + _cedMM(mese) + '/' + anno;
+  const eccNote = _cedR2((note || []).filter(n => String(n.note || '').indexOf(pref) === 0).reduce((s, n) => s + (parseFloat(n.importo) || 0), 0));
+  return { dipId, mese, anno, doc: doc || null, nBonifici: reali.length, pagatoBanca, coperturaPort, pagato: _cedR2(pagatoBanca + coperturaPort), eccPort, eccNote, eccedenza: _cedR2(eccPort + eccNote), liq: liq || null, saldaCed };
+}
+// Confronto puro (nessuna lettura): cosa succede ai pagamenti se il netto del cedolino è `netto`
+function cedConfronto(st, netto) {
+  netto = _cedR2(netto);
+  const out = { scarto: 0, esito: 'nessun_pagamento', tono: 'nd', righe: [], liqRiga: '' };
+  if (st.liq && st.liq.bonifico != null) {
+    const bonAtteso = _cedR2(netto - st.saldaCed), bonLiq = _cedR2(st.liq.bonifico), d = _cedR2(bonAtteso - bonLiq);
+    if (Math.abs(d) > 0.01) out.liqRiga = 'Nella liquidazione di questo mese hai segnato bonifico ' + _cedE(bonLiq) + ' e contanti ' + _cedE(st.liq.contanti || 0) + ': con questo cedolino la parte in bonifico è ' + _cedE(bonAtteso) + ', quindi i contanti dovrebbero essere ' + _cedE(_cedR2((parseFloat(st.liq.contanti) || 0) - d)) + ' (' + (d > 0 ? '−' : '+') + _cedE(Math.abs(d)) + ').';
+  }
+  if (!st.pagato && !st.eccedenza) { out.righe.push('Per questo mese non c\'è ancora nessun bonifico collegato: nessuna conseguenza sui pagamenti.'); if (out.liqRiga) { out.tono = 'warn'; out.esito = 'liquidazione'; } return out; }
+  const scarto = out.scarto = _cedR2(st.pagato - st.eccedenza - netto);
+  const pagTxt = 'Bonifici collegati ' + _cedE(st.pagatoBanca) + (st.coperturaPort ? ' + portafoglio ' + _cedE(st.coperturaPort) : '') + (st.eccedenza ? ' − eccedenza già registrata ' + _cedE(st.eccedenza) : '');
+  out.righe.push(pagTxt + ' → ' + _cedE(_cedR2(st.pagato - st.eccedenza)) + ' per lo stipendio.');
+  if (Math.abs(scarto) <= 0.01) { out.esito = 'ok'; out.tono = 'ok'; out.righe.push('✓ Torna al centesimo con il netto di ' + _cedE(netto) + '.'); }
+  else if (scarto < 0) {
+    const daTogliere = Math.min(st.eccedenza, -scarto);
+    if (daTogliere > 0.009) { out.esito = 'eccedenza_alta'; out.righe.push('L\'eccedenza registrata è troppo alta di ' + _cedE(daTogliere) + ': con questo netto è in realtà ' + _cedE(_cedR2(st.eccedenza - daTogliere)) + '.'); }
+    if (-scarto - daTogliere > 0.009) { out.esito = daTogliere > 0.009 ? 'eccedenza_alta_manca' : 'manca'; out.righe.push('Mancano ' + _cedE(-scarto - daTogliere) + ' rispetto al netto di ' + _cedE(netto) + ': va fatto un bonifico in più.'); }
+    out.tono = 'ko';
+  } else { out.esito = 'in_piu'; out.tono = 'warn'; out.righe.push('Hai pagato ' + _cedE(scarto) + ' in più rispetto al netto di ' + _cedE(netto) + ': puoi metterli nel portafoglio o come acconto sul mese dopo.'); }
+  if (out.liqRiga && out.tono === 'ok') out.tono = 'warn';
+  return out;
+}
+// Riquadro di confronto vecchio/nuovo (usato in revisione e prima di sostituire)
+function cedConfrontoHtml(st, nuovo) {
+  const d = st.doc, vN = d && d.netto_busta != null ? _cedR2(d.netto_busta) : null, nN = nuovo.netto != null ? _cedR2(nuovo.netto) : null;
+  const vL = d && d.lordo != null ? _cedR2(d.lordo) : null, nL = nuovo.lordo != null ? _cedR2(nuovo.lordo) : null;
+  const uguale = vN != null && nN != null && Math.abs(vN - nN) <= 0.01 && (vL == null || nL == null || Math.abs(vL - nL) <= 0.01);
+  const diffTxt = (a, b) => a == null || b == null ? '' : (Math.abs(b - a) <= 0.01 ? ' <span style="color:var(--green)">= uguale</span>' : ' <b style="color:var(--red)">(' + (b > a ? '+' : '−') + _cedE(Math.abs(b - a)) + ')</b>');
+  const stato = d ? (d.inviato_dip ? 'già inviata al dipendente' + (d.inviato_il ? ' il ' + new Date(d.inviato_il).toLocaleDateString('it-IT') : '') : 'di controllo, non inviata') : '';
+  const c = nN != null ? cedConfronto(st, nN) : null, col = { ok: 'var(--green)', warn: 'var(--yellow)', ko: 'var(--red)', nd: 'var(--muted)' };
+  return '<div style="font-size:12px;line-height:1.5;background:' + (uguale ? 'rgba(47,138,92,.07)' : 'rgba(230,162,0,.1)') + ';border-radius:8px;padding:8px 10px;margin-bottom:8px">'
+    + '<div style="font-weight:700;margin-bottom:4px">' + (uguale ? '✓ Uguale a quella già caricata' : '⚠️ Diversa da quella già caricata') + ' <span style="font-weight:400;color:var(--muted)">(' + esc(stato) + ')</span></div>'
+    + '<div>Netto: ' + (vN != null ? _cedE(vN) : '—') + ' → <b>' + (nN != null ? _cedE(nN) : '—') + '</b>' + diffTxt(vN, nN) + '</div>'
+    + (vL != null || nL != null ? '<div>Lordo: ' + (vL != null ? _cedE(vL) : '—') + ' → <b>' + (nL != null ? _cedE(nL) : '—') + '</b>' + diffTxt(vL, nL) + '</div>' : '')
+    + (c ? '<div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(0,0,0,.08);color:' + col[c.tono] + '"><b>Pagamenti:</b> ' + c.righe.map(esc).join(' ') + (c.liqRiga ? '<br>' + esc(c.liqRiga) : '') + '</div>' : '')
+    + '</div>';
+}
+// Testo semplice per le conferme
+function cedConfrontoTesto(st, nuovo, nome) {
+  const d = st.doc, c = cedConfronto(st, nuovo.netto);
+  return nome + ' — ' + MESI[st.mese] + ' ' + st.anno + '\nGià caricata (' + (d && d.inviato_dip ? 'già inviata' : 'di controllo, non inviata') + '): netto ' + (d && d.netto_busta != null ? _cedE(d.netto_busta) : '—') + '\nNuova: netto ' + (nuovo.netto != null ? _cedE(nuovo.netto) : '—') + '\n' + c.righe.join('\n') + (c.liqRiga ? '\n' + c.liqRiga : '');
+}
+// La versione che viene sostituita resta registrata (importi e date, non il PDF)
+function cedVersioniDopo(vecchio) {
+  if (!vecchio) return [];
+  const v = { netto: vecchio.netto_busta != null ? _cedR2(vecchio.netto_busta) : null, lordo: vecchio.lordo != null ? _cedR2(vecchio.lordo) : null, contributi_dip: vecchio.contributi_dip ?? null, tfr_accantonato: vecchio.tfr_accantonato ?? null, nome_file: vecchio.nome_file || null, inviato_il: vecchio.inviato_dip ? (vecchio.inviato_il || null) : null, sostituito_il: new Date().toISOString(), da: ME ? ME.id : null };
+  return [v].concat(Array.isArray(vecchio.versioni) ? vecchio.versioni : []).slice(0, 10);
+}
+// Dopo una sostituzione: se i pagamenti non tornano lo dico subito, con l'azione per sistemare
+async function cedAvvisaDopoSostituzione(dipId, mese, anno, nome) {
+  try {
+    const st = await cedStatoPagamenti(dipId, mese, anno); if (!st.doc || st.doc.netto_busta == null) return;
+    const c = cedConfronto(st, st.doc.netto_busta);
+    if (c.tono === 'ok' || c.esito === 'nessun_pagamento') return;
+    toast('⚠️ ' + (nome || 'Cedolino') + ' ' + MESI[mese] + ': i pagamenti non tornano più con la busta definitiva', { azione: 'Sistema', onAzione: () => cedSistema(dipId, mese, anno) });
+  } catch (e) { console.warn('cedAvvisaDopoSostituzione:', e.message || e); }
+}
+// Scheda "Sistema i pagamenti di questo cedolino": mostra la situazione e propone le scritture
+async function cedSistema(dipId, mese, anno) {
+  const st = await cedStatoPagamenti(dipId, mese, anno);
+  if (!st.doc || st.doc.netto_busta == null) { toast('Cedolino senza netto: scrivilo prima in Documenti'); return; }
+  const netto = _cedR2(st.doc.netto_busta), c = cedConfronto(st, netto), { data: pr } = await sb.from('presenze_profili').select('nome,cognome').eq('id', dipId).maybeSingle();
+  const nome = pr ? pr.nome + (pr.cognome ? ' ' + pr.cognome : '') : '';
+  const ult = (st.doc.versioni || [])[0];
+  let az = '';
+  if (c.esito === 'in_piu') az = '<button class="btn-primary" style="margin-bottom:8px" onclick="cedApplica(\'' + dipId + '\',' + mese + ',' + anno + ',\'portafoglio\')">🐷 Metti ' + _cedE(c.scarto) + ' nel portafoglio</button>'
+    + '<button class="btn-secondary" style="margin-bottom:8px;width:100%" onclick="cedApplica(\'' + dipId + '\',' + mese + ',' + anno + ',\'acconto\')">Registra ' + _cedE(c.scarto) + ' come acconto sul mese dopo</button>';
+  if (c.esito === 'eccedenza_alta' || c.esito === 'eccedenza_alta_manca') az = '<button class="btn-primary" style="margin-bottom:8px" onclick="cedApplica(\'' + dipId + '\',' + mese + ',' + anno + ',\'rettifica\')">Correggi l\'eccedenza registrata (−' + _cedE(Math.min(st.eccedenza, -c.scarto)) + ')</button>';
+  if (c.esito === 'manca' || c.esito === 'eccedenza_alta_manca') az += '<div style="font-size:12.5px;color:var(--muted);line-height:1.5;margin-bottom:8px">Per la parte che manca: fai il bonifico e collegalo da Contabilità → Riconciliazione, oppure coprila dal portafoglio del dipendente.</div>';
+  const corpo = '<div style="font-size:13px;line-height:1.55">'
+    + '<div style="font-weight:700;font-size:15px;margin-bottom:6px">' + esc(nome) + ' · ' + MESI[mese] + ' ' + anno + '</div>'
+    + '<div>Netto del cedolino: <b>' + _cedE(netto) + '</b>' + (ult && ult.netto != null && Math.abs(ult.netto - netto) > 0.01 ? ' <span style="color:var(--muted)">(prima era ' + _cedE(ult.netto) + ', sostituito il ' + new Date(ult.sostituito_il).toLocaleDateString('it-IT') + ')</span>' : '') + '</div>'
+    + c.righe.map(r => '<div>' + esc(r) + '</div>').join('') + (c.liqRiga ? '<div style="margin-top:6px;color:var(--yellow)">' + esc(c.liqRiga) + ' La liquidazione non la cambio da solo: correggila tu da Stipendi se serve.</div>' : '')
+    + '</div><div style="margin-top:14px">' + (az || (c.tono === 'ok' ? '<div style="color:var(--green);font-weight:700">✓ Non c\'è niente da sistemare.</div>' : '')) + '</div>';
+  let sh = $('sh-cedSistema');
+  if (!sh) { sh = document.createElement('div'); sh.className = 'overlay'; sh.id = 'sh-cedSistema'; sh.innerHTML = '<div class="sheet"><div class="sheet-handle"></div><div class="sheet-hdr"><span class="sheet-title">Pagamenti del cedolino</span><button class="sheet-cls" onclick="closeSheet(\'sh-cedSistema\')">✕</button></div><div class="sheet-body" id="ced-sistema-body"></div></div>'; sh.addEventListener('click', e => { if (e.target === sh) closeSheet('sh-cedSistema'); }); document.body.appendChild(sh); }
+  $('ced-sistema-body').innerHTML = corpo;
+  openSheet('sh-cedSistema');
+}
+// Scrive la correzione scelta. Gli importi si ricalcolano qui sul dato fresco: ripetere non raddoppia nulla.
+async function cedApplica(dipId, mese, anno, tipo) {
+  try {
+    const st = await cedStatoPagamenti(dipId, mese, anno), netto = _cedR2(st.doc && st.doc.netto_busta), c = cedConfronto(st, netto);
+    const causale = 'eccedenza_bonifico_' + _cedMM(mese) + '_' + anno, nota = 'Eccedenza bonifico ' + _cedMM(mese) + '/' + anno;
+    if (tipo === 'portafoglio' && c.esito === 'in_piu') await presenzePortafoglioDeposita(dipId, c.scarto, causale);
+    else if (tipo === 'acconto' && c.esito === 'in_piu') {
+      const ms = mese === 12 ? 1 : mese + 1, as = mese === 12 ? anno + 1 : anno;
+      await sb.from('presenze_riconciliazione_note').insert({ dipendente_id: dipId, importo: c.scarto, data: todayISO(), competenza_tipo: 'acconto_stipendio', mese_riferimento: ms, anno_riferimento: as, note: nota + ' (cedolino definitivo: netto ' + netto.toFixed(2) + '€, pagato ' + st.pagato.toFixed(2) + '€) — acconto via bonifico, non contanti', registrato_da: ME ? ME.id : null });
+    } else if (tipo === 'rettifica' && /eccedenza_alta/.test(c.esito)) {
+      let resta = _cedR2(Math.min(st.eccedenza, -c.scarto));
+      const daPort = _cedR2(Math.min(resta, Math.max(0, st.eccPort)));
+      if (daPort > 0) { await sb.from('presenze_portafoglio_movimenti').insert({ dipendente_id: dipId, importo: -daPort, data: todayISO(), causale, registrato_da: ME ? ME.id : null }); resta = _cedR2(resta - daPort); }
+      if (resta > 0) await sb.from('presenze_riconciliazione_note').insert({ dipendente_id: dipId, importo: -resta, data: todayISO(), competenza_tipo: 'rettifica', mese_riferimento: mese, anno_riferimento: anno, note: nota + ' — rettifica per cedolino definitivo (netto ' + netto.toFixed(2) + '€)', registrato_da: ME ? ME.id : null });
+    } else { toast('Niente da correggere: la situazione è già cambiata'); }
+    toast('✓ Sistemato');
+    closeSheet('sh-cedSistema');
+    if (typeof RIC !== 'undefined') RIC.D = null;
+  } catch (e) { toast('⚠️ ' + (e.message || e)); }
+}
+
+function cedAggiornaCmp(i) { const g = _cedGruppi[i], el = $('ced-cmp-'+i); if (g && el && g.prec && g.prec.doc) el.innerHTML = cedConfrontoHtml(g.prec, { netto: g.netto, lordo: g.lordo }); }
 
 // Carica su Supabase UN SOLO gruppo (una busta paga): ritaglio PDF, upload,
 // anti-duplicati, notifica Telegram. Usata sia dal caricamento massivo
@@ -27117,13 +27338,13 @@ async function caricaUnGruppoCedolino(g, mese, anno, srcDoc) {
   // rilettura riparte da zero (letto_il azzerato) perché il
   // contenuto è cambiato.
   const { data: esistente } = await sb.from('presenze_documenti')
-    .select('id,url').eq('dipendente_id', g.dipId).eq('categoria','busta_paga')
+    .select('id,url,netto_busta,lordo,contributi_dip,tfr_accantonato,nome_file,inviato_dip,inviato_il,versioni').eq('dipendente_id', g.dipId).eq('categoria','busta_paga')
     .eq('mese', mese).eq('anno', anno).limit(1).maybeSingle();
 
   let insErr = null;
   if (esistente) {
     const { error } = await sb.from('presenze_documenti').update({
-      nome_file: nomeFile, url: path,
+      nome_file: nomeFile, url: path, versioni: cedVersioniDopo(esistente),
       lordo: g.lordo, netto_busta: g.netto,
       contributi_dip: g.contributiDip, tfr_accantonato: g.tfrAccantonato,
       letto_dip: false, letto_il: null,
@@ -27149,6 +27370,7 @@ async function caricaUnGruppoCedolino(g, mese, anno, srcDoc) {
     insErr = error;
   }
   if (insErr) throw insErr;
+  if (esistente) { const d = (_cedDipendenti || []).find(x => x.id === g.dipId); cedAvvisaDopoSostituzione(g.dipId, mese, anno, d ? d.nome + (d.cognome ? ' ' + d.cognome : '') : ''); }
   // NIENTE notifica qui: il caricamento crea solo la bozza. L'invio vero e
   // proprio (e la relativa notifica Telegram) avviene da inviaCedolinoDoc()
   // o inviaCedoliniInAttesa(), quando l'admin decide di inviare.
@@ -27179,7 +27401,9 @@ async function confermaCedolinoSingolo(i) {
     const nome = d ? d.nome+(d.cognome?' '+d.cognome:'') : '(dipendente)';
     const periodo = g.periodoControllato ? MESI[g.periodoControllato.mese]+' '+g.periodoControllato.anno : 'questo periodo';
     const continua = confirm(
-      '⚠️ '+nome+' ha già una busta paga caricata per '+periodo+'.\n\nCaricando questa la sostituirai (quella vecchia verrà eliminata). Vuoi procedere?'
+      '⚠️ '+nome+' ha già una busta paga caricata per '+periodo+'.\n\n'
+      + (g.prec && g.prec.doc ? cedConfrontoTesto(g.prec, { netto: g.netto, lordo: g.lordo }, nome)+'\n\n' : '')
+      + 'Caricando questa la sostituirai: gli importi di quella vecchia restano registrati nello storico del cedolino, il PDF vecchio viene eliminato. Vuoi procedere?'
     );
     if (!continua) return;
   }
