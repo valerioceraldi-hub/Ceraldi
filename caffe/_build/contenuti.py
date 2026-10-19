@@ -130,9 +130,6 @@ ARTICOLI = [
 <p>Il bar napoletano è un luogo di passaggio e di incontro: si entra per un caffè e si esce con una notizia, un saluto, un consiglio. È anche il posto dove nasce un'altra tradizione tutta napoletana, il <a href="../caffe-sospeso/">caffè sospeso</a>.</p>
 """,
  "provare": [("Caffè Ceraldi", "cioccolata, crema di caffè e panna fresca"), ("Michelino", "espresso, crema di zucchero e panna"), ("Caldo freddo", "espresso e crema di latte montata a freddo")],
- "fonti": [("Reversible coffee pot (Wikipedia)", "https://en.wikipedia.org/wiki/Reversible_coffee_pot"),
-           ("La cuccumella napoletana è nata a Parigi (Linkiesta)", "https://www.linkiesta.it/2020/07/cuccumella-napoletana-caffe-napoli-parigi/"),
-           ("La caffettiera napoletana: la storia della cuccumella (Napolike)", "https://www.napolike.it/caffettiera-napoletana-storia-della-cuccumella")],
 },
 {
  "slug": "caffe-sospeso",
@@ -156,8 +153,6 @@ ARTICOLI = [
 <p>Il caffè sospeso funziona perché è piccolo: costa poco, non chiede organizzazione e non mette in imbarazzo nessuno. È lo stesso spirito del bar napoletano, dove il caffè è prima di tutto un'occasione per stare in mezzo agli altri. Se vuoi capire meglio questo rito, leggi anche <a href="../caffe-napoletano/">come si beve il caffè a Napoli</a>.</p>
 """,
  "provare": [("Espresso al bancone", "il modo più napoletano per cominciare"), ("Caffè Babà", "caffè e babà nella stessa tazza")],
- "fonti": [("Giornata del caffè sospeso (GreenMe)", "https://www.greenme.it/lifestyle/costume-e-societa/giornata-caffe-sospeso-tradiziona-napoletana-solidarieta/"),
-           ("Caffè sospeso: la tradizione napoletana (Italy Segreta)", "https://italysegreta.com/it/caffe-sospeso-la-tradizione-napoletana-di-comprare-un-caffe-per-qualcuno-che-non-puo-permetterselo/")],
 },
 {
  "slug": "sfogliatella",
@@ -187,8 +182,6 @@ ARTICOLI = [
 <p>Calda, appena sfornata, con lo zucchero a velo che cade sul piattino. A Napoli si accompagna al caffè, al bancone, a qualsiasi ora del mattino. E chi ama la sfoglia può provare anche la <strong>coda d'aragosta</strong>, una sfogliatella allungata e farcita di crema.</p>
 """,
  "provare": [("Sfogliatella riccia e frolla", "con ricotta, semola, canditi e cannella"), ("Sfogliata Santa Rosa", "crema e amarene"), ("Cestino", "il riccio della sfogliatella con chantilly e frutti di bosco"), ("Codina di aragosta", "con chantilly, cioccolato o pistacchio")],
- "fonti": [("Pasticceria Pintauro, la sfogliatella più antica della città (Dissapore)", "https://www.dissapore.com/ristoranti/pasticceria-pintauro-a-napoli-recensione-come-la-sfogliatella-piu-antica-della-citta"),
-           ("The history and the origin of the sfogliatella (Gran Caffè Gambrinus)", "https://grancaffegambrinus.com/en/the-history-and-the-origin-of-the-sfogliatella/")],
 },
 {
  "slug": "baba",
@@ -215,8 +208,6 @@ ARTICOLI = [
 <p>Il babà classico è semplice, solo pasta e bagna. Ma si presta a mille varianti: con crema e amarene, con panna e fragole, con il cioccolato, o al limoncello, per un omaggio alla Costiera.</p>
 """,
  "provare": [("Babà al rum", "classico, oppure con crema e amarene, panna e fragole o cioccolato"), ("Segreto amalfitano", "babà al limoncello con chantilly ai limoni di Amalfi"), ("Babàmisù", "cupola di babà con mascarpone e caffè"), ("Caffè Babà", "il babà anche nella tazza")],
- "fonti": [("Babà, storia e leggenda del dolce napoletano nato in Francia (Gambero Rosso)", "https://www.gamberorosso.it/notizie/storie/baba-storia-e-leggenda-del-dolce-napoletano-nato-in-francia"),
-           ("Il babà: un dolce polacco diventato simbolo di Napoli (Napolike)", "https://www.napolike.it/il-baba-dolce-polacco-simbolo-di-napoli")],
 },
 {
  "slug": "pastiera",
@@ -243,8 +234,6 @@ ARTICOLI = [
 <p>La pastiera dà il meglio di sé un giorno o due dopo la cottura, quando i profumi di grano, agrumi e fiori d'arancio si sono amalgamati. Per questo in molte famiglie si prepara qualche giorno prima di Pasqua.</p>
 """,
  "provare": [("Pastiera napoletana", "con grano, canditi e fiori d'arancio"), ("Pellecchiella", "torta con albicocche del Vesuvio, presidio Slow Food")],
- "fonti": [("Storia e leggenda della pastiera napoletana (Gambero Rosso)", "https://www.gamberorosso.it/notizie/storie/storia-e-leggenda-della-pastiera-napoletana-con-la-ricetta-di-sal-de-riso/"),
-           ("Pastiera napoletana: storia (Eroica Fenice)", "https://www.eroicafenice.com/napoli/food/pastiera-napoletana-storia-e-consigli-per-gli-acquisti/")],
 },
 {
  "slug": "zeppole-di-san-giuseppe",
@@ -268,8 +257,6 @@ ARTICOLI = [
 <p>La zeppola nasce fritta, ed è quella la versione più fedele alla tradizione. Oggi si trova anche al forno, più leggera. In entrambi i casi l'impasto è quello della pasta choux, che si gonfia e resta vuoto dentro, pronto per la crema.</p>
 """,
  "provare": [("Zeppolina di San Giuseppe", "crema pasticcera e amarena"), ("Francesina crema e amarena", "pasta sfoglia, crema e amarene")],
- "fonti": [("Zeppole di San Giuseppe: storia e varianti regionali (Dissapore)", "https://www.dissapore.com/cucina/zeppole-di-san-giuseppe-storia-e-varianti-regionali-di-un-dolce-frittissimo/"),
-           ("Festa di San Giuseppe, tempo di zeppole (La Voce di New York)", "https://lavocedinewyork.com/food/cucina-italiana/2019/03/17/festa-di-san-giuseppe-tempo-di-zeppole-storia-e-leggenda-di-una-tradizione-napoletana")],
 },
 ]
 
@@ -503,3 +490,63 @@ FAQ_EN = [
     ("Do you serve an English breakfast?", "Yes, every morning: eggs, bacon, sausages, beans, mushrooms, tomatoes, toast and tea.", None),
     ("How can I contact you?", "Call +39 081 552 3488 (also WhatsApp) or mobile +39 328 438 8404, or find us on Instagram @ceraldicaffe.", None),
 ]
+
+
+# ── Fonti degli articoli (solo fonti autorevoli, nessun concorrente) ──
+_W = "https://it.wikipedia.org/wiki/"
+FONTI = {
+ "caffe-napoletano": [("Caffettiera napoletana, Wikipedia", _W + "Caffettiera_napoletana"), ("Questi fantasmi!, Wikipedia", _W + "Questi_fantasmi%21"),
+                      ("La cuccumella napoletana è nata a Parigi, Linkiesta", "https://www.linkiesta.it/2020/07/cuccumella-napoletana-caffe-napoli-parigi/")],
+ "caffe-sospeso": [("Caffè sospeso, Wikipedia", _W + "Caff%C3%A8_sospeso"),
+                   ("Giornata del caffè sospeso, GreenMe", "https://www.greenme.it/lifestyle/costume-e-societa/giornata-caffe-sospeso-tradiziona-napoletana-solidarieta/")],
+ "sfogliatella": [("Sfogliatella, Wikipedia", _W + "Sfogliatella"), ("Monastero di Santa Rosa, Wikipedia", _W + "Monastero_di_Santa_Rosa")],
+ "baba": [("Babà, Wikipedia", _W + "Bab%C3%A0"),
+          ("Babà, storia e leggenda del dolce napoletano nato in Francia, Gambero Rosso", "https://www.gamberorosso.it/notizie/storie/baba-storia-e-leggenda-del-dolce-napoletano-nato-in-francia")],
+ "pastiera": [("Pastiera napoletana, Wikipedia", _W + "Pastiera_napoletana"), ("Chiesa di San Gregorio Armeno, Wikipedia", _W + "Chiesa_di_San_Gregorio_Armeno"),
+              ("Storia e leggenda della pastiera napoletana, Gambero Rosso", "https://www.gamberorosso.it/notizie/storie/storia-e-leggenda-della-pastiera-napoletana-con-la-ricetta-di-sal-de-riso/")],
+ "zeppole-di-san-giuseppe": [("Zeppola di San Giuseppe, Wikipedia", _W + "Zeppola_di_San_Giuseppe"), ("Ippolito Cavalcanti, Wikipedia", _W + "Ippolito_Cavalcanti"),
+                             ("Zeppole di San Giuseppe: storia e varianti regionali, Dissapore", "https://www.dissapore.com/cucina/zeppole-di-san-giuseppe-storia-e-varianti-regionali-di-un-dolce-frittissimo/")],
+ "colazione-napoletana": [("Croissant, Wikipedia", _W + "Croissant"), ("Kipferl, Wikipedia", _W + "Kipferl"), ("Sfogliatella, Wikipedia", _W + "Sfogliatella")],
+ "pasticceria-artigianale": [("Albicocca vesuviana, Wikipedia", _W + "Albicocca_vesuviana")],
+ "dolci-dei-conventi": [("Monastero di Santa Rosa, Wikipedia", _W + "Monastero_di_Santa_Rosa"), ("Chiesa di San Gregorio Armeno, Wikipedia", _W + "Chiesa_di_San_Gregorio_Armeno"),
+                        ("Roccocò, Wikipedia", _W + "Roccoc%C3%B2"), ("Susamielli, Wikipedia", _W + "Susamielli")],
+ "dolci-di-natale": [("Struffoli, Wikipedia", _W + "Struffoli"), ("Roccocò, Wikipedia", _W + "Roccoc%C3%B2"), ("Mustaccioli, Wikipedia", _W + "Mostaccioli"),
+                     ("Susamielli, Wikipedia", _W + "Susamielli"), ("Pisto, Wikipedia", _W + "Pisto")],
+ "piazza-carita-via-toledo": [("Via Toledo, Wikipedia", _W + "Via_Toledo"), ("Piazza Carità, Wikipedia", _W + "Piazza_Carit%C3%A0"),
+                              ("Chiesa di Santa Maria della Carità, Wikipedia", _W + "Chiesa_di_Santa_Maria_della_Carit%C3%A0_(Napoli)"),
+                              ("Pignasecca, Wikipedia", _W + "Pignasecca"), ("Quartieri Spagnoli, Wikipedia", _W + "Quartieri_Spagnoli")],
+ "a-tazza-e-cafe": [("'A tazza 'e cafè, Wikipedia", _W + "%27A_tazza_%27e_caf%C3%A8"), ("Questi fantasmi!, Wikipedia", _W + "Questi_fantasmi%21"),
+                    ("Caffè sospeso, Wikipedia", _W + "Caff%C3%A8_sospeso")],
+ "tradizioni-napoletane": [("Panaro, Wikipedia", _W + "Panaro"), ("Cornicello, Wikipedia", _W + "Cornicello"), ("Smorfia napoletana, Wikipedia", _W + "Smorfia_napoletana"),
+                           ("San Gennaro, Wikipedia", _W + "San_Gennaro")],
+}
+for _a in ARTICOLI:
+    _a["fonti"] = FONTI[_a["slug"]]
+    # Revisore: si indica solo dopo una revisione reale (nome di chi ha riletto e data)
+    _a.setdefault("revisore", None)
+
+# ── Categorie del magazine ────────────────────────────────────────────
+CATEGORIE = [
+ {"slug": "caffe-e-colazione", "nome": "Caffè e colazione",
+  "intro": "Il rito del caffè a Napoli, il caffè sospeso, le canzoni e la colazione al bar: cornetto, sfogliatella e tazzina.",
+  "articoli": ["caffe-napoletano", "caffe-sospeso", "a-tazza-e-cafe", "colazione-napoletana"]},
+ {"slug": "pasticceria-napoletana", "nome": "Pasticceria napoletana",
+  "intro": "Storie, leggende e ingredienti dei dolci napoletani: sfogliatella, babà, pastiera, zeppole, i dolci dei conventi e quelli di Natale.",
+  "articoli": ["sfogliatella", "baba", "pastiera", "zeppole-di-san-giuseppe", "dolci-dei-conventi", "dolci-di-natale", "pasticceria-artigianale"]},
+ {"slug": "napoli", "nome": "Napoli: luoghi e tradizioni",
+  "intro": "Piazza Carità, via Toledo e le tradizioni che si vedono ogni giorno per le strade di Napoli.",
+  "articoli": ["piazza-carita-via-toledo", "tradizioni-napoletane"]},
+]
+CATEGORIA_DI = {s: c for c in CATEGORIE for s in c["articoli"]}
+assert sorted(CATEGORIA_DI) == sorted(a["slug"] for a in ARTICOLI), "ogni articolo deve avere una categoria"
+
+# ── Collegamenti dal menu agli approfondimenti (per id del prodotto su qromo) ──
+MENU_APPROFONDIMENTI = {
+ 152789: "storie/zeppole-di-san-giuseppe/",
+ 153840: "storie/sfogliatella/", 153867: "storie/sfogliatella/", 153868: "storie/sfogliatella/",
+ 153848: "storie/pastiera/",
+ 153854: "storie/baba/", 153855: "storie/baba/", 153860: "storie/baba/", 153861: "storie/baba/",
+ 219384: "storie/pasticceria-artigianale/", 472126: "storie/pasticceria-artigianale/", 616031: "storie/pasticceria-artigianale/", 638146: "storie/pasticceria-artigianale/",
+ 153960: "aspritz/",
+ 278576: "bar/", 296968: "bar/",
+}

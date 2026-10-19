@@ -342,7 +342,10 @@ def meta_articolo(a):
     riga = f'Di <a href="../../storia/">{e(AUTORE)}</a>. Pubblicato il <time datetime="{pub}">{data_it(pub)}</time>'
     if agg and agg != pub:
         riga += f', aggiornato il <time datetime="{agg}">{data_it(agg)}</time>'
-    return riga + f'. {a["lettura"]} minuti di lettura'
+    if a.get("revisore"):
+        riga += f'. Rivisto da {e(a["revisore"])}'
+    c = CATEGORIA_DI[a["slug"]]
+    return riga + f'. {a["lettura"]} minuti di lettura. <a href="../{c["slug"]}/">{e(c["nome"])}</a>'
 
 def articolo(a):
     url = BASE + f"storie/{a['slug']}/"
@@ -350,21 +353,24 @@ def articolo(a):
     img = BASE + (f"img/{k}-{FOTO[k]['w'][0]}.webp" if k else "img/og.jpg")
     ld = [{"@context": "https://schema.org", "@type": "Article", "headline": a["titolo"], "description": a["descrizione"],
            "image": [img], "datePublished": a.get("pubblicato", PUBBLICATO), "dateModified": a.get("aggiornato", a.get("pubblicato", PUBBLICATO)), "inLanguage": "it-IT", "mainEntityOfPage": url,
-           "isPartOf": {"@id": BASE + "#sito"},
+           "isPartOf": {"@id": BASE + "#sito"}, "articleSection": CATEGORIA_DI[a["slug"]]["nome"],
+           "citation": [f[1] for f in a["fonti"]],
            "author": {"@type": "Organization", "name": AUTORE, "url": BASE + "storia/"},
            "publisher": {"@type": "Organization", "name": "Ceraldi Caffè", "logo": {"@type": "ImageObject", "url": BASE + "img/apple-touch-icon.png"}}},
           {"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [
               {"@type": "ListItem", "position": 1, "name": "Ceraldi Caffè", "item": BASE},
               {"@type": "ListItem", "position": 2, "name": "Storie", "item": BASE + "storie/"},
-              {"@type": "ListItem", "position": 3, "name": a["titolo"], "item": url}]}]
+              {"@type": "ListItem", "position": 3, "name": CATEGORIA_DI[a["slug"]]["nome"], "item": BASE + f"storie/{CATEGORIA_DI[a['slug']]['slug']}/"},
+              {"@type": "ListItem", "position": 4, "name": a["titolo"], "item": url}]}]
     og = f"img/{k}-{FOTO[k]['w'][0]}.webp" if k else "img/og.jpg"
     h = testa("it", a["titolo_seo"] + " | Ceraldi Caffè", a["descrizione"], url, "../../", og_img=og, ld=ld, tipo="article")
     fig = f'<figure class="{"verticale" if FOTO[k]["r"][1] > FOTO[k]["r"][0] else ""}">{immagine(k, "../../", "(max-width: 800px) 100vw, 760px", eager=True)}</figure>' if k else ''
     prova = ''.join(f'<li><b>{e(n)}</b><br><span>{e(d)}</span></li>' for n, d in a["provare"])
-    altre = ''.join(f'<li><a href="../{b["slug"]}/"><b>{e(b["titolo"])}</b><span>{e(b["dek"])}</span><small>{b["lettura"]} min</small></a></li>' for b in ARTICOLI if b is not a)
+    fonti = ''.join(f'<li><a href="{e(u)}" rel="noopener">{e(t)}</a></li>' for t, u in a["fonti"])
+    altre = ''.join(f'<li><a href="../{b["slug"]}/"><b>{e(b["titolo"])}</b><span>{e(b["dek"])}</span><small>{b["lettura"]} min</small></a></li>' for b in sorted(ARTICOLI, key=lambda b: CATEGORIA_DI[b["slug"]] is not CATEGORIA_DI[a["slug"]]) if b is not a)
     return h + f'''<header class="testata-scura">{barra("../../")}</header>
 <main id="contenuto" class="articolo"><div class="contenitore">
-<p class="briciole"><a href="../../">Ceraldi Caffè</a> / <a href="../">Storie</a></p>
+<p class="briciole"><a href="../../">Ceraldi Caffè</a> / <a href="../">Storie</a> / <a href="../{CATEGORIA_DI[a["slug"]]["slug"]}/">{e(CATEGORIA_DI[a["slug"]]["nome"])}</a></p>
 <article>
 <h1>{e(a["titolo"])}</h1>
 <p class="dek">{e(a["dek"])}</p>
@@ -373,6 +379,7 @@ def articolo(a):
 <div class="corpo">{a["corpo"]}</div>
 <aside class="cartellino"><h2>Da provare da Ceraldi</h2><p>Piazza Carità 14, Napoli. Tutti i giorni dalle 6:30 alle 20:30. Dolci di produzione propria.</p><ul>{prova}</ul>
 <div class="azioni sinistra"><a class="btn" href="../../menu/">Guarda il menu</a><a class="btn" href="{BAR["mappa"]}" rel="noopener">Come arrivare</a></div></aside>
+<aside class="fonti"><h2>Fonti</h2><ul>{fonti}</ul></aside>
 </article>
 <section class="altre"><h2>Altre storie</h2><ul class="storie">{altre}</ul></section>
 </div></main>
@@ -384,16 +391,40 @@ def indice_storie():
               "Caffè napoletano, caffè sospeso, sfogliatella, babà, pastiera, dolci di Natale, Piazza Carità e tradizioni di Napoli: le storie raccontate da Ceraldi Caffè.", url, "../",
               ld=[{"@context": "https://schema.org", "@type": "CollectionPage", "name": "Storie dal caffè", "url": url, "isPartOf": {"@id": BASE + "#sito"},
                    "hasPart": [{"@type": "Article", "headline": a["titolo"], "url": url + a["slug"] + "/"} for a in ARTICOLI]}])
-    lista_s = ''.join(f'<li><a href="{a["slug"]}/"><b>{e(a["titolo"])}</b><span>{e(a["dek"])}</span><small>{a["lettura"]} min di lettura</small></a></li>' for a in ARTICOLI)
+    PER = {a["slug"]: a for a in ARTICOLI}
+    chips = ''.join(f'<a href="{c["slug"]}/">{e(c["nome"])}</a>' for c in CATEGORIE)
+    lista_s = f'<nav class="chips" aria-label="Categorie">{chips}</nav>' + ''.join(
+        f'<section class="categoria"><h2><a href="{c["slug"]}/">{e(c["nome"])}</a></h2><ul class="storie">'
+        + ''.join(f'<li><a href="{PER[s]["slug"]}/"><b>{e(PER[s]["titolo"])}</b><span>{e(PER[s]["dek"])}</span><small>{PER[s]["lettura"]} min di lettura</small></a></li>' for s in c["articoli"])
+        + '</ul></section>' for c in CATEGORIE)
     return h + f'''<header class="testata-scura">{barra("../")}</header>
 <main id="contenuto" class="articolo"><div class="contenitore">
 <p class="briciole"><a href="../">Ceraldi Caffè</a></p>
 <h1>Storie dal caffè</h1>
 <p class="dek">Riti, leggende, dolci e luoghi della cultura napoletana, raccontati dal bancone di Piazza Carità.</p>
-<ul class="storie" style="margin-top:36px">{lista_s}</ul>
+<div style="margin-top:28px">{lista_s}</div>
 </div></main>
 ''' + piede("../")
 
+
+def pagina_categoria(c):
+    url = BASE + f"storie/{c['slug']}/"
+    PER = {a["slug"]: a for a in ARTICOLI}
+    ld = [{"@context": "https://schema.org", "@type": "CollectionPage", "name": c["nome"], "description": c["intro"], "url": url, "isPartOf": {"@id": BASE + "#sito"},
+           "hasPart": [{"@type": "Article", "headline": PER[s]["titolo"], "url": BASE + f"storie/{s}/"} for s in c["articoli"]]},
+          ld_breadcrumb([("Storie", BASE + "storie/"), (c["nome"], url)])]
+    h = testa("it", f"{c['nome']}: storie dal caffè | Ceraldi Caffè", c["intro"], url, "../../", ld=ld)
+    voci = ''.join(f'<li><a href="../{s}/"><b>{e(PER[s]["titolo"])}</b><span>{e(PER[s]["dek"])}</span><small>{PER[s]["lettura"]} min di lettura</small></a></li>' for s in c["articoli"])
+    altre = ''.join(f'<a href="../{x["slug"]}/">{e(x["nome"])}</a>' for x in CATEGORIE if x is not c)
+    return h + f'''<header class="testata-scura">{barra("../../")}</header>
+<main id="contenuto" class="articolo"><div class="contenitore">
+<p class="briciole"><a href="../../">Ceraldi Caffè</a> / <a href="../">Storie</a></p>
+<h1>{e(c["nome"])}</h1>
+<p class="dek">{e(c["intro"])}</p>
+<ul class="storie" style="margin-top:36px">{voci}</ul>
+<nav class="chips" aria-label="Altre categorie" style="margin-top:40px">{altre}</nav>
+</div></main>
+''' + piede("../../")
 
 # ── Menu completo (da menu_grezzo.json, scaricato da qromo con aggiorna_menu.py) ──
 ALLERGENI = {1: "sedano", 2: "molluschi", 3: "solfiti", 4: "uova", 5: "pesce", 6: "glutine", 7: "lupini", 8: "latte",
@@ -433,7 +464,7 @@ def dati_menu():
             voci = []
             for i in sorted(ii, key=lambda i: i['order_number'] or 0):
                 ids = all_by.get(i['menu_item_id'], [])
-                voci.append({"nome": _pulisci(i['name']), "desc": _re.sub(r'\s+', ' ', (i['ingredients'] or '')).strip(),
+                voci.append({"id": i['menu_item_id'], "nome": _pulisci(i['name']), "desc": _re.sub(r'\s+', ' ', (i['ingredients'] or '')).strip(),
                              "prezzo": i['price'] or 0,
                              "allergeni": [ALLERGENI[x] for x in ids if x in ALLERGENI],
                              "etichette": [ETICHETTE[x] for x in ids if x in ETICHETTE]})
@@ -464,7 +495,9 @@ def _voce_html(v):
         extra.append(', '.join(v['etichette']).capitalize())
     ex = '<small>' + e('. '.join(extra)) + '</small>' if extra else ''
     de = '<span>' + e(v['desc']) + '</span>' if v['desc'] else ''
-    return '<li><div class="voce-testa"><b>' + e(v['nome']) + '</b><i>' + _prezzo(v['prezzo']) + '</i></div>' + de + ex + '</li>'
+    ap = MENU_APPROFONDIMENTI.get(v.get('id'))
+    lk = f'<a class="approfondisci" href="../{ap}">{"La sua storia" if ap.startswith("storie/") else "Scopri di più"}</a>' if ap else ''
+    return '<li><div class="voce-testa"><b>' + e(v['nome']) + '</b><i>' + _prezzo(v['prezzo']) + '</i></div>' + de + ex + lk + '</li>'
 
 def pagina_menu():
     url = BASE + "menu/"
@@ -592,7 +625,7 @@ def pagina_privacy():
 
 
 def sitemap():
-    urls = [(BASE, "1.0"), (BASE + "menu/", "0.9")] + [(BASE + p["slug"] + "/", "0.9") for p in PAGINE] + [(BASE + "contatti/", "0.8"), (BASE + "en/", "0.8"), (BASE + "storie/", "0.7")] + [(BASE + f"storie/{a['slug']}/", "0.6", a.get("aggiornato", a.get("pubblicato", PUBBLICATO))) for a in ARTICOLI]
+    urls = [(BASE, "1.0"), (BASE + "menu/", "0.9")] + [(BASE + p["slug"] + "/", "0.9") for p in PAGINE] + [(BASE + "contatti/", "0.8"), (BASE + "en/", "0.8"), (BASE + "storie/", "0.7")] + [(BASE + f"storie/{c['slug']}/", "0.6") for c in CATEGORIE] + [(BASE + f"storie/{a['slug']}/", "0.6", a.get("aggiornato", a.get("pubblicato", PUBBLICATO))) for a in ARTICOLI]
     righe = ''.join(f'<url><loc>{x[0]}</loc><lastmod>{x[2] if len(x) > 2 else OGGI}</lastmod><priority>{x[1]}</priority></url>' for x in urls)
     return f'<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{righe}</urlset>\n'
 
@@ -668,6 +701,8 @@ if __name__ == "__main__":
     scrivi("storie/index.html", indice_storie())
     for a in ARTICOLI:
         scrivi(f"storie/{a['slug']}/index.html", articolo(a))
+    for c in CATEGORIE:
+        scrivi(f"storie/{c['slug']}/index.html", pagina_categoria(c))
     for p in PAGINE:
         scrivi(f"{p['slug']}/index.html", pagina(p))
     scrivi("menu/index.html", pagina_menu())
@@ -683,4 +718,4 @@ if __name__ == "__main__":
     for vecchio, nuovo in RIMANDI.items():
         scrivi(f"{vecchio}/index.html", rimando(nuovo))
     scrivi("robots.txt", robots())
-    print("Pagine generate:", 6 + len(ARTICOLI) + len(PAGINE))
+    print("Pagine generate:", 6 + len(ARTICOLI) + len(PAGINE) + len(CATEGORIE))
