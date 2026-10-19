@@ -20,7 +20,7 @@ PAGINE = [
 <p class="capolettera">Napoli, primi anni Settanta. In Piazza Garibaldi, davanti alla stazione, la città arriva e riparte in continuazione: valigie, treni, voci, clacson. È lì che la famiglia Ceraldi apre il suo primo bar. Il mestiere si impara al bancone, una tazzina alla volta, tra chi ha fretta di partire e chi è appena arrivato e cerca, prima di tutto, un caffè fatto come si deve.</p>
 
 <h2>Il 2002 e l'angolo vuoto</h2>
-<p>Passano gli anni, il bar cresce. Poi, un giorno del 2002, il fondatore cammina per i vicoli del centro senza cercare niente di preciso, e arriva nel cuore della città: Piazza Carità. Intorno c'è il brulichio di sempre, mercanti, impiegati, passanti, la Pignasecca che chiama dai suoi banchi. Il suo sguardo si ferma su un angolo vuoto e senza vita.</p>
+<p>Passano gli anni, il bar cresce. Poi, un giorno del 2002, il fondatore cammina per i vicoli del centro senza cercare niente di preciso, e arriva nel cuore della città: <a href="../storie/piazza-carita-via-toledo/">Piazza Carità</a>. Intorno c'è il brulichio di sempre, mercanti, impiegati, passanti, la Pignasecca che chiama dai suoi banchi. Il suo sguardo si ferma su un angolo vuoto e senza vita.</p>
 <p>Un altro avrebbe tirato dritto. Lui no. Quell'angolo, racconta, sembrava aver aspettato proprio lui per tutto quel tempo. Da quel giorno, in Piazza Carità 14, c'è Ceraldi Caffè.</p>
 
 <h2>Dalla prima tazzina all'ultimo aperitivo</h2>
