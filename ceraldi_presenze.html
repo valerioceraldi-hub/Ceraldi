@@ -3292,7 +3292,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     <button class="hdr-btn" id="tb-back" style="display:none" aria-label="Indietro"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
     <div class="tb-titles">
       <h1 id="tb-title">Presenze</h1>
-      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v72</span></p>
+      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v73</span></p>
     </div>
     <span class="topbar-badge" id="role-badge"></span>
     <div class="hdr-actions">
@@ -5277,6 +5277,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
       <div id="cl-residuo" style="background:rgba(200,135,58,.08);border:1px solid rgba(200,135,58,.3);border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:13px;color:var(--text);display:none"></div>
       <div id="cl-note" style="background:var(--bg);border-radius:10px;padding:12px;margin-bottom:14px;font-size:13px;color:var(--muted);display:none"></div>
       <button id="cl-btn-busta" style="display:none;width:100%;margin-bottom:14px" class="btn-secondary" onclick="apriBustaLegata()">📄 Leggi busta paga collegata</button>
+      <div id="cl-busta-info" style="display:none;background:var(--bg);border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:12.5px;color:var(--muted);line-height:1.5"></div>
       <div style="background:rgba(43,74,203,.04);border:1px solid rgba(43,74,203,.18);border-radius:12px;padding:14px">
         <div style="font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">Dichiarazione di presa visione</div>
         <p style="font-size:12px;color:var(--text);line-height:1.65;margin:0">Confermando dichiari di aver ricevuto il pagamento. La presente conferma costituisce accettazione ai sensi dell&rsquo;art. 1335 c.c. Eventuali contestazioni entro <b>7 giorni</b>, decorsi i quali il contenuto si intender&agrave; tacitamente accettato.</p>
@@ -5285,6 +5286,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     </div>
     <div class="sheet-foot" style="display:flex;gap:8px">
       <button class="btn-secondary" style="flex:1" onclick="closeSheet('sh-confLiq')">Non ancora</button>
+      <button class="btn-secondary" style="flex:1;color:var(--red)" onclick="contestaLiquidazioneDaConferma()">⚠ Contesta</button>
       <button class="btn-green-solid" style="flex:1" onclick="confermaLiquidazione()">&#x2713; Confermo</button>
     </div>
   </div>
@@ -14365,7 +14367,7 @@ const DB = (() => {
             .eq('mese', mese).eq('anno', anno), 'liquidazioni.delMese'),
     daConfermare: (dipId) =>
       run(sb.from('presenze_liquidazioni').select('*')
-            .eq('dipendente_id', dipId).eq('confermata_dip', false),
+            .eq('dipendente_id', dipId).eq('confermata_dip', false).is('contestata_il', null),
           'liquidazioni.daConfermare'),
   };
 
@@ -28864,9 +28866,17 @@ async function caricaLiquidazioniDipendenti() {
   }
   if (liq.note) { $('cl-note').textContent = liq.note; $('cl-note').style.display='block'; }
   else { $('cl-note').style.display='none'; }
-  const btnBusta = $('cl-btn-busta');
-  if (liq.documento_id) { btnBusta.style.display='block'; btnBusta.dataset.docId = liq.documento_id; }
-  else { btnBusta.style.display='none'; delete btnBusta.dataset.docId; }
+  // 19/10: si mostra SOLO il cedolino definitivo già inviato. Quello di controllo (bozza)
+  // resta dell'admin: il database non lo fa nemmeno leggere al dipendente.
+  const btnBusta = $('cl-btn-busta'), infoBusta = $('cl-busta-info');
+  btnBusta.style.display='none'; delete btnBusta.dataset.docId; infoBusta.style.display='none';
+  try {
+    let q = sb.from('presenze_documenti').select('id,inviato_dip').eq('dipendente_id', ME.id).eq('categoria','busta_paga');
+    q = liq.documento_id ? q.eq('id', liq.documento_id) : q.eq('mese', liq.mese).eq('anno', liq.anno);
+    const { data: bd } = await q.limit(1).maybeSingle();
+    if (bd && bd.inviato_dip !== false) { btnBusta.style.display='block'; btnBusta.dataset.docId = bd.id; }
+    else { infoBusta.textContent = '📄 La busta paga di '+meseLbl+' ti arriverà a parte, in Documenti: lì potrai leggerla e confermarla o contestarla, con le stesse regole.'; infoBusta.style.display='block'; }
+  } catch(e) {}
   hideMsg('cl-msg');
   setTimeout(() => openSheet('sh-confLiq'), 600);
 }
@@ -28874,6 +28884,13 @@ async function caricaLiquidazioniDipendenti() {
 // Apre la busta paga collegata alla liquidazione in sospeso, riusando il
 // flusso di accettazione già previsto per i documenti (letto_il + notifica
 // admin con data/ora, visibile anche al dipendente).
+// Contestazione direttamente dalla conferma dello stipendio (stesse regole e stessa firma)
+function contestaLiquidazioneDaConferma() {
+  if (!_confLiqId) return;
+  const per = $('cl-periodo') ? $('cl-periodo').textContent : '';
+  closeSheet('sh-confLiq');
+  openContesta('stipendio', _confLiqId, 'Pagamento ' + per);
+}
 async function apriBustaLegata() {
   const docId = $('cl-btn-busta').dataset.docId;
   if (!docId) return;
@@ -28918,7 +28935,7 @@ let _sospesiDip = null;
 async function getSospesiDip() {
   const [{ data: acc }, { data: liq }, { data: doc }, { data: ass }, { data: tim }, { data: richTim }, { data: richAss }] = await Promise.all([
     sb.from('presenze_acconti').select('id,importo,data').eq('dipendente_id',ME.id).eq('letto_dip',false),
-    sb.from('presenze_liquidazioni').select('id,anno,mese,importo_netto').eq('dipendente_id',ME.id).eq('confermata_dip',false),
+    sb.from('presenze_liquidazioni').select('id,anno,mese,importo_netto').eq('dipendente_id',ME.id).eq('confermata_dip',false).is('contestata_il',null),
     // Documenti: TUTTE le categorie (busta paga, CU, contratto, altro) —
     // prima erano esclusi contratto/altro, quindi caricarli non apriva
     // mai la finestra "da leggere" né faceva comparire il numeretto,
