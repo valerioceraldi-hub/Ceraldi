@@ -535,7 +535,7 @@ def pagina_menu(lang='it'):
                                                  for c in m['categorie']]} for m in M]}
     if it:
         h = testa("it", "Menu e prezzi | Ceraldi Caffè, Napoli",
-                  f"Il menu completo di Ceraldi Caffè in Piazza Carità, Napoli: {n_voci} proposte tra caffè, colazione, dolci, rosticceria, freselle, spritz e cocktail, con prezzi e allergeni.",
+                  f"Il menu completo di Ceraldi Caffè, Napoli: {n_voci} proposte, dal caffè ai dolci, dalla rosticceria ai cocktail, con prezzi e allergeni.",
                   url, rr, ld=[ld, ld_breadcrumb([("Menu", url)])], alternates=alt_coppia("menu/"))
     else:
         h = testa("en", "Menu and prices | Ceraldi Caffè, Naples",
