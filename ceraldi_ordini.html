@@ -424,7 +424,7 @@ html[data-theme="dark"] .todo-ft{background:rgba(255,255,255,.03)}
 </nav>
 
 <script>
-var APP_VERSION='8.10.0';
+var APP_VERSION='8.11.0';
 var BUILD_VERSION=APP_VERSION, BUILD_NUM=APP_VERSION;
 var APP={key:'ordini',nome:'Ordini',versione:APP_VERSION,authKey:'or_auth_v2',oldAuthKey:'ceraldi_ordini_auth_session',
   markBg:'linear-gradient(145deg,#FFC04D 0%,#FF9F0A 50%,#C2410C 100%)',
@@ -3177,6 +3177,18 @@ var VIEW = { q: '', settore: 'Tutti', cat: 'Tutte', forn: '', limite: 60, tab: '
 
 function carr(){ return docDati('or8_carrello'); }
 function conf(){ return docDati('or8_conf'); }
+/* v8.11.0: scheda Magazzino e avvisi «sotto scorta» si possono nascondere.
+   Si nasconde solo quello che vedi: giacenza e scorta minima restano salvate
+   e continuano a servire a Richieste per calcolare quanti pezzi ordinare. */
+function vediMagazzino(){ return !conf().nascondiMagazzino; }
+function vediScorta(){ return !conf().nascondiScorta; }
+function impostaVista(chiave, mostra){
+  docModifica('or8_conf', function(d){ if(mostra) delete d[chiave]; else d[chiave] = true; }, true).then(function(){
+    if(!vediMagazzino() && VIEW.tab === 'magazzino') vaiTab('ordina');
+    if(!vediScorta() && VIEW.cat === '__sotto') VIEW.cat = 'Tutte';
+    renderTutto(); apriImpostazioni();
+  });
+}
 function inCarrello(id){ return !!carr().righe['p' + id]; }
 function preferito(id){ return !!(conf().preferiti || {})[id]; }
 function fornRiga(r){
@@ -3211,7 +3223,7 @@ function prodottiSettore(){ return VIEW.settore === 'Tutti' ? CAT : CAT.filter(f
 function renderCategorie(){
   var base = prodottiSettore(), conta = {};
   base.forEach(function(p){ var c = catDi(p); conta[c] = (conta[c] || 0) + 1; });
-  var nPref = base.filter(function(p){ return preferito(p.id); }).length, nCar = Object.keys(carr().righe).length, nSotto = base.filter(sottoScorta).length;
+  var nPref = base.filter(function(p){ return preferito(p.id); }).length, nCar = Object.keys(carr().righe).length, nSotto = vediScorta() ? base.filter(sottoScorta).length : 0;
   if(VIEW.forn && !fornDi(VIEW.forn)) VIEW.forn = '';
   var nForn = VIEW.forn ? base.filter(function(p){ return prezzoDi(p, VIEW.forn) != null; }).length : 0;
   var h = (VIEW.forn ? '<button class="chip active" onclick="VIEW.forn=\'\';VIEW.limite=60;renderCategorie();renderProdotti()">🚚 ' + esc(VIEW.forn) + ' <span class="n" style="color:#fff">' + nForn + '</span> ✕</button>' : '<button class="chip" onclick="scegliFornFiltro()">🚚 Fornitore</button>') +
@@ -3236,7 +3248,7 @@ function filtraProdotti(){
   if(VIEW.forn) l = l.filter(function(p){ return prezzoDi(p, VIEW.forn) != null; });
   if(VIEW.cat === '__pref') l = l.filter(function(p){ return preferito(p.id); });
   else if(VIEW.cat === '__car') l = l.filter(function(p){ return inCarrello(p.id); });
-  else if(VIEW.cat === '__sotto') l = l.filter(sottoScorta);
+  else if(VIEW.cat === '__sotto' && vediScorta()) l = l.filter(sottoScorta);
   else if(VIEW.cat !== 'Tutte') l = l.filter(function(p){ return catDi(p) === VIEW.cat; });
   if(q){
     var f = fornDi(q);
@@ -3264,7 +3276,7 @@ function renderProdotti(){
 function rigaProdotto(p){
   var b = migliore(p), r = carr().righe['p' + p.id], nForn = prezziOrdinati(p).filter(function(x){ return !x.orfano; }).length;
   var meta = [p.conf, catDi(p)].filter(Boolean).join(' · ');
-  var badges = (preferito(p.id) ? '<span class="bdg o">★</span>' : '') + (sottoScorta(p) ? '<span class="bdg r">sotto scorta · ne hai ' + p.giacenza + '</span>' : '') +
+  var badges = (preferito(p.id) ? '<span class="bdg o">★</span>' : '') + (vediScorta() && sottoScorta(p) ? '<span class="bdg r">sotto scorta · ne hai ' + p.giacenza + '</span>' : '') +
     (b.fisso ? '<span class="bdg b">📌 ' + esc(b.forn) + '</span>' : '') + (nForn > 1 ? '<span class="bdg n">' + nForn + ' fornitori</span>' : '') + (!b.forn ? '<span class="bdg o">senza prezzo</span>' : '');
   var dx = r ? '<span class="stp" onclick="event.stopPropagation()"><button aria-label="Meno" onclick="cambiaQ(\'p' + p.id + '\',-1)">−</button><b class="tq" data-q="p' + p.id + '" onclick="chiediQuantita(\'p' + p.id + '\')">' + r.qty + '</b><button aria-label="Più" onclick="cambiaQ(\'p' + p.id + '\',1)">+</button></span>'
     : (U.lettura ? '' : '<button class="add-b" aria-label="Aggiungi" onclick="event.stopPropagation();aggiungi(' + p.id + ')">+</button>');
@@ -4632,7 +4644,7 @@ function renderDaFare(){
     if(hh >= (pm.ora || '00:00')) h += '<div class="banner b"><span>⏰</span><div style="flex:1"><b>Oggi è giorno d\'ordine</b><br>Controlla magazzino e richieste, poi invia gli ordini.</div><button class="btn-sm p" onclick="lsSet(\'or8_prom_\'+oggiISO(),true);renderDaFare()">Fatto</button></div>';
   }
   var tot = n.rich + n.var + n.forn + n.dop + n.cod;
-  if(!tot && !uniteDiRecente().length && !n.nuovi && !n.pd && !CAT.filter(function(p){ return sottoScorta(p) && !inCarrello(p.id); }).length) h += '<div class="empty"><div class="ei">✅</div><b>Tutto in ordine</b><p>Nessuna richiesta, nessun prezzo da controllare, nessun prodotto sotto scorta.</p></div>';
+  if(!tot && !uniteDiRecente().length && !n.nuovi && !n.pd && !(vediScorta() && CAT.filter(function(p){ return sottoScorta(p) && !inCarrello(p.id); }).length)) h += '<div class="empty"><div class="ei">✅</div><b>Tutto in ordine</b><p>Nessuna richiesta, nessun prezzo da controllare, nessun prodotto sotto scorta.</p></div>';
   var sez = '';
   sez += sezioneRichieste();
   sez += sezioneBarcode();
@@ -5276,6 +5288,7 @@ async function abbinaForn(nomeFatt, dest){
 
 /* ── Sotto scorta ────────────────────────────────────────────────── */
 function sezioneScorta(){
+  if(!vediScorta()) return '';
   var l = CAT.filter(function(p){ return sottoScorta(p) && !inCarrello(p.id); });
   if(!l.length) return '';
   var h = titoloSez('Sotto scorta', l.length, !U.lettura ? '<button class="lnk" onclick="scortaNelCarrello()">Tutti nel carrello</button>' : '');
@@ -5511,6 +5524,7 @@ function listaMagazzino(){
 }
 function renderMagazzino(){
   var el = document.getElementById('magBox'); if(!el) return;
+  if(!vediScorta() && VM.filtro === 'sotto') VM.filtro = 'tutti';
   var contati = CAT.filter(function(p){ return p.giacenza != null; }), valore = contati.reduce(function(s, p){ return s + (p.giacenza > 0 ? p.giacenza * (migliore(p).prezzo || 0) : 0); }, 0);
   var sotto = CAT.filter(sottoScorta), conScorta = CAT.filter(function(p){ return p.scorta_min != null; }).length;
   var h = '<div class="hero"><div class="hero-lbl">Valore della merce contata</div><div class="hero-big">' + eur0(valore) + '</div><div class="hero-sub">' + contati.length + ' prodotti contati su ' + CAT.length + ' · ai prezzi migliori di oggi</div>' +
@@ -5518,7 +5532,7 @@ function renderMagazzino(){
   if(!U.lettura) h += '<div class="btn-row" style="margin-bottom:12px"><button class="btn btn-p" onclick="apriInventario()">📋 Inventario guidato</button>' + (sotto.length ? '<button class="btn btn-s" onclick="scortaNelCarrello()">Sotto scorta nel carrello</button>' : '') + '</div>';
   var ss = settoriPresenti();
   if(ss.length > 1) h += '<div class="seg">' + ['Tutti'].concat(ss).map(function(s){ return '<button class="seg-b' + (VM.settore === s ? ' active' : '') + '" onclick="VM.settore=' + jsq(s) + ';renderMagazzino()">' + esc(s) + '</button>'; }).join('') + '</div>';
-  h += '<div class="chips">' + [['sotto', 'Sotto scorta'], ['tutti', 'Tutti'], ['contati', 'Contati'], ['senza', 'Senza scorta minima']].map(function(x){ return '<button class="chip' + (VM.filtro === x[0] ? ' active' : '') + '" onclick="VM.filtro=\'' + x[0] + '\';VM.limite=80;renderMagazzino()">' + x[1] + '</button>'; }).join('') + '</div>';
+  h += '<div class="chips">' + (vediScorta() ? [['sotto', 'Sotto scorta']] : []).concat([['tutti', 'Tutti'], ['contati', 'Contati'], ['senza', 'Senza scorta minima']]).map(function(x){ return '<button class="chip' + (VM.filtro === x[0] ? ' active' : '') + '" onclick="VM.filtro=\'' + x[0] + '\';VM.limite=80;renderMagazzino()">' + x[1] + '</button>'; }).join('') + '</div>';
   h += '<div class="sw' + (VM.q ? ' has' : '') + '"><span class="si">🔎</span><input type="search" placeholder="Cerca prodotto" value="' + esc(VM.q) + '" oninput="VM.q=this.value.trim();renderListaMag()"><button class="sx" onclick="VM.q=\'\';renderMagazzino()">✕</button></div><div id="magLista"></div>';
   el.innerHTML = h; renderListaMag();
 }
@@ -5867,7 +5881,7 @@ function suggerimentiRiordino(){
     var c = CTX.per[p.id]; if(!c || (Number(c.n_ordini) || 0) < 4) return;
     var iv = Number(c.intervallo_medio_giorni) || 0; if(iv < 2) return;
     var g = giorniDa(c.ultimo_ordine); if(g == null || g < iv * 1.15 || g > iv * 4) return;   // oltre 4 volte il solito: probabilmente non lo prendi più
-    if(inCarrello(p.id) || sottoScorta(p) || c.richiesta_aperta_il) return;
+    if(inCarrello(p.id) || (vediScorta() && sottoScorta(p)) || c.richiesta_aperta_il) return;
     if(p.giacenza != null && p.scorta_min != null && p.giacenza > p.scorta_min) return;      // il conteggio dice che ne hai abbastanza
     out.push({ p: p, c: c, g: g, iv: iv, q: Math.max(1, Math.round(Number(c.qta_tipica) || p.qty_min || 1)) });
   });
@@ -5946,6 +5960,9 @@ function apriImpostazioni(){
       (U.lettura ? '' : voce('＋', 'Nuovo prodotto', '', 'chiudiSheet(\'shImp\');apriNuovoProdotto(\'\')', 'ic-b')) +
       voce('🧬', 'Doppioni', (function(){ var d = calcolaDoppioni(); return (d.gruppi.length ? d.gruppi.length + ' da unire' : 'nessun doppione sicuro') + (d.forse.length ? ' · ' + d.forse.length + ' da controllare' : '') + (conf().doppioniAuto ? ' · unione automatica attiva' : ''); })(), 'chiudiSheet(\'shImp\');apriDoppioni(\'sicuri\')', 'ic-p') +
       voce('🗑', 'Prodotti eliminati', c.length + ' recuperabili per 30 giorni', 'apriCestinoProdotti()') + '</div>' +
+    '<div class="sec-title">Magazzino</div><div class="grp">' +
+      '<label class="row"><div class="row-main"><div class="row-t">Mostra la scheda Magazzino</div><div class="row-s">Giacenze e inventario. Se la spegni, i conteggi dei dipendenti restano salvati e servono comunque a calcolare quanti pezzi ordinare.</div></div><span class="tgl"><input type="checkbox" ' + (vediMagazzino() ? 'checked' : '') + (U.lettura ? ' disabled' : '') + ' onchange="impostaVista(\'nascondiMagazzino\',this.checked)"><span></span></span></label>' +
+      '<label class="row"><div class="row-main"><div class="row-t">Mostra i prodotti «sotto scorta»</div><div class="row-s">Avvisi, filtro e numerino in Ordina, Da fare e Magazzino. Si basano sull’ultimo conteggio, che non scende con i prodotti usati: per questo possono non corrispondere al magazzino vero.</div></div><span class="tgl"><input type="checkbox" ' + (vediScorta() ? 'checked' : '') + (U.lettura ? ' disabled' : '') + ' onchange="impostaVista(\'nascondiScorta\',this.checked)"><span></span></span></label>' + '</div>' +
     '<div class="sec-title">App</div><div class="grp">' +
       voce('🏢', 'Dati dell\'attività', 'Intestazione dei PDF d\'ordine', 'apriAzienda()') +
       voce('✨', 'Intelligenza artificiale', 'Legge PDF e foto e decide i nomi incerti · la chiave è al sicuro sul server', 'apriIA()', 'ic-p') +
@@ -6502,7 +6519,8 @@ function vaiTab(t){
   if(t === 'dafare' && location.hash !== '#da-fare') try{ history.replaceState(null, '', location.pathname); }catch(e){}
 }
 function aggiornaBadge(){
-  var n = contaDaFare(), dafare = n.rich + n.var + n.forn + n.cod + (conf().doppioniAuto ? 0 : n.dop), aperti = STORICO.filter(ordineAperto).length, sotto = CAT.filter(sottoScorta).length;
+  var n = contaDaFare(), dafare = n.rich + n.var + n.forn + n.cod + (conf().doppioniAuto ? 0 : n.dop), aperti = STORICO.filter(ordineAperto).length, sotto = vediScorta() ? CAT.filter(sottoScorta).length : 0;
+  var tm = document.querySelector('.tab-item[data-tab="magazzino"]'); if(tm) tm.style.display = vediMagazzino() ? '' : 'none';
   setBadge('badgeDaFare', dafare); setBadge('badgeOrdini', aperti); setBadge('badgeMag', sotto);
   try{ if(navigator.setAppBadge){ if(dafare) navigator.setAppBadge(dafare); else navigator.clearAppBadge(); } }catch(e){}
 }
