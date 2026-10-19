@@ -130,7 +130,7 @@ def ld_bar(lang='it'):
         "name": "Ceraldi Caffè", "alternateName": ["Caffè Ceraldi", "Ceraldi Caffe", "Bar Ceraldi Piazza Carità"],
         "slogan": "Artigiani per passione dal 1973", "url": BASE,
         "logo": BASE + "img/logo-ceraldi.svg",
-        "image": [BASE + "img/sala-1024.webp", BASE + "img/squadra-1600.webp", BASE + "img/sfogliatella-riccia-1024.webp", BASE + "img/baba-1024.webp"],
+        "image": [BASE + "img/sfogliatella-riccia-1024.webp", BASE + "img/baba-1024.webp", BASE + "img/squadra-1600.webp", BASE + "img/sala-1024.webp"],
         "description": ("Bar e pasticceria napoletana della famiglia Ceraldi, attiva dal 1973 (prima in Piazza Garibaldi, dal 2002 in Piazza Carità, Napoli). Pasticceria di produzione propria con ricette di famiglia custodite da oltre cento anni: sfogliatelle, babà, pastiera, zeppole. Colazione all'italiana con croissant e brioche, caffè della casa, buffet freddi e aperitivo."
                         if lang == 'it' else "Neapolitan café and pastry shop run by the Ceraldi family since 1973 (first in Piazza Garibaldi, in Piazza Carità, Naples, since 2002). In-house pastries from family recipes kept for over a hundred years: sfogliatella, babà, pastiera, zeppole. Italian breakfast with croissants and brioche, house coffees, cold buffet and aperitivo."),
         "foundingDate": "1973", "telephone": "+39 081 552 3488", "priceRange": "€",
@@ -184,7 +184,7 @@ def home_it():
     alt = [("it", BASE), ("en", BASE + "en/"), ("x-default", BASE)]
     h = testa("it", "Ceraldi Caffè | Bar e pasticceria a Napoli, Piazza Carità",
               "Ceraldi Caffè, Piazza Carità 14, Napoli: bar e pasticceria di produzione propria dal 1973. Sfogliatelle, babà, pastiera, colazione con croissant e brioche, aperitivo. Aperti tutti i giorni 6:30–20:30.",
-              BASE, "", ld=[ld_bar('it'), ld_sito(), ld_faq(FAQ)], alternates=alt, preload="img/sala-1024.webp")
+              BASE, "", ld=[ld_bar('it'), ld_sito(), ld_faq(FAQ)], alternates=alt, preload="img/sfogliatella-riccia-1024.webp")
     storie = ''.join(f'<li><a href="storie/{a["slug"]}/"><b>{e(a["titolo"])}</b><span>{e(a["dek"])}</span><small>{a["lettura"]} min di lettura</small></a></li>' for a in ARTICOLI)
     vetr = ''.join(f'<a href="storie/{s}/"><figure>{immagine(k, "", "(max-width: 900px) 50vw, 25vw")}<h3>{t}</h3><p>{e(d)}</p></figure></a>' for s, k, t, d in TRAD)
     return h + f'''<header class="hero">
@@ -197,7 +197,7 @@ def home_it():
 <div class="azioni sinistra"><a class="btn pieno" href="{BAR["mappa"]}" rel="noopener">Come arrivare</a><a class="btn" href="menu/">Guarda il menu</a><a class="btn" href="tel:{BAR["tel_link"]}">Chiama</a></div>
 <p class="aperto">Aperto tutti i giorni dalle 6:30 alle 20:30<br><a href="#recensioni">Valutazione 4,3 su Google</a></p>
 </div>
-<figure class="specchio">{immagine("sala", "", "(max-width: 900px) 92vw, 480px", eager=True)}</figure>
+<figure class="specchio">{immagine("sfogliatella-riccia", "", "(max-width: 900px) 92vw, 480px", eager=True, cls="fuoco-sx")}</figure>
 </div>
 </header>
 <main id="contenuto">
@@ -286,7 +286,7 @@ def home_en():
     alt = [("it", BASE), ("en", BASE + "en/"), ("x-default", BASE)]
     h = testa("en", "Ceraldi Caffè | Café and pastry shop in Naples, Piazza Carità",
               "Ceraldi Caffè, Piazza Carità 14, Naples: café and in-house pastry shop since 1973. Sfogliatella, babà, pastiera, Italian breakfast with croissants, aperitivo. Open every day 6:30 am – 8:30 pm.",
-              BASE + "en/", "../", ld=[ld_bar('en'), ld_faq(FAQ_EN)], alternates=alt, preload="../img/sala-1024.webp")
+              BASE + "en/", "../", ld=[ld_bar('en'), ld_faq(FAQ_EN)], alternates=alt, preload="../img/sfogliatella-riccia-1024.webp")
     vetr = ''.join(f'<a href="../storie/{s}/" hreflang="it"><figure>{immagine(k, "../", "(max-width: 900px) 50vw, 25vw")}<h3>{t}</h3><p>{e(d)}</p></figure></a>'
                    for (s, k, t, _), d in zip(TRAD, TRAD_EN))
     return h + f'''<header class="hero">
@@ -299,7 +299,7 @@ def home_en():
 <div class="azioni sinistra"><a class="btn pieno" href="{BAR["mappa"]}" rel="noopener">Get directions</a><a class="btn" href="menu/">See the menu</a><a class="btn" href="tel:{BAR["tel_link"]}">Call</a></div>
 <p class="aperto">Open every day from 6:30 am to 8:30 pm<br><a href="#reviews">Rated 4.3 on Google</a></p>
 </div>
-<figure class="specchio">{immagine("sala", "../", "(max-width: 900px) 92vw, 480px", eager=True)}</figure>
+<figure class="specchio">{immagine("sfogliatella-riccia", "../", "(max-width: 900px) 92vw, 480px", eager=True, cls="fuoco-sx")}</figure>
 </div>
 </header>
 <main id="contenuto">
