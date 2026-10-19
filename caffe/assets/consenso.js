@@ -64,9 +64,11 @@
     if (!caricato) return;
     var h = a.getAttribute('href') || '', nome = null;
     if (h.indexOf('tel:') === 0) nome = 'clic_chiama';
+    else if (h.indexOf('query_place_id') > -1) nome = 'clic_recensioni';
     else if (h.indexOf('maps.google') > -1 || h.indexOf('google.com/maps') > -1) nome = 'clic_indicazioni';
     else if (h.indexOf('wa.me') > -1) nome = 'clic_whatsapp';
     else if (/(^|\/)menu\/($|#)/.test(h) || h.indexOf('qromo.it') > -1) nome = 'clic_menu';
+    else if (h.indexOf('query_place_id') > -1 || h.indexOf('writereview') > -1 || h.indexOf('tripadvisor') > -1) nome = 'clic_recensioni';
     if (nome) gtag('event', nome, { link_url: a.href, posizione: a.closest('.barra-fissa') ? 'barra_fissa' : (a.closest('footer') ? 'pie_di_pagina' : 'pagina') });
   });
 

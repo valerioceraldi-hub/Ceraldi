@@ -31,7 +31,8 @@ BAR = {
     "menu": "https://ceraldicaffe.qromo.it",
     "instagram": "https://www.instagram.com/ceraldicaffe/",
     "facebook": "https://www.facebook.com/ceraldicaffe",
-    "google_recensioni": "https://search.google.com/local/reviews?placeid=ChIJj5ui8loIOxMRCpGd6YqmVy0",
+    # Scheda Google con le recensioni (formato ufficiale Google Maps URLs; il vecchio search.google.com/local/reviews risponde 404)
+    "google_recensioni": "https://www.google.com/maps/search/?api=1&query=Ceraldi%20Caff%C3%A8&query_place_id=ChIJj5ui8loIOxMRCpGd6YqmVy0",
     "google_scrivi": "https://search.google.com/local/writereview?placeid=ChIJj5ui8loIOxMRCpGd6YqmVy0",
     # Scheda nella guida Bar d'Italia del Gambero Rosso (edizione 2026 verificata online; "da oltre dieci anni" dichiarato dal titolare)
     "gambero_rosso": "https://www.gamberorosso.it/luoghi/locali/caffe-bar/ceraldi-caffe/",
@@ -51,7 +52,7 @@ DOLCI_CASA = [
     ("Segreto amalfitano", "Babà bagnato al limoncello con cuore di chantilly ai limoni di Amalfi."),
     ("Cestino", "Il riccio della sfogliatella farcito con chantilly e frutti di bosco."),
     ("Babàmisù", "Cupola di babà con crema al mascarpone e caffè."),
-    ("Pellecchiella", "Torta con albicocche Pellecchielle del Vesuvio, presidio Slow Food."),
+    ("Pellecchiella", "Torta con albicocche Pellecchielle del Vesuvio."),
     ("Torta di mele", "Con mela Annurca IGP, crema pasticcera e cannella."),
     ("Sfogliata Santa Rosa", "La sfogliatella con crema e amarene, come nella ricetta delle origini."),
 ]
@@ -76,7 +77,7 @@ DOLCI_CASA_EN = [
     ("Segreto amalfitano", "Limoncello-soaked babà with an Amalfi lemon chantilly heart."),
     ("Cestino", "Sfogliatella pastry filled with chantilly cream and berries."),
     ("Babàmisù", "A babà dome filled with mascarpone and coffee cream."),
-    ("Pellecchiella", "Cake with Vesuvius Pellecchiella apricots, a Slow Food presidium."),
+    ("Pellecchiella", "Cake with Pellecchiella apricots from Vesuvius."),
     ("Torta di mele", "Annurca IGP apples, custard and cinnamon."),
     ("Sfogliata Santa Rosa", "Sfogliatella with custard and black cherries, like the original."),
 ]
@@ -237,7 +238,7 @@ ARTICOLI = [
 <h2>Un consiglio</h2>
 <p>La pastiera dà il meglio di sé un giorno o due dopo la cottura, quando i profumi di grano, agrumi e fiori d'arancio si sono amalgamati. Per questo in molte famiglie si prepara qualche giorno prima di Pasqua.</p>
 """,
- "provare": [("Pastiera napoletana", "con grano, canditi e fiori d'arancio"), ("Pellecchiella", "torta con albicocche del Vesuvio, presidio Slow Food")],
+ "provare": [("Pastiera napoletana", "con grano, canditi e fiori d'arancio"), ("Pellecchiella", "torta con albicocche Pellecchielle del Vesuvio")],
 },
 {
  "slug": "zeppole-di-san-giuseppe",
@@ -268,8 +269,8 @@ ARTICOLI += [
 {
  "slug": "colazione-napoletana",
  "titolo": "La colazione a Napoli: cornetto, sfogliatella o graffa?",
- "titolo_seo": "Colazione a Napoli: cornetto, sfogliatella e caffè",
- "descrizione": "Come si fa colazione a Napoli: la colazione all'italiana al bancone con cornetto e cappuccino, la sfogliatella, la graffa e il caffè. Differenze tra cornetto, brioche e croissant.",
+ "titolo_seo": "Colazione a Napoli: cornetto e sfogliatella",
+ "descrizione": "Come si fa colazione a Napoli: cornetto e cappuccino al bancone, sfogliatella, graffa e caffè. E le differenze tra cornetto, brioche e croissant.",
  "dek": "In piedi al bancone, in pochi minuti, con il profumo del forno. Guida alla colazione napoletana, tra classici italiani e dolci della città.",
  "foto": "sfogliatella-frolla",
  "lettura": 4,
@@ -299,7 +300,7 @@ ARTICOLI += [
  "slug": "pasticceria-artigianale",
  "titolo": "La nostra pasticceria: produzione propria e ricette di famiglia",
  "titolo_seo": "Produzione propria: la pasticceria di Ceraldi",
- "descrizione": "Da Ceraldi Caffè in Piazza Carità i dolci sono di produzione propria, fatti con ricette di famiglia custodite da oltre cento anni: sfogliatelle, babà, pastiera e creazioni della casa.",
+ "descrizione": "Da Ceraldi Caffè i dolci sono di produzione propria, con ricette di famiglia custodite da oltre cento anni: sfogliatelle, babà, pastiera e creazioni della casa.",
  "dek": "Quello che vedi in vetrina nasce da noi, con ricette di famiglia tramandate da oltre cento anni e custodite con cura.",
  "foto": "cestino",
  "lettura": 3,
@@ -315,14 +316,14 @@ ARTICOLI += [
 <li><strong>Cestino</strong>: il riccio della sfogliatella diventa un cesto croccante, farcito con chantilly e frutti di bosco.</li>
 <li><strong>Segreto amalfitano</strong>: babà al limoncello con un cuore di chantilly ai limoni di Amalfi.</li>
 <li><strong>Babàmisù</strong>: una cupola di babà con crema al mascarpone e caffè.</li>
-<li><strong>Pellecchiella</strong>: torta con le albicocche Pellecchielle del Vesuvio, presidio Slow Food.</li>
+<li><strong>Pellecchiella</strong>: torta con le albicocche Pellecchielle del Vesuvio.</li>
 <li><strong>Torta di mele</strong>: con mela Annurca IGP, crema pasticcera e cannella.</li>
 </ul>
 
 <h2>Anche al bancone</h2>
 <p>La stessa idea vale per i caffè della casa: il Caffè Ceraldi con cioccolata, crema di caffè e panna fresca, il Caffè Babà, il Michelino. Sono il modo più semplice per assaggiare la nostra pasticceria anche in una tazza.</p>
 """,
- "provare": [("Cestino", "riccio della sfogliatella, chantilly e frutti di bosco"), ("Segreto amalfitano", "babà al limoncello e chantilly ai limoni di Amalfi"), ("Pellecchiella", "albicocche del Vesuvio, presidio Slow Food")],
+ "provare": [("Cestino", "riccio della sfogliatella, chantilly e frutti di bosco"), ("Segreto amalfitano", "babà al limoncello e chantilly ai limoni di Amalfi"), ("Pellecchiella", "albicocche Pellecchielle del Vesuvio")],
 },
 {
  "slug": "dolci-dei-conventi",
@@ -385,7 +386,7 @@ ARTICOLI += [
  "slug": "piazza-carita-via-toledo",
  "titolo": "Piazza Carità e via Toledo: una passeggiata nel cuore di Napoli",
  "titolo_seo": "Piazza Carità e via Toledo: storia e cosa vedere",
- "descrizione": "La storia di Piazza Carità e di via Toledo, aperta nel 1536 dal viceré Pedro de Toledo: il monumento a Salvo D'Acquisto, la Pignasecca, i Quartieri Spagnoli e la metro Toledo.",
+ "descrizione": "Piazza Carità e via Toledo, aperta nel 1536 dal viceré Pedro de Toledo: storia, il monumento a Salvo D'Acquisto, la Pignasecca e i Quartieri Spagnoli.",
  "dek": "La piazza dove si trova Ceraldi Caffè ha cambiato nome e monumenti più volte. Ecco la sua storia e cosa c'è intorno.",
  "foto": None,
  "lettura": 4,
@@ -414,7 +415,7 @@ ARTICOLI += [
  "slug": "a-tazza-e-cafe",
  "titolo": "'A tazza 'e cafè: il caffè nella canzone e nel teatro napoletano",
  "titolo_seo": "'A tazza 'e cafè: la canzone del 1918 e il caffè",
- "descrizione": "La storia di 'A tazza 'e cafè, la canzone napoletana del 1918 di Capaldo e Fassone, e del caffè nella cultura di Napoli, da Eduardo De Filippo a Luciano De Crescenzo.",
+ "descrizione": "'A tazza 'e cafè, la canzone del 1918 di Capaldo e Fassone, e il caffè nella cultura di Napoli, da Eduardo De Filippo a Luciano De Crescenzo.",
  "dek": "Una cassiera che non sorrideva mai, un poeta innamorato e una canzone del 1918 che paragona l'amore a una tazza di caffè.",
  "foto": None,
  "lettura": 3,
@@ -438,7 +439,7 @@ ARTICOLI += [
  "slug": "tradizioni-napoletane",
  "titolo": "Napoli in sette tradizioni: dal panaro al miracolo di San Gennaro",
  "titolo_seo": "Tradizioni napoletane: panaro, smorfia e presepe",
- "descrizione": "Sette tradizioni napoletane da conoscere: il caffè sospeso, il panaro, il cornicello, la smorfia, il presepe di San Gregorio Armeno, il miracolo di San Gennaro e i dolci delle feste.",
+ "descrizione": "Sette tradizioni napoletane: caffè sospeso, panaro, cornicello, smorfia, presepe di San Gregorio Armeno, miracolo di San Gennaro e dolci delle feste.",
  "dek": "Piccoli gesti, credenze e feste che raccontano Napoli meglio di qualsiasi guida.",
  "foto": None,
  "lettura": 4,
@@ -554,3 +555,28 @@ MENU_APPROFONDIMENTI = {
  153960: "aspritz/",
  278576: "bar/", 296968: "bar/",
 }
+
+# ── Specialità della casa (pagina /specialita/) ───────────────────────
+# Ogni voce è legata al prodotto su qromo tramite il suo id: ingredienti, allergeni e disponibilità
+# arrivano dal menu; se un prodotto non è più disponibile su qromo, sparisce da solo dalla pagina.
+SPECIALITA = [
+ {"id": "caffe", "nome": "I caffè della casa", "nome_en": "House coffees", "menu": "bar-dolci", "voci": [
+   (153768, "caffe-ceraldi", "La nostra firma: cioccolata calda sul fondo, crema di caffè e panna montata fresca, in bicchiere.", "Our signature: hot chocolate at the bottom, coffee cream and fresh whipped cream, served in a glass."),
+   (153770, None, "Il caffè incontra il dolce più napoletano: crema di caffè, crema al babà, un babà mignon e panna.", "Coffee meets the most Neapolitan of pastries: coffee cream, babà cream, a mini babà and cream."),
+   (153769, None, "Espresso con crema di zucchero e panna sciolta a bagnomaria.", "Espresso with whipped sugar cream and cream warmed in a bain-marie."),
+   (153771, None, "Espresso con crema di zucchero, pasta di nocciola Piemonte IGP e cacao.", "Espresso with whipped sugar cream, Piedmont PGI hazelnut paste and cocoa."),
+   (153789, None, "Espresso con crema di pistacchio e granella tostata.", "Espresso with pistachio cream and toasted chopped pistachios."),
+   (153773, None, "Espresso con crema di zucchero e crema di latte montata a freddo.", "Espresso with whipped sugar cream and cold-whipped milk cream."),
+ ]},
+ {"id": "dolci", "nome": "I dolci della casa", "nome_en": "House pastries", "menu": "bar-dolci", "voci": [
+   (616031, "cestino", "Il riccio della sfogliatella diventa un cesto croccante, farcito con crema chantilly e frutti di bosco.", "The crisp layers of the sfogliatella shaped into a basket, filled with chantilly cream and berries."),
+   (638146, None, "Monoporzione di babà bagnato al limoncello, con un cuore di chantilly ai limoni di Amalfi.", "A single-serve babà soaked in limoncello, with a heart of Amalfi lemon chantilly."),
+   (219384, "babamisu", "Una cupola di babà farcita con crema al mascarpone e caffè: il babà incontra il tiramisù.", "A babà dome filled with mascarpone cream and coffee: babà meets tiramisù."),
+   (472126, "pellecchiella", "Torta al forno con albicocche Pellecchielle del Vesuvio.", "A baked cake with Pellecchiella apricots from Vesuvius."),
+   (472130, None, "Torta al forno con mela Annurca IGP, crema pasticcera e cannella.", "A baked cake with Annurca PGI apples, custard and cinnamon."),
+   (153840, None, "La sfogliatella riccia con crema pasticcera e amarene, la più vicina alla ricetta del convento.", "The sfogliatella riccia with custard and black cherries, the closest to the original convent recipe."),
+ ]},
+ {"id": "aperitivo", "nome": "L'aperitivo della casa", "nome_en": "House aperitivo", "menu": "cocktails-birre-alcolici", "voci": [
+   (153960, "aspritz", "Il nostro spritz napoletano: bitter fatto in casa con agrumi della Costiera Amalfitana, erbe e radici, e Asprinio di Aversa spumante.", "Our Neapolitan spritz: a homemade bitter with Amalfi Coast citrus, herbs and roots, topped with sparkling Asprinio di Aversa."),
+ ]},
+]

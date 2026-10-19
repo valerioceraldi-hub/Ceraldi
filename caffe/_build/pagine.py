@@ -13,7 +13,7 @@ PAGINE = [
  "nav": "La nostra storia",
  "titolo": "Un angolo di Piazza Carità che aspettava noi",
  "titolo_seo": "La storia di Ceraldi, bar a Napoli dal 1973",
- "descrizione": "La storia della famiglia Ceraldi: i primi anni Settanta in Piazza Garibaldi, l'arrivo in Piazza Carità nel 2002, un padre e due figli che portano avanti la tradizione del bar e della pasticceria napoletana.",
+ "descrizione": "La famiglia Ceraldi dai primi anni Settanta in Piazza Garibaldi a Piazza Carità nel 2002: un padre e due figli che portano avanti bar e pasticceria.",
  "dek": "Dai primi anni Settanta in Piazza Garibaldi al 2002 in Piazza Carità: la storia di un padre, dei suoi due figli e di un bar che sembrava aspettarli.",
  "foto": "squadra",
  "corpo": """
@@ -42,7 +42,7 @@ PAGINE = [
  "nav": "Il bar e la colazione",
  "titolo": "Il bar: caffè napoletano, colazione e English breakfast",
  "titolo_seo": "Bar e colazione in Piazza Carità, Napoli",
- "descrizione": "Il bar di Ceraldi Caffè in Piazza Carità, Napoli: espresso e caffè della casa, colazione all'italiana con croissant e brioche, colazione napoletana e English breakfast tutte le mattine.",
+ "descrizione": "Espresso e caffè della casa, colazione con croissant, sfogliatelle ed English breakfast tutte le mattine: il bar di Ceraldi Caffè in Piazza Carità, Napoli.",
  "dek": "Dalle 6:30 del mattino: l'espresso nella tazzina calda, i caffè della casa, la colazione all'italiana e quella napoletana. E per chi viene da lontano, l'English breakfast tutte le mattine.",
  "foto": "caffe-ceraldi",
  "corpo": """
@@ -75,7 +75,7 @@ PAGINE = [
  "nav": "La pasticceria",
  "titolo": "La pasticceria: produzione propria e ricette di famiglia",
  "titolo_seo": "Pasticceria napoletana in centro a Napoli",
- "descrizione": "La pasticceria di Ceraldi Caffè in Piazza Carità: produzione propria con ricette di famiglia custodite da oltre cento anni. Sfogliatelle, babà, pastiera, zeppole e dolci della casa.",
+ "descrizione": "Pasticceria di produzione propria in Piazza Carità, con ricette di famiglia custodite da oltre cento anni: sfogliatelle, babà, pastiera e dolci della casa.",
  "dek": "Tutto quello che vedi in vetrina nasce nei nostri laboratori, con ricette di famiglia custodite da oltre cento anni.",
  "foto": "cestino",
  "corpo": """
@@ -96,7 +96,7 @@ PAGINE = [
 <li><strong>Cestino</strong>: il riccio della sfogliatella diventa un cesto croccante, con chantilly e frutti di bosco.</li>
 <li><strong>Segreto amalfitano</strong>: babà al limoncello con un cuore di chantilly ai limoni di Amalfi.</li>
 <li><strong>Babàmisù</strong>: una cupola di babà con crema al mascarpone e caffè.</li>
-<li><strong>Pellecchiella</strong>: torta con le albicocche Pellecchielle del Vesuvio, presidio Slow Food.</li>
+<li><strong>Pellecchiella</strong>: torta con le albicocche Pellecchielle del Vesuvio.</li>
 <li><strong>Torta di mele</strong> con mela Annurca IGP, <strong>ricotta e pera</strong>, crostata di fragoline, millefoglie crema e amarena.</li>
 </ul>
 
@@ -111,7 +111,7 @@ PAGINE = [
  "nav": "Rosticceria e pranzo veloce",
  "titolo": "Rosticceria napoletana, freselle e insalate",
  "titolo_seo": "Rosticceria napoletana in centro a Napoli",
- "descrizione": "La rosticceria napoletana di Ceraldi Caffè in Piazza Carità: frittatine, crocchè, pizza fritta, pizza di scarole, saltimbocca, panini, freselle e insalate per un pranzo veloce in centro a Napoli.",
+ "descrizione": "Frittatine, crocchè, pizza fritta, saltimbocca, freselle e insalate: la rosticceria napoletana di Ceraldi Caffè per un pranzo veloce in centro a Napoli.",
  "dek": "Frittatine, crocchè, pizza fritta e saltimbocca da mangiare passeggiando. Oppure, al tavolo, una fresella o un'insalata per un pranzo veloce.",
  "foto": "saltimbocca",
  "corpo": """
@@ -141,7 +141,7 @@ PAGINE = [
  "nav": "Aspritz e aperitivi",
  "titolo": "Aspritz: lo spritz napoletano fatto in casa",
  "titolo_seo": "Aspritz, l'aperitivo della casa a Napoli",
- "descrizione": "L'Aspritz di Ceraldi Caffè: bitter fatto in casa con agrumi della Costiera Amalfitana, erbe e radici, con spumante Asprinio di Aversa. Aperitivo in Piazza Carità con spritz, negroni, gin tonic e vini campani.",
+ "descrizione": "L'Aspritz di Ceraldi Caffè: bitter fatto in casa con agrumi della Costiera Amalfitana e Asprinio di Aversa spumante. Aperitivo in Piazza Carità, Napoli.",
  "dek": "Sono le sei di sera, le luci della città si accendono e l'aperitivo va in scena. Il protagonista è nostro: l'Aspritz.",
  "foto": "aspritz",
  "corpo": """

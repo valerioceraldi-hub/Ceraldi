@@ -9,7 +9,7 @@ PAGINE_EN = [
  "nav": "Our story",
  "titolo": "A corner of Piazza Carità that was waiting for us",
  "titolo_seo": "Our story: the Ceraldi family, Naples since 1973",
- "descrizione": "The story of the Ceraldi family: the early 1970s in Piazza Garibaldi, Piazza Carità from 2002, a father and two sons carrying on the tradition of the Neapolitan café and pastry shop.",
+ "descrizione": "The Ceraldi family, from Piazza Garibaldi in the early 1970s to Piazza Carità in 2002: a father and two sons carrying on a Neapolitan café tradition.",
  "dek": "From Piazza Garibaldi in the early seventies to Piazza Carità in 2002: the story of a father, his two sons and a café that seemed to be waiting for them.",
  "foto": "squadra",
  "corpo": """
@@ -38,7 +38,7 @@ PAGINE_EN = [
  "nav": "Coffee and breakfast",
  "titolo": "The café: Neapolitan coffee, breakfast and English breakfast",
  "titolo_seo": "Coffee and breakfast in Piazza Carità, Naples",
- "descrizione": "Ceraldi Caffè in Piazza Carità, Naples: espresso and house coffees, Italian breakfast with croissants and brioche, Neapolitan pastries and a full English breakfast every morning.",
+ "descrizione": "Espresso and house coffees, croissants, Neapolitan pastries and a full English breakfast every morning at Ceraldi Caffè, Piazza Carità, Naples.",
  "dek": "From 6:30 in the morning: espresso in a warm cup, our house coffees, Italian and Neapolitan breakfast. And for guests from abroad, a full English breakfast every morning.",
  "foto": "caffe-ceraldi",
  "corpo": """
@@ -70,7 +70,7 @@ PAGINE_EN = [
  "nav": "Pastry shop",
  "titolo": "The pastry shop: made in-house with family recipes",
  "titolo_seo": "Neapolitan pastry shop in central Naples",
- "descrizione": "Ceraldi Caffè's pastry shop in Piazza Carità: everything made in-house with family recipes kept for over a hundred years. Sfogliatelle, babà, pastiera, zeppole and house creations.",
+ "descrizione": "Pastries made in-house in Piazza Carità with family recipes kept for over a hundred years: sfogliatelle, babà, pastiera and house creations.",
  "dek": "Everything in our display case is made in our own kitchens, with family recipes kept for over a hundred years.",
  "foto": "cestino",
  "corpo": """
@@ -91,7 +91,7 @@ PAGINE_EN = [
 <li><strong>Cestino</strong>: the crisp layers of the sfogliatella shaped into a basket, filled with chantilly cream and berries.</li>
 <li><strong>Segreto amalfitano</strong>: limoncello babà with a heart of Amalfi lemon chantilly.</li>
 <li><strong>Babàmisù</strong>: a babà dome with mascarpone cream and coffee.</li>
-<li><strong>Pellecchiella</strong>: a tart made with Pellecchiella apricots from Vesuvius, a Slow Food Presidium.</li>
+<li><strong>Pellecchiella</strong>: a tart made with Pellecchiella apricots from Vesuvius.</li>
 <li><strong>Apple cake</strong> with Annurca PGI apples, <strong>ricotta and pear</strong>, wild strawberry tart, custard and black cherry millefeuille.</li>
 </ul>
 
@@ -107,7 +107,7 @@ PAGINE_EN = [
  "nav": "Street food and quick lunch",
  "titolo": "Neapolitan street food, freselle and salads",
  "titolo_seo": "Neapolitan street food in central Naples",
- "descrizione": "Neapolitan rosticceria at Ceraldi Caffè, Piazza Carità: frittatine, crocchè, fried pizza, scarole pizza, saltimbocca, sandwiches, freselle and salads for a quick lunch in central Naples.",
+ "descrizione": "Frittatine, crocchè, fried pizza, saltimbocca, freselle and salads: Neapolitan street food for a quick lunch at Ceraldi Caffè in central Naples.",
  "dek": "Frittatine, crocchè, fried pizza and saltimbocca to eat on the go. Or, at a table, a fresella or a salad for a quick lunch.",
  "foto": "saltimbocca",
  "corpo": """
@@ -137,7 +137,7 @@ PAGINE_EN = [
  "nav": "Aspritz and aperitivo",
  "titolo": "Aspritz: our homemade Neapolitan spritz",
  "titolo_seo": "Aspritz, our homemade spritz in Naples",
- "descrizione": "Aspritz at Ceraldi Caffè: a homemade bitter with Amalfi Coast citrus, herbs and roots, topped with sparkling Asprinio di Aversa. Aperitivo in Piazza Carità with spritz, negroni, gin and tonic and Campanian wines.",
+ "descrizione": "Aspritz at Ceraldi Caffè: a homemade bitter with Amalfi Coast citrus topped with sparkling Asprinio di Aversa. Aperitivo in Piazza Carità, Naples.",
  "dek": "It is six in the evening, the city lights come on and aperitivo time begins. The star is our own: the Aspritz.",
  "foto": "aspritz",
  "corpo": """
