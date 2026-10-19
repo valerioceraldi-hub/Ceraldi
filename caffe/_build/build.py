@@ -5,6 +5,7 @@ La cartella _build non viene pubblicata da GitHub Pages (Jekyll ignora le cartel
 import json, os, html
 from contenuti import *
 from pagine import *
+from pagine_en import *
 
 QUI = os.path.dirname(os.path.abspath(__file__))
 SITO = os.path.dirname(QUI)
@@ -64,15 +65,24 @@ def testa(lang, titolo, descr, url, rr, og_img="img/og.jpg", ld=None, alternates
 
 VOCI_NAV = [("bar/", "Il bar"), ("pasticceria/", "Pasticceria"), ("rosticceria/", "Rosticceria"), ("aspritz/", "Aspritz"),
             ("menu/", "Menu"), ("storie/", "Storie"), ("contatti/", "Contatti")]
-def barra(rr, lang='it'):
+# Pagine che esistono in entrambe le lingue: percorso italiano -> percorso inglese
+EN_PATH = {"": "en/", "storia/": "en/storia/", "bar/": "en/bar/", "pasticceria/": "en/pasticceria/", "rosticceria/": "en/rosticceria/",
+           "aspritz/": "en/aspritz/", "menu/": "en/menu/", "contatti/": "en/contatti/", "privacy/": "en/privacy/"}
+VOCI_NAV_EN = [("en/bar/", "Coffee & breakfast"), ("en/pasticceria/", "Pastries"), ("en/rosticceria/", "Street food"), ("en/aspritz/", "Aspritz"),
+               ("en/menu/", "Menu"), ("en/storia/", "Our story"), ("en/contatti/", "Contact")]
+
+def alt_coppia(it_path):
+    return [("it", BASE + it_path), ("en", BASE + EN_PATH[it_path]), ("x-default", BASE + it_path)]
+
+def barra(rr, lang='it', it_path=None):
     logo = f'<img src="{rr}img/logo-ceraldi-chiaro.svg" width="150" height="52" alt="Ceraldi Caffè">'
     if lang == 'en':
-        voci = [("#breakfast", "Breakfast"), ("#specialities", "Specialities"), (f"{rr}menu/", "Menu"), ("#find-us", "Find us")]
-        lingua = f'<a href="{rr}" hreflang="it" lang="it">Italiano</a>'
+        voci = [(rr + h, t) for h, t in VOCI_NAV_EN]
+        lingua = f'<a href="{rr}{it_path or ""}" hreflang="it" lang="it">Italiano</a>'
         home = f"{rr}en/"
     else:
         voci = [(rr + h, t) for h, t in VOCI_NAV]
-        lingua = f'<a href="{rr}en/" hreflang="en" lang="en">English</a>'
+        lingua = f'<a href="{rr}{EN_PATH.get(it_path, "en/") if it_path is not None else "en/"}" hreflang="en" lang="en">English</a>'
         home = rr or "./"
     links = ''.join(f'<a href="{h}">{t}</a>' for h, t in voci) + lingua
     return f'''<div class="barra"><a class="marchio" href="{home}">{logo}</a>
@@ -86,11 +96,11 @@ def piede(rr, lang='it'):
 <p style="margin-top:12px">{e(BAR['indirizzo'])}, {e(BAR['cap_citta'])}</p><p>{e(BAR['orari'] if it else BAR['orari_en'])}</p></div>
 <div><p><a href="tel:{BAR['tel_link']}">{'Tel.' if it else 'Phone'} {BAR['telefono']}</a></p><p><a href="tel:{BAR['cell_link']}">{'Cell.' if it else 'Mobile'} {BAR['cellulare']}</a></p>
 <p><a href="{BAR['whatsapp']}" rel="noopener">WhatsApp</a></p></div>
-<div><p><a href="{rr}menu/">{'Il menu' if it else 'Menu'}</a></p><p><a href="{BAR['google_recensioni']}" rel="noopener">{'Recensioni Google' if it else 'Google reviews'}</a></p><p><a href="{BAR['tripadvisor']}" rel="noopener">Tripadvisor</a></p></div>
-<div><p><a href="{BAR['instagram']}" rel="noopener">Instagram</a></p><p><a href="{BAR['facebook']}" rel="noopener">Facebook</a></p><p><a href="{rr}storie/">{'Storie dal caffè' if it else 'Stories (Italian)'}</a></p><p><a href="{rr}contatti/">{'Contatti' if it else 'Contact'}</a></p></div>
-<p class="legale">© {RAGIONE_SOCIALE}, Piazza Carità 14, 80134 Napoli. P. IVA {PIVA}. <a href="{rr}privacy/">Privacy e cookie</a>{f' <a href="#" data-preferenze-cookie>{"Preferenze cookie" if it else "Cookie preferences"}</a>' if GA_ID else ''}</p>
+<div><p><a href="{rr}{'' if it else 'en/'}menu/">{'Il menu' if it else 'Menu'}</a></p><p><a href="{BAR['google_recensioni']}" rel="noopener">{'Recensioni Google' if it else 'Google reviews'}</a></p><p><a href="{BAR['tripadvisor']}" rel="noopener">Tripadvisor</a></p></div>
+<div><p><a href="{BAR['instagram']}" rel="noopener">Instagram</a></p><p><a href="{BAR['facebook']}" rel="noopener">Facebook</a></p><p><a href="{rr}storie/">{'Storie dal caffè' if it else 'Stories (Italian)'}</a></p><p><a href="{rr}{'' if it else 'en/'}contatti/">{'Contatti' if it else 'Contact'}</a></p></div>
+<p class="legale">© {RAGIONE_SOCIALE}, Piazza Carità 14, 80134 Napoli. {'P. IVA' if it else 'VAT no.'} {PIVA}. <a href="{rr}{'' if it else 'en/'}privacy/">{'Privacy e cookie' if it else 'Privacy and cookies'}</a>{f' <a href="#" data-preferenze-cookie>{"Preferenze cookie" if it else "Cookie preferences"}</a>' if GA_ID else ''}</p>
 </div></footer>
-<nav class="barra-fissa" aria-label="{'Contatti rapidi' if it else 'Quick contacts'}"><a href="tel:{BAR['tel_link']}">{'Chiama' if it else 'Call'}</a><a href="{BAR['mappa']}" rel="noopener">{'Indicazioni' if it else 'Directions'}</a><a href="{rr}menu/">Menu</a></nav>
+<nav class="barra-fissa" aria-label="{'Contatti rapidi' if it else 'Quick contacts'}"><a href="tel:{BAR['tel_link']}">{'Chiama' if it else 'Call'}</a><a href="{BAR['mappa']}" rel="noopener">{'Indicazioni' if it else 'Directions'}</a><a href="{rr}{'' if it else 'en/'}menu/">Menu</a></nav>
 </body>
 </html>
 '''
@@ -178,7 +188,7 @@ def home_it():
     storie = ''.join(f'<li><a href="storie/{a["slug"]}/"><b>{e(a["titolo"])}</b><span>{e(a["dek"])}</span><small>{a["lettura"]} min di lettura</small></a></li>' for a in ARTICOLI)
     vetr = ''.join(f'<a href="storie/{s}/"><figure>{immagine(k, "", "(max-width: 900px) 50vw, 25vw")}<h3>{t}</h3><p>{e(d)}</p></figure></a>' for s, k, t, d in TRAD)
     return h + f'''<header class="hero">
-{barra("")}
+{barra("", "it", "")}
 <div class="contenitore hero-griglia">
 <div class="hero-testo">
 <p class="dal">Artigiani per passione dal 1973</p>
@@ -280,13 +290,13 @@ def home_en():
     vetr = ''.join(f'<a href="../storie/{s}/" hreflang="it"><figure>{immagine(k, "../", "(max-width: 900px) 50vw, 25vw")}<h3>{t}</h3><p>{e(d)}</p></figure></a>'
                    for (s, k, t, _), d in zip(TRAD, TRAD_EN))
     return h + f'''<header class="hero">
-{barra("../", "en")}
+{barra("../", "en", "")}
 <div class="contenitore hero-griglia">
 <div class="hero-testo">
 <p class="dal">Craftspeople by passion since 1973</p>
 <h1>Neapolitan café and pastry shop in Piazza Carità</h1>
 <p class="tag">From breakfast to aperitivo, in the heart of Naples. Pastries made in-house from family recipes kept for over a hundred years.</p>
-<div class="azioni sinistra"><a class="btn pieno" href="{BAR["mappa"]}" rel="noopener">Get directions</a><a class="btn" href="../menu/">See the menu</a><a class="btn" href="tel:{BAR["tel_link"]}">Call</a></div>
+<div class="azioni sinistra"><a class="btn pieno" href="{BAR["mappa"]}" rel="noopener">Get directions</a><a class="btn" href="menu/">See the menu</a><a class="btn" href="tel:{BAR["tel_link"]}">Call</a></div>
 <p class="aperto">Open every day from 6:30 am to 8:30 pm<br><a href="#reviews">Rated 4.3 on Google</a></p>
 </div>
 <figure class="specchio">{immagine("sala", "../", "(max-width: 900px) 92vw, 480px", eager=True)}</figure>
@@ -310,7 +320,7 @@ def home_en():
 <p class="intro">Besides espresso and Neapolitan classics, coffees and cakes created at Ceraldi.</p>
 <div class="trittico">{immagine("cestino", "../", "(max-width: 640px) 33vw, 300px")}{immagine("babamisu", "../", "(max-width: 640px) 33vw, 300px")}{immagine("pellecchiella", "../", "(max-width: 640px) 33vw, 300px")}</div>
 {carta("At the counter", CAFFE_CASA_EN, "From the pastry case", DOLCI_CASA_EN)}
-<p class="nota">The full menu with prices (in Italian): <a href="../menu/">see the menu</a>. An English version is available on our <a href="{BAR["menu"]}" rel="noopener">interactive menu</a>.</p>
+<p class="nota">The full menu with prices: <a href="menu/">see the menu</a>. You can also use our <a href="{BAR["menu"]}" rel="noopener">interactive menu</a>.</p>
 </div></section>
 <section class="sezione"><div class="contenitore">
 <h2>Neapolitan tradition, made in-house</h2>
@@ -488,90 +498,110 @@ def _voce_ld(v):
         x["offers"] = {"@type": "Offer", "price": f"{v['prezzo'] / 100:.2f}", "priceCurrency": "EUR"}
     return x
 
-def _voce_html(v):
+def _voce_html(v, rr="../", it=True):
     extra = []
     if v['allergeni']:
-        extra.append('Allergeni: ' + ', '.join(v['allergeni']))
+        extra.append(('Allergeni: ' if it else 'Allergens: ') + ', '.join(v['allergeni']))
     if v['etichette']:
         extra.append(', '.join(v['etichette']).capitalize())
     ex = '<small>' + e('. '.join(extra)) + '</small>' if extra else ''
     de = '<span>' + e(v['desc']) + '</span>' if v['desc'] else ''
     ap = MENU_APPROFONDIMENTI.get(v.get('id'))
-    lk = f'<a class="approfondisci" href="../{ap}">{"La sua storia" if ap.startswith("storie/") else "Scopri di più"}</a>' if ap else ''
+    if ap and not it:
+        ap = ap if ap.startswith("storie/") else "en/" + ap
+    lk = (f'<a class="approfondisci" href="{rr}{ap}"' + ('' if it or not ap.startswith("storie/") else ' hreflang="it" lang="en"') + '>'
+          + ("La sua storia" if it and ap.startswith("storie/") else "Scopri di più" if it else "Its story (in Italian)" if ap.startswith("storie/") else "Learn more")
+          + '</a>') if ap else ''
     return '<li><div class="voce-testa"><b>' + e(v['nome']) + '</b><i>' + _prezzo(v['prezzo']) + '</i></div>' + de + ex + lk + '</li>'
 
-def pagina_menu():
-    url = BASE + "menu/"
+def pagina_menu(lang='it'):
+    it = lang == 'it'
+    rr = "../" if it else "../../"
+    url = BASE + ("" if it else "en/") + "menu/"
     M = dati_menu()
     n_voci = sum(len(c['voci']) for m in M for c in m['categorie'])
-    ld = {"@context": "https://schema.org", "@type": "Menu", "name": "Menu di Ceraldi Caffè", "url": url, "inLanguage": "it-IT",
+    ld = {"@context": "https://schema.org", "@type": "Menu", "name": "Menu di Ceraldi Caffè" if it else "Ceraldi Caffè menu", "url": url, "inLanguage": "it-IT",
           "hasMenuSection": [{"@type": "MenuSection", "name": m['nome'],
                               "hasMenuSection": [{"@type": "MenuSection", "name": c['nome'], "hasMenuItem": [_voce_ld(v) for v in c['voci']]}
                                                  for c in m['categorie']]} for m in M]}
-    h = testa("it", "Menu e prezzi | Ceraldi Caffè, Napoli",
-              f"Il menu completo di Ceraldi Caffè in Piazza Carità, Napoli: {n_voci} proposte tra caffè, colazione, dolci, rosticceria, freselle, spritz e cocktail, con prezzi e allergeni.",
-              url, "../", ld=[ld, ld_breadcrumb([("Menu", url)])])
+    if it:
+        h = testa("it", "Menu e prezzi | Ceraldi Caffè, Napoli",
+                  f"Il menu completo di Ceraldi Caffè in Piazza Carità, Napoli: {n_voci} proposte tra caffè, colazione, dolci, rosticceria, freselle, spritz e cocktail, con prezzi e allergeni.",
+                  url, rr, ld=[ld, ld_breadcrumb([("Menu", url)])], alternates=alt_coppia("menu/"))
+    else:
+        h = testa("en", "Menu and prices | Ceraldi Caffè, Naples",
+                  f"The full menu of Ceraldi Caffè in Piazza Carità, Naples: {n_voci} items including coffee, breakfast, pastries, street food, freselle, spritz and cocktails, with prices and allergens.",
+                  url, rr, ld=[ld, ld_breadcrumb([("Menu", url)])], alternates=alt_coppia("menu/"))
     chips = ''.join('<a href="#' + m['id'] + '">' + e(m['nome']) + '</a>' for m in M)
     sezioni = ''
     for m in M:
-        sezioni += '<section class="menu-sezione" id="' + m['id'] + '"><h2>' + e(m['nome']) + '</h2>'
+        sezioni += '<section class="menu-sezione" id="' + m['id'] + '"><h2' + ('' if it else ' lang="it"') + '>' + e(m['nome']) + '</h2>'
         for c in m['categorie']:
-            sezioni += '<h3>' + e(c['nome']) + '</h3><ul class="menu-voci">' + ''.join(_voce_html(v) for v in c['voci']) + '</ul>'
+            sezioni += '<h3>' + e(c['nome']) + '</h3><ul class="menu-voci"' + ('' if it else ' lang="it"') + '>' + ''.join(_voce_html(v, rr, it) for v in c['voci']) + '</ul>'
         sezioni += '</section>'
     data = OGGI[8:10] + '/' + OGGI[5:7] + '/' + OGGI[:4]
-    return h + f"""<header class="testata-scura">{barra("../")}</header>
-<main id="contenuto" class="articolo pagina-menu"><div class="contenitore">
-<p class="briciole"><a href="../">Ceraldi Caffè</a></p>
-<h1>Il menu</h1>
+    if it:
+        testo = f"""<h1>Il menu</h1>
 <p class="dek">Caffetteria, colazione, pasticceria di produzione propria, rosticceria napoletana, freselle, spritz e cocktail. Prezzi aggiornati al {data}.</p>
 <nav class="chips" aria-label="Sezioni del menu">{chips}</nav>
-<p class="avviso">Le informazioni sugli allergeni vengono dal nostro menu digitale. In caso di allergie o intolleranze chiedi sempre al personale prima di ordinare. Puoi anche consultare il <a href="{BAR['menu']}" rel="noopener">menu interattivo</a>, con filtro allergeni e versione inglese.</p>
+<p class="avviso">Le informazioni sugli allergeni vengono dal nostro menu digitale. In caso di allergie o intolleranze chiedi sempre al personale prima di ordinare. Puoi anche consultare il <a href="{BAR['menu']}" rel="noopener">menu interattivo</a>, con filtro allergeni e versione inglese.</p>"""
+    else:
+        testo = f"""<h1>Our menu</h1>
+<p class="dek">Coffee, breakfast, pastries made in-house, Neapolitan street food, freselle, spritz and cocktails. Prices updated on {data}.</p>
+<nav class="chips" aria-label="Menu sections" lang="it">{chips}</nav>
+<p class="avviso">Dish names and descriptions are in Italian, as on our counter: your browser can translate them, and our staff will be happy to help. Allergen information comes from our digital menu; if you have allergies or intolerances, always ask the staff before ordering. You can also use our <a href="{BAR['menu']}" rel="noopener">interactive menu</a>, with an allergen filter and an English version.</p>"""
+    return h + f"""<header class="testata-scura">{barra(rr, lang, "menu/")}</header>
+<main id="contenuto" class="articolo pagina-menu"><div class="contenitore">
+<p class="briciole"><a href="{rr}{'' if it else 'en/'}">Ceraldi Caffè</a></p>
+{testo}
 {sezioni}
 </div></main>
-""" + piede("../")
+""" + piede(rr, lang)
 
 CTA_LINK = {"mappa": (BAR["mappa"], True), "menu_interno": ("../menu/", False), "menu_bar": ("../menu/#bar-dolci", False),
             "menu_dolci": ("../menu/#bar-dolci", False), "menu_food": ("../menu/#food", False),
             "menu_drink": ("../menu/#cocktails-birre-alcolici", False)}
 
-def pagina(p):
-    url = BASE + p["slug"] + "/"
+def pagina(p, lang='it'):
+    it = lang == 'it'
+    rr = "../" if it else "../../"
+    url = BASE + ("" if it else "en/") + p["slug"] + "/"
     k = p["foto"]
     og = f"img/{k}-{FOTO[k]['w'][0]}.webp"
     ld = [ld_breadcrumb([(p["nav"], url)]),
           {"@context": "https://schema.org", "@type": "WebPage", "name": p["titolo"], "description": p["descrizione"], "url": url,
-           "isPartOf": {"@id": BASE + "#sito"}, "about": {"@id": BASE + "#bar"}, "primaryImageOfPage": BASE + og, "inLanguage": "it-IT"}]
-    h = testa("it", p["titolo_seo"] + " | Ceraldi Caffè", p["descrizione"], url, "../", og_img=og, ld=ld)
+           "isPartOf": {"@id": BASE + "#sito"}, "about": {"@id": BASE + "#bar"}, "primaryImageOfPage": BASE + og, "inLanguage": "it-IT" if it else "en"}]
+    h = testa(lang, p["titolo_seo"] + " | Ceraldi Caffè", p["descrizione"], url, rr, og_img=og, ld=ld, alternates=alt_coppia(p["slug"] + "/"))
     gal = p.get("galleria") or []
     galleria = ''
     if gal:
-        galleria = '<div class="galleria">' + ''.join('<figure>' + immagine(g, "../", "(max-width: 640px) 50vw, 360px") + '</figure>' for g in gal) + '</div>'
+        galleria = '<div class="galleria">' + ''.join('<figure>' + immagine(g, rr, "(max-width: 640px) 50vw, 360px") + '</figure>' for g in gal) + '</div>'
     cta = ''
     for i, (t, c) in enumerate(p.get("cta", [])):
         href, est = CTA_LINK[c]
         cta += '<a class="btn' + (' pieno' if i == 0 else '') + '" href="' + href + '"' + (' rel="noopener"' if est else '') + '>' + e(t) + '</a>'
-    return h + f"""<header class="hero hero-pagina">{barra("../")}
+    return h + f"""<header class="hero hero-pagina">{barra(rr, lang, p["slug"] + "/")}
 <div class="contenitore hero-griglia">
-<div class="hero-testo"><p class="dal"><a href="../">Ceraldi Caffè</a> / {e(p["nav"])}</p>
+<div class="hero-testo"><p class="dal"><a href="{'../' if it else '../'}">Ceraldi Caffè</a> / {e(p["nav"])}</p>
 <h1>{e(p["titolo"])}</h1>
 <p class="tag">{e(p["dek"])}</p>
 <div class="azioni sinistra">{cta}</div></div>
-<figure class="specchio">{immagine(k, "../", "(max-width: 900px) 92vw, 480px", eager=True)}</figure>
+<figure class="specchio">{immagine(k, rr, "(max-width: 900px) 92vw, 480px", eager=True)}</figure>
 </div></header>
 <main id="contenuto" class="articolo"><div class="contenitore">
 <div class="corpo">{p["corpo"]}</div>
 {galleria}
-<aside class="cartellino"><h2>Vieni a trovarci</h2><p>Piazza Carità 14, Napoli, lungo via Toledo. Tutti i giorni dalle 6:30 alle 20:30.</p>
-<div class="azioni sinistra"><a class="btn" href="{BAR["mappa"]}" rel="noopener">Come arrivare</a><a class="btn" href="tel:{BAR["tel_link"]}">Chiama {BAR["telefono"]}</a></div></aside>
+<aside class="cartellino"><h2>{'Vieni a trovarci' if it else 'Visit us'}</h2><p>{'Piazza Carità 14, Napoli, lungo via Toledo. Tutti i giorni dalle 6:30 alle 20:30.' if it else 'Piazza Carità 14, Naples, on via Toledo. Open every day from 6:30 am to 8:30 pm.'}</p>
+<div class="azioni sinistra"><a class="btn" href="{BAR["mappa"]}" rel="noopener">{'Come arrivare' if it else 'Get directions'}</a><a class="btn" href="tel:{BAR["tel_link"]}">{'Chiama' if it else 'Call'} {BAR["telefono"] if it else '+39 081 552 3488'}</a></div></aside>
 </div></main>
-""" + piede("../")
+""" + piede(rr, lang)
 
 def pagina_contatti():
     url = BASE + "contatti/"
     h = testa("it", "Orari e contatti | Ceraldi Caffè, Piazza Carità 14",
               "Ceraldi Caffè, Piazza Carità 14, 80134 Napoli. Aperto tutti i giorni dalle 6:30 alle 20:30. Telefono 081 552 3488, cellulare 328 438 8404, WhatsApp. Come arrivare con la metro Linea 1.",
-              url, "../", ld=[ld_bar('it'), ld_breadcrumb([("Contatti", url)])])
-    return h + f"""<header class="testata-scura">{barra("../")}</header>
+              url, "../", ld=[ld_bar('it'), ld_breadcrumb([("Contatti", url)])], alternates=alt_coppia("contatti/"))
+    return h + f"""<header class="testata-scura">{barra("../", "it", "contatti/")}</header>
 <main id="contenuto" class="articolo"><div class="contenitore">
 <p class="briciole"><a href="../">Ceraldi Caffè</a></p>
 <h1>Contatti e orari</h1>
@@ -610,8 +640,8 @@ PRIVACY_STATISTICHE = """<p>Questo sito è una vetrina informativa e <strong>non
 def pagina_privacy():
     url = BASE + "privacy/"
     data = OGGI[8:10] + '/' + OGGI[5:7] + '/' + OGGI[:4]
-    h = testa("it", "Privacy e cookie | Ceraldi Caffè", "Informativa sulla privacy e sui cookie del sito di Ceraldi Caffè, Piazza Carità 14, Napoli.", url, "../")
-    return h + f"""<header class="testata-scura">{barra("../")}</header>
+    h = testa("it", "Privacy e cookie | Ceraldi Caffè", "Informativa sulla privacy e sui cookie del sito di Ceraldi Caffè, Piazza Carità 14, Napoli.", url, "../", alternates=alt_coppia("privacy/"))
+    return h + f"""<header class="testata-scura">{barra("../", "it", "privacy/")}</header>
 <main id="contenuto" class="articolo"><div class="contenitore">
 <p class="briciole"><a href="../">Ceraldi Caffè</a></p>
 <h1>Privacy e cookie</h1>
@@ -632,8 +662,74 @@ def pagina_privacy():
 """ + piede("../")
 
 
+def pagina_contatti_en():
+    url = BASE + "en/contatti/"
+    h = testa("en", "Opening hours and contact | Ceraldi Caffè, Naples",
+              "Ceraldi Caffè, Piazza Carità 14, 80134 Naples, Italy. Open every day from 6:30 am to 8:30 pm. Phone +39 081 552 3488, mobile +39 328 438 8404, WhatsApp. How to get here by metro Line 1.",
+              url, "../../", ld=[ld_bar('en'), ld_breadcrumb([("Contact", url)])], alternates=alt_coppia("contatti/"))
+    return h + f"""<header class="testata-scura">{barra("../../", "en", "contatti/")}</header>
+<main id="contenuto" class="articolo"><div class="contenitore">
+<p class="briciole"><a href="../">Ceraldi Caffè</a></p>
+<h1>Opening hours and contact</h1>
+<p class="dek">We are in Piazza Carità, in the centre of Naples, on via Toledo. Open every day, Sundays included.</p>
+<dl class="scheda contatti">
+<div><dt>Address</dt><dd>Piazza Carità 14<br>80134 Naples, Italy</dd></div>
+<div><dt>Opening hours</dt><dd>Every day<br>6:30 am – 8:30 pm</dd></div>
+<div><dt>Phone</dt><dd><a href="tel:{BAR["tel_link"]}">+39 081 552 3488</a><br>also on <a href="{BAR["whatsapp"]}" rel="noopener">WhatsApp</a></dd></div>
+<div><dt>Mobile</dt><dd><a href="tel:{BAR["cell_link"]}">+39 328 438 8404</a></dd></div>
+</dl>
+<div class="azioni sinistra"><a class="btn scuro" href="{BAR["mappa"]}" rel="noopener">Open in Google Maps</a><a class="btn scuro-vuoto" href="tel:{BAR["tel_link"]}">Call</a><a class="btn scuro-vuoto" href="{BAR["whatsapp"]}" rel="noopener">Message us on WhatsApp</a></div>
+<div class="corpo">
+<h2>How to get here</h2>
+<ul>
+<li><strong>By metro</strong>: Line 1, <strong>Toledo</strong> or <strong>Dante</strong> stations, a few minutes' walk away.</li>
+<li><strong>On foot</strong>: we are on via Toledo, between piazza Dante and piazza del Plebiscito, at the entrance to the Pignasecca market and the Quartieri Spagnoli.</li>
+<li><strong>By car</strong>: much of the city centre is a limited traffic zone (ZTL); it is best to leave your car in a car park and continue on foot or by metro.</li>
+</ul>
+<h2>Reviews</h2>
+<p>Read what people say about us on <a href="{BAR["google_recensioni"]}" rel="noopener">Google</a> and <a href="{BAR["tripadvisor"]}" rel="noopener">Tripadvisor</a>. If you have visited us, please <a href="{BAR["google_scrivi"]}" rel="noopener">leave a review</a>: it helps us improve.</p>
+<h2>Social media</h2>
+<p>Follow us on <a href="{BAR["instagram"]}" rel="noopener">Instagram</a> and <a href="{BAR["facebook"]}" rel="noopener">Facebook</a>.</p>
+<h2>Company details</h2>
+<p>{RAGIONE_SOCIALE}<br>Piazza Carità 14, 80134 Napoli (NA), Italy<br>VAT no. {PIVA}</p>
+</div>
+</div></main>
+""" + piede("../../", "en")
+
+PRIVACY_EN_NESSUN_COOKIE = """<p>This website is for information only. <strong>It uses no cookies, no analytics or profiling tools, and no forms</strong> that collect personal data. Fonts are hosted on the site itself, with no calls to external services.</p>"""
+PRIVACY_EN_STATISTICHE = """<p>This website is for information only and <strong>contains no forms</strong> that collect personal data. Fonts are hosted on the site itself.</p>
+<h2>Analytics (Google Analytics 4), only with your consent</h2>
+<p>If you accept in the banner, the site uses Google Analytics 4, a service of Google Ireland Limited, to count visits and clicks on Call, Directions, WhatsApp and Menu. This helps us understand which information is useful; it is not used for advertising, and advertising features and data sharing for advertising are not enabled.</p>
+<p>Cookies used: <strong>_ga</strong> and <strong>_ga_&lt;ID&gt;</strong>, which distinguish visits; they last up to 2 years. Without your consent Google Analytics is not loaded and no cookies are set. Your choice is stored in your browser for 6 months and you can change it at any time from the <em>Cookie preferences</em> link at the bottom of every page.</p>
+<p>Legal basis: your consent (Art. 6(1)(a) GDPR). Data may be processed by Google outside the European Union, with the safeguards described in its privacy policy: <a href="https://policies.google.com/privacy" rel="noopener">policies.google.com/privacy</a>.</p>"""
+
+def pagina_privacy_en():
+    url = BASE + "en/privacy/"
+    data = OGGI
+    h = testa("en", "Privacy and cookies | Ceraldi Caffè", "Privacy and cookie policy of the Ceraldi Caffè website, Piazza Carità 14, Naples.", url, "../../", alternates=alt_coppia("privacy/"))
+    return h + f"""<header class="testata-scura">{barra("../../", "en", "privacy/")}</header>
+<main id="contenuto" class="articolo"><div class="contenitore">
+<p class="briciole"><a href="../">Ceraldi Caffè</a></p>
+<h1>Privacy and cookies</h1>
+<p class="meta">Last updated: <time datetime="{data}">{data}</time>. The Italian version is the reference text.</p>
+<div class="corpo">
+<h2>Data controller</h2>
+<p>{RAGIONE_SOCIALE}, Piazza Carità 14, 80134 Napoli (NA), Italy, VAT no. {PIVA}. For any request about personal data you can call us on <a href="tel:{BAR["tel_link"]}">+39 081 552 3488</a> or visit us.</p>
+<h2>What this website collects</h2>
+{PRIVACY_EN_STATISTICHE if GA_ID else PRIVACY_EN_NESSUN_COOKIE}
+<h2>Hosting</h2>
+<p>The site is hosted on GitHub Pages (GitHub, Inc.). Like any web server, the hosting provider may log technical data about visits, such as the IP address, for security and operational purposes, under its own privacy policy.</p>
+<h2>External links</h2>
+<p>Some links lead to third-party services: Google Maps and Google (reviews), Tripadvisor, Instagram, Facebook, WhatsApp and our interactive menu on qromo. When you open them, their own privacy and cookie policies apply.</p>
+<h2>Your rights</h2>
+<p>Under Regulation (EU) 2016/679 (GDPR) you can request access to, correction or deletion of your data, and lodge a complaint with the Italian Data Protection Authority (Garante per la protezione dei dati personali).</p>
+</div>
+</div></main>
+""" + piede("../../", "en")
+
+
 def sitemap():
-    urls = [(BASE, "1.0"), (BASE + "menu/", "0.9")] + [(BASE + p["slug"] + "/", "0.9") for p in PAGINE] + [(BASE + "contatti/", "0.8"), (BASE + "en/", "0.8"), (BASE + "storie/", "0.7")] + [(BASE + f"storie/{c['slug']}/", "0.6") for c in CATEGORIE] + [(BASE + f"storie/{a['slug']}/", "0.6", a.get("aggiornato", a.get("pubblicato", PUBBLICATO))) for a in ARTICOLI]
+    urls = [(BASE, "1.0"), (BASE + "menu/", "0.9")] + [(BASE + p["slug"] + "/", "0.9") for p in PAGINE] + [(BASE + "contatti/", "0.8"), (BASE + "en/", "0.8"), (BASE + "storie/", "0.7")] + [(BASE + "en/" + x, "0.7") for x in ["storia/", "bar/", "pasticceria/", "rosticceria/", "aspritz/", "menu/", "contatti/"]] + [(BASE + f"storie/{c['slug']}/", "0.6") for c in CATEGORIE] + [(BASE + f"storie/{a['slug']}/", "0.6", a.get("aggiornato", a.get("pubblicato", PUBBLICATO))) for a in ARTICOLI]
     righe = ''.join(f'<url><loc>{x[0]}</loc><lastmod>{x[2] if len(x) > 2 else OGGI}</lastmod><priority>{x[1]}</priority></url>' for x in urls)
     return f'<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{righe}</urlset>\n'
 
@@ -713,6 +809,11 @@ if __name__ == "__main__":
         scrivi(f"storie/{c['slug']}/index.html", pagina_categoria(c))
     for p in PAGINE:
         scrivi(f"{p['slug']}/index.html", pagina(p))
+    for p in PAGINE_EN:
+        scrivi(f"en/{p['slug']}/index.html", pagina(p, "en"))
+    scrivi("en/menu/index.html", pagina_menu("en"))
+    scrivi("en/contatti/index.html", pagina_contatti_en())
+    scrivi("en/privacy/index.html", pagina_privacy_en())
     scrivi("menu/index.html", pagina_menu())
     scrivi("contatti/index.html", pagina_contatti())
     scrivi("privacy/index.html", pagina_privacy())
@@ -726,4 +827,4 @@ if __name__ == "__main__":
     for vecchio, nuovo in RIMANDI.items():
         scrivi(f"{vecchio}/index.html", rimando(nuovo))
     scrivi("robots.txt", robots())
-    print("Pagine generate:", 6 + len(ARTICOLI) + len(PAGINE) + len(CATEGORIE))
+    print("Pagine generate:", 6 + len(ARTICOLI) + len(PAGINE) + len(CATEGORIE) + len(PAGINE_EN) + 3)

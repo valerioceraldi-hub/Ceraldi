@@ -471,8 +471,8 @@ ARTICOLI += [
 FAQ = [
     ("Quali sono gli orari di Ceraldi Caffè?", "Siamo aperti tutti i giorni, domenica compresa, dalle 6:30 alle 20:30.", None),
     ("Dove si trova il bar?", "In Piazza Carità 14, nel centro di Napoli, lungo via Toledo e vicino alla Pignasecca. Le stazioni Toledo e Dante della metropolitana Linea 1 sono a pochi minuti a piedi.", None),
-    ("Posso vedere il menu prima di venire?", "Sì, il menu completo con prezzi è sul sito: https://valerioceraldi-hub.github.io/Ceraldi/caffe/menu/ e c'è anche il menu interattivo con filtro allergeni: https://ceraldicaffe.qromo.it",
-     'Sì, il menu completo con prezzi è qui sul sito: <a href="https://valerioceraldi-hub.github.io/Ceraldi/caffe/menu/">apri il menu di Ceraldi Caffè</a>. C\'è anche il <a href="https://ceraldicaffe.qromo.it" rel="noopener">menu interattivo</a> con filtro allergeni.'),
+    ("Posso vedere il menu prima di venire?", "Sì, il menu completo con prezzi è sul sito: " + BASE + "menu/ e c'è anche il menu interattivo con filtro allergeni: https://ceraldicaffe.qromo.it",
+     'Sì, il menu completo con prezzi è qui sul sito: <a href="' + BASE + 'menu/">apri il menu di Ceraldi Caffè</a>. C\'è anche il <a href="https://ceraldicaffe.qromo.it" rel="noopener">menu interattivo</a> con filtro allergeni.'),
     ("I dolci sono fatti da voi?", "Sì. La pasticceria è di produzione propria, con ricette di famiglia custodite da oltre cento anni: sfogliatelle, babà, pastiera, zeppole e le creazioni della casa.", None),
     ("Cosa posso mangiare a colazione?", "La classica colazione all'italiana con croissant (vuoti, alla crema, al cioccolato, integrali, vegani), brioche, kranz e pain au chocolat, insieme ai dolci napoletani come sfogliatella, graffa e babà.", None),
     ("Fate anche l'aperitivo?", "Sì, fino alle 20:30, con il nostro Aspritz fatto in casa, spritz, negroni, gin tonic, vini campani al calice e birre.", None),
@@ -485,8 +485,8 @@ FAQ = [
 FAQ_EN = [
     ("What are the opening hours?", "We are open every day, Sundays included, from 6:30 am to 8:30 pm.", None),
     ("Where is the café?", "At Piazza Carità 14 in central Naples, on Via Toledo near the Pignasecca market. Toledo and Dante stations on Metro Line 1 are a few minutes' walk away.", None),
-    ("Can I see the menu online?", "Yes, the full menu with coffee, pastries, cocktails and allergens is online: https://ceraldicaffe.qromo.it",
-     'Yes: <a href="https://valerioceraldi-hub.github.io/Ceraldi/caffe/menu/">see the full menu with prices</a>, or the <a href="https://ceraldicaffe.qromo.it" rel="noopener">interactive menu</a>, available in English with an allergen filter.'),
+    ("Can I see the menu online?", "Yes, the full menu with prices is on our website: " + BASE + "en/menu/ and there is also an interactive menu with an allergen filter: https://ceraldicaffe.qromo.it",
+     'Yes: <a href="' + BASE + 'en/menu/">see the full menu with prices</a>, or the <a href="https://ceraldicaffe.qromo.it" rel="noopener">interactive menu</a>, available in English with an allergen filter.'),
     ("Do you make your own pastries?", "Yes. Our pastries are made in-house from family recipes kept for over a hundred years.", None),
     ("What can I have for breakfast?", "A classic Italian breakfast with croissants, brioche, kranz and pain au chocolat, plus Neapolitan pastries such as sfogliatella, graffa and babà.", None),
     ("Do you serve an English breakfast?", "Yes, every morning: eggs, bacon, sausages, beans, mushrooms, tomatoes, toast and tea.", None),
