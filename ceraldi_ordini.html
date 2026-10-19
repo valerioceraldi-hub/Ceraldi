@@ -424,7 +424,7 @@ html[data-theme="dark"] .todo-ft{background:rgba(255,255,255,.03)}
 </nav>
 
 <script>
-var APP_VERSION='8.9.0';
+var APP_VERSION='8.10.0';
 var BUILD_VERSION=APP_VERSION, BUILD_NUM=APP_VERSION;
 var APP={key:'ordini',nome:'Ordini',versione:APP_VERSION,authKey:'or_auth_v2',oldAuthKey:'ceraldi_ordini_auth_session',
   markBg:'linear-gradient(145deg,#FFC04D 0%,#FF9F0A 50%,#C2410C 100%)',
@@ -1600,7 +1600,7 @@ async function impostaPrezzi(id, mappa, opz){
     if(!cambi.length && !opz.extra){ if(CATMAP[id]) CATMAP[id].prices = prima; return CATMAP[id]; }
     var r = await api('catalogo_ceraldi?id=eq.' + encodeURIComponent(id) + '&updated_at=eq.' + encodeURIComponent(fr[0].updated_at) + '&select=' + COLS,
       { method: 'PATCH', prefer: 'return=representation', body: campi });
-    if(r && r.length){ sostituisciProdotto(r[0]); sincronizzaPrezziCeraldi(id, cambi); return r[0]; }
+    if(r && r.length){ sostituisciProdotto(r[0]); sincronizzaPrezziCeraldi(id, cambi, opz.fonte); return r[0]; }
     await sleep(250 + tent * 300); // qualcuno l'ha appena modificato: riprovo sul dato fresco
   }
   throw new Error('Il prodotto viene modificato da un altro dispositivo: riprova tra un attimo');
@@ -1619,12 +1619,17 @@ function numIt(v){
 function r2x(v){ return Math.round((Number(v) || 0) * 10000) / 10000; }
 function impostaPrezzo(id, forn, prezzo, opz){ var m = {}; m[forn] = prezzo; return impostaPrezzi(id, m, opz); }
 // prezzi_ceraldi alimenta lo storico prezzi (trigger) e l'assistente
-async function sincronizzaPrezziCeraldi(id, cambi){
+async function sincronizzaPrezziCeraldi(id, cambi, fonte){
   for(var i = 0; i < cambi.length; i++){
-    var c = cambi[i];
+    var c = cambi[i], t0 = new Date(Date.now() - 120000).toISOString();
     try{
       if(c.v == null) await api('prezzi_ceraldi?product_id=eq.' + id + '&supplier=eq.' + encodeURIComponent(c.forn), { method: 'DELETE' });
-      else await api('prezzi_ceraldi?on_conflict=product_id,supplier', { method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: { product_id: id, supplier: c.forn, price: c.v } });
+      else{
+        await api('prezzi_ceraldi?on_conflict=product_id,supplier', { method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: { product_id: id, supplier: c.forn, price: c.v } });
+        // v8.10.0: il prezzo viene da una fattura → nello storico resta la data della FATTURA (non quella in cui l'hai approvata)
+        if(fonte && fonte.data) await api('prezzi_storico?product_id=eq.' + id + '&supplier=eq.' + encodeURIComponent(c.forn) + '&source=eq.manual&created_at=gte.' + encodeURIComponent(t0), { method: 'PATCH', prefer: 'return=minimal', body: { source: 'fattura', fattura_id: fonte.fattura_id != null ? String(fonte.fattura_id) : null, note: 'Fattura del ' + String(fonte.data).slice(0, 10) + (fonte.riga ? ' · riga ' + fonte.riga : '') } });
+        if(DATECAT.st[id]) delete DATECAT.st[id];
+      }
     }catch(e){ _registraErrore('prezzi_ceraldi', e.message); }
   }
 }
@@ -2619,6 +2624,102 @@ function fornitoriOrfani(){
   return Object.keys(c).sort(function(a, b){ return c[b] - c[a]; }).map(function(k){ return { nome: k, n: c[k] }; });
 }
 
+/* ── Vince il prezzo più recente (v8.10.0, 19/10/2026) ───────────────
+   Per ogni prodotto e fornitore:
+   1. tra più fatture conta solo la più recente: le più vecchie si scartano;
+   2. la fattura più recente si confronta con il prezzo del catalogo:
+      salvato PRIMA della data della fattura → decidi tu se prendere il
+      prezzo della fattura; salvato DOPO → vince il catalogo, la fattura
+      si scarta.
+   La data del prezzo in catalogo viene dallo storico prezzi: se il prezzo
+   è arrivato da una fattura vale la data della fattura, se l'hai scritto
+   tu vale il giorno in cui l'hai salvato. Le modifiche in blocco (date
+   non vere) non contano: lì vale solo l'ultima fattura confermata con lo
+   stesso prezzo. Se la data non è nota non si scarta niente. */
+var DATECAT = { st: {}, fc: {} };
+async function caricaDateCatalogo(ids){
+  ids = ids.filter(function(x, i, l){ return x != null && l.indexOf(x) === i; }); if(!ids.length) return;
+  for(var i = 0; i < ids.length; i += 100){
+    var parte = ids.slice(i, i + 100).join(',');
+    var r = await Promise.all([
+      api('prezzi_storico?select=product_id,supplier,price,prev_price,source,note,created_at&product_id=in.(' + parte + ')&order=created_at.desc&limit=5000'),
+      api('prezzi_da_fatture?select=id,product_id,fornitore,piva,prezzo_ivato,prezzo_unit,data_fattura,resolved_at,stato,note&product_id=in.(' + parte + ')&stato=in.(approved,matched_auto)&limit=5000')
+    ]);
+    ids.slice(i, i + 100).forEach(function(id){ DATECAT.st[id] = []; DATECAT.fc[id] = []; });
+    (r[0] || []).forEach(function(x){ (DATECAT.st[x.product_id] = DATECAT.st[x.product_id] || []).push(x); });
+    (r[1] || []).forEach(function(x){ if(!/^Scartata/.test(x.note || '')) (DATECAT.fc[x.product_id] = DATECAT.fc[x.product_id] || []).push(x); });
+  }
+}
+function _giornoRoma(iso){ try{ return new Date(iso).toLocaleDateString('sv-SE', { timeZone: 'Europe/Rome' }); }catch(e){ return String(iso).slice(0, 10); } }
+// → { data: 'aaaa-mm-gg', fonte: testo } oppure null se non si sa
+function dataPrezzoCatalogo(p, forn){
+  var cur = prezzoDi(p, forn); if(cur == null) return null;
+  var nf = nomeFornitore(forn), uguale = function(v){ v = num(v); return v != null && Math.abs(v - cur) <= Math.max(0.006, cur * 0.001); };
+  var st = (DATECAT.st[p.id] || []).filter(function(x){ return nomeFornitore(x.supplier) === nf; }).sort(function(a, b){ return String(b.created_at).localeCompare(String(a.created_at)); });
+  var conf = (DATECAT.fc[p.id] || []).filter(function(x){ return pfForn(x) === nf && x.data_fattura && uguale(pfPrezzo(x)); });
+  // la riga dello storico da cui vale il prezzo attuale (la più vecchia della serie con questo prezzo)
+  var inizio = null; for(var i = 0; i < st.length; i++){ if(!uguale(st[i].price)) break; if(st[i].source !== 'riallineamento') inizio = st[i]; }
+  if(inizio){
+    var m = /(\d{4}-\d{2}-\d{2})/.exec(inizio.note || '');
+    if(inizio.source === 'fattura' && m) return { data: m[1], fonte: 'dalla fattura del ' + dataIt(m[1]) };
+    if(inizio.source === 'manual'){
+      var t = Date.parse(inizio.created_at), daF = conf.find(function(x){ return x.resolved_at && Math.abs(Date.parse(x.resolved_at) - t) < 15 * 60000; });
+      if(daF) return { data: daF.data_fattura, fonte: 'dalla fattura del ' + dataIt(daF.data_fattura) };
+      return { data: _giornoRoma(inizio.created_at), fonte: 'salvato da te il ' + dataIt(inizio.created_at) };
+    }
+  }
+  var ult = conf.sort(function(a, b){ return String(b.data_fattura).localeCompare(String(a.data_fattura)); })[0];
+  return ult ? { data: ult.data_fattura, fonte: 'confermato dalla fattura del ' + dataIt(ult.data_fattura) } : null;
+}
+// Perché una riga di fattura non deve cambiare il catalogo (o '' se va decisa)
+function motivoScarto(r, p, forn, aperte){
+  var piuNuova = (aperte || []).filter(function(x){ return x.id !== r.id && x.product_id === p.id && pfForn(x) === forn && x.data_fattura && (x.data_fattura > r.data_fattura || (x.data_fattura === r.data_fattura && x.id > r.id)); })
+    .concat((DATECAT.fc[p.id] || []).filter(function(x){ return x.id !== r.id && pfForn(x) === forn && x.data_fattura > r.data_fattura; }))
+    .sort(function(a, b){ return String(b.data_fattura).localeCompare(String(a.data_fattura)); })[0];
+  if(piuNuova) return 'Scartata: superata dalla fattura del ' + dataIt(piuNuova.data_fattura);
+  var dc = dataPrezzoCatalogo(p, forn);
+  if(dc && dc.data > String(r.data_fattura).slice(0, 10)) return 'Scartata: il prezzo del catalogo (' + eur(prezzoDi(p, forn)) + ') è più recente, ' + dc.fonte;
+  return '';
+}
+async function applicaRegolaDate(){
+  if(U.lettura || !CAT.length) return 0;
+  var aperte = PF.filter(function(r){ return (r.stato === 'review' || r.stato === 'new_price') && r.product_id && CATMAP[r.product_id] && pfForn(r) && r.data_fattura; });
+  if(!aperte.length) return 0;
+  try{ await caricaDateCatalogo(aperte.map(function(r){ return r.product_id; })); }catch(e){ return 0; }   // senza date sicure non scarto niente
+  var gruppi = {};
+  aperte.forEach(function(r){
+    if(/^Ripristinata/.test(r.note || '')) return;   // l'hai rimessa tu: decidi tu
+    var mot = motivoScarto(r, CATMAP[r.product_id], pfForn(r), aperte); if(!mot) return;
+    var st = collegamentoSicuro(r) ? 'approved' : 'storico', k = st + '\u0001' + mot;
+    (gruppi[k] = gruppi[k] || []).push(r.id);
+  });
+  var n = 0, ora = new Date().toISOString();
+  for(var k in gruppi){ var pz = k.split('\u0001'); try{ await patchPF(gruppi[k], { stato: pz[0], resolved_at: ora, note: pz[1].slice(0, 250) }); n += gruppi[k].length; }catch(e){ _registraErrore('regola date', e.message); } }
+  if(n) caricaScartate();
+  return n;
+}
+// Le scartate degli ultimi 30 giorni: le vedi e, se serve, le rimetti tu
+var SCART = [];
+async function caricaScartate(){ try{ SCART = await api('prezzi_da_fatture?select=id,product_id,fornitore,piva,descrizione,prezzo_ivato,prezzo_unit,data_fattura,note,stato,resolved_at,fattura_id&note=like.Scartata*&resolved_at=gte.' + encodeURIComponent(new Date(Date.now() - 30 * 86400000).toISOString()) + '&order=resolved_at.desc&limit=150') || []; }catch(e){} }
+function sezioneScartate(){
+  var l = SCART.filter(function(r){ return CATMAP[r.product_id]; }); if(!l.length) return '';
+  var lim = DF.mostra.scart ? l.length : 6;
+  return titoloSez('Prezzi scartati in automatico', l.length) +
+    '<p class="hint" style="font-size:12.5px;margin:-2px 4px 8px">Fatture più vecchie di un\'altra fattura dello stesso prodotto, o del prezzo che hai in catalogo: non cambiano il catalogo. Se una ti serve, rimettila tra quelle da decidere.</p><div class="todo">' +
+    l.slice(0, lim).map(function(r){ var p = CATMAP[r.product_id], f = pfForn(r) || r.fornitore;
+      return '<div class="todo-it"><div style="display:flex;gap:10px"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p.name) + '</div><div class="row-s">' + esc(f) + ' · fattura del ' + esc(dataIt(r.data_fattura)) + '</div><div class="row-s" style="font-size:12px">' + esc(String(r.note || '').replace(/^Scartata: /, '')) + '</div></div><div style="text-align:right;flex-shrink:0"><b class="tnum">' + eur(pfPrezzo(r)) + '</b>' + (prezzoDi(p, f) != null ? '<br><span class="muted" style="font-size:12px">catalogo ' + eur(prezzoDi(p, f)) + '</span>' : '') + '</div></div>' +
+        (U.lettura ? '' : '<div style="margin-top:6px"><button class="btn-sm" onclick="ripristinaScartata(' + r.id + ')">Rimettila da decidere</button></div>') + '</div>'; }).join('') +
+    (l.length > lim ? '<div class="todo-ft"><button class="btn-sm p" onclick="DF.mostra.scart=1;renderDaFare()">Mostra tutte (' + l.length + ')</button></div>' : '') + '</div>';
+}
+async function ripristinaScartata(id){
+  var r = SCART.find(function(x){ return x.id === id; }); if(!r) return;
+  var p = CATMAP[r.product_id], att = p ? prezzoDi(p, pfForn(r)) : null, nuovo = pfPrezzo(r);
+  try{
+    await api('prezzi_da_fatture?id=eq.' + id, { method: 'PATCH', prefer: 'return=minimal', body: { stato: att == null ? 'new_price' : 'review', resolved_at: null, prezzo_attuale: att, variazione_pct: att ? Math.round((nuovo - att) / att * 10000) / 100 : null, note: ('Ripristinata da te · ' + (r.note || '')).slice(0, 250) } });
+    SCART = SCART.filter(function(x){ return x.id !== id; }); await caricaPF(); renderDaFare(); aggiornaBadge(); toast('Rimessa tra i prezzi da decidere');
+  }catch(e){ toast('⚠️ ' + e.message); }
+}
+
 /* ── Quando è stato fissato un prezzo ────────────────────────────── */
 var PROVE = {};   // "id|fornitore" → [{ v, data, fonte }]
 async function caricaProvePrezzi(ids){
@@ -2748,7 +2849,7 @@ function fornDiRigaPF(r){ var f = risolviFornitore(r.fornitore, r.piva); return 
 function pesoRiga(r){
   var n = r.note || '';
   if(/a mano|Creato nuovo prodotto/i.test(n)) return 3;
-  if(r.stato === 'approved') return /Superata|già uguale/i.test(n) ? 1 : 3;
+  if(r.stato === 'approved') return /Superata|Scartata|già uguale/i.test(n) ? 1 : 3;
   if(r.stato === 'rejected') return /Contestato/i.test(n) ? 2 : 0;
   if(r.stato === 'matched_auto') return 1;
   return 0;   // review / new_price: collegamento non ancora confermato
@@ -4405,7 +4506,7 @@ function badgeFattura(o){
    richieste dei dipendenti, prezzi arrivati dalle fatture, fornitori
    delle fatture da abbinare, contestazioni, prodotti sotto scorta.
    ══════════════════════════════════════════════════════════════════ */
-var DF = { mostra: {}, ris: {}, escl: {}, scorta: {} };
+var DF = { mostra: {}, ris: {}, escl: {}, scorta: {}, pd: {} };
 var STATI_APERTI_PF = ['pending', 'new_product', 'new_price', 'review', 'no_match'];
 
 function pfForn(r){ var f = risolviFornitore(r.fornitore, r.piva); return f && f.nome ? f.nome : null; }
@@ -4492,10 +4593,12 @@ async function processaPending(){
       var x = lav[i], m = esiti[i], prezzo = pfPrezzo(x.r), c;
       try{
         if(m.tipo === 'esatto' && CATMAP[m.id] && prezzo > 0){
-          var p = CATMAP[m.id], att = prezzoDi(p, x.forn), v = att ? Math.round((prezzo - att) / att * 10000) / 100 : null, perche = 'auto: ' + testoProve(m.v);
-          if(att == null) c = { stato: 'new_price', product_id: p.id, match_score: m.v.s, prezzo_attuale: null, variazione_pct: null, note: perche.slice(0, 250) };
+          var p = CATMAP[m.id], att = prezzoDi(p, x.forn), v = att ? Math.round((prezzo - att) / att * 10000) / 100 : null, perche = 'auto: ' + testoProve(m.v), vecchia = false;
+          if(att != null && Math.abs(v) <= 1 && Math.abs(prezzo - att) > 0.005){ try{ await caricaDateCatalogo([p.id]); vecchia = !!motivoScarto(x.r, p, x.forn, PF); }catch(e){ vecchia = true; } }
+          if(vecchia) c = { stato: 'review', product_id: p.id, match_score: m.v.s, prezzo_attuale: att, variazione_pct: v, note: perche.slice(0, 250) };   // ci pensa la regola delle date
+          else if(att == null) c = { stato: 'new_price', product_id: p.id, match_score: m.v.s, prezzo_attuale: null, variazione_pct: null, note: perche.slice(0, 250) };
           else if(Math.abs(v) <= 1){
-            if(Math.abs(prezzo - att) > 0.005) await impostaPrezzo(p.id, x.forn, prezzo);
+            if(Math.abs(prezzo - att) > 0.005) await impostaPrezzo(p.id, x.forn, prezzo, { fonte: { fattura_id: x.r.fattura_id, riga: x.r.id, data: x.r.data_fattura } });
             c = { stato: 'matched_auto', product_id: p.id, match_score: m.v.s, prezzo_attuale: att, variazione_pct: v, resolved_at: new Date().toISOString(), note: perche.slice(0, 250) }; auto++;
           } else c = { stato: 'review', product_id: p.id, match_score: m.v.s, prezzo_attuale: att, variazione_pct: v, note: perche.slice(0, 250) };
         } else if(m.tipo === 'probabile' && CATMAP[m.id] && prezzo > 0){
@@ -4544,6 +4647,7 @@ function renderDaFare(){
   sez += sezioneScorta();
   sez += sezioneSuggerimenti();
   sez += sezioneContestazioni();
+  sez += sezioneScartate();
   if(sez) h += '<div style="display:flex;justify-content:flex-end;gap:12px;margin:2px 4px -2px"><button class="lnk-btn" style="font-size:13px;padding:2px" onclick="apriTutteSez(true)">Apri tutte</button><button class="lnk-btn" style="font-size:13px;padding:2px" onclick="apriTutteSez(false)">Chiudi tutte</button></div>';
   h += blocchiDaFare(sez);
   el.innerHTML = h;
@@ -4975,23 +5079,22 @@ function rigaVariazione(r){
       // prodotto già certo (imparato dalle tue conferme o abbinato a mano): resta da decidere solo il prezzo
       ? '<div style="font-weight:700;font-size:13.5px;margin-top:10px">' + (att != null ? 'Prezzo cambiato: lo aggiorno?' : 'Nuovo prezzo da ' + esc(f) + ': lo uso?') + '</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">' +
         '<button class="btn-sm g" onclick="applicaPF(' + r.id + ')">' + (att != null ? 'Aggiorna a ' : 'Usa ') + eur(nuovo) + '</button>' +
-        (v > 0 ? '<button class="btn-sm o" onclick="contestaPF(' + r.id + ')">Contesta</button>' : '') +
-        '<button class="btn-sm" onclick="ignoraPF(' + r.id + ')">Ignora</button></div>' +
+        '<button class="btn-sm" onclick="ignoraPF(' + r.id + ')">Ignora</button></div>' + '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:8px;font-size:12.5px;line-height:1.35;color:var(--ink2)"><input type="checkbox" style="margin-top:2px;width:auto" ' + (DF.pd[r.id] ? 'checked' : '') + ' onchange="DF.pd[' + r.id + ']=this.checked"><span>Metti anche nei <b>prezzi difformi</b>, da contestare al fornitore (vale con «Aggiorna» o con «Ignora»)</span></label>' +
         '<button class="lnk-btn" style="font-size:12px;padding:6px 0 0;color:var(--ink3)" onclick="cambiaProdottoPF(' + r.id + ')">Non è questo prodotto?</button>'
       : '<div style="font-weight:700;font-size:13.5px;margin-top:10px">È lo stesso prodotto?</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">' +
       '<button class="btn-sm g" onclick="applicaPF(' + r.id + ')">Sì, ' + (att != null ? 'aggiorna a ' : 'usa ') + eur(nuovo) + '</button>' +
       '<button class="btn-sm" onclick="cambiaProdottoPF(' + r.id + ')">No, è un altro</button>' +
-      (v > 0 ? '<button class="btn-sm o" onclick="contestaPF(' + r.id + ')">Sì, ma contesta</button>' : '') +
-      '<button class="btn-sm" onclick="ignoraPF(' + r.id + ')">Ignora</button></div>')) + '</div>';
+      '<button class="btn-sm" onclick="ignoraPF(' + r.id + ')">Ignora</button></div>' + '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:8px;font-size:12.5px;line-height:1.35;color:var(--ink2)"><input type="checkbox" style="margin-top:2px;width:auto" ' + (DF.pd[r.id] ? 'checked' : '') + ' onchange="DF.pd[' + r.id + ']=this.checked"><span>Metti anche nei <b>prezzi difformi</b>, da contestare al fornitore (vale con «Aggiorna» o con «Ignora»)</span></label>')) + '</div>';
 }
 async function applicaPF(id, muto){
   var r = PF.find(function(x){ return x.id === id; }); if(!r) return;
   var p = CATMAP[r.product_id], f = pfForn(r); if(!p || !f) return;
   var prima = prezzoDi(p, f), nuovo = pfPrezzo(r);
   try{
-    await impostaPrezzo(p.id, f, nuovo);
+    await impostaPrezzo(p.id, f, nuovo, { fonte: { fattura_id: r.fattura_id, riga: r.id, data: r.data_fattura } });
     var ora = new Date().toISOString();
     await patchPF([id], { stato: 'approved', resolved_at: ora });
+    if(DF.pd[id]){ delete DF.pd[id]; await aggiungiDifforme(r, p, f, prima); }
     salvaAlias(descrPulita(r.descrizione), p.id); imparaRiga(r, p.id, 3);
     // le righe più vecchie dello stesso prodotto/fornitore non servono più
     var vecchie = PF.filter(function(x){ return x.id !== id && x.product_id === p.id && pfForn(x) === f && (!x.data_fattura || !r.data_fattura || x.data_fattura <= r.data_fattura); }).map(function(x){ return x.id; });
@@ -5006,7 +5109,14 @@ async function aggiornaVariazioniPiccole(){
   var ok = 0; for(var i = 0; i < l.length; i++){ if(PF.some(function(x){ return x.id === l[i].id; }) && await applicaPF(l[i].id, true)) ok++; }
   renderDaFare(); aggiornaBadge(); toast(ok + ' prezzi aggiornati ✓');
 }
-async function ignoraPF(id){ var r0 = PF.find(function(x){ return x.id === id; }), st0 = r0 ? r0.stato : 'review'; try{ await patchPF([id], { stato: 'rejected', resolved_at: new Date().toISOString() }); renderDaFare(); aggiornaBadge(); toast('Ignorato', { azione: 'Annulla', onAzione: function(){ api('prezzi_da_fatture?id=eq.' + id, { method: 'PATCH', body: { stato: st0, resolved_at: null } }).then(caricaPF).then(function(){ renderDaFare(); aggiornaBadge(); }); } }); }catch(e){ toast('⚠️ ' + e.message); } }
+async function ignoraPF(id){ if(DF.pd[id]){ delete DF.pd[id]; return contestaPF(id); } var r0 = PF.find(function(x){ return x.id === id; }), st0 = r0 ? r0.stato : 'review'; try{ await patchPF([id], { stato: 'rejected', resolved_at: new Date().toISOString() }); renderDaFare(); aggiornaBadge(); toast('Ignorato', { azione: 'Annulla', onAzione: function(){ api('prezzi_da_fatture?id=eq.' + id, { method: 'PATCH', body: { stato: st0, resolved_at: null } }).then(caricaPF).then(function(){ renderDaFare(); aggiornaBadge(); }); } }); }catch(e){ toast('⚠️ ' + e.message); } }
+// Mette la riga tra i prezzi difformi (da contestare), qualunque cosa decidi per il catalogo
+async function aggiungiDifforme(r, p, f, prezzoCat){
+  try{
+    await api('prezzi_difformi', { method: 'POST', prefer: 'return=minimal', body: { fornitore: f, nome_prodotto: p ? p.name : descrPulita(r.descrizione), id_prodotto_catalogo: p ? p.id : null, prezzo_catalogo: prezzoCat, prezzo_nuovo: pfPrezzo(r), fonte: 'fattura del ' + dataIt(r.data_fattura), riga_fattura_id: r.id, qta: num(r.qta) || null } });
+    await caricaPD(); aggiornaBadge(); toast('Messo anche tra i prezzi difformi');
+  }catch(e){ toast('⚠️ Prezzi difformi: ' + e.message); }
+}
 async function contestaPF(id){
   var r = PF.find(function(x){ return x.id === id; }); if(!r) return;
   var p = CATMAP[r.product_id], f = pfForn(r);
@@ -5184,24 +5294,53 @@ function sezioneContestazioni(){
   if(PDf.length > 1) h += barraMassa([['Archivia tutte (' + PDf.length + ')', 'massaContestazioni()', 'r']], DF.filtro.pd ? 'solo ' + esc(DF.filtro.pd) : '');
   h += Object.keys(g).sort(function(a, b){ return g[b].length - g[a].length; }).map(function(f){
     var l = g[f];
-    return '<div class="todo"><div class="todo-hd"><span class="sup-av" style="background:' + coloreForn(f) + '">' + esc(iniziali(f)) + '</span><div class="row-main"><div class="row-t">' + esc(f) + '</div><div class="row-s">' + l.length + ' prezzi diversi da quelli concordati</div></div></div>' +
-      l.slice(0, 4).map(function(x){ return '<div class="todo-it" style="display:flex;gap:10px"><div class="row-main">' + esc(x.nome_prodotto) + '<div class="row-s">' + esc(dataIt(x.data)) + ' · ' + esc(x.fonte || '') + '</div></div><div style="text-align:right">' + (x.prezzo_catalogo != null ? '<span class="muted" style="font-size:12px">' + eur(x.prezzo_catalogo) + '</span><br>' : '') + '<b class="var-up">' + eur(x.prezzo_nuovo) + '</b></div></div>'; }).join('') +
-      (l.length > 4 ? '<div class="todo-it muted">… e altri ' + (l.length - 4) + '</div>' : '') +
-      (U.lettura ? '' : '<div class="todo-ft"><button class="btn-sm g" onclick="mandaContestazione(' + jsq(f) + ')">Scrivi a ' + esc(nomeBreve(f, 16)) + '</button><button class="btn-sm" onclick="archiviaContestazioni(' + jsq(f) + ')">Archivia</button></div>') + '</div>';
+    var l = g[f], gg = giorniPD(l);
+    return '<div class="todo"><div class="todo-hd"><span class="sup-av" style="background:' + coloreForn(f) + '">' + esc(iniziali(f)) + '</span><div class="row-main"><div class="row-t">' + esc(f) + '</div><div class="row-s">' + l.length + ' prezzi diversi da quelli concordati · ' + gg.length + (gg.length === 1 ? ' giorno' : ' giorni') + '</div></div></div>' +
+      gg.slice(0, 3).map(function(d){ return '<div class="todo-it" style="padding-bottom:2px"><div class="row-s" style="font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Inseriti il ' + esc(dataIt(d.g)) + ' · ' + d.l.length + '</div></div>' + d.l.slice(0, 3).map(rigaPD).join('') + (d.l.length > 3 ? '<div class="todo-it muted">… e altri ' + (d.l.length - 3) + '</div>' : ''); }).join('') +
+      (gg.length > 3 ? '<div class="todo-it muted">… e altri ' + (gg.length - 3) + ' giorni</div>' : '') +
+      (U.lettura ? '' : '<div class="todo-ft"><button class="btn-sm g" onclick="apriInvioPD(' + jsq(f) + ')">Scegli cosa inviare a ' + esc(nomeBreve(f, 14)) + '</button><button class="btn-sm" onclick="archiviaContestazioni(' + jsq(f) + ')">Archivia tutte</button></div>') + '</div>';
   }).join('');
   return h;
 }
-function testoContestazione(f){
-  var l = PD.filter(function(x){ return x.fornitore === f; }), az = conf().azienda || {};
-  return ['Buongiorno ' + f + ',', 'vi segnaliamo questi prezzi diversi da quelli concordati:', ''].concat(l.map(function(x){ return '• ' + x.nome_prodotto + ': concordato ' + (x.prezzo_catalogo != null ? 'EUR ' + Number(x.prezzo_catalogo).toFixed(2) : 'n/d') + ', fatturato EUR ' + Number(x.prezzo_nuovo).toFixed(2); }))
+// prezzi difformi raggruppati per giorno di inserimento, dal più recente
+function giorniPD(l){
+  var per = {}; l.forEach(function(x){ var g = _giornoRoma(x.data); (per[g] = per[g] || []).push(x); });
+  return Object.keys(per).sort().reverse().map(function(g){ return { g: g, l: per[g] }; });
+}
+function rigaPD(x){ return '<div class="todo-it" style="display:flex;gap:10px"><div class="row-main">' + esc(x.nome_prodotto) + '<div class="row-s">' + esc(x.fonte || '') + (x.qta ? ' · q.tà ' + num(x.qta) : '') + '</div></div><div style="text-align:right">' + (x.prezzo_catalogo != null ? '<span class="muted" style="font-size:12px">' + eur(x.prezzo_catalogo) + '</span><br>' : '') + '<b class="var-up">' + eur(x.prezzo_nuovo) + '</b></div></div>'; }
+// Scelta della tranche da inviare: tutti, solo l'ultimo giorno, da un giorno in poi, o giorni a scelta
+var PDINV = { f: '', sel: {} };
+function apriInvioPD(f){ PDINV = { f: f, sel: {} }; giorniPD(PD.filter(function(x){ return x.fornitore === f; })).forEach(function(d){ PDINV.sel[d.g] = true; }); disegnaInvioPD(); }
+function invioPDScegli(modo, g){
+  var gg = giorniPD(PD.filter(function(x){ return x.fornitore === PDINV.f; }));
+  gg.forEach(function(d){ PDINV.sel[d.g] = modo === 'tutti' ? true : modo === 'ultimo' ? d.g === gg[0].g : modo === 'dal' ? d.g >= g : modo === 'solo' ? d.g === g : !!PDINV.sel[d.g]; });
+  if(modo === 'tocca') PDINV.sel[g] = !PDINV.sel[g];
+  disegnaInvioPD();
+}
+function idsInvioPD(){ return PD.filter(function(x){ return x.fornitore === PDINV.f && PDINV.sel[_giornoRoma(x.data)]; }).map(function(x){ return x.id; }); }
+function disegnaInvioPD(){
+  var f = PDINV.f, gg = giorniPD(PD.filter(function(x){ return x.fornitore === f; })); if(!gg.length){ chiudiSheet('shPDinv'); return; }
+  var ids = idsInvioPD(), opz = gg.map(function(d){ return '<option value="' + d.g + '">' + esc(dataIt(d.g)) + '</option>'; }).join('');
+  apriSheet('shPDinv', { titolo: 'Prezzi difformi da inviare', sotto: esc(f), alto: true, corpo:
+    '<div class="chips" style="flex-wrap:wrap;margin:0 0 8px"><button class="chip" onclick="invioPDScegli(\'tutti\')">Tutti</button><button class="chip" onclick="invioPDScegli(\'ultimo\')">Solo l\'ultimo giorno (' + esc(dataIt(gg[0].g)) + ')</button></div>' +
+    '<div style="display:flex;gap:8px;align-items:center;margin:0 2px 12px;font-size:13.5px;flex-wrap:wrap"><span>Dal giorno</span><select id="pdDal" class="inp" style="width:auto;padding:6px 8px">' + opz + '</select><span>in poi</span><button class="btn-sm" onclick="invioPDScegli(\'dal\',document.getElementById(\'pdDal\').value)">Scegli</button></div>' +
+    gg.map(function(d){ var on = !!PDINV.sel[d.g];
+      return '<div class="grp" style="margin-bottom:10px;' + (on ? '' : 'opacity:.55') + '"><label class="row" style="cursor:pointer"><input type="checkbox" style="width:auto;margin-right:10px" ' + (on ? 'checked' : '') + ' onchange="invioPDScegli(\'tocca\',\'' + d.g + '\')"><div class="row-main"><div class="row-t" style="font-size:14px">Inseriti il ' + esc(dataIt(d.g)) + '</div><div class="row-s">' + d.l.length + (d.l.length === 1 ? ' prezzo' : ' prezzi') + '</div></div><button class="btn-sm" onclick="event.preventDefault();invioPDScegli(\'solo\',\'' + d.g + '\')">Solo questo</button></label>' +
+        d.l.map(function(x){ return '<div class="row" style="font-size:13px"><div class="row-main">' + esc(x.nome_prodotto) + '<div class="row-s">' + esc(x.fonte || '') + '</div></div><div style="text-align:right;white-space:nowrap">' + (x.prezzo_catalogo != null ? '<span class="muted">' + eur(x.prezzo_catalogo) + '</span> → ' : '') + '<b class="var-up">' + eur(x.prezzo_nuovo) + '</b></div></div>'; }).join('') + '</div>'; }).join(''),
+    piede: '<div class="btn-row"><button class="btn btn-s" ' + (ids.length ? '' : 'disabled') + ' onclick="chiudiSheet(\'shPDinv\');archiviaContestazioni(null, idsInvioPD())">Archivia</button><button class="btn btn-p" ' + (ids.length ? '' : 'disabled') + ' onclick="chiudiSheet(\'shPDinv\');mandaContestazione(PDINV.f, idsInvioPD())">Scrivi a ' + esc(nomeBreve(f, 14)) + ' (' + ids.length + ')</button></div>' });
+}
+function testoContestazione(f, ids){
+  var l = PD.filter(function(x){ return x.fornitore === f && (!ids || ids.indexOf(x.id) >= 0); }), az = conf().azienda || {}, gg = giorniPD(l), righe = [];
+  gg.slice().reverse().forEach(function(d){ if(gg.length > 1) righe.push('', 'Segnalati il ' + dataIt(d.g) + ':'); d.l.forEach(function(x){ righe.push('• ' + x.nome_prodotto + (x.fonte && /fattura/.test(x.fonte) ? ' (' + x.fonte + ')' : '') + ': concordato ' + (x.prezzo_catalogo != null ? 'EUR ' + Number(x.prezzo_catalogo).toFixed(2) : 'n/d') + ', fatturato EUR ' + Number(x.prezzo_nuovo).toFixed(2)); }); });
+  return ['Buongiorno ' + f + ',', 'vi segnaliamo questi prezzi diversi da quelli concordati:'].concat(gg.length > 1 ? righe : [''].concat(righe))
     .concat(['', 'Potete verificare? Grazie.', az.nome || 'Caffetteria Ceraldi']).join('\n');
 }
-function mandaContestazione(f){
-  var fo = fornDi(f) || {}, t = testoContestazione(f);
+function mandaContestazione(f, soloIds){
+  var fo = fornDi(f) || {}, t = testoContestazione(f, soloIds);
   if(fo.whatsapp) window.open('https://wa.me/' + telefonoWA(fo.whatsapp) + '?text=' + encodeURIComponent(t), '_blank');
   else if(navigator.share) navigator.share({ text: t }).catch(function(){}); else if(navigator.clipboard){ navigator.clipboard.writeText(t); toast('Testo copiato'); }
-  var ids = PD.filter(function(x){ return x.fornitore === f; }).map(function(x){ return x.id; });
-  setTimeout(async function(){ if(await conferma('Messaggio inviato?', 'Le segnalazioni di ' + esc(f) + ' passano tra quelle inviate.', 'Sì, inviato')){ try{ await api('prezzi_difformi?id=in.(' + ids.join(',') + ')', { method: 'PATCH', prefer: 'return=minimal', body: { stato: 'inviato', data_invio: new Date().toISOString() } }); PD = PD.filter(function(x){ return ids.indexOf(x.id) < 0; }); renderDaFare(); aggiornaBadge(); }catch(e){ toast('⚠️ ' + e.message); } } }, 600);
+  var ids = soloIds || PD.filter(function(x){ return x.fornitore === f; }).map(function(x){ return x.id; });
+  setTimeout(async function(){ if(await conferma('Messaggio inviato?', ids.length + (ids.length === 1 ? ' segnalazione' : ' segnalazioni') + ' di ' + esc(f) + ' passano tra quelle inviate. Le altre restano qui.', 'Sì, inviato')){ try{ await api('prezzi_difformi?id=in.(' + ids.join(',') + ')', { method: 'PATCH', prefer: 'return=minimal', body: { stato: 'inviato', data_invio: new Date().toISOString() } }); PD = PD.filter(function(x){ return ids.indexOf(x.id) < 0; }); renderDaFare(); aggiornaBadge(); }catch(e){ toast('⚠️ ' + e.message); } } }, 600);
 }
 async function archiviaContestazioni(f, soloIds){ // f = fornitore oppure soloIds = elenco
   var ids = soloIds || PD.filter(function(x){ return x.fornitore === f; }).map(function(x){ return x.id; }); if(!ids.length) return;
@@ -6298,9 +6437,11 @@ async function sincronizza(manuale, completo){
     if(!U.lettura && PF.some(function(r){ return r.stato === 'pending'; })){
       var auto = await processaPending();
       await risolviPrezziUguali();
+      await applicaRegolaDate();
       if(auto) toast(auto + ' prezzi aggiornati in automatico dalle fatture (variazioni entro l\'1%)', { durata: 3500 });
       renderTuttoSicuro();
-    } else if(!U.lettura) risolviPrezziUguali().then(renderTuttoSicuro);
+    } else if(!U.lettura) risolviPrezziUguali().then(applicaRegolaDate).then(renderTuttoSicuro);
+    if(!U.lettura) caricaScartate().then(renderTuttoSicuro);
     try{ await caricaContesto(true); }catch(e){}
     if(!U.lettura && await escludiServizi()) renderTuttoSicuro();
     if(!U.lettura) collegaStorico().then(function(n){ if(n) caricaContesto(true); }).catch(function(){});
