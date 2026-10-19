@@ -424,7 +424,7 @@ html[data-theme="dark"] .todo-ft{background:rgba(255,255,255,.03)}
 </nav>
 
 <script>
-var APP_VERSION='8.8.1';
+var APP_VERSION='8.9.0';
 var BUILD_VERSION=APP_VERSION, BUILD_NUM=APP_VERSION;
 var APP={key:'ordini',nome:'Ordini',versione:APP_VERSION,authKey:'or_auth_v2',oldAuthKey:'ceraldi_ordini_auth_session',
   markBg:'linear-gradient(145deg,#FFC04D 0%,#FF9F0A 50%,#C2410C 100%)',
@@ -2177,9 +2177,10 @@ function nomiDaFatture(p, forn){
   var visti = {}, out = [];
   Object.keys(MEMF.righe || {}).forEach(function(k){
     var x = MEMF.righe[k]; if(x.p !== p.id || !x.d || !/approved|matched_auto|storico/.test(x.s || '')) return;
-    if(forn){ var fr = risolviFornitore(x.f, x.iv); if(!fr || fr.nome !== forn) return; }
-    var kn = norm(x.d); if(visti[kn]){ if(x.t > visti[kn].t) visti[kn].t = x.t; return; }
-    visti[kn] = { d: x.d, c: x.c, t: x.t || '' }; out.push(visti[kn]);
+    var fr = risolviFornitore(x.f, x.iv), fn = fr && fr.nome ? fr.nome : x.f;
+    if(forn && fn !== forn) return;
+    var kn = fn + '|' + norm(x.d); if(visti[kn]){ if(x.t > visti[kn].t){ visti[kn].t = x.t; if(x.c) visti[kn].c = x.c; } visti[kn].n++; return; }
+    visti[kn] = { d: x.d, c: x.c, t: x.t || '', forn: fn, n: 1 }; out.push(visti[kn]);
   });
   return out.sort(function(a, b){ return String(b.t).localeCompare(String(a.t)); });
 }
@@ -2867,6 +2868,59 @@ function ordinatiPrima(forn, data){
   return ids;
 }
 
+/* ── Prova "per esclusione" (v8.9.0, 19/10/2026) ──────────────────────
+   Il prodotto l'hai chiamato come vuoi tu, il fornitore in fattura lo
+   scrive in un altro modo e il codice non è ancora noto: il nome non può
+   aiutare. Ma l'app sa cosa hai ordinato a quel fornitore e cosa è già
+   arrivato in fattura: i prodotti ordinati e non ancora fatturati sono i
+   candidati naturali per le righe che non riconosce. Mai collegati da
+   soli: la prima volta confermi tu, poi descrizione e codice del
+   fornitore sono imparati e la volta dopo il riconoscimento è automatico. */
+function _codOrdineCifre(s){ var m = /ORD\s*(\d{6})-?(\d{4})/i.exec(String(s || '')); return m ? m[1] + m[2] : ''; }
+// il prodotto risulta già in una fattura di quel fornitore dopo l'ordine?
+function giaFatturato(pid, forn, daT, rigaEsclusa){
+  var finoT = daT + 60 * 86400000, trovato = false;
+  Object.keys(MEMF.righe || {}).forEach(function(k){
+    if(trovato || +k === rigaEsclusa) return; var x = MEMF.righe[k]; if(x.p !== pid || !/approved|matched_auto|storico|review|new_price/.test(x.s || '')) return;
+    var t = Date.parse(x.t || ''); if(isNaN(t) || t < daT - 2 * 86400000 || t > finoT) return;
+    var fr = risolviFornitore(x.f, x.iv); if(fr && fr.nome === forn) trovato = true;
+  });
+  if(!trovato) trovato = (PF || []).some(function(x){ if(x.id === rigaEsclusa || x.product_id !== pid || pfForn(x) !== forn) return false; var t = Date.parse(x.data_fattura || ''); return !isNaN(t) && t >= daT - 2 * 86400000 && t <= finoT; });
+  return trovato;
+}
+// [{ p, o (ordine), it (voce), data, qtaUguale, codice, prove: [testi], s }]
+function candidatiDaOrdine(r, forn){
+  if(!r || !forn || typeof STORICO === 'undefined') return [];
+  var tF = Date.parse(r.ddt_data || r.data_fattura || ''); if(isNaN(tF)) return [];
+  var cod = _codOrdineCifre(r.rif_ordine), desc = descrPulita(r.descrizione), prezzo = pfPrezzo(r), out = [], visti = {};
+  // righe ancora non riconosciute della stessa fattura: se è una sola, l'esclusione è più forte
+  var aperteFatt = (PF || []).filter(function(x){ return String(x.fattura_id) === String(r.fattura_id) && !x.product_id && /pending|new_product|no_match/.test(x.stato) && !rigaServizio(x.descrizione); }).length || 1;
+  STORICO.forEach(function(o){
+    if(fornOrdine(o) !== forn && nomeFornitore(o.supplier) !== nomeFornitore(forn)) return;
+    var tO = Date.parse(dataOrdine(o) || ''); if(isNaN(tO)) return;
+    var codO = codiceOrdine(o.id).replace(/\D/g, ''), conCodice = !!cod && cod === codO;
+    if(cod && !conCodice) return;                                   // la fattura cita un altro ordine
+    if(!conCodice && (tF < tO - 2 * 86400000 || tF > tO + 45 * 86400000)) return;
+    var aperti = (o.items || []).filter(function(it){ return it.id != null && CATMAP[it.id] && !giaFatturato(it.id, forn, tO, r.id); });
+    aperti.forEach(function(it){
+      var p = CATMAP[it.id]; if(visti[p.id]) return;
+      if(negato(chiaveCod(forn, r.cod_articolo), desc, p.id)) return;
+      if(formatoDiverso(nomeTecnico(p), desc)) return;               // formato, peso o pezzi diversi: non è lui
+      var cp = coerenzaPrezzo(p, forn, prezzo); if(cp.stato === 'no' && !cp.perPezzo && !cp.perCartone) return;
+      visti[p.id] = 1;
+      var qu = Math.abs((Number(r.qta) || 0) - (Number(it.qty) || 0)) < 0.01, prove = [], s = 20;
+      prove.push('ordinato il ' + new Date(tO).toLocaleDateString('it-IT') + ' a ' + forn + ' (× ' + it.qty + ') e non ancora arrivato in fattura');
+      if(conCodice){ prove.push('la fattura riporta il rif. ordine ' + codiceOrdine(o.id)); s += 25; }
+      if(qu){ prove.push('stessa quantità'); s += 10; }
+      if(cp.stato === 'ok'){ prove.push('prezzo in linea (' + eur(cp.rif) + ')'); s += 10; }
+      if(aperti.length === 1 && aperteFatt === 1){ prove.push('è l\'unico prodotto dell\'ordine non ancora trovato in fattura'); s += 20; }
+      s += Math.max(0, 10 - Math.abs(tF - tO) / 86400000 / 3);
+      out.push({ p: p, o: o, it: it, data: tO, qtaUguale: qu, codice: conCodice, prove: prove, s: Math.round(s) });
+    });
+  });
+  return out.sort(function(a, b){ return b.s - a.s; }).slice(0, 4);
+}
+
 /* ── Valuta UN prodotto per UNA riga: prove a favore e contro ── */
 function valutaCandidato(r, forn, p, ctx){
   ctx = ctx || {};
@@ -2902,7 +2956,9 @@ function valutaCandidato(r, forn, p, ctx){
   var cp = coerenzaPrezzo(p, forn, prezzo);
   if(cp.stato === 'ok') pro.push({ k: 'prezzo', t: 'prezzo in linea (' + eur(cp.rif) + ' ' + (cp.da === 'catalogo' ? 'da ' + forn : 'da altri fornitori') + ')' });
   else if(cp.stato === 'no') contro.push({ k: 'prezzo', t: testoPrezzo(cp), duro: false, perPezzo: cp.perPezzo });
-  if(ctx.ordinati && ctx.ordinati[p.id]) pro.push({ k: 'ordine', t: 'era nell\'ordine a ' + forn });
+  var ex = (ctx.esclusione || []).find(function(x){ return x.p.id === p.id; });
+  if(ex) pro.push({ k: 'esclusione', t: ex.prove.join(', ') });
+  else if(ctx.ordinati && ctx.ordinati[p.id]) pro.push({ k: 'ordine', t: 'era nell\'ordine a ' + forn });
   return { p: p, pro: pro, contro: contro, forte: forte, prezzo: cp };
 }
 // "parole diverse: LIMONE / SODA" = prodotti diversi; "MESS / MES" o "LIMONE / LIMONATA" = stessa parola scritta diversa
@@ -2916,10 +2972,11 @@ function ha(v, k){ return v.pro.some(function(x){ return x.k === k; }); }
 /* Collegamento sicuro: una prova di identità + una prova indipendente, e nessuna prova contro */
 function decisione(v){
   if(!v || v.contro.length) return false;
-  var conferma = ha(v, 'prezzo') || ha(v, 'ordine');
+  var conferma = ha(v, 'prezzo') || ha(v, 'ordine') || ha(v, 'esclusione');
   if(ha(v, 'codice')) return conferma || v.prezzo.stato == null;
   if(ha(v, 'alias') || ha(v, 'descr')) return conferma || v.prezzo.stato == null;
-  if(ha(v, 'nome') || ha(v, 'ia')) return conferma || (v.prezzo.stato == null && ha(v, 'nome') && ha(v, 'ia'));
+  // l'IA conferma un nome simile, ma da sola non basta mai (serve una prova certa: codice, nome confermato, descrizione, nome)
+  if(ha(v, 'nome')) return conferma || (v.prezzo.stato == null && ha(v, 'ia'));
   return false;
 }
 
@@ -2937,8 +2994,9 @@ function riconosciRiga(r, forn, ctx){
   if(cs[0] && cs[0].s >= 30 && (!cs[1] || cs[0].s >= 1.6 * cs[1].s)) ctx.simileId = cs[0].c.id;
   Object.keys(ctx.ordinati).forEach(function(i){ var p = CATMAP[i]; if(p && confrontaNomi(desc, p, {}).livello) metti(p); });
   if(ctx.extra) ctx.extra.forEach(metti);
+  ctx.esclusione = candidatiDaOrdine(r, forn); ctx.esclusione.forEach(function(x){ metti(x.p); });
   var val = Object.keys(lista).map(function(i){ return valutaCandidato(r, forn, lista[i], ctx); }).filter(function(v){ return !v.contro.some(function(c){ return c.k === 'no'; }); });
-  function forza(v){ var s = 0; v.pro.forEach(function(x){ s += { codice: 50, alias: 40, descr: 40, nome: 30, ia: 30, simile: 12, prezzo: 15, ordine: 15 }[x.k] || 0; }); v.contro.forEach(function(x){ s -= x.duro ? 60 : 25; }); return s; }
+  function forza(v){ var s = 0; v.pro.forEach(function(x){ s += { codice: 50, alias: 40, descr: 40, nome: 30, ia: 30, simile: 12, prezzo: 15, ordine: 15, esclusione: 25 }[x.k] || 0; }); v.contro.forEach(function(x){ s -= x.duro ? 60 : 25; }); return s; }
   val.forEach(function(v){ v.s = forza(v); });
   val.sort(function(a, b){ return b.s - a.s; });
   var best = val[0], sec = val[1];
@@ -2946,7 +3004,7 @@ function riconosciRiga(r, forn, ctx){
   // due candidati entrambi "sicuri": decido solo se uno ha chiaramente più prove
   if(best && decisione(best) && !(sec && decisione(sec) && sec.s >= best.s - 10)) return { tipo: 'esatto', id: best.p.id, v: best, cand: cand, conflitto: ctx.codice && ctx.codice.conflitto };
   // proposta solo se c'è almeno un indizio sul NOME o sul CODICE (il solo prezzo simile non basta)
-  var indizio = best && best.pro.some(function(x){ return /codice|alias|descr|nome|simile|ia/.test(x.k); });
+  var indizio = best && best.pro.some(function(x){ return /codice|alias|descr|nome|simile|ia|esclusione/.test(x.k); });
   if(best && indizio && best.s > 0 && !best.contro.some(function(c){ return c.duro; })) return { tipo: 'probabile', id: best.p.id, v: best, cand: cand, conflitto: ctx.codice && ctx.codice.conflitto };
   return { tipo: 'nessuno', id: null, v: best || null, cand: cand, conflitto: ctx.codice && ctx.codice.conflitto };
 }
@@ -3386,11 +3444,11 @@ function renderScheda(){
   h += '<div class="sec-title">Dati del prodotto' + (ro ? '' : '<button class="lnk" onclick="modificaDati(' + p.id + ')">Modifica</button>') + '</div><div class="grp">' +
     [['Nome', p.name]].concat(nomeOriginale(p) ? [['Nome originale', nomeOriginale(p)]] : []).concat([['Confezione', p.conf], ['Categoria', catDi(p)], ['Reparto', repartiDi(p).join(' + ')], ['IVA', p.iva ? p.iva + '%' : ''], ['Codici a barre', barcodeLista(p).join(', ')]]).map(function(x){ return '<div class="row"><div class="row-main row-s" style="margin:0">' + x[0] + '</div><div class="row-r" style="color:var(--ink);max-width:62%;overflow:hidden;text-overflow:ellipsis">' + esc(x[1] || '—') + '</div></div>'; }).join('') + '</div>';
   // Nomi per fatture e fornitori (v8.8.0)
-  var origs = nomiOriginali(p), daF = nomiDaFatture(p).filter(function(x){ return !nomiDi(p).some(function(n){ return norm(n) === norm(x.d); }); }).slice(0, 4);
+  var origs = nomiOriginali(p), daF = nomiDaFatture(p).slice(0, 8);
   h += '<div class="sec-title">Nomi in fattura e dai fornitori' + (ro ? '' : '<button class="lnk" onclick="aggiungiNomeDaScheda()">+ nome</button>') + '</div><div class="grp">' +
     (origs.some(function(n){ return norm(n) !== norm(p.name); }) ? origs.map(function(n, i){ if(norm(n) === norm(p.name)) return ''; return '<div class="row"><div class="row-main"><div class="row-t" style="font-size:14px;word-break:break-word">' + esc(n) + '</div><div class="row-s">' + (i === 0 ? 'nome originale · ' : '') + 'riconosce fatture e richieste con questo nome</div></div>' + (ro ? '' : '<button class="more-b" aria-label="Togli" onclick="togliNomeOriginale(' + p.id + ',' + i + ')">✕</button>') + '</div>'; }).join('')
       : '<div class="row"><div class="row-main row-s">Se lo rinomini (Modifica), il nome di adesso resta qui: fatture e fornitori continuano a riconoscerlo.</div></div>') +
-    (ro ? '' : daF.map(function(x){ return '<button class="row" data-n="' + esc(x.d) + '" onclick="aggiungiNomeOriginale(' + p.id + ',this.dataset.n).then(renderScheda)"><div class="row-main"><div class="row-t" style="font-size:13.5px;word-break:break-word">' + esc(x.d) + '</div><div class="row-s">visto in fattura' + (x.c ? ' · cod. ' + esc(x.c) : '') + ' · tocca per tenerlo come nome</div></div><span class="chev">+</span></button>'; }).join('')) + '</div>';
+    '</div>' + (daF.length ? '<div class="sec-title">Come lo chiamano i fornitori</div><div class="grp">' + daF.map(function(x){ return '<div class="row"><span class="sup-av" style="background:' + coloreForn(x.forn) + '">' + esc(iniziali(x.forn)) + '</span><div class="row-main"><div class="row-t" style="font-size:13.5px;word-break:break-word">' + esc(x.d) + '</div><div class="row-s">' + esc(x.forn) + (x.c ? ' · cod. ' + esc(x.c) : '') + ' · confermato in ' + x.n + (x.n === 1 ? ' fattura' : ' fatture') + ' · lo riconosco da solo</div></div></div>'; }).join('') + '</div>' : '');
   // Storia acquisti: richiesta → ordine → fattura
   h += '<div class="sec-title">Storia acquisti</div><div id="storiaAcq"><div class="grp"><div class="row"><div class="row-main row-s">Carico…</div></div></div></div>';
   h += '<div class="sec-title">Modifiche al listino</div><div class="grp" id="storPrezzi"><div class="row"><div class="row-main row-s">Carico…</div></div></div>';
@@ -3747,9 +3805,22 @@ async function collegaProvvisorio(k){
 }
 function colRighe(k, l){ return '<div class="grp">' + (l.length ? l.map(function(p){ return '<button class="row" onclick="collegaA(\'' + k + '\',' + p.id + ')"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p.name) + '</div>' + origHtml(p) + '<div class="row-s">' + esc([p.conf, migliore(p).forn].filter(Boolean).join(' · ')) + '</div></div><span class="chev">›</span></button>'; }).join('') : '<div class="row"><div class="row-main row-s">Nessun prodotto simile.</div></div>') + '</div>'; }
 function colCerca(k){ var q = document.getElementById('colQ').value; document.getElementById('colRis').innerHTML = colRighe(k, cercaCatalogo(q, 30)); pickerListini('colRis', q, function(id){ collegaA(k, id); }); }
+// la voce della richiesta prende l'id del prodotto; il testo scritto dal dipendente resta com'è
+async function collegaVoceRichiesta(rid, scritto, pid){
+  if(rid == null || pid == null || !scritto) return;
+  try{
+    var rr = await api('ceraldi_richieste_storico?select=id,items&id=eq.' + encodeURIComponent(rid)); var x = rr && rr[0]; if(!x) return;
+    var cambiato = false, items = (x.items || []).map(function(it){
+      if(cambiato || !it.custom || it.id != null || norm(it.name) !== norm(scritto)) return it;
+      cambiato = true; return Object.assign({}, it, { id: pid, custom: false, collegato_il: new Date().toISOString() });
+    });
+    if(cambiato){ await api('ceraldi_richieste_storico?id=eq.' + encodeURIComponent(rid), { method: 'PATCH', prefer: 'return=minimal', body: { items: items } }); var m = (RICH || []).find(function(y){ return y.id === x.id; }); if(m) m.items = items; }
+  }catch(e){ _registraErrore('richieste', 'collega voce ' + rid + ': ' + e.message); }
+}
 function collegaA(k, id){
   var r = carr().righe[k], p = CATMAP[id]; if(!r || !p) return;
   salvaAlias(r.orig || r.nome, id);
+  (r.da || []).forEach(function(d){ if(d && d.r != null) collegaVoceRichiesta(d.r, r.orig || r.nome, id); });
   if(r.barcode && !barcodeHa(p, r.barcode)) aggiornaProdotto(id, { barcode: barcodeConAggiunto(p, r.barcode) }).catch(function(){});
   docModifica('or8_carrello', function(d){ var x = d.righe[k]; if(!x) return; delete d.righe[k]; var nk = 'p' + id; if(d.righe[nk]){ d.righe[nk].qty += x.qty; d.righe[nk].da = (d.righe[nk].da || []).concat(x.da || []); } else d.righe[nk] = Object.assign(x, { id: id, nome: p.name, conf: p.conf || '' }); });
   chiudiSheet('shCol'); renderCarrello(); renderOrdina(); toast('Collegato: la prossima volta lo riconosco da solo');
@@ -4430,7 +4501,7 @@ async function processaPending(){
         } else if(m.tipo === 'probabile' && CATMAP[m.id] && prezzo > 0){
           // collegamento proposto ma NON confermato: lo vedrai con la domanda "È lo stesso prodotto?"
           var p2 = CATMAP[m.id], a2 = prezzoDi(p2, x.forn);
-          c = { stato: a2 == null ? 'new_price' : 'review', product_id: p2.id, match_score: Math.max(1, m.v.s), prezzo_attuale: a2, variazione_pct: a2 ? Math.round((prezzo - a2) / a2 * 10000) / 100 : null, note: ('dubbio: ' + testoProve(m.v)).slice(0, 250) };
+          c = { stato: a2 == null ? 'new_price' : 'review', product_id: p2.id, match_score: Math.max(1, m.v.s), prezzo_attuale: a2, variazione_pct: a2 ? Math.round((prezzo - a2) / a2 * 10000) / 100 : null, note: ((m.v.pro.some(function(q){ return /codice|alias|descr|nome|simile|ia/.test(q.k); }) ? 'dubbio: ' : 'dubbio-ordine: ') + testoProve(m.v)).slice(0, 250) };
         } else c = { stato: prezzo > 0 ? 'new_product' : 'no_match', match_score: 0 };
         await patchPF([x.r.id], c);
       }catch(e){ _registraErrore('fatture', x.r.id + ': ' + e.message); }
@@ -4441,7 +4512,9 @@ async function processaPending(){
 // Le righe con prezzo già identico a quello in catalogo non chiedono nulla
 async function risolviPrezziUguali(){
   if(U.lettura) return;
-  var ids = PF.filter(function(r){ if(!(r.stato === 'review' || r.stato === 'new_price') || !r.product_id) return false; var p = CATMAP[r.product_id], f = pfForn(r); if(!p || !f) return false; var a = prezzoDi(p, f); return a != null && Math.abs(a - pfPrezzo(r)) < 0.01; }).map(function(r){ return r.id; });
+  var ids = PF.filter(function(r){ if(!(r.stato === 'review' || r.stato === 'new_price') || !r.product_id) return false;
+    if(/^dubbio-ordine/.test(r.note || '')) return false;   // proposto solo perché ordinato: lo conferma sempre una persona
+    var p = CATMAP[r.product_id], f = pfForn(r); if(!p || !f) return false; var a = prezzoDi(p, f); return a != null && Math.abs(a - pfPrezzo(r)) < 0.01; }).map(function(r){ return r.id; });
   if(ids.length) try{ await patchPF(ids, { stato: 'approved', resolved_at: new Date().toISOString(), note: 'Prezzo già uguale al catalogo' }); }catch(e){}
 }
 
@@ -4567,6 +4640,9 @@ async function massaNuovi(tipo){
     try{ await patchPF(l.map(function(r){ return r.id; }), { stato: 'rejected', resolved_at: new Date().toISOString(), note: 'Ignorata in blocco' }); renderDaFare(); aggiornaBadge(); toast(l.length + ' righe ignorate'); }catch(e){ toast('⚠️ ' + e.message); }
     return;
   }
+  // in blocco solo le righe senza nessun possibile prodotto già in catalogo
+  var dubbie = l.filter(function(r){ var f = pfForn(r); return candidatiDaOrdine(r, f).length || candidati(r.descrizione, CAT, 6, f).some(function(x){ return x.s >= 30 && !formatoDiverso(nomeTecnico(x.c), r.descrizione); }); });
+  if(dubbie.length){ l = l.filter(function(r){ return dubbie.indexOf(r) < 0; }); toast(dubbie.length + (dubbie.length === 1 ? ' riga ha' : ' righe hanno') + ' un possibile prodotto già in catalogo: restano da guardare una per una', { durata: 4000 }); if(!l.length) return; }
   if(!(await conferma('Aggiungere ' + l.length + ' prodotti al catalogo?', 'Ognuno viene creato con il nome della fattura, il prezzo del fornitore e categoria, confezione e IVA proposte dai prodotti simili (o dal fornitore). Potrai correggerli dopo dalla scheda. Le righe con un prodotto simile già a catalogo conviene collegarle una per una.', 'Aggiungi'))) return;
   await inBlocco(l, async function(r){
     var f = pfForn(r), nome = descrPulita(r.descrizione), d = proponiDati(nome, { forn: f, iva: r.iva }), pr = {}; if(f) pr[f] = pfPrezzo(r);
@@ -4785,7 +4861,7 @@ async function prendiRichiesta(id, muto){
     if(DF.escl[k]) continue;
     var q = it.qty || 1;
     if(x.p && x.tipo === 'esatto'){
-      if(it.custom){ salvaAlias(it.name, x.p.id); if(it.barcode) collegaCodice(x.p, it.barcode, true); }
+      if(it.custom){ salvaAlias(it.name, x.p.id); if(it.barcode) collegaCodice(x.p, it.barcode, true); collegaVoceRichiesta(id, it.name, x.p.id); }
       if(it.needsScortaMin && x.p.scorta_min == null && DF.scorta[k] !== false) aggiornaProdotto(x.p.id, { scorta_min: (it.giacenza || 0) + q }).catch(function(){});
       aggiungi(x.p.id, q, { da: daVoce(it), muto: true, orig: it.custom ? it.name : null, sost: x.cambiato ? x.cambiato.name : null });
     } else aggiungiProvvisorio(it.name, it.conf, q, { da: daVoce(it), barcode: it.barcode || null, nota: it.note || '' });
@@ -4992,6 +5068,22 @@ function pfDatiRiga(r){
     (linkFattura(r) ? '<div class="row-s" style="font-size:12px;margin-top:6px">' + linkFattura(r).replace(/^ · /, '') + '</div>' : '');
 }
 function pfCerca(id){ var q = document.getElementById('pfQ').value.trim(), sg = document.getElementById('pfSug'); if(sg) sg.style.display = q ? 'none' : ''; document.getElementById('pfRis').innerHTML = q ? pfRighe(id, cercaCatalogo(q, 30)) : ''; if(q) pickerListini('pfRis', q, function(pid){ associaPF(id, pid); }); }
+// Confronto prima di confermare: catalogo, fattura, fornitore, perché lo propongo, esito suggerito
+function confrontaPF(id, pid){
+  var r = PF.find(function(x){ return x.id === id; }), p = CATMAP[pid]; if(!r || !p) return;
+  var f = pfForn(r), v = valutaCandidato(r, f, p, { codice: prodottoDaCodice(f, r.cod_articolo), ordinati: ordinatiPrima(f, r.data_fattura), esclusione: candidatiDaOrdine(r, f) });
+  var esito = decisione(v) ? ['ok', 'Corrispondenza confermata dalle prove'] : (v.contro.some(function(c){ return c.duro; }) ? ['no', 'Nessuna corrispondenza: ci sono prove contro'] : ['dubbio', 'Possibile corrispondenza: da verificare']);
+  var riga = function(l, t, sub){ return '<div class="row"><div class="row-main"><div class="row-s" style="font-size:12px">' + l + '</div><div class="row-t" style="font-size:14.5px;word-break:break-word">' + t + '</div>' + (sub || '') + '</div></div>'; };
+  apriSheet('shConfr', { titolo: 'È lo stesso prodotto?', sotto: esc(f), corpo:
+    '<div class="grp">' + riga('Nel catalogo', esc(p.name), origHtml(p) + '<div class="row-s">' + esc([p.conf, prezzoDi(p, f) != null ? eur(prezzoDi(p, f)) + ' da ' + f : ''].filter(Boolean).join(' · ')) + '</div>') +
+      riga('In fattura (' + esc(dataIt(r.data_fattura)) + ')', esc(descrPulita(r.descrizione)), '<div class="row-s">' + esc([r.cod_articolo ? 'cod. ' + r.cod_articolo : '', r.qta ? 'q.tà ' + num(r.qta) : '', pfPrezzo(r) ? eur(pfPrezzo(r)) : ''].filter(Boolean).join(' · ')) + '</div>') + riga('Fornitore', esc(f)) + '</div>' +
+    '<div class="sec-title">Perché lo propongo</div><div class="grp">' + (v.pro.length ? v.pro.map(function(x){ return '<div class="row"><div class="row-main row-s" style="color:var(--ink)">✓ ' + esc(x.t) + '</div></div>'; }).join('') : '<div class="row"><div class="row-main row-s">Nessuna prova a favore.</div></div>') +
+      v.contro.map(function(x){ return '<div class="row"><div class="row-main row-s" style="color:var(--red)">✕ ' + esc(x.t) + '</div></div>'; }).join('') + '</div>' +
+    '<div class="banner ' + (esito[0] === 'ok' ? 'g' : esito[0] === 'no' ? 'r' : 'o') + '" style="display:block;margin-top:10px"><b>' + esito[1] + '</b><div style="font-size:12.5px;margin-top:3px">Se confermi, la descrizione e il codice di ' + esc(f) + ' restano collegati a questo prodotto: la prossima fattura lo riconosce da sola. La fattura non viene modificata.</div></div>',
+    piede: '<div class="btn-row"><button class="btn btn-s" onclick="chiudiSheet(\'shConfr\');pfNonEQuesto(' + id + ',' + pid + ')">No, è un altro</button><button class="btn btn-p" onclick="chiudiSheet(\'shConfr\');associaPF(' + id + ',' + pid + ')">Sì, è lui</button></div>' });
+}
+// «No»: l'app lo ricorda e non lo ripropone per questa descrizione o codice
+function pfNonEQuesto(id, pid){ var r = PF.find(function(x){ return x.id === id; }); if(!r) return; salvaNo(r, pfForn(r), pid); renderDaFare(); toast('Ok, non te lo propongo più per questa riga'); }
 async function associaPF(id, pid){
   var r = PF.find(function(x){ return x.id === id; }); if(!r) return;
   var p = CATMAP[pid], f = pfForn(r), att = prezzoDi(p, f), nuovo = pfPrezzo(r), v = att ? Math.round((nuovo - att) / att * 10000) / 100 : null;
@@ -5005,9 +5097,18 @@ async function associaPF(id, pid){
     renderDaFare(); aggiornaBadge();
   }catch(e){ toast('⚠️ ' + e.message); }
 }
-function creaDaPF(id){
+function creaDaPF(id, forza){
   var r = PF.find(function(x){ return x.id === id; }); if(!r) return;
   var f = pfForn(r);
+  // niente doppioni: se un prodotto ordinato o con il nome simile potrebbe essere lui, prima lo chiedo
+  var eo = forza ? [] : candidatiDaOrdine(r, f), cn = forza ? [] : candidati(r.descrizione, CAT, 6, f).filter(function(x){ return x.s >= 30 && !formatoDiverso(nomeTecnico(x.c), r.descrizione) && !eo.some(function(y){ return y.p.id === x.c.id; }); }).slice(0, 3);
+  if(eo.length || cn.length){
+    apriSheet('shPrima', { titolo: 'Prima di aggiungerlo', sotto: esc(descrPulita(r.descrizione)), corpo: '<p class="hint" style="margin:0 4px 10px">Potrebbe essere già nel catalogo con un altro nome. Se è uno di questi, toccalo: non creo un doppione.</p><div class="grp">' +
+      eo.map(function(x){ return '<button class="row" onclick="chiudiSheet(\'shPrima\');confrontaPF(' + id + ',' + x.p.id + ')"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(x.p.name) + '</div>' + origHtml(x.p) + '<div class="row-s">' + esc(x.prove.join(' · ')) + '</div></div><span class="chev">›</span></button>'; }).join('') +
+      cn.map(function(x){ return '<button class="row" onclick="chiudiSheet(\'shPrima\');confrontaPF(' + id + ',' + x.c.id + ')"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(x.c.name) + '</div>' + origHtml(x.c) + '<div class="row-s">nome simile</div></div><span class="chev">›</span></button>'; }).join('') + '</div>',
+      piede: '<button class="btn btn-s" onclick="chiudiSheet(\'shPrima\');creaDaPF(' + id + ',true)">Nessuno di questi: è un prodotto nuovo</button>' });
+    return;
+  }
   apriNuovoProdotto(descrPulita(r.descrizione), { forn: f, prezzo: pfPrezzo(r), iva: r.iva, onCreato: async function(p){ if(r.product_id != null && r.product_id !== p.id) salvaNo(r, f, r.product_id); salvaAlias(descrPulita(r.descrizione), p.id); imparaRiga(r, p.id, 3); await patchPF([id], { stato: 'approved', product_id: p.id, resolved_at: new Date().toISOString(), note: 'Creato nuovo prodotto' }); renderDaFare(); aggiornaBadge(); } });
 }
 
@@ -5021,11 +5122,12 @@ function sezioneNuovi(l){
   if(l.length > 1) h += barraMassa([['Aggiungi tutti al catalogo (' + l.length + ')', 'massaNuovi(\'aggiungi\')', 'p'], ['Ignora tutti (' + l.length + ')', 'massaNuovi(\'ignora\')', 'r']], DF.filtro.nuovi ? 'solo ' + esc(DF.filtro.nuovi) : '');
   if(!U.lettura) h += '<p class="hint" style="font-size:12.5px;margin:-2px 4px 8px">Non ho trovato questi prodotti nel catalogo. Se lo hai già con un altro nome, tocca <b>«È …»</b> o <b>Cerca</b>. Se è nuovo, <b>Aggiungi</b>. Se non lo ordini con l\'app (trasporto, cose una tantum), <b>Ignora</b>.</p>';
   h += '<div class="todo">' + l.slice(0, lim).map(function(r){
-    var f = pfForn(r), c = candidati(r.descrizione, CAT, 8, f).filter(function(x){ return x.s >= 30 && !formatoDiverso(x.c.name, r.descrizione); }).slice(0, 3);
+    var f = pfForn(r), eo = candidatiDaOrdine(r, f), c = candidati(r.descrizione, CAT, 8, f).filter(function(x){ return x.s >= 30 && !formatoDiverso(nomeTecnico(x.c), r.descrizione) && !eo.some(function(y){ return y.p.id === x.c.id; }); }).slice(0, 3);
     var sg = /^(?:Sganciato da|Scartato) #(\d+): (.+)$/.exec(r.note || ''), pr = sg && CATMAP[sg[1]];
     return '<div class="todo-it"><div style="display:flex;gap:10px"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(descrPulita(r.descrizione)) + '</div><div class="row-s">' + esc(f) + ' · fattura del ' + esc(dataIt(r.data_fattura)) + (r.qta ? ' · q.tà ' + num(r.qta) : '') + linkFattura(r) + '</div></div><b class="tnum">' + eur(pfPrezzo(r)) + '</b></div>' +
       (pr ? '<div class="row-s" style="font-size:12px;margin-top:4px;color:var(--orange-ink)">Non è «' + esc(nomeBreve(pr.name, 40)) + '»: ' + esc(sg[2]) + '.</div>' : '') +
-      (!U.lettura ? c.map(function(x){ var a = prezzoDi(x.c, f); return '<button class="cand" onclick="associaPF(' + r.id + ',' + x.c.id + ')"><span>È</span><b>' + esc(x.c.name) + '</b><span class="muted">' + (a != null ? eur(a) : 'nuovo') + '</span></button>'; }).join('') +
+      (!U.lettura ? eo.map(function(x){ var a = prezzoDi(x.p, f); return '<button class="cand" onclick="confrontaPF(' + r.id + ',' + x.p.id + ')" style="flex-wrap:wrap"><span>Ordinato:</span><b>' + esc(x.p.name) + '</b><span class="muted">' + (a != null ? eur(a) : 'nuovo') + '</span>' + origHtml(x.p) + '<span class="row-s" style="flex-basis:100%;font-size:11.5px;text-align:left">' + esc(x.prove.join(' · ')) + '</span></button>'; }).join('') +
+        c.map(function(x){ var a = prezzoDi(x.c, f); return '<button class="cand" onclick="confrontaPF(' + r.id + ',' + x.c.id + ')"><span>È</span><b>' + esc(x.c.name) + '</b><span class="muted">' + (a != null ? eur(a) : 'nuovo') + '</span></button>'; }).join('') +
       '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="btn-sm p" onclick="creaDaPF(' + r.id + ')">Aggiungi al catalogo</button><button class="btn-sm" onclick="cambiaProdottoPF(' + r.id + ')">Cerca…</button><button class="btn-sm" onclick="ignoraPF(' + r.id + ')">Ignora</button></div>' : '') + '</div>';
   }).join('') + (l.length > lim ? '<div class="todo-ft"><button class="btn-sm p" onclick="DF.mostra.nuovi=1;renderDaFare()">Mostra altri ' + (Math.min(l.length, 200) - lim) + '</button></div>' : '') + '</div>';
   return h;
