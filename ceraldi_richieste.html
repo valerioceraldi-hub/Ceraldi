@@ -393,7 +393,7 @@ body.has-fbar{padding-bottom:calc(150px + var(--safe-b))}
 
 <script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js" defer></script>
 <script>
-var APP_VERSION='8.6.1';
+var APP_VERSION='8.7.0';
 var BUILD_NUM=APP_VERSION;
 var APP={key:'richieste',nome:'Richieste',versione:APP_VERSION,authKey:'rq_auth_v2',oldAuthKey:'ceraldi_richieste_auth_session',
   markBg:'linear-gradient(145deg,#C4A1FF 0%,#8B5CF6 50%,#5B21B6 100%)',
@@ -891,7 +891,56 @@ var _ntfReg = null;
 function ntfSupportate(){ return ('serviceWorker' in navigator) && ('PushManager' in window) && ('Notification' in window); }
 function ntfInstallata(){ try{ return matchMedia('(display-mode: standalone)').matches || navigator.standalone === true; }catch(e){ return false; } }
 function ntfIOS(){ return /iphone|ipad|ipod/i.test(navigator.userAgent || ''); }
-async function ntfRegistra(){ if(_ntfReg) return _ntfReg; if(!('serviceWorker' in navigator)) return null; try{ _ntfReg = await navigator.serviceWorker.register('sw.js'); return _ntfReg; }catch(e){ return null; } }
+/* ══ 20/10/2026: un servizio notifiche PER APP ══
+   Prima tutte e quattro le app registravano lo stesso servizio (sw.js) per
+   tutta la cartella del sito: su Android il telefono aveva UNA sola
+   iscrizione alle notifiche per tutte, intestata all'ultima app aperta.
+   Ora ogni app ha la sua registrazione, limitata al proprio file (stesso
+   sw.js). Su iPhone ogni app è già separata dal sistema: lì non cambia nulla.
+   La vecchia iscrizione comune la sposta UNA volta sola l'app a cui era
+   intestata nel database; le altre app non la toccano. */
+function ceraldiSwIOS(){ var u = navigator.userAgent || ''; return /iphone|ipad|ipod/i.test(u) || (/Macintosh/.test(u) && navigator.maxTouchPoints > 1); }
+function ceraldiSwRegistra(){
+  if(ceraldiSwIOS()) return navigator.serviceWorker.register('sw.js');
+  return navigator.serviceWorker.register('sw.js', { scope: './' + (location.pathname.split('/').pop() || '') });
+}
+function ceraldiSwPronto(reg){
+  return new Promise(function(ok){
+    if(!reg || reg.active) return ok(reg);
+    var w = reg.installing || reg.waiting; if(!w) return ok(reg);
+    var fatto = false, fine = function(){ if(!fatto){ fatto = true; ok(reg); } };
+    w.addEventListener('statechange', function(){ if(w.state === 'activated') fine(); });
+    setTimeout(fine, 10000);
+  });
+}
+async function ceraldiSwMigra(appKey, vapid, A){
+  try{
+    if(ceraldiSwIOS() || !('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    var chiave = 'ceraldi_sw_migrato_' + appKey, fatta = function(){ try{ localStorage.setItem(chiave, '1'); }catch(e){} };
+    try{ if(localStorage.getItem(chiave)) return; }catch(e){}
+    var comune = await navigator.serviceWorker.getRegistration('./');
+    if(!comune || !/\/$/.test(new URL(comune.scope).pathname)){ fatta(); return; }
+    var vecchia = comune.pushManager ? await comune.pushManager.getSubscription() : null;
+    if(!vecchia){ try{ await comune.unregister(); }catch(e){} fatta(); return; }
+    var di = await A.leggiApp(vecchia.endpoint);          // a quale app è intestata (null = a nessuna)
+    if(di && di !== appKey){ fatta(); return; }           // è di un'altra app: la sposterà lei
+    if(di === appKey && Notification.permission === 'granted'){
+      var reg = await ceraldiSwPronto(await ceraldiSwRegistra());
+      var nuova = (await reg.pushManager.getSubscription()) || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: vapid }));
+      if(!(await A.salva(nuova))) return;                  // non salvata: riprovo al prossimo avvio
+    }
+    if(di) await A.togli(vecchia.endpoint);
+    try{ await vecchia.unsubscribe(); }catch(e){}
+    try{ await comune.unregister(); }catch(e){}
+    fatta();
+  }catch(e){ console.warn('[notifiche] migrazione:', e); }
+}
+function ntfMigra(){ return ceraldiSwMigra(APP.key, _ntfB64(_NTF_VAPID), {
+  leggiApp: async function(e){ var r = await api('push_iscrizioni?select=app&endpoint=eq.' + encodeURIComponent(e)); return r && r[0] ? r[0].app : null; },
+  salva: async function(sub){ try{ await api('rpc/push_iscrivi', { method: 'POST', body: { p_endpoint: sub.endpoint, p_p256dh: _ntfChiave(sub, 'p256dh'), p_auth: _ntfChiave(sub, 'auth'), p_dispositivo: _ntfDispositivo(), p_app: APP.key } }); return true; }catch(e){ return false; } },
+  togli: async function(e){ try{ await api('push_iscrizioni?endpoint=eq.' + encodeURIComponent(e), { method: 'DELETE' }); }catch(e2){} }
+}); }
+async function ntfRegistra(){ if(_ntfReg) return _ntfReg; if(!('serviceWorker' in navigator)) return null; try{ _ntfReg = await ceraldiSwRegistra(); return _ntfReg; }catch(e){ return null; } }
 function _ntfB64(s){ var p = '='.repeat((4 - s.length % 4) % 4), b = atob((s + p).replace(/-/g, '+').replace(/_/g, '/')); var a = new Uint8Array(b.length); for(var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return a; }
 function _ntfChiave(sub, n){ var k = sub.getKey(n); if(!k) return ''; return btoa(String.fromCharCode.apply(null, new Uint8Array(k))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
 function _ntfDispositivo(){ var u = navigator.userAgent || ''; if(/iphone/i.test(u)) return 'iPhone'; if(/ipad/i.test(u)) return 'iPad'; if(/android/i.test(u)) return 'Android'; if(/mac/i.test(u)) return 'Mac'; if(/windows/i.test(u)) return 'PC'; return 'Dispositivo'; }
@@ -1482,7 +1531,7 @@ async function avvia(){
   caricaBozzaServer();
   svuotaOutbox(true);
   caricaStorico(true);
-  ntfRegistra();
+  ntfRegistra().then(ntfMigra);
   setTimeout(controllaVersione, 4000);
   window.addEventListener('online', function(){ svuotaOutbox(true); });
   document.addEventListener('visibilitychange', function(){
