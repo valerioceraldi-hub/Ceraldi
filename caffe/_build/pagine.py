@@ -32,9 +32,11 @@ PAGINE = [
 
 <h2>Artigiani per passione</h2>
 <p>Il nostro motto è scritto nel logo: <em>artigiani per passione</em>. Vuol dire fare le cose come si facevano, anche quando ci sarebbe un modo più veloce. Vuol dire che il caffè si serve nella tazzina calda, che la sfogliatella deve scrocchiare, che chi entra deve sentirsi a casa, anche se viene da lontano.</p>
+<p>Nel 2019 abbiamo rinnovato il logo e il pay-off, «Artigiani per passione dal 1973»: guardare al passato per costruire il futuro, senza dimenticare le nostre radici, e per farlo, a volte, semplificare e guardare all'essenziale.</p>
 <p>Un impegno che negli anni è stato notato: da oltre dieci anni Ceraldi Caffè è nella guida <a href="https://www.gamberorosso.it/luoghi/locali/caffe-bar/ceraldi-caffe/" rel="noopener">Bar d'Italia del Gambero Rosso</a>.</p>
 <p>Vieni a trovarci in Piazza Carità: il resto della storia lo scriviamo ogni giorno, al bancone.</p>
 """,
+ "galleria": ["famiglia"],
  "cta": [("Come arrivare", "mappa"), ("Guarda il menu", "menu_interno")],
 },
 {
@@ -67,7 +69,7 @@ PAGINE = [
 <p>Per i nostri ospiti stranieri che non vogliono rinunciare alle loro abitudini, tutte le mattine serviamo la <strong>Full English Breakfast</strong>, preparata come vuole la tradizione: uova, bacon, salsicce, fagioli, funghi e pomodori, pane tostato e l'immancabile tè. In alternativa, omelette semplice o farcita e uova strapazzate.</p>
 <p lang="en"><em>Full English breakfast served every morning in the heart of Naples: eggs, bacon, sausages, beans, mushrooms, tomatoes, toast and tea.</em></p>
 """,
- "galleria": ["sala"],
+ "galleria": ["sala", "bar-banco", "caffe-panna"],
  "cta": [("Menu del bar", "menu_bar"), ("Come arrivare", "mappa")],
 },
 {
@@ -103,7 +105,7 @@ PAGINE = [
 <h2>Le feste</h2>
 <p>Il calendario si legge anche in vetrina: le zeppole il 19 marzo, la pastiera a Pasqua, e a Natale i <a href="../storie/dolci-di-natale/">dolci natalizi napoletani</a>.</p>
 """,
- "galleria": ["sfogliatella-riccia", "baba-amarena", "pastiera", "babamisu", "pellecchiella", "zeppola"],
+ "galleria": ["sfogliatella-riccia", "baba-amarena", "pastiera", "babamisu", "pellecchiella", "zeppola", "vetrina"],
  "cta": [("Tutti i dolci nel menu", "menu_dolci"), ("Come arrivare", "mappa")],
 },
 {
@@ -133,7 +135,7 @@ PAGINE = [
 <h2>Freselle e insalate</h2>
 <p>Per un pranzo leggero, le <strong>freselle</strong>: la classica napoletana con pomodorini, tonno, cipolla rossa e olive; la caprese con bocconcini di mozzarella e pesto; la Cetara con le alici. E le insalate: tonno e pomodoro, caprese con pomodori di Sorrento, l'insalatona completa e la Caesar salad.</p>
 """,
- "galleria": ["frittatina"],
+ "galleria": ["frittatina", "polpo"],
  "cta": [("Il menu completo", "menu_food"), ("Come arrivare", "mappa")],
 },
 {

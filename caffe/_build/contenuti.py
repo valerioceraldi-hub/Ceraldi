@@ -105,6 +105,13 @@ FOTO = {
     "pellecchiella": {"alt": "Torta Pellecchiella di Ceraldi Caffè con albicocche del Vesuvio", "w": [800, 480], "r": (1, 1)},
     "squadra": {"alt": "La squadra di Ceraldi Caffè al bancone del bar in Piazza Carità", "w": [1600, 800], "r": (3, 2)},
     "sala": {"alt": "La sala di Ceraldi Caffè con le poltroncine in pelle rossa e una colazione servita al tavolo", "w": [1024, 640], "r": (3, 2)},
+    "bar-banco": {"alt": "Il banco del bar di Ceraldi Caffè con il barista al lavoro", "w": [1024, 640], "r": (3, 2)},
+    "caffe-panna": {"alt": "Caffè della casa in bicchiere con panna montata e cialda, sul banco di marmo di Ceraldi Caffè", "w": [1024, 640], "r": (3, 2)},
+    "vetrina": {"alt": "La vetrina della pasticceria e della rosticceria di Ceraldi Caffè", "w": [1024, 640], "r": (3, 2)},
+    "polpo": {"alt": "Polpo e patate arrosto, piatto della gastronomia di Ceraldi Caffè", "w": [1024, 640], "r": (3, 2)},
+    "sala-bianca": {"alt": "La sala bianca e oro di Ceraldi Caffè con i tavolini e le poltroncine rosse", "w": [1024, 640], "r": (3, 2)},
+    "famiglia": {"alt": "La famiglia Ceraldi seduta a un tavolo nella sala del bar", "w": [1024, 640], "r": (3, 2)},
+    "crostatina": {"alt": "Crostatina di fragole di Ceraldi Caffè su un piatto", "w": [1024, 640], "r": (3, 2)},
     "aperitivo": {"alt": "Aperitivo da Ceraldi Caffè: spritz e cocktail al tavolo", "w": [960, 640], "r": (4, 3)},
 }
 
@@ -390,7 +397,7 @@ ARTICOLI += [
  "titolo_seo": "Piazza Carità e via Toledo: storia e cosa vedere",
  "descrizione": "Piazza Carità e via Toledo, aperta nel 1536 dal viceré Pedro de Toledo: storia, il monumento a Salvo D'Acquisto, la Pignasecca e i Quartieri Spagnoli.",
  "dek": "La piazza dove si trova Ceraldi Caffè ha cambiato nome e monumenti più volte. Ecco la sua storia e cosa c'è intorno.",
- "foto": None,
+ "foto": "sala-bianca",
  "lettura": 4,
  "corpo": """
 <p>Piazza Carità si apre lungo via Toledo, a metà strada tra piazza Dante e piazza del Plebiscito. È uno snodo della Napoli di tutti i giorni: da qui si sale verso la Pignasecca e i Quartieri Spagnoli, si scende verso il porto, si attraversa il centro a piedi.</p>
@@ -419,7 +426,7 @@ ARTICOLI += [
  "titolo_seo": "'A tazza 'e cafè: la canzone del 1918 e il caffè",
  "descrizione": "'A tazza 'e cafè, la canzone del 1918 di Capaldo e Fassone, e il caffè nella cultura di Napoli, da Eduardo De Filippo a Luciano De Crescenzo.",
  "dek": "Una cassiera che non sorrideva mai, un poeta innamorato e una canzone del 1918 che paragona l'amore a una tazza di caffè.",
- "foto": None,
+ "foto": "bar-banco",
  "lettura": 3,
  "corpo": """
 <p>A Napoli il caffè non è solo una bevanda: è entrato nelle canzoni, nel teatro e nei libri. Ed è uno dei modi in cui la città racconta sé stessa.</p>
@@ -436,6 +443,37 @@ ARTICOLI += [
 <p>Luciano De Crescenzo ha raccontato il <a href="../caffe-sospeso/">caffè sospeso</a> come il gesto di chi, essendo felice, offre un caffè al resto del mondo. Una frase che ha fatto conoscere l'usanza ben oltre Napoli.</p>
 """,
  "provare": [("Caffè Ceraldi", "la nostra tazza più dolce"), ("Michelino", "espresso, crema di zucchero e panna")],
+},
+{
+ "slug": "festa-della-mamma",
+ "titolo": "Festa della mamma: fragole, cioccolato e dolci fatti col cuore",
+ "titolo_seo": "Festa della mamma: idee di dolci con fragole e cioccolato",
+ "descrizione": "Per la festa della mamma, la seconda domenica di maggio, i dolci che non sbagliano mai: fragole e cioccolato, crostata, macarons, biscotti e torta di rose.",
+ "dek": "Non esiste un dolce ufficiale per la festa della mamma. Ma qualche abbinamento che non sbaglia mai c'è.",
+ "foto": "crostatina",
+ "lettura": 3,
+ "pubblicato": "2019-05-09",
+ "aggiornato": "2026-10-20",
+ "corpo": """
+<p>La mamma non è una persona come tutte le altre. È pronta a correre in aiuto in ogni momento, telefona sempre (anche quando il figlio è ormai cresciuto), mette da parte l'ultima fetta di torta e prepara in anticipo il piatto preferito. Insomma, sulla mamma si può sempre contare.</p>
+<p>Esistono tanti modi per dirle grazie nel giorno della sua festa, che in Italia cade la seconda domenica di maggio. Uno è preparare insieme a lei un dolce speciale, senza dimenticare l'ingrediente più importante: l'amore.</p>
+
+<h2>Il dolce ufficiale non esiste</h2>
+<p>A Natale il simbolo è il panettone, a Pasqua la colomba (e a Napoli la <a href="../pastiera/">pastiera</a>). Per la festa della mamma non c'è un dolce prestabilito: contano la cura e il gesto, più della ricetta. Ci sono però alcune preparazioni che per tradizione tornano ogni anno.</p>
+
+<h2>Fragole e cioccolato</h2>
+<p>A maggio le fragole sono di stagione, e l'accoppiata con il cioccolato mette d'accordo quasi tutti i palati, anche quelli delle mamme più severe. Bastano due ingredienti per ricette facili e veloci, come un tiramisù veloce o la classica crostata di fragole.</p>
+<p>Per personalizzare la crostata si può tagliare la pasta frolla a forma di cuoricini, oppure ricoprire la superficie con delle formine e aggiungere uno strato di crema al cioccolato.</p>
+
+<h2>Piccole dolcezze</h2>
+<p>Altri classici da preparare per l'occasione sono i macarons in tutte le loro sfumature: quelli alla nocciola sono perfetti da servire con un tè caldo, chiacchierando. Per dei biscotti più semplici basta una frolla al burro e qualche stampino per decorarli con la forma che si preferisce.</p>
+
+<h2>Rose, rose e rose</h2>
+<p>Per la mamma romantica, il dolce giusto è la classica torta di rose oppure un fresco dessert con more e confettura di rose. Con i più piccoli in cucina, si possono fare le eleganti rose di sfoglia.</p>
+
+<p>Se invece vuoi farle trovare qualcosa di già pronto, passa a trovarci: in vetrina ci sono la crostatina di fragole, i babà e le torte della casa, tutti di <a href="../../pasticceria/">produzione propria</a>. Auguri a tutte le mamme!</p>
+""",
+ "provare": [("Crostatina di fragole", "frolla, crema e fragole fresche"), ("Babà panna e fragole", "il babà con panna e fragole")],
 },
 {
  "slug": "tradizioni-napoletane",
@@ -524,6 +562,7 @@ FONTI = {
                               ("Pignasecca, Wikipedia", _W + "Pignasecca"), ("Quartieri Spagnoli, Wikipedia", _W + "Quartieri_Spagnoli")],
  "a-tazza-e-cafe": [("'A tazza 'e cafè, Wikipedia", _W + "%27A_tazza_%27e_caf%C3%A8"), ("Questi fantasmi!, Wikipedia", _W + "Questi_fantasmi%21"),
                     ("Caffè sospeso, Wikipedia", _W + "Caff%C3%A8_sospeso")],
+ "festa-della-mamma": [("Festa della mamma, Wikipedia", _W + "Festa_della_mamma")],
  "tradizioni-napoletane": [("Panaro, Wikipedia", _W + "Panaro"), ("Cornicello, Wikipedia", _W + "Cornicello"), ("Smorfia napoletana, Wikipedia", _W + "Smorfia_napoletana"),
                            ("San Gennaro, Wikipedia", _W + "San_Gennaro")],
 }
@@ -539,7 +578,7 @@ CATEGORIE = [
   "articoli": ["caffe-napoletano", "caffe-sospeso", "a-tazza-e-cafe", "colazione-napoletana"]},
  {"slug": "pasticceria-napoletana", "nome": "Pasticceria napoletana",
   "intro": "Storie, leggende e ingredienti dei dolci napoletani: sfogliatella, babà, pastiera, zeppole, i dolci dei conventi e quelli di Natale.",
-  "articoli": ["sfogliatella", "baba", "pastiera", "zeppole-di-san-giuseppe", "dolci-dei-conventi", "dolci-di-natale", "pasticceria-artigianale"]},
+  "articoli": ["sfogliatella", "baba", "pastiera", "zeppole-di-san-giuseppe", "dolci-dei-conventi", "dolci-di-natale", "pasticceria-artigianale", "festa-della-mamma"]},
  {"slug": "napoli", "nome": "Napoli: luoghi e tradizioni",
   "intro": "Piazza Carità, via Toledo e le tradizioni che si vedono ogni giorno per le strade di Napoli.",
   "articoli": ["piazza-carita-via-toledo", "tradizioni-napoletane"]},

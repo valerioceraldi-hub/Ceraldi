@@ -28,9 +28,11 @@ PAGINE_EN = [
 
 <h2>Craftspeople by passion</h2>
 <p>Our motto is written in our logo: <em>artigiani per passione</em>, craftspeople by passion. It means doing things the way they were always done, even when there is a quicker way. It means coffee is served in a warm cup, a sfogliatella has to crunch, and whoever walks in should feel at home, even if they come from far away.</p>
+<p>In 2019 we refreshed our logo and our tagline, «Artigiani per passione dal 1973» (craftspeople by passion since 1973): looking back at our past to build the future, without forgetting our roots, and sometimes simplifying and focusing on what matters.</p>
 <p>That commitment has been noticed: for over ten years Ceraldi Caffè has been listed in the <a href="https://www.gamberorosso.it/luoghi/locali/caffe-bar/ceraldi-caffe/" rel="noopener" hreflang="it">Gambero Rosso Bar d'Italia guide</a>.</p>
 <p>Come and see us in Piazza Carità: we write the rest of the story every day, at the counter.</p>
 """,
+ "galleria": ["famiglia"],
  "cta": [("Get directions", "mappa"), ("See the menu", "menu_interno")],
 },
 {
@@ -62,7 +64,7 @@ PAGINE_EN = [
 <h2>Full English breakfast, every morning</h2>
 <p>For guests who don't want to give up their habits, we serve a <strong>full English breakfast</strong> every morning, made the traditional way: eggs, bacon, sausages, beans, mushrooms and tomatoes, toast and, of course, tea. Or try a plain or filled omelette, or scrambled eggs.</p>
 """,
- "galleria": ["sala"],
+ "galleria": ["sala", "bar-banco", "caffe-panna"],
  "cta": [("Café menu", "menu_bar"), ("Get directions", "mappa")],
 },
 {
@@ -99,7 +101,7 @@ PAGINE_EN = [
 <p>You can read the calendar in our display case: zeppole on 19 March, pastiera at Easter and the Neapolitan Christmas sweets in December.</p>
 <p>Want to know more? Our <a href="../../storie/pasticceria-napoletana/">stories about Neapolitan pastries</a> are in Italian; your browser can translate them.</p>
 """,
- "galleria": ["sfogliatella-riccia", "baba-amarena", "pastiera", "babamisu", "pellecchiella", "zeppola"],
+ "galleria": ["sfogliatella-riccia", "baba-amarena", "pastiera", "babamisu", "pellecchiella", "zeppola", "vetrina"],
  "cta": [("All pastries on the menu", "menu_dolci"), ("Get directions", "mappa")],
 },
 {
@@ -129,7 +131,7 @@ PAGINE_EN = [
 <h2>Freselle and salads</h2>
 <p>For a light lunch, <strong>freselle</strong>, twice-baked bread rings: the classic Neapolitan one with cherry tomatoes, tuna, red onion and olives; the caprese with mozzarella bocconcini and pesto; the Cetara with anchovies. And salads: tuna and tomato, caprese with Sorrento tomatoes, the big mixed salad and Caesar salad.</p>
 """,
- "galleria": ["frittatina"],
+ "galleria": ["frittatina", "polpo"],
  "cta": [("Full menu", "menu_food"), ("Get directions", "mappa")],
 },
 {
