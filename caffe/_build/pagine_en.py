@@ -131,7 +131,7 @@ PAGINE_EN = [
 <h2>Freselle and salads</h2>
 <p>For a light lunch, <strong>freselle</strong>, twice-baked bread rings: the classic Neapolitan one with cherry tomatoes, tuna, red onion and olives; the caprese with mozzarella bocconcini and pesto; the Cetara with anchovies. And salads: tuna and tomato, caprese with Sorrento tomatoes, the big mixed salad and Caesar salad.</p>
 """,
- "galleria": ["frittatina", "polpo"],
+ "galleria": ["frittatina"],
  "cta": [("Full menu", "menu_food"), ("Get directions", "mappa")],
 },
 {

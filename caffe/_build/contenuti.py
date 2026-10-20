@@ -108,7 +108,6 @@ FOTO = {
     "bar-banco": {"alt": "Il banco del bar di Ceraldi Caffè con il barista al lavoro", "w": [1024, 640], "r": (3, 2)},
     "caffe-panna": {"alt": "Caffè della casa in bicchiere con panna montata e cialda, sul banco di marmo di Ceraldi Caffè", "w": [1024, 640], "r": (3, 2)},
     "vetrina": {"alt": "La vetrina della pasticceria e della rosticceria di Ceraldi Caffè", "w": [1024, 640], "r": (3, 2)},
-    "polpo": {"alt": "Polpo e patate arrosto, piatto della gastronomia di Ceraldi Caffè", "w": [1024, 640], "r": (3, 2)},
     "sala-bianca": {"alt": "La sala bianca e oro di Ceraldi Caffè con i tavolini e le poltroncine rosse", "w": [1024, 640], "r": (3, 2)},
     "famiglia": {"alt": "La famiglia Ceraldi seduta a un tavolo nella sala del bar", "w": [1024, 640], "r": (3, 2)},
     "crostatina": {"alt": "Crostatina di fragole di Ceraldi Caffè su un piatto", "w": [1024, 640], "r": (3, 2)},

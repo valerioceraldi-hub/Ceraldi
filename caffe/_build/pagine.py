@@ -135,7 +135,7 @@ PAGINE = [
 <h2>Freselle e insalate</h2>
 <p>Per un pranzo leggero, le <strong>freselle</strong>: la classica napoletana con pomodorini, tonno, cipolla rossa e olive; la caprese con bocconcini di mozzarella e pesto; la Cetara con le alici. E le insalate: tonno e pomodoro, caprese con pomodori di Sorrento, l'insalatona completa e la Caesar salad.</p>
 """,
- "galleria": ["frittatina", "polpo"],
+ "galleria": ["frittatina"],
  "cta": [("Il menu completo", "menu_food"), ("Come arrivare", "mappa")],
 },
 {
