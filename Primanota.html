@@ -590,7 +590,7 @@ function avvisoCreditoIA(){
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.34.1</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.35.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -22900,16 +22900,21 @@ function apriRiconciliaDaFattura(fatturaId){
   } else if(resto < 0.01){
     _rfAvviso = '<div class="rf-avviso">Questa fattura risulta già saldata: non resta nulla da pagare. Qui sotto confronto i movimenti con l\'importo pieno ('+fmt(_rfLordo)+').</div>';
   }
-  const tutti = (_bancaMovimenti||[]).filter(function(m){ return !m.abbinata && !m.ignorata && (m.importo||0) < 0; })
+  // 20/10 (Valerio: "mostrami anche quelle abbinate, così se ho fatto un errore di
+  // collegamento lo stacco e lo collego ad altra fattura"): oltre ai liberi si
+  // mostrano anche i movimenti in uscita GIÀ collegati a una fattura, con scritto
+  // a quale; dai liberi si abbina come sempre, da quelli collegati si può
+  // staccarli dalla fattura sbagliata e collegarli a questa (_rfSposta).
+  const tutti = (_bancaMovimenti||[]).filter(function(m){ return (m.importo||0) < 0 && !m.ignorata && (!m.abbinata || (m.fatturaId && _fattureDelMovimento(m).length)); })
     // 20/09: anche le spese con carta di credito Nexi non ancora abbinate
     .concat(((typeof _cartaMovimenti!=='undefined'?_cartaMovimenti:[])||[]).filter(function(c){ return !c.abbinata && !c.ignorata && (parseFloat(c.importo)||0)>0; }).map(function(c){
       return {id:c.id, data:c.data, importo:-Math.abs(parseFloat(c.importo)||0), descrizione:'CARTA '+(c.carta_ultime4?'····'+c.carta_ultime4+' ':'')+(c.titolare?'('+c.titolare+') ':'')+'— '+(c.descrizione||''), _carta:true};
     }));
-  if(!tutti.length){
+  if(!tutti.some(function(m){ return !m.abbinata; })){
     alert('Nessun movimento bancario libero trovato. Importa prima un estratto conto, o controlla che non siano già tutti abbinati.');
     return;
   }
-  window._rfStato = {f:f, impF:impF, resto:resto, rif:_rfRif, annullata:_rfAnnullata, tutti:tutti, q:'', ord:'importo', fin:'tutti', fonte:'tutti', mostra:40};
+  window._rfStato = {f:f, impF:impF, resto:resto, rif:_rfRif, annullata:_rfAnnullata, tutti:tutti, q:'', ord:'importo', fin:'tutti', fonte:'tutti', stato:'tutti', mostra:40};
   const existing = document.getElementById('_riconciliaDaFattOv');
   if(existing) existing.remove();
   const ov = document.createElement('div');
@@ -22932,6 +22937,8 @@ function _rfFiltra(){
   var L=S.tutti.slice();
   if(S.fonte==='banca') L=L.filter(function(m){ return !m._carta; });
   if(S.fonte==='carta') L=L.filter(function(m){ return m._carta; });
+  if(S.stato==='liberi') L=L.filter(function(m){ return !m.abbinata; });
+  if(S.stato==='legati') L=L.filter(function(m){ return !!m.abbinata; });
   var d0=f.data ? new Date(String(f.data).slice(0,10)+'T12:00:00').getTime() : null;
   if(S.fin!=='tutti' && d0){
     var gg=+S.fin; L=L.filter(function(m){ var t=new Date(m.data+'T12:00:00').getTime(); return t>=d0-7*86400000 && t<=d0+gg*86400000; });
@@ -22953,7 +22960,7 @@ function _rfFiltra(){
   if(S.ord==='importo'){
     // 24/09: in cima quelli che tornano al centesimo, poi quelli che pagano
     // questa fattura insieme ad altre dello stesso fornitore, poi i più vicini
-    var pri=function(m){ var d=Math.abs(Math.abs(m.importo)-S.rif); return d<0.01 ? 0 : (_rfPagateInsieme(S, m) ? 1 : 2); };
+    var pri=function(m){ var d=Math.abs(Math.abs(m.importo)-S.rif); return (m.abbinata?10:0) + (d<0.01 ? 0 : ((!m.abbinata && _rfPagateInsieme(S, m)) ? 1 : 2)); };   // i già abbinati dopo i liberi
     var P={}; L.forEach(function(m){ P[m.id]=pri(m); });
     L.sort(function(a,b){ return (P[a.id]-P[b.id]) || (Math.abs(Math.abs(a.importo)-S.rif)-Math.abs(Math.abs(b.importo)-S.rif)); });
   }
@@ -22975,12 +22982,14 @@ function _rfRender(){
   var c=function(k,v,l){ return '<button class="chip'+(S[k]===v?' active':'')+'" onclick="_rfSet(\''+k+'\',\''+v+'\')">'+l+'</button>'; };
   if(ch) ch.innerHTML = c('ord','importo','Importo più vicino')+c('ord','data','Data più vicina')+c('ord','recenti','Più recenti')+
     '<span class="rf-sep"></span>'+c('fin','tutti','Tutte le date')+c('fin','60','Entro 60 gg')+c('fin','150','Entro 150 gg')+
-    '<span class="rf-sep"></span>'+c('fonte','tutti','Banca e carta')+c('fonte','banca','Solo banca')+c('fonte','carta','Solo carta');
+    '<span class="rf-sep"></span>'+c('fonte','tutti','Banca e carta')+c('fonte','banca','Solo banca')+c('fonte','carta','Solo carta')+
+    '<span class="rf-sep"></span>'+c('stato','tutti','Liberi e abbinati')+c('stato','liberi','Solo non abbinati')+c('stato','legati','Solo già abbinati');
   var vis=L.slice(0, S.mostra);
   window._nonAbbinati = vis; // l'indice del bottone = indice in questa lista (contratto di _cfAbbina)
   var fid=String(f.id).replace(/'/g,'');
   var nCarta=S.tutti.filter(function(m){ return m._carta; }).length;
-  var h='<div class="rf-conta">'+L.length+' moviment'+(L.length===1?'o':'i')+' in uscita non abbinat'+(L.length===1?'o':'i')+(L.length!==S.tutti.length?' su '+S.tutti.length:'')+' · banca e carta Nexi ('+nCarta+' spese con carta)</div>';
+  var nLegati=L.filter(function(m){ return m.abbinata; }).length, nLiberi=L.length-nLegati;
+  var h='<div class="rf-conta">'+L.length+' moviment'+(L.length===1?'o':'i')+' in uscita'+(L.length!==S.tutti.length?' su '+S.tutti.length:'')+': <b>'+nLiberi+' non abbinat'+(nLiberi===1?'o':'i')+'</b>, <b>'+nLegati+' già abbinat'+(nLegati===1?'o':'i')+'</b> a una fattura · carta Nexi ('+nCarta+' spese)</div>';
   if(!vis.length) h+='<div class="an-vuoto"><span>Nessun movimento con questa ricerca.</span></div>';
   vis.forEach(function(m, idx){
     // 24/09: "identico" solo se lo è davvero (al centesimo); entro 50
@@ -22989,12 +22998,27 @@ function _rfRender(){
     var badge = !combacia ? '' : (diffMov<0.01
       ? '✓ Importo identico'+(S.annullata?' all\'importo pieno della fattura':(Math.abs(S.rif-Math.abs(f.importo||0))>0.01?' (al netto della nota di credito)':''))
       : '≈ Differenza di '+fmt(diffMov));
-    var insieme = (!combacia && !m._carta) ? _rfPagateInsieme(S, m) : null;
+    var insieme = (!combacia && !m._carta && !m.abbinata) ? _rfPagateInsieme(S, m) : null;
+    var legate = m.abbinata ? _fattureDelMovimento(m) : [];
+    var _stato = '', _btnLegato = '';
+    if(m.abbinata){
+      var _questa = legate.some(function(g){ return String(g.id)===String(f.id); });
+      var _elenco = legate.map(function(g){ return '<b>Fatt. '+esc(g.numero||'—')+'</b> del '+_dataBreve(g.data)+' · '+esc(g.fornitore||''); }).join('<br>');
+      var _av = legate.length===1 ? _pagPrimaDellaFattura(m.data, legate[0].data) : 0;
+      _stato = '<div class="rf-legato'+(_questa?' rf-legato-qui':'')+'">'+(_questa?'✓ Già abbinato a questa fattura':'🔗 Già abbinato a:<br>'+_elenco)+
+        (_av?'<div class="rf-legato-av">⚠️ Pagato '+_av+' giorni prima della data di quella fattura: forse è collegato a quella sbagliata.</div>':'')+'</div>';
+      if(!_questa) _btnLegato = legate.length===1
+        ? '<div class="rf-btns"><button class="rf-b rf-b-w" onclick="_rfSposta('+idx+',\''+fid+'\')">Stacca da Fatt. '+esc(legate[0].numero||'—')+' e collega a questa</button></div>'
+        : '<div class="rf-info">Paga più fatture insieme: si modifica da Riconciliazione.</div>';
+    } else if(!m._carta){
+      _stato = '<div class="rf-libero">Non ancora abbinato a nessuna fattura</div>';
+    }
     var dd=Math.round((new Date(m.data+'T12:00:00')-new Date(String(f.data).slice(0,10)+'T12:00:00'))/86400000);
-    h+='<div class="rf-mov'+(combacia||insieme?' rf-ok':'')+'"><div class="rf-top"><div style="min-width:0"><div class="rf-dt">'+_anData(m.data)+' <em>'+(isNaN(dd)?'':(dd>=0?dd+' gg dopo la fattura':(-dd)+' gg prima'))+'</em> '+_fonteTag(m)+'</div><div class="rf-ds">'+esc(m.descrizione||'')+'</div>'+(badge?'<div class="rf-badge">'+badge+'</div>':'')+
+    h+='<div class="rf-mov'+(m.abbinata?' rf-mov-legato':(combacia||insieme?' rf-ok':''))+'"><div class="rf-top"><div style="min-width:0"><div class="rf-dt">'+_anData(m.data)+' <em>'+(isNaN(dd)?'':(dd>=0?dd+' gg dopo la fattura':(-dd)+' gg prima'))+'</em> '+_fonteTag(m)+'</div><div class="rf-ds">'+esc(m.descrizione||'')+'</div>'+(badge?'<div class="rf-badge">'+badge+'</div>':'')+_stato+
       (insieme?'<div class="rf-badge">✓ Paga questa fattura insieme a '+insieme.map(function(g){ return 'N° '+esc(g.f.numero||'—')+' ('+fmt(g.imp)+')'; }).join(' e ')+': la somma è identica</div>':'')+'</div><div class="rf-imp">'+fmt(impMov)+'</div></div>'+
       (insieme?'<div class="rf-btns"><button class="rf-b rf-b-p" data-f="'+esc([String(f.id)].concat(insieme.map(function(g){ return String(g.f.id); })).join(','))+'" onclick="_rfAbbinaInsieme('+idx+',this.dataset.f)">Abbina insieme ('+(insieme.length+1)+' fatture)</button></div>':'')+
-      (m._carta ? '<div class="rf-btns"><button class="rf-b rf-b-p" data-mid="'+esc(String(m.id))+'" onclick="var o=document.getElementById(\'_riconciliaDaFattOv\');if(o)o.remove();_abbinaCarta(this.dataset.mid,\''+fid+'\').then(function(){ if(typeof renderLista===\'function\')renderLista(); });">Abbina alla spesa con carta</button></div></div>' :
+      (m.abbinata ? _btnLegato+'</div>' :
+      m._carta ? '<div class="rf-btns"><button class="rf-b rf-b-p" data-mid="'+esc(String(m.id))+'" onclick="var o=document.getElementById(\'_riconciliaDaFattOv\');if(o)o.remove();_abbinaCarta(this.dataset.mid,\''+fid+'\').then(function(){ if(typeof renderLista===\'function\')renderLista(); });">Abbina alla spesa con carta</button></div></div>' :
       '<div class="rf-btns"><button class="rf-b rf-b-p" onclick="_cfAbbina('+idx+',\''+fid+'\',false);var o=document.getElementById(\'_riconciliaDaFattOv\');if(o)o.remove();if(typeof renderLista===\'function\')renderLista();">Abbina e salda ('+fmt(S.rif)+')</button>'+
       (Math.abs(impMov-S.rif)>0.50?'<button class="rf-b" onclick="_cfAbbina('+idx+',\''+fid+'\',true);var o=document.getElementById(\'_riconciliaDaFattOv\');if(o)o.remove();if(typeof renderLista===\'function\')renderLista();">Solo acconto ('+fmt(impMov)+')</button>':'')+'</div></div>');
   });
@@ -23050,7 +23074,37 @@ async function _rfAbbinaInsieme(movIdx, fidsCsv){
   await _applicaGruppoRiconciliazione(sel, [m], {ridisegnaLista:true});
 }
 
-async function _cfAbbina(movIdx, fattId, isParziale){
+// Sposta un pagamento già collegato a un'altra fattura: lo stacca da quella
+// (che torna «da pagare» o «parziale» secondo gli altri pagamenti) e lo collega
+// a questa. Riusa _anTogliDaFattura / _anSistemaLatoMovimento (lo stesso
+// «Stacca» del Controllo anomalie) e poi _cfAbbina, invariato.
+async function _rfSposta(movIdx, fattId){
+  var m=(window._nonAbbinati||[])[movIdx];
+  var f=(fatture||[]).find(function(x){ return String(x.id)===String(fattId); });
+  if(!m || !f) return;
+  var vecchie=_fattureDelMovimento(m);
+  if(vecchie.length!==1){ toast('Questo pagamento paga più fatture: si modifica da Riconciliazione'); return; }
+  var fv=vecchie[0];
+  if(!confirm('Sposto questo pagamento:\n'+_nomeMovBreve(m).replace(/&[a-z#0-9]+;/g,'')+' del '+_dataBreve(m.data)+' · '+fmt(Math.abs(m.importo||0))+'\n\n'+
+    'DA: '+(fv.fornitore||'')+' Fatt. '+(fv.numero||'—')+' del '+_dataBreve(fv.data)+' → tornerà «da pagare» (o «parziale» se ha altri pagamenti)\n'+
+    'A: '+(f.fornitore||'')+' Fatt. '+(f.numero||'—')+' del '+_dataBreve(f.data)+' → risulterà pagata con questo movimento\n\nConfermi?')) return;
+  try{
+    await _anSistemaLatoMovimento(m.id, fv);
+    _anTogliDaFattura(fv, m.id);
+    await dbUpdate(fv);
+  }catch(e){
+    toast('❌ Non riuscito, nulla è cambiato: '+String(e.message||e).slice(0,60));
+    if(typeof _registraErrore==='function') _registraErrore('database','Sposta pagamento: '+(e.message||e));
+    return;
+  }
+  m.abbinata=false; m.fatturaId=null; m.fatturaLabel=''; m.verificataBanca=false;
+  _anMovCache=null;
+  var o=document.getElementById('_riconciliaDaFattOv'); if(o) o.remove();
+  await _cfAbbina(movIdx, fattId, false, true);
+  if(typeof renderLista==='function') renderLista();
+}
+
+async function _cfAbbina(movIdx, fattId, isParziale, saltaConferma){
   var m=(window._nonAbbinati||[])[movIdx];
   var f=fatture.find(function(x){return String(x.id)===String(fattId);});
   if(!m||!f) return;
@@ -23074,7 +23128,7 @@ async function _cfAbbina(movIdx, fattId, isParziale){
     var _dataTxt = f.pagamentoImpostatoIl ? ', il '+new Date(f.pagamentoImpostatoIl).toLocaleDateString('it-IT') : '';
     conf+='\n\n⚠️ Questa fattura ha già un pagamento impostato ('+(f.pagamento||'—')+') '+_origineTxt+_dataTxt+'. Vuoi comunque abbinarla anche a questo movimento bancario?';
   }
-  if(!confirm(conf)) return;
+  if(!saltaConferma && !confirm(conf)) return;
   if(_pagGiaAssegnato){ f.pagamentoOrigine='manuale'; f.pagamentoImpostatoIl=new Date().toISOString(); } // scelta esplicita confermata ora, non più toccabile dal motore automatico
   // FIX 26/08 (caso reale Eureka N°56/D): quando questo STESSO movimento era
   // già agganciato a UN'ALTRA fattura (es. corretto un abbinamento sbagliato
@@ -32164,6 +32218,13 @@ html[data-theme="dark"] .sf-hint{color:var(--orange)}
 .rf-dt em{font-style:normal;font-weight:500;font-size:11.5px;color:var(--ink3)}
 .rf-ds{font-size:11.5px;color:var(--ink3);word-break:break-word;margin-top:2px;line-height:1.35}
 .rf-badge{font-size:11px;font-weight:700;color:var(--blue);margin-top:4px}
+.rf-libero{font-size:11px;font-weight:600;color:var(--ink3);margin-top:4px}
+.rf-mov-legato{background:var(--surface2)}
+.rf-legato{margin-top:6px;padding:7px 9px;border-radius:10px;background:rgba(255,149,0,.10);border:1px solid rgba(255,149,0,.35);font-size:12px;line-height:1.4;color:var(--ink2)}
+.rf-legato-qui{background:var(--blue-light);border-color:var(--blue);color:var(--blue);font-weight:600}
+.rf-legato-av{margin-top:5px;font-weight:700;color:#b36a00}
+.rf-info{font-size:11.5px;color:var(--ink3);margin-top:8px}
+.rf-b-w{border-color:rgba(255,149,0,.6);color:#b36a00}
 .rf-avviso{margin:8px 16px 2px;padding:10px 12px;border-radius:14px;background:rgba(255,149,0,.08);border:1px solid rgba(255,149,0,.35);font-size:12.5px;line-height:1.45;color:var(--ink2)}
 /* FIX 28/09: banner "comprensione automatica" nel foglio "Abbina a una
    fattura" — stessa forma arrotondata e stesso linguaggio visivo di
