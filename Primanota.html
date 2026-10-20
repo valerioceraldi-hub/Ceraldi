@@ -508,6 +508,39 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
 
 <script>(function(){try{var t=localStorage.getItem('fatture_theme');if(t==='dark'||(t==='auto'&&matchMedia('(prefers-color-scheme: dark)').matches))document.documentElement.setAttribute('data-theme','dark');}catch(e){}})();</script>
 <body>
+<script>
+/* ── CREDITO IA (20/10/2026) ─────────────────────────────────────────
+   Anthropic non permette di ricaricare il credito o leggerne il saldo da
+   un'app: si ricarica solo dalla console (Billing). Qui: 1) un link diretto
+   alla pagina di ricarica; 2) se una risposta dell'IA dice che il credito è
+   finito (qualunque funzione del server: ia, assistenti…), compare un avviso
+   chiaro con il tasto per ricaricare, invece di un errore generico. */
+var CREDITO_IA_URL = 'https://console.anthropic.com/settings/billing';
+function apriRicaricaIA(){ try{ window.open(CREDITO_IA_URL, '_blank', 'noopener'); }catch(e){ location.href = CREDITO_IA_URL; } }
+function avvisoCreditoIA(){
+  if(document.getElementById('creditoIaBanner')) return;
+  var d = document.createElement('div'); d.id = 'creditoIaBanner'; d.setAttribute('role', 'alert');
+  d.style.cssText = 'position:fixed;left:12px;right:12px;top:calc(env(safe-area-inset-top,0px) + 10px);z-index:99999;max-width:520px;margin:0 auto;background:#fff4e5;color:#5a3700;border:1px solid #f0b357;border-radius:14px;padding:12px 14px;box-shadow:0 10px 30px -10px rgba(0,0,0,.35);font:14px/1.4 -apple-system,system-ui,sans-serif;display:flex;gap:10px;align-items:center';
+  d.innerHTML = '<div style="flex:1;min-width:0"><b>Credito IA esaurito</b><div style="font-size:12.5px;margin-top:2px">L\'intelligenza artificiale è ferma finché non ricarichi il credito Anthropic. Vale per tutte le app Ceraldi.</div></div>'
+    + '<button type="button" style="border:none;background:#d97706;color:#fff;font:inherit;font-weight:700;padding:8px 12px;border-radius:10px;cursor:pointer;white-space:nowrap">Ricarica</button>'
+    + '<button type="button" aria-label="Chiudi" style="border:none;background:none;color:inherit;font-size:18px;cursor:pointer;padding:0 4px">✕</button>';
+  var b = d.querySelectorAll('button'); b[0].onclick = apriRicaricaIA; b[1].onclick = function(){ d.remove(); };
+  document.body.appendChild(d);
+}
+(function(){
+  if(!window.fetch || window.__creditoIaWrap) return; window.__creditoIaWrap = true;
+  var orig = window.fetch;
+  window.fetch = function(input, init){
+    var p = orig.apply(this, arguments), url = String(input && input.url || input || '');
+    if(url.indexOf('/functions/v1/') < 0) return p;
+    return p.then(function(r){
+      if(r && !r.ok && r.clone){ try{ r.clone().text().then(function(t){ if(/credit balance is too low|credito_esaurito/i.test(t || '')) avvisoCreditoIA(); }).catch(function(){}); }catch(e){} }
+      return r;
+    });
+  };
+})();
+</script>
+
 <!-- HEADER — ridisegnato 19/09: marchio app disegnato (non più emoji),
      pulsanti circolari in vetro con icone vettoriali, sync che gira al tocco.
      Stesse identiche funzioni richiamate (sincronizzaOra / apriImpostazioni). -->
@@ -518,7 +551,7 @@ input#eRiconciliata{width:24px!important;height:24px!important;padding:0!importa
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.32.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.33.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -4894,6 +4927,7 @@ function _impRenderSub(key){
       <div style="padding:4px 20px 24px">
         <div style="font-size:14px;color:var(--ink2);line-height:1.5;margin-bottom:12px">L'IA legge scansioni e PDF delle fatture, classifica i fornitori e risponde nell'Assistente.</div>
         <div style="font-size:13px;color:var(--green);background:var(--green-light,rgba(52,199,89,.12));border-radius:8px;padding:10px 12px;line-height:1.45">🔒 La chiave Anthropic è custodita sul server: non sta su questo telefono e nessuno può copiarla da qui. Può usarla solo chi entra con un account abilitato a Fatture.</div>
+        <button type="button" onclick="apriRicaricaIA()" style="margin-top:12px;width:100%;border:none;border-radius:var(--radius-sm);padding:12px 14px;background:var(--surface2);color:var(--ink);font:inherit;font-size:14px;font-weight:600;text-align:left;cursor:pointer;display:flex;align-items:center;gap:10px"><span style="font-size:18px">💳</span><span style="flex:1">Ricarica credito IA<br><small style="font-weight:400;color:var(--ink3);font-size:12px">Apre la pagina Billing della console Anthropic: il credito vale per Fatture, Ordini e Presenze. Lì puoi attivare anche la ricarica automatica.</small></span><span style="color:var(--ink3)">›</span></button>
       </div>`;
   } else if(key==='paypal'){
     body.innerHTML = _impBack('PayPal') + `
