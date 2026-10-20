@@ -2213,6 +2213,7 @@ html[data-theme="dark"] .ch-riep{background:#2C2C2E}
 .st-pill.confermato,.st-pill.saldato_acconti{background:var(--green-light);color:var(--green)}
 .st-dx{text-align:right;flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end}
 .st-dx small{font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;font-weight:700}
+.st-dx-sub{font-size:11px!important;font-weight:500!important;color:var(--muted)!important;text-transform:none!important;letter-spacing:0!important;margin-top:1px}
 .st-dx b{font-size:17px;font-weight:800;color:var(--green)}
 .st-dx b.neg{color:var(--red)}
 .st-dx span{font-size:10.5px;color:var(--muted)}
@@ -3292,7 +3293,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     <button class="hdr-btn" id="tb-back" style="display:none" aria-label="Indietro"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
     <div class="tb-titles">
       <h1 id="tb-title">Presenze</h1>
-      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v73</span></p>
+      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v74</span></p>
     </div>
     <span class="topbar-badge" id="role-badge"></span>
     <div class="hdr-actions">
@@ -12313,6 +12314,16 @@ function stipCard(c) {
         : `<button class="btn-secondary st-btn" onclick="apriSaldaCedolino('${c.cedDocId}','${id}','${c.nomeOnclick}',${mm},${yy},${c.nettoCed})">🔗 ${c.versatoCed > 0.01 ? 'Completa il cedolino · ' + _e26(rest) : 'Salda il cedolino · ' + _e26(c.nettoCed)}</button>`; }
   }
 
+  // ── cifra nella testata (20/10/2026, richiesto da Valerio) ──
+  // pagato tutto → quanto ha RICEVUTO nel mese (non la sola differenza dell'ultimo pagamento),
+  // così a colpo d'occhio si vede il netto dato a ciascuno · pagato in parte → ricevuto finora
+  // e, piccolo, quanto resta · da liquidare → come prima (da pagare), con il già dato se c'è.
+  const ricevuto = Math.round((dato - c.totRestMese) * 100) / 100;
+  let testa;
+  if (c.stato === 'parziale') testa = { lbl: 'ricevuto', val: ricevuto, sotto: 'resta ' + _e26(c.residuoLiq) };
+  else if (c.stato === 'da_liquidare') testa = { lbl: c.headlineLbl, val: c.importoHeadline, sotto: ricevuto > 0.005 ? 'già dato ' + _e26(ricevuto) : '' };
+  else testa = { lbl: 'ricevuto', val: ricevuto, sotto: '' };
+
   // ── testo in grande ──
   let heroLbl, heroVal, heroCls;
   if (c.stato === 'da_liquidare') { heroLbl = resta >= 0 ? 'Resta da pagare' : 'Ha ricevuto in più'; heroVal = Math.abs(resta); heroCls = resta >= 0 ? 'verde' : 'rosso'; }
@@ -12329,7 +12340,7 @@ function stipCard(c) {
       <div class="st-nome"><b>${esc(d.nome)}${d.cognome ? ' ' + esc(d.cognome) : ''}</b>
         <span class="st-pill ${c.stato}">${pillTxt}</span>
         <small>${subGiorni}${avvisi.length ? ' · <span class="st-warn">⚠ ' + avvisi.join(' · ') + '</span>' : ''}</small></div>
-      <div class="st-dx"><small>${c.headlineLbl}</small><b class="${c.importoHeadline >= 0 ? '' : 'neg'}">${_e26(c.importoHeadline)}</b><span id="stip-chev-${id}">dettagli ▾</span></div>
+      <div class="st-dx"><small>${testa.lbl}</small><b class="${testa.val >= 0 ? '' : 'neg'}">${_e26(testa.val)}</b>${testa.sotto ? `<small class="st-dx-sub">${testa.sotto}</small>` : ''}<span id="stip-chev-${id}">dettagli ▾</span></div>
     </div>
     <div class="st-barra"><i style="width:${(quota * 100).toFixed(1)}%"></i></div>
     <div id="stip-det-${id}" class="st-det" style="display:none">
@@ -32411,14 +32422,16 @@ if (typeof stipCard === 'function') {
   stipCard = function (c) { try { (ST26.input = ST26.input || {})[c.d.id] = c; } catch (e) {} return _stipCardMD.apply(this, arguments); };
 }
 function meseDipApri() {
-  if (!MD.mese) MD.mese = todayISO().slice(0, 7);
+  if (!MD.mese || MD.mese < meseDipMinimo()) MD.mese = todayISO().slice(0, 7);
   meseDipCarica();
 }
+// 20/10/2026: il dipendente vede il mese in corso e al massimo i 2 precedenti
+function meseDipMinimo() { const t = new Date(); const d = new Date(t.getFullYear(), t.getMonth() - 2, 1); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
 function meseDipSposta(n) {
   const [y, m] = MD.mese.split('-').map(Number);
   const d = new Date(y, m - 1 + n, 1);
   const v = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
-  if (v > todayISO().slice(0, 7)) return;
+  if (v > todayISO().slice(0, 7) || v < meseDipMinimo()) return;
   MD.mese = v; meseDipCarica();
 }
 async function meseDipCarica() {
@@ -32428,6 +32441,7 @@ async function meseDipCarica() {
   const lbl = new Date(y, m - 1, 1).toLocaleDateString('it-IT', { month: 'long', year: 'numeric' });
   $('md-mese-lbl').textContent = lbl.charAt(0).toUpperCase() + lbl.slice(1);
   $('md-next').disabled = MD.mese >= todayISO().slice(0, 7);
+  { const prev = document.querySelector('#pg-mese-dip .md-nav button'); if (prev) prev.disabled = MD.mese <= meseDipMinimo(); }
   body.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
   const ultimo = new Date(y, m, 0).getDate(), dal = MD.mese + '-01', al = MD.mese + '-' + String(ultimo).padStart(2, '0');
   // 1) stesso calcolo della pagina Stipendi, solo con i dati di questa persona
