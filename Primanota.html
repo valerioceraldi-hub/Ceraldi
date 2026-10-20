@@ -590,7 +590,7 @@ function avvisoCreditoIA(){
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.36.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.36.1</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -8622,6 +8622,18 @@ function _fxStessoNumero(a, b){
   var pa = princ(na), pb = princ(nb);
   return pa.length >= 3 && pa === pb ? 1 : 0;
 }
+// 20/10/2026 (Valerio: 3 fatture Eureka del 20/10, stesso importo, numeri 78/D,
+// 79/D, 80/D → importata solo la prima). «Stessa data + stesso importo» basta
+// a dire «stessa fattura» SOLO se i numeri non si contraddicono: uno dei due
+// manca, oppure uno contiene l'altro (es. XML «V1058209» e cartaceo «058209»).
+// Due numeri presenti e diversi = due fatture diverse, sempre.
+function _fxNumeriCompatibili(a, b){
+  if(!String(a || '').trim() || !String(b || '').trim()) return true;
+  if(_fxStessoNumero(a, b) >= 1) return true;
+  var da = String(a).replace(/\D/g, '').replace(/^0+/, ''), db = String(b).replace(/\D/g, '').replace(/^0+/, '');
+  if(Math.min(da.length, db.length) < 3) return false;
+  return da.slice(-db.length) === db || db.slice(-da.length) === da;
+}
 function _fxCercaStessa(lista, x){
   // x = { fornitore, piva, numero, data, importo, tipo }
   var ok = function(f){ return f && !f.deletedAt && (!x.tipo || !f.tipo || f.tipo === x.tipo || (f.tipo !== 'nota_credito' && x.tipo !== 'nota_credito')); };
@@ -8632,7 +8644,7 @@ function _fxCercaStessa(lista, x){
   if(l.length > 1){ var l2 = l.filter(imp); if(l2.length === 1) return l2[0]; }
   l = stesso.filter(function(f){ return x.numero && _fxStessoNumero(f.numero, x.numero) >= 1 && imp(f); });
   if(l.length === 1) return l[0];
-  l = stesso.filter(function(f){ return f.data && f.data === x.data && imp(f); });
+  l = stesso.filter(function(f){ return f.data && f.data === x.data && imp(f) && _fxNumeriCompatibili(f.numero, x.numero); });
   return l.length === 1 ? l[0] : null;
 }
 
@@ -8804,7 +8816,7 @@ async function importaMassivoXml(input){
         });
         risultati.duplicateInfo = risultati.duplicateInfo || [];
         risultati.duplicateInfo.push({
-          file: file.name, fornitore, numero,
+          file: file.name, fornitore, numero, numDiverso: normS(dup.numero) !== normS(numero),
           esistenteId: dup.id, esistenteNumero: dup.numero, esistenteData: dup.data
         });
         // Aggiorna con XML se: non ha XML, oppure ha solo fatturaAllegata vuota/placeholder
@@ -9010,7 +9022,7 @@ async function importaMassivoXml(input){
   const dupInfo = risultati.duplicateInfo || [];
   if(dupInfo.length){
     const righe = dupInfo.slice(0,5).map(d =>
-      `${d.file} → già presente: ${d.fornitore} N°${d.esistenteNumero} del ${d.esistenteData}`
+      `${d.file} → già presente: ${d.fornitore} N°${d.esistenteNumero} del ${d.esistenteData}` + (d.numDiverso ? ` (nell'XML il numero è «${d.numero}»: considerata la stessa fattura)` : '')
     ).join('\n');
     const extra = dupInfo.length>5 ? `\n…e altri ${dupInfo.length-5}` : '';
     const detBox = document.createElement('div');
