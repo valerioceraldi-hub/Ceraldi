@@ -106,11 +106,20 @@ FOTO = {
     "squadra": {"alt": "La squadra di Ceraldi Caffè al bancone del bar in Piazza Carità", "w": [1600, 800], "r": (3, 2)},
     "sala": {"alt": "La sala di Ceraldi Caffè con le poltroncine in pelle rossa e una colazione servita al tavolo", "w": [1024, 640], "r": (3, 2)},
     "bar-banco": {"alt": "Il banco del bar di Ceraldi Caffè con il barista al lavoro", "w": [1024, 640], "r": (3, 2)},
-    "caffe-panna": {"alt": "Caffè della casa in bicchiere con panna montata e cialda, sul banco di marmo di Ceraldi Caffè", "w": [1024, 640], "r": (3, 2)},
     "vetrina": {"alt": "La vetrina della pasticceria e della rosticceria di Ceraldi Caffè", "w": [1024, 640], "r": (3, 2)},
     "sala-bianca": {"alt": "La sala bianca e oro di Ceraldi Caffè con i tavolini e le poltroncine rosse", "w": [1024, 640], "r": (3, 2)},
     "famiglia": {"alt": "La famiglia Ceraldi seduta a un tavolo nella sala del bar", "w": [1024, 640], "r": (3, 2)},
     "crostatina": {"alt": "Crostatina di fragole di Ceraldi Caffè su un piatto", "w": [1024, 640], "r": (3, 2)},
+    "caffe-servito-bancone": {"alt": "Il barman di Ceraldi Caffè serve un caffè con panna al bancone", "w": [1024, 640], "r": (3, 2)},
+    "cornetti-caffe-bancone": {"alt": "Cornetti e caffè serviti sul bancone di marmo di Ceraldi Caffè", "w": [1024, 640], "r": (3, 2)},
+    "latte-macchiato-dolci": {"alt": "Latte macchiato e alzatina di dolci al bancone di Ceraldi Caffè", "w": [1024, 640], "r": (3, 2)},
+    "baba-al-rum-classico": {"alt": "Babà al rum classico di Ceraldi Caffè, accanto a una tazzina di caffè", "w": [1024, 640], "r": (3, 2)},
+    "zeppolina-san-giuseppe": {"alt": "Zeppolina di San Giuseppe di Ceraldi Caffè con crema e amarena", "w": [1024, 640], "r": (3, 2)},
+    "cocktail-menta-cetriolo": {"alt": "Il barman di Ceraldi Caffè versa lo spumante in un cocktail con menta e cetriolo", "w": [1024, 640], "r": (3, 2)},
+    "cocktail-frutti-rossi": {"alt": "Cocktail rosso ai frutti di bosco al bancone di Ceraldi Caffè", "w": [1024, 640], "r": (3, 2)},
+    "cocktail-barman": {"alt": "Il barman di Ceraldi Caffè guarnisce un cocktail al bancone", "w": [1024, 640], "r": (3, 2)},
+    "logo-ceraldi-caffe-carta": {"alt": "Il logo di Ceraldi Caffè, Artigiani per passione dal 1973, stampato su carta", "w": [1024, 640], "r": (3, 2)},
+    "sala-ingresso-piazza-carita": {"alt": "L'interno di Ceraldi Caffè in Piazza Carità, con la sala e le poltroncine rosse", "w": [1024, 640], "r": (3, 2)},
     "aperitivo": {"alt": "Aperitivo da Ceraldi Caffè: spritz e cocktail al tavolo", "w": [960, 640], "r": (4, 3)},
 }
 
@@ -339,7 +348,7 @@ ARTICOLI += [
  "titolo_seo": "Dolci dei conventi napoletani: storia e leggende",
  "descrizione": "Sfogliatella, pastiera, roccocò, susamielli, raffioli: molti dolci napoletani sono nati nei conventi della città e della costiera. Ecco la loro storia.",
  "dek": "Dietro molti dolci napoletani ci sono le cucine dei monasteri. Un viaggio tra suore pasticcere, ricette segrete e festività.",
- "foto": None,
+ "foto": "sfogliatella-riccia",
  "lettura": 4,
  "corpo": """
 <p>Per secoli i conventi sono stati tra i più grandi laboratori di pasticceria di Napoli. Le monache avevano tempo, ingredienti preziosi come zucchero, mandorle e spezie, e ricette custodite all'interno delle mura. Molti dei dolci che oggi troviamo nelle pasticcerie vengono da lì.</p>
@@ -480,7 +489,7 @@ ARTICOLI += [
  "titolo_seo": "Tradizioni napoletane: panaro, smorfia e presepe",
  "descrizione": "Sette tradizioni napoletane: caffè sospeso, panaro, cornicello, smorfia, presepe di San Gregorio Armeno, miracolo di San Gennaro e dolci delle feste.",
  "dek": "Piccoli gesti, credenze e feste che raccontano Napoli meglio di qualsiasi guida.",
- "foto": None,
+ "foto": "zeppolina-san-giuseppe",
  "lettura": 4,
  "corpo": """
 <p>Napoli è una città di tradizioni vive, che si vedono per strada ogni giorno. Eccone sette, dalle più quotidiane alle più solenni.</p>

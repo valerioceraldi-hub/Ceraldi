@@ -32,7 +32,7 @@ PAGINE_EN = [
 <p>That commitment has been noticed: for over ten years Ceraldi Caffè has been listed in the <a href="https://www.gamberorosso.it/luoghi/locali/caffe-bar/ceraldi-caffe/" rel="noopener" hreflang="it">Gambero Rosso Bar d'Italia guide</a>.</p>
 <p>Come and see us in Piazza Carità: we write the rest of the story every day, at the counter.</p>
 """,
- "galleria": ["famiglia"],
+ "galleria": ["famiglia", "logo-ceraldi-caffe-carta"],
  "cta": [("Get directions", "mappa"), ("See the menu", "menu_interno")],
 },
 {
@@ -64,7 +64,7 @@ PAGINE_EN = [
 <h2>Full English breakfast, every morning</h2>
 <p>For guests who don't want to give up their habits, we serve a <strong>full English breakfast</strong> every morning, made the traditional way: eggs, bacon, sausages, beans, mushrooms and tomatoes, toast and, of course, tea. Or try a plain or filled omelette, or scrambled eggs.</p>
 """,
- "galleria": ["sala", "bar-banco", "caffe-panna"],
+ "galleria": ["sala", "bar-banco", "vetrina", "cornetti-caffe-bancone", "latte-macchiato-dolci", "caffe-servito-bancone"],
  "cta": [("Café menu", "menu_bar"), ("Get directions", "mappa")],
 },
 {
@@ -101,7 +101,7 @@ PAGINE_EN = [
 <p>You can read the calendar in our display case: zeppole on 19 March, pastiera at Easter and the Neapolitan Christmas sweets in December.</p>
 <p>Want to know more? Our <a href="../../storie/pasticceria-napoletana/">stories about Neapolitan pastries</a> are in Italian; your browser can translate them.</p>
 """,
- "galleria": ["sfogliatella-riccia", "baba-amarena", "pastiera", "babamisu", "pellecchiella", "zeppola", "vetrina"],
+ "galleria": ["sfogliatella-riccia", "baba-amarena", "pastiera", "babamisu", "pellecchiella", "zeppola", "baba-al-rum-classico", "zeppolina-san-giuseppe"],
  "cta": [("All pastries on the menu", "menu_dolci"), ("Get directions", "mappa")],
 },
 {
@@ -158,7 +158,7 @@ PAGINE_EN = [
 </ul>
 <p>All served at your table in Piazza Carità, while the city slows down.</p>
 """,
- "galleria": ["aperitivo"],
+ "galleria": ["aperitivo", "cocktail-menta-cetriolo", "cocktail-frutti-rossi", "cocktail-barman"],
  "cta": [("Cocktails and drinks", "menu_drink"), ("Get directions", "mappa")],
 },
 ]

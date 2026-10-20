@@ -623,6 +623,7 @@ def pagina_contatti():
 <div><dt>Cellulare e WhatsApp</dt><dd><a href="tel:{BAR["cell_link"]}">328 438 8404</a><br>scrivici su <a href="{BAR["whatsapp"]}" rel="noopener">WhatsApp</a></dd></div>
 </dl>
 <div class="azioni sinistra"><a class="btn scuro" href="{BAR["mappa"]}" rel="noopener">Apri in Google Maps</a><a class="btn scuro-vuoto" href="tel:{BAR["tel_link"]}">Chiama</a><a class="btn scuro-vuoto" href="{BAR["whatsapp"]}" rel="noopener">Scrivi su WhatsApp</a></div>
+<figure>{immagine("sala-ingresso-piazza-carita", "../", "(max-width: 800px) 100vw, 760px")}</figure>
 <div class="corpo">
 <h2>Come arrivare</h2>
 <ul>
@@ -689,6 +690,7 @@ def pagina_contatti_en():
 <div><dt>Mobile and WhatsApp</dt><dd><a href="tel:{BAR["cell_link"]}">+39 328 438 8404</a><br>message us on <a href="{BAR["whatsapp"]}" rel="noopener">WhatsApp</a></dd></div>
 </dl>
 <div class="azioni sinistra"><a class="btn scuro" href="{BAR["mappa"]}" rel="noopener">Open in Google Maps</a><a class="btn scuro-vuoto" href="tel:{BAR["tel_link"]}">Call</a><a class="btn scuro-vuoto" href="{BAR["whatsapp"]}" rel="noopener">Message us on WhatsApp</a></div>
+<figure>{immagine("sala-ingresso-piazza-carita", "../../", "(max-width: 800px) 100vw, 760px")}</figure>
 <div class="corpo">
 <h2>How to get here</h2>
 <ul>

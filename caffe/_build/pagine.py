@@ -36,7 +36,7 @@ PAGINE = [
 <p>Un impegno che negli anni è stato notato: da oltre dieci anni Ceraldi Caffè è nella guida <a href="https://www.gamberorosso.it/luoghi/locali/caffe-bar/ceraldi-caffe/" rel="noopener">Bar d'Italia del Gambero Rosso</a>.</p>
 <p>Vieni a trovarci in Piazza Carità: il resto della storia lo scriviamo ogni giorno, al bancone.</p>
 """,
- "galleria": ["famiglia"],
+ "galleria": ["famiglia", "logo-ceraldi-caffe-carta"],
  "cta": [("Come arrivare", "mappa"), ("Guarda il menu", "menu_interno")],
 },
 {
@@ -69,7 +69,7 @@ PAGINE = [
 <p>Per i nostri ospiti stranieri che non vogliono rinunciare alle loro abitudini, tutte le mattine serviamo la <strong>Full English Breakfast</strong>, preparata come vuole la tradizione: uova, bacon, salsicce, fagioli, funghi e pomodori, pane tostato e l'immancabile tè. In alternativa, omelette semplice o farcita e uova strapazzate.</p>
 <p lang="en"><em>Full English breakfast served every morning in the heart of Naples: eggs, bacon, sausages, beans, mushrooms, tomatoes, toast and tea.</em></p>
 """,
- "galleria": ["sala", "bar-banco", "caffe-panna"],
+ "galleria": ["sala", "bar-banco", "vetrina", "cornetti-caffe-bancone", "latte-macchiato-dolci", "caffe-servito-bancone"],
  "cta": [("Menu del bar", "menu_bar"), ("Come arrivare", "mappa")],
 },
 {
@@ -105,7 +105,7 @@ PAGINE = [
 <h2>Le feste</h2>
 <p>Il calendario si legge anche in vetrina: le zeppole il 19 marzo, la pastiera a Pasqua, e a Natale i <a href="../storie/dolci-di-natale/">dolci natalizi napoletani</a>.</p>
 """,
- "galleria": ["sfogliatella-riccia", "baba-amarena", "pastiera", "babamisu", "pellecchiella", "zeppola", "vetrina"],
+ "galleria": ["sfogliatella-riccia", "baba-amarena", "pastiera", "babamisu", "pellecchiella", "zeppola", "baba-al-rum-classico", "zeppolina-san-giuseppe"],
  "cta": [("Tutti i dolci nel menu", "menu_dolci"), ("Come arrivare", "mappa")],
 },
 {
@@ -162,7 +162,7 @@ PAGINE = [
 </ul>
 <p>Il tutto al tavolo, in Piazza Carità, mentre la città rallenta.</p>
 """,
- "galleria": ["aperitivo"],
+ "galleria": ["aperitivo", "cocktail-menta-cetriolo", "cocktail-frutti-rossi", "cocktail-barman"],
  "cta": [("Cocktail e drink nel menu", "menu_drink"), ("Come arrivare", "mappa")],
 },
 ]
