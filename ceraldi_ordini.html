@@ -324,6 +324,8 @@ body.has-fbar{padding-bottom:calc(150px + var(--safe-b))}
 .todo{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);margin-bottom:10px;overflow:hidden}
 .todo-hd{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:.5px solid var(--sep2)}
 .todo-it{padding:10px 14px;border-bottom:.5px solid var(--sep2);font-size:13.5px}
+.esv{font-size:12px;margin-top:4px;line-height:1.35;color:var(--ink2)}.esv b{display:inline-block;min-width:14px;text-align:center}
+.esv.si{color:var(--green-ink)}.esv.si b{color:var(--green)}.esv.parte{color:#b36a00}.esv.no{color:#c25a00}.esv.no b{color:#ff9500;font-size:13px}.esv.car{color:var(--blue)}.esv.att{color:var(--ink3)}
 .todo-it:last-child{border-bottom:none}
 .todo-ft{display:flex;gap:6px;flex-wrap:wrap;padding:10px 14px;background:var(--surface2)}
 html[data-theme="dark"] .todo-ft{background:rgba(255,255,255,.03)}
@@ -443,7 +445,7 @@ function avvisoCreditoIA(){
   </button>
   <button class="tab-item" data-tab="dafare" onclick="vaiTab('dafare')">
     <span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13l3-8h10l3 8"/><path d="M4 13v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5h-5a3 3 0 0 1-6 0z"/></svg></span>
-    <span class="tab-lbl">Da fare</span>
+    <span class="tab-lbl">Da decidere</span>
     <span class="tab-badge hidden" id="badgeDaFare"></span>
   </button>
   <button class="tab-item" data-tab="magazzino" onclick="vaiTab('magazzino')">
@@ -458,7 +460,7 @@ function avvisoCreditoIA(){
 </nav>
 
 <script>
-var APP_VERSION='8.13.0';
+var APP_VERSION='8.14.0';
 var BUILD_VERSION=APP_VERSION, BUILD_NUM=APP_VERSION;
 var APP={key:'ordini',nome:'Ordini',versione:APP_VERSION,authKey:'or_auth_v2',oldAuthKey:'ceraldi_ordini_auth_session',
   markBg:'linear-gradient(145deg,#FFC04D 0%,#FF9F0A 50%,#C2410C 100%)',
@@ -3860,7 +3862,7 @@ function renderCarrello(){
   var b = document.getElementById('carrBody'); if(!b) return;
   var g = gruppiCarrello(), sal = Object.keys(carr().salvati || {}).length;
   document.getElementById('carrSub').textContent = g.length ? Object.keys(carr().righe).length + ' prodotti · ' + g.length + ' fornitor' + (g.length === 1 ? 'e' : 'i') : '';
-  if(!g.length){ b.innerHTML = '<div class="empty"><div class="ei">🛒</div><b>Il carrello è vuoto</b><p>Tocca + accanto a un prodotto, oppure prendi le richieste dei dipendenti da "Da fare".</p></div>' + (sal ? '<button class="btn btn-s" onclick="apriSalvati()">Salvati per dopo (' + sal + ')</button>' : ''); document.getElementById('carrPiede').innerHTML = ''; return; }
+  if(!g.length){ b.innerHTML = '<div class="empty"><div class="ei">🛒</div><b>Il carrello è vuoto</b><p>Tocca + accanto a un prodotto, oppure prendi le richieste dei dipendenti da "Da decidere".</p></div>' + (sal ? '<button class="btn btn-s" onclick="apriSalvati()">Salvati per dopo (' + sal + ')</button>' : ''); document.getElementById('carrPiede').innerHTML = ''; return; }
   var h = '';
   g.forEach(function(gr){
     var ex = extraForn(gr.forn), min = num(ex.minimo), sotto = min && gr.totale < min;
@@ -3994,6 +3996,7 @@ function snapshotOrdine(forn){
     var rf = x.r.id != null ? rifFornitore(CATMAP[x.r.id], forn) : ''; if(rf) it.rif = rf;
     var rich = (x.r.da || []).map(function(d){ return d.r; }).filter(Boolean); if(rich.length) it.rich = rich;
     if(x.r.sost) it.sost = x.r.sost;
+    if(x.r.orig) it.orig = x.r.orig;
     return it;
   });
   return { forn: forn, righe: rr, items: items, nota: nota, totale: r2(items.reduce(function(s, i){ return s + i.price * i.qty; }, 0)) };
@@ -4162,7 +4165,7 @@ function renderListaOrdini(){
    Per vedere chi ha chiesto cosa e quando, e per recuperare una richiesta:
    rimetterla nel carrello o di nuovo in "Da fare". */
 var VR = { tutte: null, at: 0, dip: '', aperta: null, carico: null };
-var STATI_RICH = { pending: ['In attesa', 'o'], importata: ['Nel carrello', 'b'], ordinata: ['Ordinata', 'g'], scartata: ['Non accettata', 'r'], annullata: ['Annullata dal dipendente', 'n'] };
+var STATI_RICH = { pending: ['In attesa', 'o'], importata: ['Nel carrello', 'b'], ordinata: ['Ordinata', 'g'], arrivata: ['Arrivata', 'g'], scartata: ['Non accettata', 'r'], annullata: ['Annullata dal dipendente', 'n'] };
 function caricaStoricoRichieste(forza){
   if(VR.carico) return VR.carico;                                        // già in corso: aspetto quella
   if(!forza && VR.tutte && Date.now() - VR.at < 60000) return Promise.resolve(false);
@@ -4171,6 +4174,67 @@ function caricaStoricoRichieste(forza){
     .catch(function(e){ VR.errore = e.message; if(!VR.tutte) VR.at = Date.now(); return false; })
     .finally(function(){ VR.carico = null; });
   return VR.carico;
+}
+/* 20/10/2026 (Valerio: «fammi vedere se ogni singolo prodotto poi è stato
+   ordinato»). Esito di ogni prodotto di una richiesta, deterministico:
+   · dal 06/10 ogni prodotto dell'ordine porta il numero della richiesta
+     (items[].rich): se l'ordine con quella richiesta contiene lo stesso
+     prodotto del catalogo (o lo stesso nome scritto a mano) → ordinato,
+     altrimenti → non ordinato;
+   · richieste più vecchie: si guarda se LO STESSO prodotto del catalogo è
+     stato ordinato nei 21 giorni dopo — lo si dice, ma come «risulta
+     ordinato dopo», non come collegamento certo;
+   · ancora nel carrello con quella richiesta → nel carrello. */
+function richiestaNelCarrello(rid){ var R = (carr() || {}).righe || {}; return Object.keys(R).some(function(k){ return (R[k].da || []).some(function(d){ return d.r === rid; }); }); }
+function rigaCarrelloDi(rid, it){
+  var R = (carr() || {}).righe || {}, out = null;
+  Object.keys(R).forEach(function(k){ var x = R[k]; if(!(x.da || []).some(function(d){ return d.r === rid; })) return; if((!it.custom && it.id != null && x.id === it.id) || (it.custom && (x.orig === it.name || x.nome === it.name))) out = x; });
+  return out;
+}
+function esitoVociRichiesta(r){
+  var t0 = new Date(r.created_at).getTime() || 0, legati = [], dopo = [];
+  STORICO.forEach(function(o){
+    var t = Number(o.id) > 1e12 ? Number(o.id) : new Date(o.created_at || 0).getTime(); if(t < t0) return;
+    var conLink = (o.items || []).some(function(i){ return (i.rich || []).indexOf(r.id) >= 0; });
+    if(conLink) legati.push({ o: o, t: t }); else if(t - t0 <= 21 * 86400000) dopo.push({ o: o, t: t });
+  });
+  // dal primo ordine che porta i numeri delle richieste in poi, «non c'è» vuol dire davvero «non ordinato»
+  var primoRich = STORICO.reduce(function(m, o){ return (o.items || []).some(function(i){ return i.rich; }) ? Math.min(m, Number(o.id) || m) : m; }, Infinity);
+  var collegata = legati.length > 0 || t0 >= primoRich;
+  return (r.items || []).map(function(it){
+    if(r.stato === 'pending') return { k: 'attesa' };
+    if(r.stato === 'scartata' || r.stato === 'annullata') return { k: 'no', motivo: r.stato === 'scartata' ? 'non accettata' : 'annullata dal dipendente' };
+    var stesso = function(i){ return (!it.custom && it.id != null && i.id === it.id) || (it.custom && (i.orig === it.name || i.sost === it.name || String(i.name || '').trim().toUpperCase() === String(it.name || '').trim().toUpperCase())); };
+    var trov = [];
+    legati.forEach(function(L){ (L.o.items || []).forEach(function(i){ if((i.rich || []).indexOf(r.id) >= 0 && stesso(i)) trov.push({ o: L.o, t: L.t, i: i }); }); });
+    if(trov.length){ var q = trov.reduce(function(s, x){ return s + (+x.i.qty || 0); }, 0), solo = trov.every(function(x){ return (x.i.rich || []).length === 1; });
+      return { k: solo && q < (it.qty || 1) ? 'parte' : 'si', q: q, forn: trov[0].o.supplier, t: trov[0].t, certo: true, sost: trov[0].i.sost && !it.custom ? trov[0].i.name : null }; }
+    if(rigaCarrelloDi(r.id, it)) return { k: 'carrello' };
+    if(legati.length) return { k: 'no', certo: true };
+    if(!it.custom && it.id != null){
+      var d = null; dopo.forEach(function(L){ if(d) return; (L.o.items || []).forEach(function(i){ if(!d && i.id === it.id) d = { o: L.o, t: L.t, i: i }; }); });
+      if(d) return { k: 'si', q: +d.i.qty || 0, forn: d.o.supplier, t: d.t, certo: false };
+    }
+    if(collegata) return { k: 'no', certo: true };
+    return it.custom ? { k: 'ignoto' } : { k: 'no', certo: false };
+  });
+}
+function riassuntoEsiti(r, E){
+  if(r.stato === 'pending' || r.stato === 'scartata' || r.stato === 'annullata' || !E.length) return null;
+  var n = { si: 0, parte: 0, no: 0, carrello: 0, ignoto: 0 }; E.forEach(function(e){ n[e.k] = (n[e.k] || 0) + 1; });
+  if(n.carrello) return ['Nel carrello', 'b'];
+  if(n.si === E.length) return [r.stato === 'arrivata' ? 'Arrivata' : 'Ordinata', 'g'];
+  if(n.si + n.parte > 0) return ['Ordinata in parte', 'o'];
+  if(n.ignoto === E.length) return ['Da verificare', 'n'];
+  return ['Non ordinata', 'r'];
+}
+function htmlEsitoVoce(e, it){
+  var g = function(t){ return t ? new Date(t).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' }) : ''; };
+  if(e.k === 'si' || e.k === 'parte') return '<div class="esv ' + (e.k === 'si' ? 'si' : 'parte') + '"><b>' + (e.k === 'si' ? '✓' : '◐') + '</b> ' + (e.certo ? 'Ordinato' : 'Risulta ordinato dopo') + ' a ' + esc(e.forn || '—') + ' il ' + g(e.t) + ' · ×' + e.q + (e.k === 'parte' ? ' su ' + (it.qty || 1) + ' chiesti' : '') + (e.sost ? ' · al suo posto: ' + esc(nomeBreve(e.sost, 30)) : '') + '</div>';
+  if(e.k === 'no') return '<div class="esv no"><b>✕</b> ' + (e.certo === false ? 'Non risulta ordinato nelle 3 settimane dopo la richiesta' : 'Non ordinato') + (e.motivo ? ' (' + esc(e.motivo) + ')' : '') + '</div>';
+  if(e.k === 'carrello') return '<div class="esv car"><b>🛒</b> Nel carrello, non ancora ordinato</div>';
+  if(e.k === 'attesa') return '<div class="esv att"><b>⏳</b> In attesa della tua decisione</div>';
+  return '<div class="esv att"><b>?</b> Non so dire se è stato ordinato (richiesta di prima del 6 ottobre, scritto a mano)</div>';
 }
 function nomeDip(r){ return String(r.dipendente || 'Dipendente').trim(); }
 function renderStoricoRichieste(el){
@@ -4186,7 +4250,7 @@ function renderStoricoRichieste(el){
   var nomi = Object.keys(conteggio).sort(function(a, b){ return conteggio[b] - conteggio[a] || a.localeCompare(b, 'it'); });
   var l = tutte.filter(function(r){ return !VR.dip || nomeDip(r) === VR.dip; });
   if(VO.q) l = l.filter(function(r){ return cercaTutte(nomeDip(r) + ' ' + (r.nota || '') + ' ' + (r.items || []).map(function(i){ return i.name; }).join(' '), VO.q); });
-  var h = '<p class="hint" style="font-size:12.5px;margin:2px 4px 8px">Tutte le richieste dei dipendenti. Tocca una richiesta per vedere i prodotti e, se serve, rimetterla nel carrello o di nuovo in "Da fare".</p>';
+  var h = '<p class="hint" style="font-size:12.5px;margin:2px 4px 8px">Tutte le richieste dei dipendenti. Tocca una richiesta per vedere i prodotti e, se serve, rimetterla nel carrello o di nuovo in "Da decidere".</p>';
   h += '<div class="chips" style="flex-wrap:wrap;margin-bottom:8px"><button class="chip' + (!VR.dip ? ' active' : '') + '" onclick="VR.dip=\'\';renderListaOrdini()">Tutti · ' + tutte.length + '</button>' +
     nomi.map(function(n){ return '<button class="chip' + (VR.dip === n ? ' active' : '') + '" data-n="' + esc(n) + '" onclick="VR.dip=this.dataset.n;renderListaOrdini()">' + esc(n.split(' ')[0]) + ' · ' + conteggio[n] + '</button>'; }).join('') + '</div>';
   if(VR.dip){
@@ -4198,13 +4262,13 @@ function renderStoricoRichieste(el){
   if(!l.length){ el.innerHTML = h + '<div class="empty"><div class="ei">📋</div><b>Nessuna richiesta</b></div>'; return; }
   var mese = '';
   l.slice(0, 300).forEach(function(r){
-    var d = new Date(r.created_at), m = d.toLocaleDateString('it-IT', { month: 'long', year: 'numeric' }), st = STATI_RICH[r.stato] || [r.stato || '', 'n'], ap = VR.aperta === r.id;
+    var d = new Date(r.created_at), m = d.toLocaleDateString('it-IT', { month: 'long', year: 'numeric' }), E = esitoVociRichiesta(r), st = riassuntoEsiti(r, E) || STATI_RICH[r.stato] || [r.stato || '', 'n'], ap = VR.aperta === r.id;
     if(m !== mese){ mese = m; h += '<div class="sec-title">' + esc(m) + '</div>'; }
     h += '<div class="todo"><button class="todo-hd" style="width:100%;background:none;border:0;text-align:left;font:inherit;color:inherit;cursor:pointer" onclick="VR.aperta=VR.aperta===' + r.id + '?null:' + r.id + ';renderListaOrdini()"><span class="sup-av" style="background:' + coloreForn(nomeDip(r)) + '">' + esc(iniziali(nomeDip(r))) + '</span><div class="row-main"><div class="row-t">' + esc(nomeDip(r)) + (r.urgente || /URGENTE/.test(r.nota || '') ? ' <span class="bdg r">urgente</span>' : '') + '</div><div class="row-s">' + esc(dataIt(r.created_at, true)) + ' · ' + (r.items || []).length + ' prodott' + ((r.items || []).length === 1 ? 'o' : 'i') + '</div></div><span class="bdg ' + st[1] + '">' + esc(st[0]) + '</span><span class="chev">' + (ap ? '⌃' : '⌄') + '</span></button>';
     if(ap){
       if(r.nota) h += '<div class="todo-it" style="color:var(--ink2)">📝 ' + esc(String(r.nota).replace(/^⚠️ URGENTE( — )?/, '')) + '</div>';
-      (r.items || []).forEach(function(it){ var p = !it.custom && it.id != null ? CATMAP[it.id] : null; h += '<div class="todo-it" style="display:flex;gap:10px"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p ? p.name : it.name) + '</div><div class="row-s">' + esc([it.conf, it.custom ? 'scritto a mano' : (p ? '' : 'non più in catalogo')].filter(Boolean).join(' · ')) + '</div></div><b class="tnum">× ' + (it.qty || 1) + '</b></div>'; });
-      if(!U.lettura) h += '<div class="todo-ft"><button class="btn-sm p" onclick="recuperaRichiesta(' + r.id + ')">🛒 Rimetti nel carrello</button>' + (r.stato !== 'pending' ? '<button class="btn-sm" onclick="riapriRichiesta(' + r.id + ')">↩︎ Di nuovo in Da fare</button>' : '<button class="btn-sm" onclick="vaiTab(\'dafare\')">Apri Da fare</button>') + '</div>';
+      (r.items || []).forEach(function(it, ix){ var p = !it.custom && it.id != null ? CATMAP[it.id] : null; h += '<div class="todo-it" style="display:flex;gap:10px"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p ? p.name : it.name) + '</div><div class="row-s">' + esc([it.conf, it.custom ? 'scritto a mano' : (p ? '' : 'non più in catalogo')].filter(Boolean).join(' · ')) + '</div>' + htmlEsitoVoce(E[ix] || { k: 'ignoto' }, it) + '</div><b class="tnum">× ' + (it.qty || 1) + '</b></div>'; });
+      if(!U.lettura) h += '<div class="todo-ft"><button class="btn-sm p" onclick="recuperaRichiesta(' + r.id + ')">🛒 Rimetti nel carrello</button>' + (r.stato !== 'pending' ? '<button class="btn-sm" onclick="riapriRichiesta(' + r.id + ')">↩︎ Di nuovo in Da decidere</button>' : '<button class="btn-sm" onclick="vaiTab(\'dafare\')">Apri Da decidere</button>') + '</div>';
     }
     h += '</div>';
   });
@@ -4226,13 +4290,13 @@ async function recuperaRichiesta(id){
 }
 async function riapriRichiesta(id){
   var r = (VR.tutte || []).find(function(x){ return x.id === id; }); if(!r) return;
-  if(!(await conferma('Rimettere in "Da fare"?', 'La richiesta di ' + esc(nomeDip(r)) + ' torna tra quelle da gestire. Il dipendente la vede di nuovo "in attesa".', 'Rimetti'))) return;
+  if(!(await conferma('Rimettere in "Da decidere"?', 'La richiesta di ' + esc(nomeDip(r)) + ' torna tra quelle da gestire. Il dipendente la vede di nuovo "in attesa".', 'Rimetti'))) return;
   try{
     var ok = await cambiaStatoRichieste([id], 'pending', [r.stato]);
     if(!ok.length){ toast('Non riesco: forse è già cambiata. Aggiorno.'); await caricaStoricoRichieste(true); renderListaOrdini(); return; }
     r.stato = 'pending'; delete DF.ris[id];
     await caricaRichieste(); preparaRichieste(); renderListaOrdini(); aggiornaBadge();
-    toast('Di nuovo in "Da fare"', { azione: 'Apri', onAzione: function(){ vaiTab('dafare'); } });
+    toast('Di nuovo in "Da decidere"', { azione: 'Apri', onAzione: function(){ vaiTab('dafare'); } });
   }catch(e){ toast('⚠️ ' + e.message); }
 }
 function apriOrdine(id){
@@ -4898,7 +4962,7 @@ function bcCerca(id){ var q = document.getElementById('bcQ').value; document.get
 
 /* ── Richieste dei dipendenti ────────────────────────────────────── */
 function sezioneRichieste(){
-  var tutte = RICH.filter(function(r){ return r.stato === 'pending'; }), pend = richiesteFiltrate(), imp = RICH.filter(function(r){ return r.stato === 'importata'; });
+  var tutte = RICH.filter(function(r){ return r.stato === 'pending'; }), pend = richiesteFiltrate(), imp = RICH.filter(function(r){ return r.stato === 'importata' && richiestaNelCarrello(r.id); });
   if(!tutte.length && !imp.length) return '';
   var h = titoloSez('Richieste dei dipendenti', tutte.length || null);
   h += filtroSez('rich', valoriFiltro(tutte, function(r){ return String(r.dipendente || 'Dipendente').trim(); }));
@@ -4914,7 +4978,7 @@ function sezioneRichieste(){
     if(!U.lettura) h += '<div class="todo-ft"><button class="btn-sm p" onclick="prendiRichiesta(' + r.id + ')">🛒 Metti nel carrello</button><button class="btn-sm r" onclick="rifiutaRichiesta(' + r.id + ')">Non accettare</button></div>';
     h += '</div>';
   });
-  if(imp.length) h += '<div class="banner b"><span>🛒</span><div>' + imp.length + ' richiest' + (imp.length === 1 ? 'a presa' : 'e prese') + ' in carico: i prodotti sono nel carrello, segnati con il nome di chi li ha chiesti. Quando invii l\'ordine, il dipendente riceve l\'avviso.</div></div>';
+  if(imp.length) h += '<div class="banner b"><span>🛒</span><div style="flex:1">' + (imp.length === 1 ? 'La richiesta di ' + esc(imp[0].dipendente || 'un dipendente') + ' è' : imp.length + ' richieste sono') + ' nel carrello, con il nome di chi ha chiesto ogni prodotto. Quando invii l\'ordine, il dipendente riceve l\'avviso.<div style="margin-top:8px"><button class="btn-sm p" onclick="vaiTab(\'ordina\');apriCarrello()">Apri il carrello</button></div></div></div>';
   return h;
 }
 /* Cosa vedi sotto ogni prodotto di una richiesta: sempre una frase chiara e il tasto per cambiarlo */
@@ -5462,7 +5526,7 @@ function renderDoppioni(){
   } else {
     h += voci.length ? '<div class="grp">' + voci.map(function(v){ if(v.tipo === 'fornitore') return '<div class="row"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(v.vecchio) + ' → ' + esc(v.nuovo || 'tolto') + (v.annullata ? ' <span class="bdg n">annullata</span>' : '') + '</div><div class="row-s">' + esc(quando(v.at)) + ' · ' + v.prima.length + ' prodotti</div></div>' + (v.annullata || U.lettura ? '' : '<button class="btn-sm" onclick="annullaDaUI(\'' + v.id + '\')">Annulla</button>') + '</div>';
       return '<div class="row"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(v.nome) + (v.auto ? ' <span class="bdg b">da solo</span>' : '') + (v.annullata ? ' <span class="bdg n">annullata</span>' : '') + '</div><div class="row-s">' + esc(quando(v.at)) + ' · tolte: ' + esc(v.via.map(function(r){ return r.name; }).join(', ')) + '</div></div>' + (v.annullata || U.lettura ? '' : '<button class="btn-sm" onclick="annullaDaUI(\'' + v.id + '\')">Annulla</button>') + '</div>'; }).join('') + '</div>' : '<div class="empty"><b>Nessuna unione negli ultimi 30 giorni</b></div>';
-    h += '<label class="row" style="background:var(--surface);border-radius:var(--radius);margin-top:6px"><div class="row-main"><div class="row-t">Unisci da solo i doppioni sicuri</div><div class="row-s">Se ricompare un doppione sicuro lo unisco io e te lo segnalo in "Da fare"</div></div><span class="tgl"><input type="checkbox" ' + (conf().doppioniAuto ? 'checked' : '') + (U.lettura ? ' disabled' : '') + ' onchange="docModifica(\'or8_conf\',function(d){d.doppioniAuto=' + '!d.doppioniAuto' + '})"><span></span></span></label>';
+    h += '<label class="row" style="background:var(--surface);border-radius:var(--radius);margin-top:6px"><div class="row-main"><div class="row-t">Unisci da solo i doppioni sicuri</div><div class="row-s">Se ricompare un doppione sicuro lo unisco io e te lo segnalo in "Da decidere"</div></div><span class="tgl"><input type="checkbox" ' + (conf().doppioniAuto ? 'checked' : '') + (U.lettura ? ' disabled' : '') + ' onchange="docModifica(\'or8_conf\',function(d){d.doppioniAuto=' + '!d.doppioniAuto' + '})"><span></span></span></label>';
   }
   b.innerHTML = h;
   document.getElementById('dopPiede').innerHTML = piede;
@@ -5500,7 +5564,7 @@ async function dopUnisciTutti(){
   VD.tab = 'uniti'; renderDoppioni();
   toast(ok + ' doppioni uniti' + (err ? ' · ' + err + ' non riusciti (vedi Diagnostica)' : '') + ' ✓', { durata: 4000 });
   if(conf().doppioniAuto == null && ok){
-    var si = await conferma('D\'ora in poi faccio da solo?', 'Se in futuro compare un nuovo doppione sicuro (ad esempio creato da un telefono con la vecchia versione), lo unisco io e te lo segnalo in "Da fare" con il tasto Annulla. I casi incerti li chiedo sempre a te.', 'Sì, fallo da solo');
+    var si = await conferma('D\'ora in poi faccio da solo?', 'Se in futuro compare un nuovo doppione sicuro (ad esempio creato da un telefono con la vecchia versione), lo unisco io e te lo segnalo in "Da decidere" con il tasto Annulla. I casi incerti li chiedo sempre a te.', 'Sì, fallo da solo');
     docModifica('or8_conf', function(d){ d.doppioniAuto = !!si; });
     renderDoppioni();
   }
@@ -5996,7 +6060,7 @@ function apriImpostazioni(){
       voce('🗑', 'Prodotti eliminati', c.length + ' recuperabili per 30 giorni', 'apriCestinoProdotti()') + '</div>' +
     '<div class="sec-title">Magazzino</div><div class="grp">' +
       '<label class="row"><div class="row-main"><div class="row-t">Mostra la scheda Magazzino</div><div class="row-s">Giacenze e inventario. Se la spegni, i conteggi dei dipendenti restano salvati e servono comunque a calcolare quanti pezzi ordinare.</div></div><span class="tgl"><input type="checkbox" ' + (vediMagazzino() ? 'checked' : '') + (U.lettura ? ' disabled' : '') + ' onchange="impostaVista(\'nascondiMagazzino\',this.checked)"><span></span></span></label>' +
-      '<label class="row"><div class="row-main"><div class="row-t">Mostra i prodotti «sotto scorta»</div><div class="row-s">Avvisi, filtro e numerino in Ordina, Da fare e Magazzino. Si basano sull’ultimo conteggio, che non scende con i prodotti usati: per questo possono non corrispondere al magazzino vero.</div></div><span class="tgl"><input type="checkbox" ' + (vediScorta() ? 'checked' : '') + (U.lettura ? ' disabled' : '') + ' onchange="impostaVista(\'nascondiScorta\',this.checked)"><span></span></span></label>' + '</div>' +
+      '<label class="row"><div class="row-main"><div class="row-t">Mostra i prodotti «sotto scorta»</div><div class="row-s">Avvisi, filtro e numerino in Ordina, Da decidere e Magazzino. Si basano sull’ultimo conteggio, che non scende con i prodotti usati: per questo possono non corrispondere al magazzino vero.</div></div><span class="tgl"><input type="checkbox" ' + (vediScorta() ? 'checked' : '') + (U.lettura ? ' disabled' : '') + ' onchange="impostaVista(\'nascondiScorta\',this.checked)"><span></span></span></label>' + '</div>' +
     '<div class="sec-title">App</div><div class="grp">' +
       voce('🏢', 'Dati dell\'attività', 'Intestazione dei PDF d\'ordine', 'apriAzienda()') +
       voce('✨', 'Intelligenza artificiale', 'Legge PDF e foto e decide i nomi incerti · la chiave è al sicuro sul server', 'apriIA()', 'ic-p') +
@@ -6131,7 +6195,7 @@ async function togliModello(i){ var m = conf().ricorrenti[i]; if(!(await conferm
 /* ── Promemoria, azienda, IA, notifiche ──────────────────────────── */
 function apriPromemoria(){
   var p = conf().promemoria || { giorni: [], ora: '10:00' };
-  sotto('shPro', 'Promemoria', '<p class="hint" style="font-size:13.5px;margin-bottom:12px">Nei giorni scelti, dall\'ora indicata, "Da fare" ti ricorda di controllare magazzino e richieste e di inviare gli ordini.</p><div class="field"><label>Giorni</label>' + selettoreGiorni('proG', p.giorni) + '</div><div class="field"><label>Dalle ore</label><input class="inp" type="time" id="proO" value="' + esc(p.ora || '10:00') + '"></div>',
+  sotto('shPro', 'Promemoria', '<p class="hint" style="font-size:13.5px;margin-bottom:12px">Nei giorni scelti, dall\'ora indicata, "Da decidere" ti ricorda di controllare magazzino e richieste e di inviare gli ordini.</p><div class="field"><label>Giorni</label>' + selettoreGiorni('proG', p.giorni) + '</div><div class="field"><label>Dalle ore</label><input class="inp" type="time" id="proO" value="' + esc(p.ora || '10:00') + '"></div>',
     '<button class="btn btn-p" onclick="docModifica(\'or8_conf\',function(d){d.promemoria={giorni:leggiGiorni(\'proG\'),ora:document.getElementById(\'proO\').value||\'10:00\'}});toast(\'Promemoria salvato\');apriImpostazioni()">Salva</button>');
 }
 function apriAzienda(){
@@ -6497,7 +6561,7 @@ async function sincronizza(manuale, completo){
     try{ await caricaContesto(true); }catch(e){}
     if(!U.lettura && await escludiServizi()) renderTuttoSicuro();
     if(!U.lettura) collegaStorico().then(function(n){ if(n) caricaContesto(true); }).catch(function(){});
-    if(!U.lettura && conf().doppioniAuto){ var nu = await uniscitiDaSolo(); if(nu){ toast('Ho unito ' + nu + ' doppioni del catalogo (vedi Da fare)', { durata: 3500 }); renderTuttoSicuro(); } }
+    if(!U.lettura && conf().doppioniAuto){ var nu = await uniscitiDaSolo(); if(nu){ toast('Ho unito ' + nu + ' doppioni del catalogo (vedi Da decidere)', { durata: 3500 }); renderTuttoSicuro(); } }
   })();
   try{ await _syncInCorso; } finally { _syncInCorso = null; }
 }
