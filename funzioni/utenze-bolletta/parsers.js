@@ -213,7 +213,8 @@ function leggiPlenitude(R) {
   R.set('tipo', 'gas', 'Eni Plenitude — gas');
   R.set('fornitore_nome', 'Eni Plenitude S.p.A. Società Benefit', 'Eni Plenitude SpA Società Benefit'); R.set('fornitore_piva', '12300020158', 'Partita IVA 12300020158');
   let x;
-  if ((x = R.cerca(/Indirizzo di fornitura PDR Matricola misuratore\s*\n[^\n]*?(\d{14})\s+([A-Z0-9]+)\s*$/im))) { R.set('codice_fornitura', x.m[1], x.r); R.set('contatore', x.m[2], x.r); }
+  // «Indirizzo di fornitura PDR [Matricola misuratore]» e sotto: indirizzo, PDR (14 cifre) [, matricola]
+  if ((x = R.cerca(/Indirizzo di fornitura PDR(?: Matricola misuratore)?\s*\n[^\n]*?(\d{14})(?:\s+([A-Z0-9]{6,}))?\s*$/im))) { R.set('codice_fornitura', x.m[1], x.r); if (x.m[2]) R.set('contatore', x.m[2], x.r); }
   else if ((x = R.cerca(/\bPDR[^\d\n]{0,40}(\d{14})/))) R.set('codice_fornitura', x.m[1], x.r);
   if ((x = R.cerca(/Fattura elettronica numero (\d+)[^\n]*Data di emissione (\d{2}\/\d{2}\/\d{4})/i))) { R.set('numero_fattura', x.m[1], x.r); R.set('data_emissione', data(x.m[2]), x.r); }
   if ((x = R.cerca(/Periodo di fatturazione: dal (\d{2}\/\d{2}\/\d{4}) al (\d{2}\/\d{2}\/\d{4})/i))) { R.set('periodo_dal', data(x.m[1]), x.r); R.set('periodo_al', data(x.m[2]), x.r); }
@@ -236,7 +237,8 @@ function leggiPlenitude(R) {
   if ((x = R.cerca(/Oneri di recesso: (si|sì|no)/i))) R.set('oneri_recesso', /no/i.test(x.m[1]) ? 'no' : 'sì', x.r);
   if ((x = R.cerca(/In un anno hai consumato (\d[\d.]*) smc/i))) R.set('consumo_annuo', num(x.m[1]), x.r);
   if ((x = R.cerca(/Consumo fatturato\*?\s*(\d[\d.]*)/i))) R.set('consumo_fatturato', num(x.m[1]), x.r);
-  if (/Rilevata distributore/i.test(R.testo)) R.set('letture', /Stimat/i.test(R.testo.split('Letture e Consumi')[1] || '') ? 'mista' : 'reale', 'Letture: Rilevata distributore');
+  { const parte = (R.testo.split('Letture e Consumi')[1] || '').split('Consumo fatturato')[0];
+    if (/Rilevata|Stimata|Autolettura/i.test(parte)) R.set('letture', /Stimat/i.test(parte) ? (/Rilevata|Autolettura/i.test(parte.replace(/Ultima Lettura Rilevata fatturata/i, '')) ? 'mista' : 'stimata') : 'reale', 'Letture e Consumi: ' + (parte.match(/(Rilevata distributore|Lettura Rilevata|Stimata|Autolettura)/i) || [''])[0]); }
   if ((x = R.cerca(/Spesa annua\s*\n?dal (\d{2}\.\d{2}\.\d{4}) al (\d{2}\.\d{2}\.\d{4})\s*\n?([\d.,]+) €/i))) R.set('spesa_annua', num(x.m[3]), x.r);
 }
 

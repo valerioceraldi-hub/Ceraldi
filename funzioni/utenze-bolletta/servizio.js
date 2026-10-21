@@ -177,7 +177,7 @@ async function gestisci(req) {
       const piva = Array.from(new Set(PIVA_UTENZE.concat((mod || []).map((m) => m.fornitore_piva).filter(Boolean))));
       const { data: gia } = await db.from('utenze_bollette').select('fattura_id').not('fattura_id', 'is', null);
       const { data: saltate } = await db.from('utenze_xml_controllate').select('fattura_id');
-      const fatte = new Set((gia || []).map((x) => String(x.fattura_id)).concat((saltate || []).map((x) => String(x.fattura_id))));
+      const fatte = new Set((gia || []).map((x) => String(x.fattura_id)).concat(body.ricontrolla ? [] : (saltate || []).map((x) => String(x.fattura_id))));
       const { data: cand } = await db.from('fatture').select('id,numero,data,importo,stato,fornitore,piva').is('deleted_at', null).in('piva', piva).gte('data', body.dal || '2025-01-01').order('data', { ascending: false }).limit(500);
       const daFare = (cand || []).filter((f) => !fatte.has(String(f.id)));
       const esiti = [], senza = [];
