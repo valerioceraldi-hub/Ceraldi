@@ -15,6 +15,7 @@ e = html.escape
 def font(rr):
     return (f'<link rel="preload" href="{rr}assets/font/BodoniModa-normal-400_600-latin.woff2" as="font" type="font/woff2" crossorigin>'
             f'<link rel="preload" href="{rr}assets/font/Jost-normal-400-latin.woff2" as="font" type="font/woff2" crossorigin>'
+            f'<link rel="preload" href="{rr}assets/font/Jost-normal-500-latin.woff2" as="font" type="font/woff2" crossorigin>'
             f'<link rel="stylesheet" href="{rr}assets/font.css">')
 FOTO.update({
     "aspritz": {"alt": "Aspritz di Ceraldi Caffè al bancone, con fetta d'arancia", "w": [1024, 640], "r": (4, 3)},
