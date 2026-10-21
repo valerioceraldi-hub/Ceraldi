@@ -590,7 +590,7 @@ function avvisoCreditoIA(){
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.39.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.39.1</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -5869,8 +5869,8 @@ function aggiornaHeroCard(){
   const totaleMese = fattureMese.reduce((s,f)=>s+(f.importo||0),0);
   const oggi = ora.toISOString().slice(0,10);
   // 19/09: le note di credito non si pagano (sono un credito) — escluse dai conteggi
-  const daPagare = fatture.filter(f=>(f.stato==='da_pagare'||f.stato==='parziale')&&f.tipo!=='ddt'&&f.tipo!=='nota_credito').length;
-  const scadute = fatture.filter(f=>(f.stato==='da_pagare'||f.stato==='parziale')&&f.tipo!=='ddt'&&f.tipo!=='nota_credito'&&f.scadenza&&f.scadenza<oggi).length;
+  const daPagare = fatture.filter(f=>(f.stato==='da_pagare'||f.stato==='parziale')&&f.tipo!=='ddt'&&f.tipo!=='nota_credito'&&contaInDaPagare(f)).length;
+  const scadute = fatture.filter(f=>(f.stato==='da_pagare'||f.stato==='parziale')&&f.tipo!=='ddt'&&f.tipo!=='nota_credito'&&f.scadenza&&f.scadenza<oggi&&contaInDaPagare(f)).length;
   const set = (id,val) => { const el=document.getElementById(id); if(el) el.textContent=val; };
   // 19/09: i numeri ora "scorrono" fino al valore (stessi identici valori di
   // prima, cambia solo come ci arrivano) — vedi _heroConta più sotto.
@@ -27126,7 +27126,7 @@ function _sfRender(){
   var dal=new Date(); dal.setMonth(dal.getMonth()-11); dal.setDate(1); var dalK=dal.toISOString().slice(0,7);
   var fatt=F.filter(function(f){ return f.tipo!=='nota_credito'; }), nc=F.filter(function(f){ return f.tipo==='nota_credito'; });
   var spesa12=F.filter(function(f){ return String(f.data||'').slice(0,7)>=dalK; }).reduce(function(s,f){ return s+(f.importo||0); },0);
-  var aperte=fatt.filter(function(f){ return f.stato==='da_pagare'||f.stato==='parziale'; });
+  var aperte=fatt.filter(function(f){ return (f.stato==='da_pagare'||f.stato==='parziale') && contaInDaPagare(f); });
   var residuo=aperte.reduce(function(s,f){ return s+Math.max(0,(f.importo||0)-(f.stato==='parziale'?(f.parzPagato||0):0)); },0);
   var scadute=aperte.filter(function(f){ return f.scadenza && f.scadenza<oggi; });
   var ncAperte=nc.filter(function(n){ return scNcCredito(n) > 0.01; });
@@ -27304,7 +27304,7 @@ function _bfVecchie(){
   var lim2=new Date(oggi.getTime()-60*86400000).toISOString().slice(0,10);
   var ok=_bfOk||{};
   return (typeof fatture!=='undefined'?fatture:[]).filter(function(f){
-    if(f.tipo!=='fattura' || !(f.stato==='da_pagare'||f.stato==='parziale') || ok[String(f.id)]) return false;
+    if(f.tipo!=='fattura' || !(f.stato==='da_pagare'||f.stato==='parziale') || ok[String(f.id)] || !contaInDaPagare(f)) return false;
     return f.scadenza ? String(f.scadenza).slice(0,10)<lim : (f.data && String(f.data).slice(0,10)<lim2);
   });
 }
@@ -29932,7 +29932,7 @@ function _bonCandidate(){
   var S=_bonS, oggi=new Date(); oggi.setHours(12,0,0,0); var oggiK=_bonIso(oggi);
   var lim = S.fin==='7' ? _bonIso(new Date(oggi.getTime()+7*86400000)) : S.fin==='30' ? _bonIso(new Date(oggi.getTime()+30*86400000)) : '9999';
   return (fatture||[]).filter(function(f){
-    if(f.tipo!=='fattura' || !(f.stato==='da_pagare'||f.stato==='parziale')) return false;
+    if(f.tipo!=='fattura' || !(f.stato==='da_pagare'||f.stato==='parziale') || !contaInDaPagare(f)) return false;
     var p=String(f.pagamento||'').toLowerCase(); if(p && p!=='bonifico') return false;
     var sc=String(f.scadenza||f.data||'').slice(0,10);
     if(S.fin==='scadute') return sc<oggiK;
@@ -33173,6 +33173,28 @@ function scFraseAvviso(a, fmtEur){
    La logica di calcolo sta in scadenze_core (identica sul server).
    ══════════════════════════════════════════════════════════════════════ */
 var PNA = { cfg: null, sch: null, ord: 'data', schedaPn: {} };
+/* 21/10/2026 (Valerio): «nel conteggio delle fatture da pagare e scadute tieni conto
+   solo di quelle del 2026: i dati del 2025 non sono completi, l'app esiste da pochi
+   mesi». Una sola regola per tutta l'app: si contano le fatture con data documento
+   da questa data in poi. Le fatture più vecchie restano nel registro (filtro «Tutte»),
+   solo non entrano nei conteggi di da pagare / scadute / in scadenza.
+   La data si cambia da Registro (riga sotto i totali) ed è condivisa (anche col
+   riepilogo Telegram). */
+var CONTI_DAL_DEFAULT = '2026-01-01';
+function contiDal(){ var d = PNA && PNA.cfg && PNA.cfg.contiDal; return /^\d{4}-\d{2}-\d{2}$/.test(d || '') ? d : CONTI_DAL_DEFAULT; }
+function contaInDaPagare(f){ return !!f && String(f.data || '').slice(0, 10) >= contiDal(); }
+async function cambiaContiDal(){
+  var att = contiDal(), p = att.split('-');
+  var v = prompt('Conta le fatture da pagare e scadute con data dal (gg/mm/aaaa).\nLe più vecchie restano nel registro ma non entrano nei conteggi.', p[2] + '/' + p[1] + '/' + p[0]);
+  if(v == null) return;
+  var m = String(v).trim().match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/); if(!m){ toast('Data non valida: usa gg/mm/aaaa'); return; }
+  var iso = m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2);
+  var cfg = await pnaCfg(true); cfg.contiDal = iso;
+  try{ await sbFetch('ceraldi_stato_condiviso?on_conflict=id', { method: 'POST', headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify({ id: 'fatture_riepilogo_cfg', data: cfg, updated_at: new Date().toISOString() }) }); PNA.cfg = cfg; }
+  catch(e){ toast('❌ Non salvato, riprova'); return; }
+  toast('✓ Conteggi dal ' + m[1].padStart(2, '0') + '/' + m[2].padStart(2, '0') + '/' + m[3], { forza: true });
+  try{ renderLista(); aggiornaHeroCard(); }catch(e){}
+}
 try{ PNA.ord = localStorage.getItem('cf_reg_ordine') || 'data'; }catch(e){}
 async function pnaCfg(forza){
   if(PNA.cfg && !forza) return PNA.cfg;
@@ -34085,9 +34107,9 @@ function pnSetOrdine(v){ PNA.ord = v; try{ localStorage.setItem('cf_reg_ordine',
 function pnFiltraPreset(f, preset, oggi, ctx){
   var st = scStato(f), d = String(f.data || '').slice(0, 10), pag = scPagabile(f);
   switch(preset){
-    case 'da_pagare': return pag && (st === 'da_pagare' || st === 'parziale');
-    case 'scadute': { var p = pag ? scProssima(f, fatture) : null; return !!p && p.data < oggi; }
-    case 'prossime': { var p2 = pag ? scProssima(f, fatture) : null; return !!p2 && p2.data >= oggi && p2.data <= ctx.sette; }
+    case 'da_pagare': return pag && (st === 'da_pagare' || st === 'parziale') && contaInDaPagare(f);
+    case 'scadute': { var p = pag && contaInDaPagare(f) ? scProssima(f, fatture) : null; return !!p && p.data < oggi; }
+    case 'prossime': { var p2 = pag && contaInDaPagare(f) ? scProssima(f, fatture) : null; return !!p2 && p2.data >= oggi && p2.data <= ctx.sette; }
     case 'questo_mese': return d >= ctx.mese;
     case 'ultimi_30': return d >= ctx.trenta;
     case 'sopra_500': return Math.abs(f.importo || 0) > 500;
@@ -34144,12 +34166,13 @@ function _renderListaVero(){
     if(f.tipo === 'ddt') return;
     if(f.tipo === 'nota_credito'){ T.nc += Math.abs(f.importo || 0); return; }
     T.doc += Math.abs(f.importo || 0);
-    if(scStato(f) !== 'pagata'){ var C = scConti(f, fatture); if(C.residuo > 0.009){ T.resta += C.residuo; T.nRes++; } scScadenze(f, fatture).forEach(function(x){ if(!x.pagata && x.data < oggi){ T.scaduto += x.residuo; T.nScad++; } }); }
+    if(scStato(f) !== 'pagata' && contaInDaPagare(f)){ var C = scConti(f, fatture); if(C.residuo > 0.009){ T.resta += C.residuo; T.nRes++; } scScadenze(f, fatture).forEach(function(x){ if(!x.pagata && x.data < oggi){ T.scaduto += x.residuo; T.nScad++; } }); }
   });
   var cnt = document.getElementById('listaCount');
   if(cnt) cnt.innerHTML = '<div class="rg-riass"><span><b>' + filt.length + '</b> ' + (filt.length === 1 ? 'documento' : 'documenti') + ' · totale <b>' + fmt(T.doc - T.nc) + '</b>' + (T.nc ? ' (note di credito −' + fmt(T.nc) + ')' : '') + '</span></div><div class="rg-tot">' +
     '<div class="' + (T.resta ? 'warn' : '') + '"><small>Da pagare</small><b>' + fmt(T.resta) + '</b><span>' + (T.nRes ? T.nRes + (T.nRes === 1 ? ' fattura' : ' fatture') : 'niente') + '</span></div>' +
     '<div class="' + (T.scaduto ? 'ko' : '') + '"><small>Scaduto</small><b>' + fmt(T.scaduto) + '</b><span>' + (T.nScad ? T.nScad + (T.nScad === 1 ? ' scadenza' : ' scadenze') : 'niente') + '</span></div></div>' +
+    '<div style="font-size:11px;color:var(--ink3);margin:2px 4px 6px">Da pagare e scaduto contano le fatture dal ' + contiDal().split('-').reverse().join('/') + ' · <button style="border:none;background:none;color:var(--blue);font:inherit;font-weight:700;padding:0;cursor:pointer" onclick="cambiaContiDal()">cambia</button></div>' +
     '<div class="rg-ord"><span>Ordina per</span><select onchange="pnSetOrdine(this.value)" aria-label="Ordina il registro">' + [['data', 'data del documento'], ['scadenza', 'prossima scadenza'], ['importo', 'importo'], ['fornitore', 'fornitore']].map(function(o){ return '<option value="' + o[0] + '"' + (ord === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>';
   _renderActiveChips();
   try{ _rfConteggi(); }catch(e){}
@@ -37162,7 +37185,7 @@ function ricdRender(){
   var dovuto = 0, scaduto = 0, nScad = 0, prossimi = 0, vecchio = 0, nVecchie = 0;
   try{
     var idx = ricIndice(), ap = ricvAperti(idx), fra15 = new Date(); fra15.setDate(fra15.getDate() + 15); var fra15K = ricvIso(fra15), m60 = new Date(); m60.setDate(m60.getDate() - 60); var meno60K = ricvIso(m60);
-    Object.keys(ap.bis).forEach(function(fid){ var f = idx.doc[fid]; if(!f || f.tipo !== 'fattura' || scStato(f) === 'pagata') return; var v = ap.bis[fid]; dovuto += v; var sk = String(f.scadenza || '').slice(0, 10); if(sk && sk < meno60K){ vecchio += v; nVecchie++; } else if(sk && sk < oggiK){ scaduto += v; nScad++; } else if(sk && sk <= fra15K) prossimi += v; });
+    Object.keys(ap.bis).forEach(function(fid){ var f = idx.doc[fid]; if(!f || f.tipo !== 'fattura' || scStato(f) === 'pagata' || !contaInDaPagare(f)) return; var v = ap.bis[fid]; dovuto += v; var sk = String(f.scadenza || '').slice(0, 10); if(sk && sk < meno60K){ vecchio += v; nVecchie++; } else if(sk && sk < oggiK){ scaduto += v; nScad++; } else if(sk && sk <= fra15K) prossimi += v; });
   }catch(e){}
   var nConf = 0, nSist = 0;
   try{ var C = ricvCalcola(); Object.keys(C.stati).forEach(function(k){ var g = C.stati[k].gruppo; if(g === 'conferma') nConf++; else if(g === 'sistemare') nSist++; }); nSist += C.docItems.length; }catch(e){}
