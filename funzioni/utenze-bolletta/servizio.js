@@ -12,7 +12,7 @@ import { leggiBolletta, imparaEtichetta, ETICHETTE, ESSENZIALI, VERSIONE_LETTORE
 export const PIVA_UTENZE = ['15844561009', '06655971007', '07679350632', '12300020158'];
 
 export function crea({ createClient, extractText, getDocumentProxy, URL_SB, SERVICE, ANON }) {
-const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-sistema-secret', 'Access-Control-Allow-Methods': 'POST, OPTIONS' };
+const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-sistema-secret, x-utenze-token', 'Access-Control-Allow-Methods': 'POST, OPTIONS' };
 const json = (b, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...CORS, 'Content-Type': 'application/json' } });
 const db = createClient(URL_SB, SERVICE);
 const BUCKET = 'bollette';
@@ -26,6 +26,9 @@ const cifre = (s) => String(s || '').replace(/\D/g, '');
 const senzaZeri = (s) => cifre(s).replace(/^0+/, '');
 
 async function autorizza(req) {
+  // lo script Gmail (account della società) ha una chiave sua, valida SOLO per consegnare PDF
+  const tok = req.headers.get('x-utenze-token');
+  if (tok) { const { data } = await db.from('app_segreti').select('valore').eq('chiave', 'utenze_gmail_token').maybeSingle(); return (data && data.valore && tok === data.valore) ? { gmail: true } : null; }
   const seg = req.headers.get('x-sistema-secret');
   if (seg) { const { data } = await db.from('app_segreti').select('valore').eq('chiave', 'sistema_secret').maybeSingle(); if (data && data.valore && seg === data.valore) return { sistema: true }; return null; }
   const auth = req.headers.get('Authorization') || ''; if (!auth) return null;
@@ -127,6 +130,7 @@ async function gestisci(req) {
   const chi = await autorizza(req);
   if (!chi) return json({ errore: 'Non autorizzato' }, 401);
   let body = {}; try { body = await req.json(); } catch { /* vuoto */ }
+  if (chi.gmail && body.azione !== 'ricevi') return json({ errore: 'Non autorizzato' }, 401);
   try {
     if (body.azione === 'leggi') {
       let bytes, fattura = null;
@@ -166,6 +170,7 @@ async function gestisci(req) {
         if (!m0) await db.from('utenze_modelli').insert({ fornitore_piva: d.fornitore_piva, fornitore_nome: d.fornitore_nome || null, lettore: body.lettore || 'generico' });
       }
       const out = await archivia(body.attesa || null, d, body.provenienza, body.controlli, body.fonte === 'gmail' ? 'gmail' : (body.fonte === 'xml' ? 'xml' : 'pdf'), body.fattura_id || null, 'confermata');
+      if (body.arrivo_id) await db.from('utenze_in_arrivo').update({ esito: 'archiviata', bolletta_id: out.bolletta.id, attesa: null }).eq('id', body.arrivo_id);
       return json({ ok: true, ...out });
     }
 
@@ -201,6 +206,57 @@ async function gestisci(req) {
       // le fatture senza PDF di bolletta si ricordano, per non riaprirle ogni volta
       if (senza.length) await db.from('utenze_xml_controllate').upsert(senza.map((id) => ({ fattura_id: +id, esito: versione + 'nessuna bolletta leggibile nell\'XML', controllata_il: new Date().toISOString() })), { onConflict: 'fattura_id' });
       return json({ ok: true, lette: esiti.length, esiti, rimangono: Math.max(0, daFare.length - max) });
+    }
+
+    if (body.azione === 'ricevi') {
+      // Un PDF allegato a un'email arrivata nella casella della società.
+      // Bolletta riconosciuta e con tutti i conti che tornano → archiviata;
+      // altrimenti resta «da confermare» in app. Bollette non intestate a
+      // Ceraldi Group: scartate senza conservare il file.
+      const em = body.email || {}, nome = String(body.nome_file || 'allegato.pdf').slice(0, 200);
+      const base = { origine: 'gmail', email_id: em.id || null, mittente: String(em.mittente || '').slice(0, 200), oggetto: String(em.oggetto || '').slice(0, 300), email_data: em.data || null, nome_file: nome };
+      if (em.id) { const { data: g } = await db.from('utenze_in_arrivo').select('id,esito').eq('email_id', em.id).eq('nome_file', nome).maybeSingle(); if (g) return json({ ok: true, esito: 'già ricevuta', id: g.id }); }
+      if (!body.pdf_base64) return json({ errore: 'Manca il PDF' }, 400);
+      const bytes = b64ToBytes(body.pdf_base64);
+      if (bytes.length > 15 * 1024 * 1024) return json({ errore: 'PDF troppo grande' }, 400);
+      let a;
+      try { a = await analizza(bytes); } catch (e) { await db.from('utenze_in_arrivo').insert({ ...base, esito: 'non letta', messaggio: 'PDF non leggibile: ' + String(e?.message || e).slice(0, 200) }); return json({ ok: true, esito: 'non letta' }); }
+      if (a.errore) { await db.from('utenze_in_arrivo').insert({ ...base, esito: 'scartata', messaggio: a.errore }); return json({ ok: true, esito: 'scartata' }); }
+      if (!a.r.dati.codice_fornitura && a.r.dati.consumo == null) { await db.from('utenze_in_arrivo').insert({ ...base, esito: 'scartata', messaggio: 'Il PDF non sembra una bolletta di luce, gas o acqua' }); return json({ ok: true, esito: 'scartata' }); }
+      if (a.giaPresente) { await db.from('utenze_in_arrivo').insert({ ...base, esito: 'già presente', bolletta_id: a.giaPresente.id, messaggio: 'Bolletta già archiviata' }); return json({ ok: true, esito: 'già presente' }); }
+      const attesa = 'in_attesa/' + (await sha(bytes)) + '.pdf';
+      await db.storage.from(BUCKET).upload(attesa, bytes, { contentType: 'application/pdf', upsert: true });
+      const ris = risposta(a, attesa);
+      const sicura = a.r.lettore !== 'generico' && !a.r.mancanti.length && a.r.controlli.every((c) => c.ok);
+      if (sicura) {
+        const out = await archivia(attesa, a.r.dati, ris.provenienza, a.r.controlli, 'gmail', a.fattura ? a.fattura.id : null, 'confermata');
+        await db.from('utenze_in_arrivo').insert({ ...base, esito: 'archiviata', bolletta_id: out.bolletta.id, messaggio: (a.cambioFornitore ? 'Cambio fornitore: ' : '') + (a.r.dati.fornitore_nome || '') + ' n° ' + a.r.dati.numero_fattura });
+        return json({ ok: true, esito: 'archiviata', bolletta_id: out.bolletta.id });
+      }
+      await db.from('utenze_in_arrivo').insert({ ...base, attesa, esito: 'da confermare', risultato: ris, messaggio: a.nuovoFornitore ? 'Fornitore nuovo: alla prima bolletta conferma i dati, poi l\'app la riconosce da sola' : (a.r.mancanti.length ? 'Mancano: ' + a.r.mancanti.join(', ') : 'Un controllo sui totali non torna') });
+      return json({ ok: true, esito: 'da confermare' });
+    }
+
+    if (body.azione === 'gmail_config') {
+      // solo un utente (non il sistema): mostra la chiave da incollare nello script e salva l'indirizzo dello script
+      if (!chi.utente) return json({ errore: 'Non autorizzato' }, 401);
+      if (body.url_script) {
+        if (!/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(String(body.url_script).trim())) return json({ errore: 'L\'indirizzo deve essere quello dell\'app web dello script: https://script.google.com/macros/s/…/exec' }, 400);
+        await db.from('app_segreti').upsert({ chiave: 'utenze_gmail_script_url', valore: String(body.url_script).trim(), nota: 'app web dello script Gmail delle bollette', aggiornato_il: new Date().toISOString() }, { onConflict: 'chiave' });
+      }
+      const { data: t } = await db.from('app_segreti').select('valore').eq('chiave', 'utenze_gmail_token').maybeSingle();
+      const { data: u } = await db.from('app_segreti').select('valore').eq('chiave', 'utenze_gmail_script_url').maybeSingle();
+      return json({ chiave: t?.valore || null, url_script: u?.valore || null, url_app: URL_SB + '/functions/v1/utenze-bolletta' });
+    }
+
+    if (body.azione === 'gmail_avvia') {
+      // «Leggi da Gmail» premuto in app: si chiede allo script della casella di controllare adesso
+      const { data: u } = await db.from('app_segreti').select('valore').eq('chiave', 'utenze_gmail_script_url').maybeSingle();
+      const { data: t } = await db.from('app_segreti').select('valore').eq('chiave', 'utenze_gmail_token').maybeSingle();
+      if (!u || !u.valore) return json({ errore: 'Lo script Gmail non è ancora installato: segui le istruzioni in Utenze → Leggi da Gmail.' }, 400);
+      const r = await fetch(u.valore + (u.valore.includes('?') ? '&' : '?') + 'chiave=' + encodeURIComponent(t?.valore || ''), { redirect: 'follow' });
+      const testo = await r.text(); let esito; try { esito = JSON.parse(testo); } catch { esito = { errore: 'Risposta dello script non valida', dettaglio: testo.slice(0, 200) }; }
+      return json(esito);
     }
 
     if (body.azione === 'pdf_url') {
