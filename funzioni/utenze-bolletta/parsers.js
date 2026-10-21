@@ -13,6 +13,9 @@
 // ══════════════════════════════════════════════════════════════════════
 
 export const PIVA_CERALDI = '04523831214';
+// da aumentare ogni volta che cambiano i lettori: le fatture già controllate
+// senza successo vengono ricontrollate col lettore nuovo
+export const VERSIONE_LETTORE = 2;
 
 // numero italiano «1.234,56» → 1234.56 ; «13.418» (migliaia) → 13418
 export function num(s) {

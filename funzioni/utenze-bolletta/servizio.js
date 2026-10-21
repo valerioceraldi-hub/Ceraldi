@@ -5,7 +5,7 @@
 // quello pubblicato qui, versionato e leggibile da chiunque controlli.
 // Azioni: leggi · salva · scan_xml · pdf_url (vedi index.ts)
 // ══════════════════════════════════════════════════════════════════════
-import { leggiBolletta, imparaEtichetta, ETICHETTE, ESSENZIALI } from './parsers.js';
+import { leggiBolletta, imparaEtichetta, ETICHETTE, ESSENZIALI, VERSIONE_LETTORE } from './parsers.js';
 
 // Fornitori di utenze già conosciuti (P.IVA): le loro fatture elettroniche
 // vengono controllate per cercare il PDF della bolletta allegato.
@@ -176,8 +176,9 @@ async function gestisci(req) {
       const { data: mod } = await db.from('utenze_modelli').select('fornitore_piva');
       const piva = Array.from(new Set(PIVA_UTENZE.concat((mod || []).map((m) => m.fornitore_piva).filter(Boolean))));
       const { data: gia } = await db.from('utenze_bollette').select('fattura_id').not('fattura_id', 'is', null);
-      const { data: saltate } = await db.from('utenze_xml_controllate').select('fattura_id');
-      const fatte = new Set((gia || []).map((x) => String(x.fattura_id)).concat(body.ricontrolla ? [] : (saltate || []).map((x) => String(x.fattura_id))));
+      const { data: saltate } = await db.from('utenze_xml_controllate').select('fattura_id,esito');
+      const versione = 'v' + VERSIONE_LETTORE + ': ';
+      const fatte = new Set((gia || []).map((x) => String(x.fattura_id)).concat((saltate || []).filter((x) => String(x.esito || '').startsWith(versione)).map((x) => String(x.fattura_id))));
       const { data: cand } = await db.from('fatture').select('id,numero,data,importo,stato,fornitore,piva').is('deleted_at', null).in('piva', piva).gte('data', body.dal || '2025-01-01').order('data', { ascending: false }).limit(500);
       const daFare = (cand || []).filter((f) => !fatte.has(String(f.id)));
       const esiti = [], senza = [];
@@ -198,7 +199,7 @@ async function gestisci(req) {
         esiti.push({ fattura: f.numero, fornitore: f.fornitore, stato: out.bolletta.stato, bolletta_id: out.bolletta.id });
       }
       // le fatture senza PDF di bolletta si ricordano, per non riaprirle ogni volta
-      if (senza.length) await db.from('utenze_xml_controllate').upsert(senza.map((id) => ({ fattura_id: +id, esito: 'nessuna bolletta leggibile nell\'XML' })), { onConflict: 'fattura_id' });
+      if (senza.length) await db.from('utenze_xml_controllate').upsert(senza.map((id) => ({ fattura_id: +id, esito: versione + 'nessuna bolletta leggibile nell\'XML', controllata_il: new Date().toISOString() })), { onConflict: 'fattura_id' });
       return json({ ok: true, lette: esiti.length, esiti, rimangono: Math.max(0, daFare.length - max) });
     }
 
