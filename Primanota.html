@@ -590,7 +590,7 @@ function avvisoCreditoIA(){
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.38.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.39.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -27874,38 +27874,44 @@ function _ceMesiDisponibili(){
   return out;
 }
 function _ceMovCat(m){ try{ return _categorizzaMovimento(m).key; }catch(e){ return ''; } }
-function _ceDatiMese(mk){
-  var ric=0, giorni=0;
-  (typeof chiusure!=='undefined'?chiusure:[]).forEach(function(c){ if(String(c.data||'').slice(0,7)===mk && !c.deleted_at){ ric+=(+c.totale_corrispettivi||0); giorni++; } });
+// 21/10/2026: stessi conti per un mese, un anno o due date qualsiasi (dal/al inclusi)
+function _ceDatiMese(mk){ var a=+mk.slice(0,4), m=+mk.slice(5,7); var D=_ceDati(mk+'-01', mk+'-'+String(new Date(a,m,0).getDate()).padStart(2,'0')); D.mk=mk; return D; }
+function _ceDati(dal, al){
+  var ric=0, giorni=0, dentro=function(d){ d=String(d||'').slice(0,10); return d>=dal && d<=al; };
+  (typeof chiusure!=='undefined'?chiusure:[]).forEach(function(c){ if(dentro(c.data) && !c.deleted_at){ ric+=(+c.totale_corrispettivi||0); giorni++; } });
   var perCat={}, perForn={}, nFatt=0, nonClass={};
   (typeof fatture!=='undefined'?fatture:[]).forEach(function(f){
-    if(f.tipo==='ddt' || String(f.data||'').slice(0,7)!==mk) return;
+    if(f.tipo==='ddt' || !dentro(f.data)) return;
     var cat=_ceCatDi(f.fornitore)||'_nc';
     perCat[cat]=(perCat[cat]||0)+(+f.importo||0);
     var fk=cat+'|'+(f.fornitore||'—'); perForn[fk]=(perForn[fk]||0)+(+f.importo||0);
     if(cat==='_nc') nonClass[f.fornitore||'—']=1;
     nFatt++;
   });
-  var extra={stipendi:0,f24:0,mutuo:0,spese:0}, bancaMese=false;
+  var extra={stipendi:0,f24:0,mutuo:0,spese:0}, bancaMese=false, mesiBanca={};
   (_bancaMovimenti||[]).forEach(function(m){
-    if(String(m.data||'').slice(0,7)!==mk) return; bancaMese=true;
+    if(!dentro(m.data)) return; bancaMese=true; mesiBanca[String(m.data).slice(0,7)]=1;
     if(!(m.importo<0)) return;
     var k=_ceMovCat(m); if(extra.hasOwnProperty(k)) extra[k]+=Math.abs(m.importo);
   });
   var costiFatt=Object.keys(perCat).reduce(function(s,k){ return s+perCat[k]; },0);
   var costiExtra=Object.keys(extra).reduce(function(s,k){ return s+extra[k]; },0);
-  return {mk:mk, ric:ric, giorni:giorni, perCat:perCat, perForn:perForn, nFatt:nFatt, extra:extra, bancaMese:bancaMese,
+  // mesi dell'intervallo senza nessun movimento di banca caricato (stipendi, F24… mancherebbero)
+  var mancano=[], t0=+dal.slice(0,4)*12+(+dal.slice(5,7)-1), t1=+al.slice(0,4)*12+(+al.slice(5,7)-1);
+  for(var t=t0;t<=t1;t++){ var mk2=Math.floor(t/12)+'-'+String(t%12+1).padStart(2,'0'); if(!mesiBanca[mk2] && mk2<=_ceIso(new Date()).slice(0,7)) mancano.push(mk2); }
+  return {dal:dal, al:al, ric:ric, giorni:giorni, perCat:perCat, perForn:perForn, nFatt:nFatt, extra:extra, bancaMese:bancaMese, mesiSenzaBanca:mancano,
     costiFatt:costiFatt, costiExtra:costiExtra, costi:costiFatt+costiExtra, margine:ric-costiFatt-costiExtra, nonClass:Object.keys(nonClass)};
 }
 function _ceMeseLbl(mk, lungo){
   var a=+mk.slice(0,4), m=+mk.slice(5,7)-1;
   return lungo ? new Date(a,m,1).toLocaleDateString('it-IT',{month:'long',year:'numeric'}) : _GR_MESI[m]+' '+String(a).slice(2);
 }
-function _ceDelta(att, prec, inverso){
+function _ceDelta(att, prec, inverso, rif){
   if(!(prec>0)) return '';
-  var p=Math.round((att-prec)/prec*100); if(!p) return '<em class="ce-dl">= mese prima</em>';
+  rif=rif||'sul mese prima';
+  var p=Math.round((att-prec)/prec*100); if(!p) return '<em class="ce-dl">= '+rif.replace(/^sul(lo)? /,'')+'</em>';
   var buono=inverso? p<0 : p>0;
-  return '<em class="ce-dl '+(buono?'ce-up':'ce-down')+'">'+(p>0?'+':'−')+Math.abs(p)+'% sul mese prima</em>';
+  return '<em class="ce-dl '+(buono?'ce-up':'ce-down')+'">'+(p>0?'+':'−')+Math.abs(p)+'% '+rif+'</em>';
 }
 function _ceRender(){
   var box=document.getElementById('ceBox'); if(!box) return;
@@ -27916,10 +27922,33 @@ function _ceRender(){
     var ora=new Date(), mkOra=ora.getFullYear()+'-'+String(ora.getMonth()+1).padStart(2,'0');
     window._ceMese = (mesi[0]===mkOra && ora.getDate()<10 && mesi[1]) ? mesi[1] : mesi[0];
   }
-  var D=_ceDatiMese(window._ceMese);
-  var iPrec=mesi.indexOf(window._ceMese)+1, P=mesi[iPrec]?_ceDatiMese(mesi[iPrec]):null;
-  var ora2=new Date(), inCorso=window._ceMese===ora2.getFullYear()+'-'+String(ora2.getMonth()+1).padStart(2,'0');
-  var chips=mesi.map(function(mk){ return '<button class="chip'+(mk===window._ceMese?' active':'')+'" data-mk="'+mk+'" onclick="_ceSetMese(this.dataset.mk)">'+_ceMeseLbl(mk)+'</button>'; }).join('');
+  var modo=window._ceModo||'mese', oggi=_ceIso(new Date()), D, P, inCorso=false, titoloPer, rifDelta='sul mese prima', chips;
+  var segm='<div class="pa-seg" style="grid-template-columns:repeat(3,1fr);margin:0 0 10px">'+[['mese','Mese'],['anno','Anno'],['date','Date']].map(function(x){ return '<button class="'+(modo===x[0]?'on':'')+'" onclick="_ceSetModo(\''+x[0]+'\')">'+x[1]+'</button>'; }).join('')+'</div>';
+  var _menoUnAnno=function(d){ return (+d.slice(0,4)-1)+d.slice(4); };
+  if(modo==='anno'){
+    var anni={}; (typeof chiusure!=='undefined'?chiusure:[]).forEach(function(c){ if(c.data) anni[c.data.slice(0,4)]=1; });
+    var listaA=Object.keys(anni).sort().reverse(); if(!window._ceAnno || listaA.indexOf(window._ceAnno)<0) window._ceAnno=listaA[0];
+    var A=window._ceAnno, fine=A+'-12-31'; inCorso=fine>=oggi && A+'-01-01'<=oggi; if(inCorso) fine=oggi;
+    D=_ceDati(A+'-01-01', fine); P=_ceDati(_menoUnAnno(A+'-01-01'), _menoUnAnno(fine));
+    titoloPer='Anno '+A+(inCorso?' · fino a oggi ('+_ceDataIt(fine)+')':''); rifDelta=inCorso?'sullo stesso periodo del '+(+A-1):'sul '+(+A-1);
+    chips=listaA.map(function(a){ return '<button class="chip'+(a===A?' active':'')+'" data-a="'+a+'" onclick="window._ceAnno=this.dataset.a;window._ceAperta=null;_ceRender()">'+a+'</button>'; }).join('');
+  } else if(modo==='date'){
+    if(!window._ceDal || !window._ceAl){ var dd=new Date(); window._ceAl=oggi; window._ceDal=_ceIso(new Date(dd.getFullYear(), dd.getMonth()-2, 1)); }
+    var da=window._ceDal<=window._ceAl?window._ceDal:window._ceAl, aa=window._ceDal<=window._ceAl?window._ceAl:window._ceDal;
+    D=_ceDati(da, aa); P=_ceDati(_menoUnAnno(da), _menoUnAnno(aa)); inCorso=aa>=oggi;
+    titoloPer='Dal '+_ceDataIt(da)+' al '+_ceDataIt(aa); rifDelta='sullo stesso periodo dell\'anno prima';
+    chips='<div class="pa-2" style="width:100%"><input type="date" value="'+esc(window._ceDal)+'" onchange="window._ceDal=this.value;window._ceAperta=null;_ceRender()" aria-label="Dal"><input type="date" value="'+esc(window._ceAl)+'" onchange="window._ceAl=this.value;window._ceAperta=null;_ceRender()" aria-label="Al"></div>';
+  } else {
+    D=_ceDatiMese(window._ceMese);
+    var iPrec=mesi.indexOf(window._ceMese)+1; P=mesi[iPrec]?_ceDatiMese(mesi[iPrec]):null;
+    var ora2=new Date(); inCorso=window._ceMese===ora2.getFullYear()+'-'+String(ora2.getMonth()+1).padStart(2,'0');
+    titoloPer=_ceMeseLbl(D.mk,true)+(inCorso?' · mese in corso':'');
+    chips=mesi.map(function(mk){ return '<button class="chip'+(mk===window._ceMese?' active':'')+'" data-mk="'+mk+'" onclick="_ceSetMese(this.dataset.mk)">'+_ceMeseLbl(mk)+'</button>'; }).join('');
+  }
+  // il confronto col mese prima non ha senso a mese in corso; con lo stesso periodo dell'anno prima sì
+  var mostraDelta = P && (modo!=='mese' || !inCorso) && (P.ric>0 || P.costi>0);
+  // i costi si confrontano solo se in entrambi i periodi c'è l'estratto della banca (altrimenti stipendi e F24 mancano da una parte)
+  var costiConfr = mostraDelta && !(P.mesiSenzaBanca.length && D.costiExtra>0);
   // righe costi: categorie fattura + uscite di banca, un'unica scala
   var righe=[];
   Object.keys(D.perCat).forEach(function(k){ if(D.perCat[k]) righe.push({k:k, v:D.perCat[k], tipo:'fatt'}); });
@@ -27941,24 +27970,27 @@ function _ceRender(){
   var marg=D.margine, margPerc=D.ric>0?Math.round(marg/D.ric*100):null;
   box.innerHTML=
     '<div class="gr-card ce-card">'+
-      '<div class="gr-hd"><div><div class="gr-t">Conto economico</div><div class="gr-s">'+_ceMeseLbl(D.mk,true)+(inCorso?' · mese in corso':'')+' · importi IVA inclusa</div></div></div>'+
-      '<div class="ce-chips">'+chips+'</div>'+
+      '<div class="gr-hd"><div><div class="gr-t">Conto economico</div><div class="gr-s">'+esc(titoloPer)+' · importi IVA inclusa</div></div></div>'+
+      segm+'<div class="ce-chips">'+chips+'</div>'+
       '<div class="gr-kpi">'+
-        '<div><span>Incassi</span><b>'+fmt(D.ric)+'</b>'+(P&&!inCorso?_ceDelta(D.ric,P.ric):'')+'</div>'+
-        '<div><span>Costi</span><b>'+fmt(D.costi)+'</b>'+(P&&!inCorso?_ceDelta(D.costi,P.costi,true):'')+'</div>'+
+        '<div><span>Incassi</span><b>'+fmt(D.ric)+'</b>'+(mostraDelta?_ceDelta(D.ric,P.ric,false,rifDelta):'')+'</div>'+
+        '<div><span>Costi</span><b>'+fmt(D.costi)+'</b>'+(costiConfr?_ceDelta(D.costi,P.costi,true,rifDelta):(mostraDelta?'<em class="ce-dl">confronto non possibile: nel periodo di confronto manca l\'estratto della banca</em>':''))+'</div>'+
         '<div><span>Resta</span><b style="color:'+(marg>=0?'var(--green)':'var(--red)')+'">'+(marg<0?'−':'')+fmt(Math.abs(marg))+'</b>'+(margPerc!==null?'<em class="ce-dl">'+margPerc+'% degli incassi</em>':'')+'</div>'+
       '</div>'+
-      (righe.length?'<div class="ce-sez">Dove vanno i soldi · tocca una voce</div>'+(righe.some(function(r){ return r.tipo==='banca'; })?'<div class="gr-leg" style="margin:0 2px 4px"><span><i class="gr-dot gr-d1"></i>Fatture</span><span><i class="gr-dot gr-d2"></i>Pagato in banca senza fattura</span></div>':'')+'<div class="gr-hlist">'+htmlRighe+'</div>':'<div class="gr-nota">Nessun costo registrato in questo mese.</div>')+
+      (righe.length?'<div class="ce-sez">Dove vanno i soldi · tocca una voce</div>'+(righe.some(function(r){ return r.tipo==='banca'; })?'<div class="gr-leg" style="margin:0 2px 4px"><span><i class="gr-dot gr-d1"></i>Fatture</span><span><i class="gr-dot gr-d2"></i>Pagato in banca senza fattura</span></div>':'')+'<div class="gr-hlist">'+htmlRighe+'</div>':'<div class="gr-nota">Nessun costo registrato in questo '+(modo==='mese'?'mese':'periodo')+'.</div>')+
       (function(){
         var C=_ceContaDaFare(); if(!C.tot) return '';
         var pezzi=[]; if(C.manca) pezzi.push(C.manca+' senza categoria'); if(C.conferma) pezzi.push(C.conferma+' propost'+(C.conferma===1?'a':'e')+' da confermare');
         return '<button class="ce-cta" onclick="_ceClassificaApri()"><b>'+C.tot+' fornitor'+(C.tot===1?'e':'i')+' da sistemare</b><span>'+pezzi.join(' · ')+' — l\'app propone, tu confermi ›</span></button>';
       })()+
-      '<div class="gr-nota">Incassi = corrispettivi delle chiusure ('+D.giorni+' giorn'+(D.giorni===1?'o':'i')+'). Costi = fatture per data documento ('+D.nFatt+'), più stipendi, F24, mutuo e commissioni pagati in banca nel mese'+(D.bancaMese?'':' (estratto di questo mese non ancora caricato)')+'. È una vista di gestione, non il bilancio.</div>'+
+      '<div class="gr-nota">Incassi = corrispettivi delle chiusure ('+D.giorni+' giorn'+(D.giorni===1?'o':'i')+'). Costi = fatture per data documento ('+D.nFatt+'), più stipendi, F24, mutuo e commissioni pagati in banca '+(modo==='mese'?'nel mese':'nel periodo')+(modo==='mese'?(D.bancaMese?'':' (estratto di questo mese non ancora caricato)'):(D.mesiSenzaBanca.length?' (manca l\'estratto di: '+D.mesiSenzaBanca.map(function(m){ return _ceMeseLbl(m); }).join(', ')+')':''))+'. '+(modo!=='mese'&&mostraDelta?'Il confronto è con le stesse date dell\'anno prima. ':'')+'È una vista di gestione, non il bilancio.</div>'+
     '</div>'+
     _cePrevHtml();
 }
 function _ceSetMese(mk){ window._ceMese=mk; window._ceAperta=null; _ceRender(); }
+function _ceSetModo(m){ window._ceModo=m; window._ceAperta=null; try{ localStorage.setItem('ceraldi_ce_modo', m); }catch(e){} _ceRender(); }
+function _ceDataIt(iso){ var p=String(iso||'').slice(0,10).split('-'); return p.length===3?p[2]+'/'+p[1]+'/'+p[0]:iso; }
+try{ window._ceModo = localStorage.getItem('ceraldi_ce_modo') || 'mese'; }catch(e){}
 function _ceApri(k){ window._ceAperta = window._ceAperta===k ? null : k; _ceRender(); }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -35254,7 +35286,7 @@ function ricRileggiSumUpUnaVolta(){
    Prova cieca sull'archivio reale (370 pagamenti tolti e ricercati): 90%
    ritrovati; «sicuro» giusto 161 su 161, «probabile» 19 su 19.
    ══════════════════════════════════════════════════════════════════════ */
-var RICV = { ctx: null, inCarica: false, gruppo: null, mostra: 40, annulla: [], aperte: {}, memo: null, soloClassica: false };
+var RICV = { ctx: null, inCarica: false, gruppo: null, mostra: 40, annulla: [], aperte: {}, memo: null, soloClassica: false, detAperti: {} };
 var RICV_CAT = {
   stipendio: ['Stipendi e compensi', 'cedolino'], tributo: ['Tasse, contributi e multe', 'tributo'], cliente: ['Incassi da clienti', 'altro'], commissione: ['Commissioni e spese bancarie', 'commissione'],
   giroconto: ['Giroconti tra i tuoi conti', 'giroconto'], finanziamento_soci: ['Soci: finanziamenti e rimborsi', 'finanziamento_soci'], mutuo: ['Mutuo e prestiti', 'altro'],
@@ -35309,6 +35341,8 @@ async function ricvCaricaContesto(forza){
   try{ var rg = await sbFetch('ceraldi_stato_condiviso?id=eq.ric_regole_categorie&select=data'); ctx.regole = (rg && rg[0] && rg[0].data && rg[0].data.regole) || {}; }catch(e){}
   try{ if(!window._rcPronto && typeof _rcCarica === 'function') await _rcCarica(); }catch(e){}
   try{ ctx.paghe = await ricvCaricaPaghe(); }catch(e){ ctx.paghe = null; }
+  // la verità sugli stipendi è la tabella condivisa con Presenze: un bonifico già collegato lì è collegato anche qui
+  try{ (ctx.paghe && ctx.paghe.pbs || []).forEach(function(b){ var mid = String(b.movimento_banca_id || ''); if(!mid) return; var L = (ctx.stip[mid] = ctx.stip[mid] || []); if(!L.some(function(x){ return x.mese === b.mese_riferimento && x.anno === b.anno_riferimento; })) L.push({ nome: ctx.nomi[b.dipendente_id] || 'dipendente', mese: b.mese_riferimento, anno: b.anno_riferimento, importo: Math.abs(+b.importo || 0), tipo: 'cedolino', pbs: b.id }); }); }catch(e){}
   try{ if(typeof ricvCaricaSaldoSU === 'function') await ricvCaricaSaldoSU(); }catch(e){}
   RICV.ctx = ctx; RICV.inCarica = false; RICV.memo = null; ricInvalida();
   return ctx;
@@ -35686,7 +35720,7 @@ function ricvClassifica(M, idx, ctx, extra){
             if(mancanti.length) S.avvisi.forEach(function(a){ if(a.cod === 'movimento_avanza'){ a.t = mancanti.length === 1 ? 'Manca la fattura n° ' + mancanti[0] : 'Mancano ' + mancanti.length + ' fatture citate nella causale'; a.s = 'La causale cita ' + (mancanti.length === 1 ? 'la n° ' + mancanti[0] : 'le n° ' + mancanti.join(', ')) + ', che non ' + (mancanti.length === 1 ? 'è' : 'sono') + ' a registro: ' + (mancanti.length === 1 ? 'probabilmente è lei' : 'probabilmente sono loro') + ' i ' + ricEur(q.libero) + ' senza documento. Caricala dal cassetto fiscale: la collego io.'; } });
           }
           if(doppia){ var pr = (ricConti(doppia).prove || []).filter(function(p){ return p.importo > 0.009; })[0];
-            S.avvisi.forEach(function(a){ if(a.cod === 'movimento_avanza'){ a.liv = 'ko'; a.t = 'Fattura n° ' + doppia.numero + ' pagata due volte?'; a.s = 'La causale cita anche la n° ' + doppia.numero + ' (' + ricEur(q.libero) + '), che risulta già pagata' + (pr && pr.data ? ' il ' + ricGg(pr.data) : '') + '. Se è così, ' + ricEur(q.libero) + ' vanno chiesti indietro a ' + ricvBello(doppia.fornitore || '') + ' o scalati dalla prossima fattura.'; } }); }
+            S.avvisi.forEach(function(a){ if(a.cod === 'movimento_avanza'){ a.doppia = doppia; a.libero = q.libero; a.liv = 'ko'; a.t = 'Fattura n° ' + doppia.numero + ' pagata due volte?'; a.s = 'La causale cita anche la n° ' + doppia.numero + ' (' + ricEur(q.libero) + '), che risulta già pagata' + (pr && pr.data ? ' il ' + ricGg(pr.data) : '') + '. Se è così, ' + ricEur(q.libero) + ' vanno chiesti indietro a ' + ricvBello(doppia.fornitore || '') + ' o scalati dalla prossima fattura.'; } }); }
         }
       }catch(e){}
     }
@@ -36285,7 +36319,13 @@ function ricvRender(){
   h += '</div>';
   h += '<div class="rv-piede"><button onclick="ricvAutoReport()">🤖 Collegati in automatico</button><button onclick="ricvUsaClassica(true)">Vista classica</button><button onclick="ricvVerificheCassa()">Verifiche di cassa (POS, versamenti)</button><button onclick="ricRileggiSumUp()">Rileggi estratti SumUp</button></div>';
   h += '</div>';
+  // 21/10/2026 (Valerio: «apro "Stipendi da collegare" e dopo qualche secondo si chiude»):
+  // l'elenco si ridisegna da solo quando arrivano dati nuovi (sincronizzazione, altri
+  // dispositivi). Le sezioni a tendina restano aperte o chiuse come le hai lasciate.
+  var _detK = function(d){ var b = d.querySelector('summary b'); return b ? b.textContent.replace(/[\d·.,€]+/g, '').replace(/\s+/g, ' ').trim() : ''; };
+  try{ wrap.querySelectorAll('details.rv-det').forEach(function(d){ var kk = _detK(d); if(kk) RICV.detAperti[kk] = d.open; }); }catch(e){}
   wrap.innerHTML = h;
+  try{ wrap.querySelectorAll('details.rv-det').forEach(function(d){ var kk = _detK(d); if(!kk) return; if(RICV.detAperti[kk] != null) d.open = RICV.detAperti[kk]; d.addEventListener('toggle', function(){ RICV.detAperti[kk] = d.open; }); }); }catch(e){}
   if(RICV.ctx && RICV.ctx.pronto && !RICV.autoInCorso && ricvAutoAttivo() && RICV.autoN !== ricvTuttiMovimenti().length) setTimeout(function(){ ricvAutoCollega().catch(function(e){ console.warn('auto', e); RICV.autoInCorso = false; }); }, 400);
 }
 function ricvTuttiIMesi(){ ['bancaMese', 'bancaFiltroDal', 'bancaFiltroAl'].forEach(function(id){ var e = document.getElementById(id); if(e) e.value = ''; }); if(typeof _ricAggiornaChrome === 'function') _ricAggiornaChrome(); ricvRender(); }
@@ -36397,6 +36437,7 @@ function ricvApri(key){
     else if(a.cod === 'nc_su_uscita' && a.verso && a.f) b = '<div class="sk-btns"><button class="sk-btn sm prim" onclick="ricSpostaSuFattura(' + pnIdJs(a.f.id) + ',' + ricvJs(M.id) + ',' + pnIdJs(a.verso) + ');pnChiudi(\'ricvMov\')">Sposta sulla fattura</button></div>';
     else if(a.cod === 'nc_e_rimborso' && a.f) b = '<div class="sk-btns"><button class="sk-btn sm prim" onclick="ricvScollega(' + k + ',' + pnIdJs(a.f.id) + ')">Scollega dalla nota</button></div>';
     else if(a.cod === 'metodo_diverso' && a.f && a.verso) b = '<div class="sk-btns"><button class="sk-btn sm prim" onclick="ricCorreggiMetodo(' + pnIdJs(a.f.id) + ',\'' + a.verso + '\');pnChiudi(\'ricvMov\')">Segna pagata con ' + esc(RICV_TIPO_NOME[a.verso] || a.verso) + '</button></div>';
+    else if(a.cod === 'movimento_avanza' && a.doppia) b = ricvHtmlDoppia(a, M, k);
     else if(a.cod === 'beneficiario_diverso' && a.f) b = '<div class="sk-btns"><button class="sk-btn sm prim" onclick="ricvScollega(' + k + ',' + pnIdJs(a.f.id) + ')">Scollega da ' + esc(ricvBello(a.f.fornitore || '').slice(0, 20)) + '</button></div>';
     h += '<div class="rc-esito ' + (a.liv === 'ko' ? 'ko' : 'warn') + '"><div class="rc-esito-ico">!</div><div><b>' + esc(a.t) + '</b><small>' + esc(a.s) + '</small>' + b + '</div></div>';
   });
@@ -36445,6 +36486,51 @@ function ricvApri(key){
       (b ? '<label class="rv-ricorda"><input type="checkbox" id="ricvRicorda"> Fai lo stesso con i prossimi movimenti a «' + esc(ricvBello(b)) + '»</label>' : '') + (conProp ? '</details>' : '</section>');
   }
   mo.querySelector('.pn-sh-bd').innerHTML = h;
+}
+
+/* ── 21/10/2026 «Fattura pagata due volte?» (Valerio: «non mi dà la possibilità di
+   scegliere e vedere quella fattura, come e quando è stata pagata, se c'è un
+   movimento collegato, e scegliere se va collegata a questo o a quel bonifico»).
+   Nel foglio del movimento: la fattura con XML e data, ogni pagamento che le
+   risulta (con il suo movimento da aprire) e tre scelte, tutte annullabili. ── */
+function ricvHtmlDoppia(a, M, k){
+  var f = a.doppia, Rc = ricConti(f) || {}, prove = (Rc.prove || []).filter(function(p){ return p.importo > 0.009; });
+  var stati = ricvCalcola().stati, conMov = prove.filter(function(p){ return p.movId && stati[ricMovKey(p.movId)] && ricMovKey(p.movId) !== M.key; });
+  var nomeTipo = function(p){ return ({ contanti: 'contanti', manuale: 'segnata a mano', carta: 'carta' })[p.tipo] || (RICV_TIPO_NOME[p.tipo] || p.tipo || 'movimento'); };
+  var h = '<div class="rv-doc rv-doc-tap" style="margin:10px 0 6px" onclick="apriScheda(' + pnIdJs(f.id) + ')">' + ricvEstremi(f) + '</div>';
+  h += '<div class="sk-nota" style="margin-top:6px"><b>Come risulta pagata la n° ' + esc(f.numero || '—') + '</b></div>';
+  if(prove.length) h += prove.map(function(p){ var kk = p.movId ? ricMovKey(p.movId) : null, apri = kk && stati[kk] && kk !== M.key;
+    return '<div class="sk-riga"><div class="sk-riga-m"><b>' + ricGg(p.data) + ' · ' + fmt(p.importo) + (p.totale != null && Math.abs(p.totale - p.importo) > 0.01 ? ' <small>di un movimento da ' + fmt(p.totale) + '</small>' : '') + '</b><small>' + esc(nomeTipo(p) + (p.conto ? ' · ' + p.conto : '')) + (p.descr ? ' · ' + esc(String(p.descr).slice(0, 90)) : '') + '</small></div>' + (apri ? '<button class="sk-btn sm" onclick="ricvApri(' + ricvJs(kk) + ')">Vedi il movimento</button>' : '') + '</div>'; }).join('');
+  else h += '<div class="sk-nota">Risulta «pagata» ma senza nessun pagamento collegato' + (f.pagamento ? ' (metodo indicato: ' + esc(f.pagamento) + ')' : '') + '.</div>';
+  h += '<div class="sk-nota" style="margin-top:8px">Cosa è successo davvero?</div><div class="sk-btns" style="flex-direction:column;align-items:stretch">';
+  if(conMov.length || !prove.length) h += '<button class="sk-btn sm prim" onclick="ricvDoppiaSposta(' + k + ',' + pnIdJs(f.id) + ')">La n° ' + esc(f.numero || '') + ' l\'ho pagata con QUESTO bonifico</button><div class="sk-nota" style="margin:0 2px 6px">' + (conMov.length ? 'Il pagamento del ' + conMov.map(function(p){ return ricGg(p.data); }).join(', ') + ' torna libero: lo colleghi poi alla fattura giusta.' : 'La collego a questo movimento.') + '</div>';
+  h += '<button class="sk-btn sm" onclick="ricvDoppiaAnche(' + k + ',' + pnIdJs(f.id) + ')">È stata pagata davvero due volte</button><div class="sk-nota" style="margin:0 2px 6px">La collego anche qui: risulterà ' + fmt(a.libero || 0) + ' pagato in più, da chiedere indietro a ' + esc(ricvBello(f.fornitore || '')) + ' o da scalare (lo segue il Controllo anomalie).</div>';
+  if(typeof apriCambioAbbinamentoMov === 'function' && M.fonte === 'banca') h += '<button class="sk-btn sm" onclick="pnChiudi(\'ricvMov\');apriCambioAbbinamentoMov(' + ricvJs(M.id) + ')">Non è la n° ' + esc(f.numero || '') + ': scelgo io la fattura</button>';
+  return h + '</div>';
+}
+async function ricvDoppiaSposta(key, fid){
+  var S = ricvCalcola().stati[key], f = pnF(fid); if(!S || !f) return;
+  var Rc = ricConti(f) || {}, stati = ricvCalcola().stati;
+  var vecchi = (Rc.prove || []).filter(function(p){ return p.importo > 0.009 && p.movId && stati[ricMovKey(p.movId)] && ricMovKey(p.movId) !== key; });
+  var q = ricIndice().quoteMov[key], quota = ricR2(Math.min(q && q.libero != null ? q.libero : Math.abs(S.M.importo), Math.abs(+f.importo || 0)));
+  if(!confirm('Collego ' + (f.fornitore || '') + ' n° ' + (f.numero || '') + ' a questo movimento del ' + ricGg(S.M.data) + ' (' + ricEur(quota) + ')' + (vecchi.length ? ' e la tolgo dal pagamento del ' + vecchi.map(function(p){ return ricGg(p.data) + ' (' + ricEur(p.importo) + ')'; }).join(', ') + ', che torna libero.' : '.') + '\n\nSi può annullare.')) return;
+  var prima = RICV.annulla.length;
+  try{ for(var i = 0; i < vecchi.length; i++) await ricvStacca(ricMovKey(vecchi[i].movId), fid); }
+  catch(e){ toast('❌ Non salvato: ' + (e.message || e), { forza: true }); return; }
+  var ok = await ricvCollega(key, [{ f: pnF(fid), quota: quota }], { muto: true });
+  var blocco = RICV.annulla.splice(prima);
+  if(blocco.length) ricvPushAnnulla('spostamento della n° ' + (f.numero || ''), async function(){ for(var j = blocco.length - 1; j >= 0; j--) await blocco[j].fn(); });
+  if(ok) toast('✓ La n° ' + (f.numero || '') + ' ora è pagata con il movimento del ' + ricGg(S.M.data) + (vecchi.length ? ': l\'altro pagamento è tornato libero' : ''), { forza: true });
+  pnChiudi('ricvMov'); ricvRidisegna();
+  if(ok && vecchi.length){ var kk = ricMovKey(vecchi[0].movId); setTimeout(function(){ if(ricvCalcola().stati[kk]) ricvApri(kk); }, 350); }
+}
+async function ricvDoppiaAnche(key, fid){
+  var S = ricvCalcola().stati[key], f = pnF(fid); if(!S || !f) return;
+  var q = ricIndice().quoteMov[key], quota = ricR2(Math.min(q && q.libero != null ? q.libero : Math.abs(S.M.importo), Math.abs(+f.importo || 0)));
+  if(!confirm('Collego anche questo movimento a ' + (f.fornitore || '') + ' n° ' + (f.numero || '') + ' (' + ricEur(quota) + ').\n\nLa fattura risulterà pagata due volte: ' + ricEur(quota) + ' da chiedere indietro o da scalare dalla prossima fattura.\n\nSi può annullare.')) return;
+  var ok = await ricvCollega(key, [{ f: f, quota: quota }], { muto: true });
+  if(ok) toast('✓ Collegata: risulta pagata due volte, ' + ricEur(quota) + ' da riavere', { forza: true });
+  pnChiudi('ricvMov'); ricvRidisegna();
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -36683,12 +36769,12 @@ function ricvStipProposte(M, ctx){
   if(!out.length){
     var chi = ricvStipChi(M, P);
     if(chi){
-      var p = P.prof[chi.dip], m = ricvStipMeseProbabile(M, P, chi.dip), gia = P.pbs.filter(function(b){ return b.dipendente_id === chi.dip && b.anno_riferimento === m.anno && b.mese_riferimento === m.mese; });
+      var p = P.prof[chi.dip], m = ricvStipMeseProbabile(M, P, chi.dip), gia = P.pbs.filter(function(b){ return b.dipendente_id === chi.dip && b.anno_riferimento === m.anno && b.mese_riferimento === m.mese && String(b.movimento_banca_id) !== String(M.id); });
       var mot = ['La causale cita ' + chi.come, 'Mese di competenza: ' + ricvMeseNome(m.mese, m.anno) + ' (' + m.come + ')'];
       var busta = P.attesi.find(function(o){ return o.dip === chi.dip && o.anno === m.anno && o.mese === m.mese && o.fonte === 'busta'; });
       var pti = chi.pieno ? (m.storico ? 95 : 75) : 55;
       if(busta){ var r = imp / busta.importo; if(r > 0.3 && r < 1.3){ pti += 5; mot.push('Busta di ' + ricvMeseNome(m.mese) + ': netto ' + ricEur(busta.importo) + (r < 0.97 ? ' (questo è una parte: il resto in contanti o con un altro bonifico)' : '')); } }
-      if(gia.length) mot.push('Per ' + ricvMeseNome(m.mese) + ' c\'è già ' + (gia.length === 1 ? 'un bonifico collegato' : gia.length + ' bonifici collegati') + ' (' + gia.map(function(b){ return ricEur(Math.abs(+b.importo || 0)); }).join(', ') + '): questo si aggiunge');
+      if(gia.length) mot.push('Per ' + ricvMeseNome(m.mese) + (gia.length === 1 ? ' c\'è già un bonifico collegato' : ' ci sono già ' + gia.length + ' bonifici collegati') + ' (' + gia.map(function(b){ return ricEur(Math.abs(+b.importo || 0)); }).join(', ') + '): questo si aggiunge');
       out.push({ stip: { dip: chi.dip, nome: p.nome, anno: m.anno, mese: m.mese, importo: imp, fonte: 'nome', attesa: { id: 'n' + chi.dip + m.anno + m.mese + M.id } }, docs: [], punti: pti, identita: 1, motivi: mot });
     }
   }
@@ -36729,7 +36815,19 @@ async function ricvCollegaStipendio(key, s, opz){
   try{
     var r = await sbFetch('presenze_bonifici_stipendio', { method: 'POST', headers: { 'Prefer': 'return=representation' }, body: JSON.stringify({ dipendente_id: s.dip, movimento_banca_id: String(M.id), mese_riferimento: s.mese, anno_riferimento: s.anno, importo: Math.abs(M.importo), confermato: true, fonte_copertura: 'bonifico', descrizione_movimento: M.descrizione, data_movimento: M.data }) });
     id = r && r[0] && r[0].id;
-  }catch(e){ toast('❌ Non salvato: ' + (e.message || e), { forza: true }); return false; }
+  }catch(e){
+    // 21/10/2026: «duplicate key» = il bonifico è GIÀ collegato a questa persona e a questo mese
+    // (fatto in Presenze o da un altro dispositivo mentre questa schermata era aperta). Non è un errore.
+    if(e && (e.pgCode === '23505' || e.status === 409)){
+      var gia = []; try{ gia = await sbFetch('presenze_bonifici_stipendio?select=id,dipendente_id,mese_riferimento,anno_riferimento,importo&movimento_banca_id=eq.' + encodeURIComponent(String(M.id))) || []; }catch(_){}
+      if(RICV.ctx){ RICV.ctx.stip[String(M.id)] = gia.map(function(b){ return { nome: RICV.ctx.nomi[b.dipendente_id] || s.nome, mese: b.mese_riferimento, anno: b.anno_riferimento, importo: Math.abs(+b.importo || 0), tipo: 'cedolino', pbs: b.id }; }); }
+      RICV.memo = null;
+      if(!opz.muto) toast('Era già collegato a ' + s.nome + ' · ' + ricvMeseNome(s.mese, s.anno) + ' (da Presenze o da un altro dispositivo): l\'elenco ora è aggiornato', { forza: true });
+      ricvCaricaContesto(true).then(function(){ ricvRidisegna(); }).catch(function(){});
+      return true;
+    }
+    toast('❌ Non salvato: ' + (e.message || e), { forza: true }); return false;
+  }
   if(RICV.ctx){ (RICV.ctx.stip[String(M.id)] = RICV.ctx.stip[String(M.id)] || []).push({ nome: s.nome, mese: s.mese, anno: s.anno, importo: Math.abs(M.importo), tipo: 'cedolino', pbs: id }); if(s.attesa) s.attesa.coperto = true; }
   RICV.memo = null;
   ricvPushAnnulla('stipendio di ' + s.nome, async function(){
