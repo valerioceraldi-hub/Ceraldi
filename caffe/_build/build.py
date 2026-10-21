@@ -14,7 +14,7 @@ e = html.escape
 # Font ospitati sul sito (nessuna chiamata a server esterni: niente dati dei visitatori a terzi)
 def font(rr):
     return (f'<link rel="preload" href="{rr}assets/font/BodoniModa-normal-400_600-latin.woff2" as="font" type="font/woff2" crossorigin>'
-            f'<link rel="preload" href="{rr}assets/font/WorkSans-normal-400-latin.woff2" as="font" type="font/woff2" crossorigin>'
+            f'<link rel="preload" href="{rr}assets/font/Jost-normal-400-latin.woff2" as="font" type="font/woff2" crossorigin>'
             f'<link rel="stylesheet" href="{rr}assets/font.css">')
 FOTO.update({
     "aspritz": {"alt": "Aspritz di Ceraldi Caffè al bancone, con fetta d'arancia", "w": [1024, 640], "r": (4, 3)},
@@ -70,44 +70,59 @@ def testa(lang, titolo, descr, url, rr, og_img="img/og.jpg", ld=None, alternates
 <a class="salta" href="#contenuto">{'Vai al contenuto' if lang == 'it' else 'Skip to content'}</a>
 '''
 
-VOCI_NAV = [("bar/", "Il bar"), ("pasticceria/", "Pasticceria"), ("specialita/", "Specialità"), ("rosticceria/", "Rosticceria"), ("aspritz/", "Aspritz"),
-            ("menu/", "Menu"), ("storie/", "Storie"), ("contatti/", "Contatti")]
+# Navigazione principale: sei voci. Specialità, rosticceria e Aspritz restano pagine autonome,
+# raggiungibili dalle pagine madri (blocco «Da vedere anche»), dalla home e dal piè di pagina.
+VOCI_NAV = [("bar/", "Il bar"), ("pasticceria/", "Pasticceria"), ("menu/", "Menu"), ("storia/", "Storia"), ("storie/", "Storie"), ("contatti/", "Contatti")]
 # Pagine che esistono in entrambe le lingue: percorso italiano -> percorso inglese
 EN_PATH = {"": "en/", "storia/": "en/storia/", "bar/": "en/bar/", "pasticceria/": "en/pasticceria/", "rosticceria/": "en/rosticceria/",
            "aspritz/": "en/aspritz/", "specialita/": "en/specialita/", "menu/": "en/menu/", "contatti/": "en/contatti/", "privacy/": "en/privacy/"}
-VOCI_NAV_EN = [("en/bar/", "Coffee & breakfast"), ("en/pasticceria/", "Pastries"), ("en/specialita/", "Specialities"), ("en/rosticceria/", "Street food"), ("en/aspritz/", "Aspritz"),
-               ("en/menu/", "Menu"), ("en/storia/", "Our story"), ("en/contatti/", "Contact")]
+VOCI_NAV_EN = [("en/bar/", "Coffee & breakfast"), ("en/pasticceria/", "Pastries"), ("en/menu/", "Menu"), ("en/storia/", "Our story"), ("en/contatti/", "Contact")]
 
 def alt_coppia(it_path):
     return [("it", BASE + it_path), ("en", BASE + EN_PATH[it_path]), ("x-default", BASE + it_path)]
 
 def barra(rr, lang='it', it_path=None):
+    """Barra di navigazione uguale su tutte le pagine: marchio, sei voci, lingua; su telefono un pulsante a icona
+    (così non si confonde con «Il menu» della barra fissa in basso)."""
     logo = f'<img src="{rr}img/logo-ceraldi-chiaro.svg" width="150" height="52" alt="Ceraldi Caffè">'
+    attuale = (EN_PATH.get(it_path, "") if lang == 'en' else it_path) or ""
     if lang == 'en':
-        voci = [(rr + h, t) for h, t in VOCI_NAV_EN]
-        lingua = f'<a href="{rr}{it_path or ""}" hreflang="it" lang="it">Italiano</a>'
+        voci = VOCI_NAV_EN
+        lingua = (f'{rr}{it_path or ""}', "IT", "Italiano", "it")
         home = f"{rr}en/"
     else:
-        voci = [(rr + h, t) for h, t in VOCI_NAV]
-        lingua = f'<a href="{rr}{EN_PATH.get(it_path, "en/") if it_path is not None else "en/"}" hreflang="en" lang="en">English</a>'
+        voci = VOCI_NAV
+        lingua = (f'{rr}{EN_PATH.get(it_path, "en/") if it_path is not None else "en/"}', "EN", "English", "en")
         home = rr or "./"
-    links = ''.join(f'<a href="{h}">{t}</a>' for h, t in voci) + lingua
-    return f'''<div class="barra"><a class="marchio" href="{home}">{logo}</a>
-<nav class="nav-larga" aria-label="{'Main' if lang == 'en' else 'Principale'}">{links}</nav>
-<details class="nav-mobile"><summary>{'Menu' if lang == 'en' else 'Menu'}<span aria-hidden="true"></span></summary><nav aria-label="{'Main' if lang == 'en' else 'Principale'}">{links}</nav></details></div>'''
+    def link(h, t):
+        cur = ' aria-current="page"' if attuale and (h == attuale or (h == "storie/" and attuale.startswith("storie/"))) else ''
+        return f'<a href="{rr}{h}"{cur}>{t}</a>'
+    links = ''.join(link(h, t) for h, t in voci)
+    nav_l = 'Main' if lang == 'en' else 'Principale'
+    apri = 'Open the site sections' if lang == 'en' else 'Apri le sezioni del sito'
+    return f'''<div class="p-barra"><a class="p-marchio" href="{home}">{logo}</a>
+<nav class="p-nav" aria-label="{nav_l}">{links}<a class="p-lingua" href="{lingua[0]}" hreflang="{lingua[3]}" lang="{lingua[3]}" title="{lingua[2]}">{lingua[1]}</a></nav>
+<details class="p-nav-mobile"><summary aria-label="{apri}"><span class="p-burger" aria-hidden="true"></span></summary><nav aria-label="{nav_l}">{links}<a href="{lingua[0]}" hreflang="{lingua[3]}" lang="{lingua[3]}">{lingua[2]}</a></nav></details></div>'''
 
 def piede(rr, lang='it'):
     it = lang == 'it'
+    L = '' if it else 'en/'
+    col_pagine = (f'<p><a href="{rr}{L}bar/">{"Il bar e la colazione" if it else "Coffee and breakfast"}</a></p>'
+                  f'<p><a href="{rr}{L}pasticceria/">{"La pasticceria" if it else "Pastries"}</a></p>'
+                  f'<p><a href="{rr}{L}specialita/">{"Specialità della casa" if it else "House specialities"}</a></p>'
+                  f'<p><a href="{rr}{L}rosticceria/">{"Rosticceria" if it else "Street food"}</a></p>'
+                  f'<p><a href="{rr}{L}aspritz/">{"Aspritz e aperitivi" if it else "Aspritz and aperitivo"}</a></p>'
+                  f'<p><a href="{rr}{L}menu/">{"Il menu" if it else "Menu"}</a></p>')
     return f'''<footer class="piede"><div class="contenitore">
 <div><img src="{rr}img/logo-ceraldi-chiaro.svg" width="180" height="62" alt="Ceraldi Caffè, artigiani per passione dal 1973" loading="lazy">
-<p style="margin-top:12px">{e(BAR['indirizzo'])}, {e(BAR['cap_citta'])}</p><p>{e(BAR['orari'] if it else BAR['orari_en'])}</p></div>
-<div><p><a href="tel:{BAR['tel_link']}">{'Tel.' if it else 'Phone'} {BAR['telefono']}</a></p><p><a href="tel:{BAR['cell_link']}">{'Cell.' if it else 'Mobile'} {BAR['cellulare']}</a></p>
-<p><a href="{BAR['whatsapp']}" rel="noopener">WhatsApp</a></p></div>
-<div><p><a href="{rr}{'' if it else 'en/'}menu/">{'Il menu' if it else 'Menu'}</a></p><p><a href="{BAR['google_recensioni']}" rel="noopener">{'Recensioni Google' if it else 'Google reviews'}</a></p><p><a href="{BAR['tripadvisor']}" rel="noopener">Tripadvisor</a></p></div>
-<div><p><a href="{BAR['instagram']}" rel="noopener">Instagram</a></p><p><a href="{BAR['facebook']}" rel="noopener">Facebook</a></p><p><a href="{rr}storie/">{'Storie dal caffè' if it else 'Stories (Italian)'}</a></p><p><a href="{rr}{'' if it else 'en/'}contatti/">{'Contatti' if it else 'Contact'}</a></p></div>
-<p class="legale">© {RAGIONE_SOCIALE}, Piazza Carità 14, 80134 Napoli. {'P. IVA' if it else 'VAT no.'} {PIVA}. <a href="{rr}{'' if it else 'en/'}privacy/">{'Privacy e cookie' if it else 'Privacy and cookies'}</a>{f' <a href="#" data-preferenze-cookie>{"Preferenze cookie" if it else "Cookie preferences"}</a>' if GA_ID else ''}</p>
+<p style="margin-top:14px">{e(BAR['indirizzo'])}, {e(BAR['cap_citta'])}</p><p>{e(BAR['orari'] if it else BAR['orari_en'])}</p>
+<p><a href="tel:{BAR['tel_link']}">{'Tel.' if it else 'Phone'} {BAR['telefono'] if it else '+39 081 552 3488'}</a></p><p><a href="{BAR['whatsapp']}" rel="noopener">WhatsApp {BAR['cellulare'] if it else '+39 328 438 8404'}</a></p></div>
+<div>{col_pagine}</div>
+<div><p><a href="{rr}{L}storia/">{'La nostra storia' if it else 'Our story'}</a></p><p><a href="{rr}storie/"{'' if it else ' hreflang="it"'}>{'Storie dal caffè' if it else 'Stories (in Italian)'}</a></p><p><a href="{rr}{L}contatti/">{'Orari e contatti' if it else 'Hours and contact'}</a></p></div>
+<div><p><a href="{BAR['google_recensioni']}" rel="noopener">{'Recensioni Google' if it else 'Google reviews'}</a></p><p><a href="{BAR['tripadvisor']}" rel="noopener">Tripadvisor</a></p><p><a href="{BAR['instagram']}" rel="noopener">Instagram</a></p><p><a href="{BAR['facebook']}" rel="noopener">Facebook</a></p></div>
+<p class="legale">© {RAGIONE_SOCIALE}, Piazza Carità 14, 80134 Napoli. {'P. IVA' if it else 'VAT no.'} {PIVA}. <a href="{rr}{L}privacy/">{'Privacy e cookie' if it else 'Privacy and cookies'}</a>{f' <a href="#" data-preferenze-cookie>{"Preferenze cookie" if it else "Cookie preferences"}</a>' if GA_ID else ''}</p>
 </div></footer>
-<nav class="barra-fissa" aria-label="{'Contatti rapidi' if it else 'Quick contacts'}"><a href="tel:{BAR['tel_link']}">{'Chiama' if it else 'Call'}</a><a href="{BAR['mappa']}" rel="noopener">{'Indicazioni' if it else 'Directions'}</a><a href="{rr}{'' if it else 'en/'}menu/">Menu</a></nav>
+<nav class="barra-fissa" aria-label="{'Contatti rapidi' if it else 'Quick contacts'}"><a href="tel:{BAR['tel_link']}">{'Chiama' if it else 'Call'}</a><a href="{BAR['mappa']}" rel="noopener">{'Indicazioni' if it else 'Directions'}</a><a href="{rr}{L}menu/">{'Il menu' if it else 'Menu'}</a></nav>
 </body>
 </html>
 '''
@@ -162,195 +177,192 @@ def ld_faq(faq):
     return {"@context": "https://schema.org", "@type": "FAQPage",
             "mainEntity": [{"@type": "Question", "name": q, "acceptedAnswer": {"@type": "Answer", "text": a}} for q, a, h in faq]}
 
-# ── Home italiana ─────────────────────────────────────────────────────
-TRAD = [("sfogliatella", "sfogliatella-riccia", "Sfogliatella", "Riccia o frolla, dal convento di Santa Rosa a via Toledo."),
-        ("baba", "baba", "Babà", "Il dolce di un re polacco diventato napoletano."),
-        ("pastiera", "pastiera", "Pastiera", "Grano, ricotta e fiori d'arancio: la Pasqua a Napoli."),
-        ("zeppole-di-san-giuseppe", "zeppola", "Zeppola", "Crema e amarena per il 19 marzo.")]
-TRAD_EN = ["Crisp layers or soft shortcrust, from a convent on the Amalfi Coast.", "A Polish king's cake that became Neapolitan.",
-           "Wheat, ricotta and orange blossom: Easter in Naples.", "Custard and black cherry for Saint Joseph's Day."]
+# ── Home (italiano e inglese da un'unica funzione) ───────────────────
+# Otto sezioni: sala, informazioni pratiche, tre firme, la giornata, la storia, riconoscimenti, storie, visita.
+# Ogni foto compare una sola volta nella pagina (controllato da controlla.py).
+HOME_FOTO_HERO = "sala-ingresso-piazza-carita"
+HOME_FIRME = [  # foto, nome, descrizione IT, descrizione EN, link IT, link EN, etichetta IT, etichetta EN
+    ("sfogliatella-riccia", "Sfogliatella riccia", "Sfogliatella riccia",
+     "Ricotta, semola, canditi e cannella dentro mille sfoglie croccanti. Riccia, frolla o Santa Rosa.",
+     "Ricotta, semolina, candied peel and cinnamon inside a thousand crisp layers. Riccia, frolla or Santa Rosa.",
+     "storie/sfogliatella/", "storie/sfogliatella/", "La sua storia", "Its story (in Italian)"),
+    ("baba-al-rum-classico", "Babà al rum", "Rum babà",
+     "Soffice e bagnato al punto giusto: classico, con crema e amarena oppure con panna e fragole.",
+     "Soft and soaked just right: classic, with custard and black cherry, or with cream and strawberries.",
+     "storie/baba/", "storie/baba/", "La sua storia", "Its story (in Italian)"),
+    ("caffe-ceraldi", "Caffè Ceraldi", "Caffè Ceraldi",
+     "La nostra firma al bancone: cioccolata calda sul fondo, crema di caffè e panna montata fresca.",
+     "Our signature at the counter: hot chocolate at the bottom, coffee cream and fresh whipped cream.",
+     "specialita/", "en/specialita/", "I caffè della casa", "House coffees"),
+]
+HOME_GIORNATA = [  # foto, momento IT/EN, titolo IT/EN, testo IT/EN, link IT/EN, etichetta IT/EN
+    ("cornetti-caffe-bancone", "Mattina", "Morning", "Colazione al bancone", "Breakfast at the counter",
+     "Cornetto e cappuccino, sfogliatella o graffa appena fatta. E per chi viene da lontano, la Full English Breakfast tutte le mattine.",
+     "Croissant and cappuccino, a sfogliatella or a fresh graffa. And for guests from abroad, a Full English Breakfast every morning.",
+     "bar/", "en/bar/", "Il bar e la colazione", "Coffee and breakfast"),
+    ("latte-macchiato-dolci", "Pomeriggio", "Afternoon", "Una pausa in sala", "A break in the hall",
+     "Un caffè della casa e un dolce della vetrina, seduti tra gli specchi e le poltroncine rosse.",
+     "A house coffee and a pastry from the display case, among the mirrors and red leather armchairs.",
+     "pasticceria/", "en/pasticceria/", "La pasticceria", "Our pastries"),
+    ("cocktail-barman", "Sera", "Evening", "L'aperitivo", "Aperitivo",
+     "L'Aspritz fatto in casa con agrumi della Costiera e Asprinio di Aversa, spritz e cocktail preparati al banco.",
+     "Our homemade Aspritz with Amalfi Coast citrus and Asprinio di Aversa, spritz and cocktails made at the bar.",
+     "aspritz/", "en/aspritz/", "L'Aspritz", "The Aspritz"),
+]
+HOME_STORIE = [("caffe-sospeso", "squadra"), ("pastiera", "pastiera"), ("piazza-carita-via-toledo", "sala-bianca")]
+HOME_TESTI = {
+    "it": dict(
+        titolo="Ceraldi Caffè | Bar e pasticceria a Napoli, Piazza Carità",
+        descr="Bar e pasticceria di produzione propria in Piazza Carità 14, Napoli, dal 1973: sfogliatelle, babà, colazione e aperitivo. Tutti i giorni 6:30–20:30.",
+        alt_hero="La sala di Ceraldi Caffè in Piazza Carità: specchi, soffitto Liberty e poltroncine in pelle rossa",
+        occhiello="Bar e pasticceria · Piazza Carità 14, Napoli", h1="Artigiani per passione, dal&nbsp;1973",
+        lead="Caffè napoletano, sfogliatelle e babà di produzione propria. Dalla prima tazzina delle 6:30 all'aperitivo della sera, lungo via Toledo.",
+        btn_menu="Guarda il menu", btn_mappa="Come arrivare",
+        info=[("Orari", "Tutti i giorni, 6:30 – 20:30"), ("Indirizzo", "Piazza Carità 14 · metro Toledo e Dante"), ("Telefono", None), ("Gambero Rosso", None)],
+        firme_occ="Produzione propria", firme_h2="Tre firme della casa",
+        firme_p="Nascono nei nostri laboratori, ogni giorno, con ricette di famiglia tramandate nel tempo.",
+        firme_piu=[("specialita/", "Tutte le specialità della casa"), ("menu/", "Il menu completo"), ("rosticceria/", "Rosticceria e pranzo veloce")],
+        giorno_occ="Dalle 6:30 alle 20:30", giorno_h2="Una giornata da Ceraldi",
+        storia_occ="La nostra storia", storia_h2="Tre date, una famiglia",
+        tappe=[("1973", "Piazza Garibaldi", "Michele Ceraldi apre il suo primo bar davanti alla stazione, tra chi parte e chi arriva."),
+               ("2002", "Piazza Carità", "L'arrivo al numero 14, lungo via Toledo: un angolo vuoto che sembrava aspettarci."),
+               ("Oggi", "Padre e figli", "Michele porta avanti il bar con Vincenzo e Valerio, dal laboratorio al bancone.")],
+        storia_btn="Leggi la storia", storia_cap="Michele Ceraldi, il fondatore, con la famiglia nella sala di Piazza Carità.",
+        voci_occ="Riconoscimenti e recensioni", voci_h2="Cosa dicono di noi",
+        gambero="Nella guida <strong>Bar d'Italia</strong> dal {dal}, presenti anche nell'edizione 2026.", gambero_link="Leggi la scheda",
+        google="Valutazione media su Google, su {n} recensioni. Dato rilevato il {data}.", su5="su 5",
+        link_rec=("Recensioni su Google", "Tripadvisor", "Lascia una recensione"),
+        storie_occ="Storie dal caffè", storie_h2="Napoli raccontata dal bancone", storie_tutte="Tutte le storie",
+        visita_occ="Vieni a trovarci", visita_h2="Piazza Carità 14, nel cuore di Napoli",
+        visita_p="Lungo via Toledo, tra piazza Dante e piazza del Plebiscito, all'ingresso della Pignasecca e dei Quartieri Spagnoli. A pochi minuti a piedi dalle fermate Toledo e Dante della metro Linea 1.",
+        btn_maps="Apri in Google Maps", btn_chiama="Chiama",
+        scheda=[("Orari", "Tutti i giorni, domenica compresa<br>dalle 6:30 alle 20:30"), ("Indirizzo", None), ("Telefono", None), ("Cellulare e WhatsApp", None)]),
+    "en": dict(
+        titolo="Ceraldi Caffè | Café and pastry shop in Naples, Piazza Carità",
+        descr="Café and in-house pastry shop in Piazza Carità 14, Naples, since 1973: sfogliatella, babà, breakfast and aperitivo. Open daily 6:30 am – 8:30 pm.",
+        alt_hero="The hall of Ceraldi Caffè in Piazza Carità: mirrors, Liberty-style ceiling and red leather armchairs",
+        occhiello="Café and pastry shop · Piazza Carità 14, Naples", h1="Craftspeople by passion, since&nbsp;1973",
+        lead="Neapolitan coffee, sfogliatelle and babà made in-house. From the first espresso at 6:30 am to the evening aperitivo, on Via Toledo.",
+        btn_menu="See the menu", btn_mappa="Get directions",
+        info=[("Opening hours", "Every day, 6:30 am – 8:30 pm"), ("Address", "Piazza Carità 14 · Toledo and Dante metro"), ("Phone", None), ("Gambero Rosso", None)],
+        firme_occ="Made in-house", firme_h2="Three house signatures",
+        firme_p="Made every day in our own kitchens, from family recipes handed down over time.",
+        firme_piu=[("en/specialita/", "All our house specialities"), ("en/menu/", "The full menu"), ("en/rosticceria/", "Street food and quick lunch")],
+        giorno_occ="From 6:30 am to 8:30 pm", giorno_h2="A day at Ceraldi",
+        storia_occ="Our story", storia_h2="Three dates, one family",
+        tappe=[("1973", "Piazza Garibaldi", "Michele Ceraldi opens his first café in front of the railway station, among travellers coming and going."),
+               ("2002", "Piazza Carità", "We move to number 14, on Via Toledo: an empty corner that seemed to be waiting for us."),
+               ("Today", "Father and sons", "Michele runs the café with Vincenzo and Valerio, from the pastry kitchen to the counter.")],
+        storia_btn="Read our story", storia_cap="Michele Ceraldi, the founder, with his family in the hall in Piazza Carità.",
+        voci_occ="Recognition and reviews", voci_h2="What people say",
+        gambero="Listed in the <strong>Bar d'Italia</strong> guide since {dal}, including the 2026 edition.", gambero_link="Read the listing",
+        google="Average Google rating from {n} reviews, as of {data}.", su5="out of 5",
+        link_rec=("Reviews on Google", "Tripadvisor", "Write a review"),
+        storie_occ="Stories from the café (in Italian)", storie_h2="Naples, told from the counter", storie_tutte="All stories",
+        visita_occ="Visit us", visita_h2="Piazza Carità 14, in the heart of Naples",
+        visita_p="On Via Toledo, between Piazza Dante and Piazza del Plebiscito, at the entrance to the Pignasecca market and the Spanish Quarter. A few minutes' walk from Toledo and Dante stations on Metro Line 1.",
+        btn_maps="Open in Google Maps", btn_chiama="Call",
+        scheda=[("Opening hours", "Every day, Sundays included<br>6:30 am – 8:30 pm"), ("Address", None), ("Phone", None), ("Mobile and WhatsApp", None)]),
+}
 
-def recensioni(lang='it'):
+
+def home(lang='it'):
     it = lang == 'it'
-    return f'''<section class="sezione recensioni" id="{'recensioni' if it else 'reviews'}"><div class="contenitore recensioni-griglia">
-<div><p class="voto"><span class="voto-num">{BAR["google_voto"]}</span><span class="voto-stelle" aria-hidden="true">★★★★<i>★</i></span></p>
-<p class="voto-txt">{f'Valutazione media su Google, su {BAR["google_n"]} recensioni. Dato rilevato il {BAR["google_data"]}.' if it else f'Average Google rating from {BAR["google_n_en"]} reviews, as of {BAR["google_data"]}.'}</p>
-<p class="voto-txt premio">{f'Nella guida <strong>Bar d&#39;Italia del Gambero Rosso</strong> dal {BAR["gambero_dal"]}, presenti anche nell&#39;edizione 2026.' if it else f'Listed in the <strong>Gambero Rosso Bar d&#39;Italia</strong> guide since {BAR["gambero_dal"]}, including the 2026 edition.'} <a href="{BAR["gambero_rosso"]}" rel="noopener">{'Leggi la scheda' if it else 'Read the listing'}</a></p></div>
-<div><h2>{'Cosa dicono di noi' if it else 'What our customers say'}</h2>
-<p class="intro">{'Leggi le opinioni di chi è passato da Piazza Carità, o lascia la tua dopo la visita.' if it else 'Read what visitors say about us, or leave your own review after your visit.'}</p>
-<div class="azioni sinistra"><a class="btn scuro" href="{BAR["google_recensioni"]}" rel="noopener">{'Recensioni su Google' if it else 'Reviews on Google'}</a>
-<a class="btn scuro-vuoto" href="{BAR["tripadvisor"]}" rel="noopener">{'Recensioni su Tripadvisor' if it else 'Reviews on Tripadvisor'}</a>
-<a class="btn scuro-vuoto" href="{BAR["google_scrivi"]}" rel="noopener">{'Lascia una recensione' if it else 'Write a review'}</a></div></div>
-</div></section>'''
-
-ACCESSI = [("bar/", "caffe-ceraldi", "Il bar", "Caffè, colazione ed English breakfast"),
-           ("pasticceria/", "baba", "Pasticceria", "Produzione propria, ricette di famiglia"),
-           ("rosticceria/", "frittatina", "Rosticceria", "Frittatine, freselle e pranzo veloce"),
-           ("aspritz/", "aspritz", "Aspritz", "Lo spritz napoletano fatto in casa"),
-           ("storia/", "squadra", "La nostra storia", "Dal 1973, una famiglia di baristi")]
-
-def home_it():
+    T = HOME_TESTI[lang]
+    rr = "" if it else "../"
+    rl = rr + ("" if it else "en/")  # radice delle pagine nella stessa lingua
+    k = HOME_FOTO_HERO
+    larghezze = (640, 1024, 1280, 1890, 2362)
     alt = [("it", BASE), ("en", BASE + "en/"), ("x-default", BASE)]
-    h = testa("it", "Ceraldi Caffè | Bar e pasticceria a Napoli, Piazza Carità",
-              "Bar e pasticceria di produzione propria in Piazza Carità 14, Napoli, dal 1973: sfogliatelle, babà, colazione e aperitivo. Tutti i giorni 6:30–20:30.",
-              BASE, "", ld=[ld_bar('it'), ld_sito(), ld_faq(FAQ)], alternates=alt, preload="img/sfogliatella-riccia-1024.webp")
-    storie = ''.join(f'<li><a href="storie/{a["slug"]}/"><b>{e(a["titolo"])}</b><span>{e(a["dek"])}</span><small>{a["lettura"]} min di lettura</small></a></li>' for a in ARTICOLI)
-    vetr = ''.join(f'<a href="storie/{s}/"><figure>{immagine(k, "", "(max-width: 900px) 50vw, 25vw")}<h3>{t}</h3><p>{e(d)}</p></figure></a>' for s, k, t, d in TRAD)
-    return h + f'''<header class="hero">
-{barra("", "it", "")}
-<div class="contenitore hero-griglia">
-<div class="hero-testo">
-<p class="dal">Artigiani per passione dal 1973</p>
-<h1>Bar e pasticceria napoletana in Piazza Carità</h1>
-<p class="tag">{e(BAR["tagline"])} Dolci di produzione propria, con ricette di famiglia tramandate di generazione in generazione.</p>
-<div class="azioni sinistra"><a class="btn pieno" href="{BAR["mappa"]}" rel="noopener">Come arrivare</a><a class="btn" href="menu/">Guarda il menu</a><a class="btn" href="tel:{BAR["tel_link"]}">Chiama</a></div>
-<p class="aperto">Aperto tutti i giorni dalle 6:30 alle 20:30<br><a href="#recensioni">Valutazione {BAR["google_voto"]} su Google</a><br><a href="{BAR["gambero_rosso"]}" rel="noopener">Nella guida Bar d'Italia del Gambero Rosso</a></p>
-</div>
-<figure class="specchio">{immagine("sfogliatella-riccia", "", "(max-width: 900px) 92vw, 480px", eager=True, cls="fuoco-sx")}</figure>
+    h = testa(lang, T["titolo"], T["descr"], BASE + ("" if it else "en/"), rr, og_img=f"img/{k}-1280.webp",
+              ld=[ld_bar(lang)] + ([ld_sito()] if it else []), alternates=alt, preload=f"{rr}img/{k}-1890.webp")
+    srcset = ", ".join(f"{rr}img/{k}-{w}.webp {w}w" for w in larghezze)
+    tel = BAR["telefono"] if it else "+39 081 552 3488"
+    cell = BAR["cellulare"] if it else "+39 328 438 8404"
+    info_val = {2: f'<a href="tel:{BAR["tel_link"]}">{tel}</a> · <a href="{BAR["whatsapp"]}" rel="noopener">WhatsApp</a>',
+                3: f'<a href="{BAR["gambero_rosso"]}" rel="noopener">Bar d\'Italia, {"dal" if it else "since"} {BAR["gambero_dal"]}</a>'}
+    info = ''.join(f'<div><span>{e(t)}</span><b>{info_val.get(i) or e(v)}</b></div>' for i, (t, v) in enumerate(T["info"]))
+    firme = ''.join(
+        f'<article class="p-firma"><a href="{rr}{(l_it if it else l_en)}"{"" if it or l_en.startswith("en/") else " hreflang=" + chr(34) + "it" + chr(34)}>'
+        f'<figure class="p-arco">{immagine(f, rr, "(max-width: 760px) 86vw, 340px")}</figure>'
+        f'<h3>{e(n_it if it else n_en)}</h3><p>{e(d_it if it else d_en)}</p><span class="p-link">{e(c_it if it else c_en)}</span></a></article>'
+        for f, n_it, n_en, d_it, d_en, l_it, l_en, c_it, c_en in HOME_FIRME)
+    piu = ''.join(f'<a href="{rr}{h_}">{e(t)}</a>' for h_, t in T["firme_piu"])
+    giornata = ''.join(
+        f'<article class="p-momento"><figure>{immagine(f, rr, "(max-width: 760px) 92vw, 560px")}</figure>'
+        f'<div><p class="p-ora">{e(m_it if it else m_en)}</p><h3>{e(t_it if it else t_en)}</h3><p>{e(x_it if it else x_en)}</p>'
+        f'<a class="p-link" href="{rr}{l_it if it else l_en}">{e(c_it if it else c_en)}</a></div></article>'
+        for f, m_it, m_en, t_it, t_en, x_it, x_en, l_it, l_en, c_it, c_en in HOME_GIORNATA)
+    tappe = ''.join(f'<li><span class="p-anno">{a}</span><b>{e(l)}</b><p>{e(t)}</p></li>' for a, l, t in T["tappe"])
+    PER = {a["slug"]: a for a in ARTICOLI}
+    storie = ''.join(
+        f'<article class="p-storia-card"><a href="{rr}storie/{s}/"{"" if it else " hreflang=" + chr(34) + "it" + chr(34)}>'
+        f'<figure>{immagine(f, rr, "(max-width: 760px) 92vw, 360px")}</figure>'
+        f'<p class="p-ora">{e(CATEGORIA_DI[s]["nome"])}</p><h3{"" if it else " lang=" + chr(34) + "it" + chr(34)}>{e(PER[s]["titolo"])}</h3>'
+        f'<p{"" if it else " lang=" + chr(34) + "it" + chr(34)}>{e(PER[s]["dek"])}</p></a></article>' for s, f in HOME_STORIE)
+    scheda_val = {1: f'{e(BAR["indirizzo"])}<br>{e(BAR["cap_citta"]) if it else "80134 Naples, Italy"}',
+                  2: f'<a href="tel:{BAR["tel_link"]}">{tel}</a>',
+                  3: f'<a href="tel:{BAR["cell_link"]}">{cell}</a> · <a href="{BAR["whatsapp"]}" rel="noopener">WhatsApp</a>'}
+    scheda = ''.join(f'<div><dt>{e(t)}</dt><dd>{scheda_val.get(i) or v}</dd></div>' for i, (t, v) in enumerate(T["scheda"]))
+    l_rec = T["link_rec"]
+    return h + f'''<header class="p-hero">
+<img class="p-hero-foto" src="{rr}img/{k}-1890.webp" srcset="{srcset}" sizes="100vw" width="1890" height="1260" alt="{e(T["alt_hero"])}" fetchpriority="high" decoding="async">
+<div class="p-velo"></div>
+{barra(rr, lang, "")}
+<div class="p-hero-testo">
+<p class="p-occhiello">{e(T["occhiello"])}</p>
+<h1>{T["h1"]}</h1>
+<p class="p-lead">{e(T["lead"])}</p>
+<div class="p-azioni"><a class="p-btn pieno" href="{rl}menu/">{e(T["btn_menu"])}</a><a class="p-btn" href="{BAR["mappa"]}" rel="noopener">{e(T["btn_mappa"])}</a></div>
 </div>
 </header>
 <main id="contenuto">
+<section class="p-info" aria-label="{'Informazioni pratiche' if it else 'Practical information'}"><div class="p-wrap p-info-griglia">{info}</div></section>
 
-<nav class="accessi" aria-label="Cosa trovi da Ceraldi"><div class="contenitore accessi-griglia">
-{''.join(f'<a href="{h}"><figure>{immagine(k, "", "(max-width: 640px) 50vw, 220px")}</figure><b>{t}</b><span>{d}</span></a>' for h, k, t, d in ACCESSI)}
-</div></nav>
-
-<section class="sezione"><div class="contenitore storia">
-<div><h2>Artigiani per passione, dal 1973</h2>
-<p>La storia della famiglia Ceraldi nei bar di Napoli comincia nel 1973 in Piazza Garibaldi, con Michele Ceraldi. Nel 2002 l'arrivo in Piazza Carità, lungo via Toledo, a due passi dalla Pignasecca e dai Quartieri Spagnoli: da allora è il nostro bar. Si entra la mattina presto per il primo caffè e una sfogliatella calda, si torna a metà giornata per un dolce dalla vetrina, ci si ferma la sera per l'aperitivo.</p>
-<p>La nostra pasticceria è di <strong>produzione propria</strong>: sfogliatelle, babà, pastiere e torte nascono da ricette di famiglia tramandate di generazione in generazione, insieme alle creazioni della casa. Il locale è quello di un bar napoletano elegante, con specchi, poltroncine in pelle rossa e un bancone sempre affollato.</p>
-<p><a class="link-forte" href="storia/">Leggi la nostra storia</a></p></div>
-<figure class="foto-larga">{immagine("squadra", "", "(max-width: 900px) 100vw, 560px")}<figcaption>La squadra di Ceraldi Caffè al bancone.</figcaption></figure>
+<section class="p-sez p-firme"><div class="p-wrap">
+<div class="p-testa"><p class="p-occhiello scuro">{e(T["firme_occ"])}</p><h2>{e(T["firme_h2"])}</h2><p>{e(T["firme_p"])}</p></div>
+<div class="p-firme-griglia">{firme}</div>
+<p class="p-piu">{piu}</p>
 </div></section>
 
-<section class="sezione in-breve" aria-labelledby="breve"><div class="contenitore">
-<h2 id="breve">Ceraldi Caffè in breve</h2>
-<dl class="scheda">
-<div><dt>Che cos'è</dt><dd>Bar, caffetteria e pasticceria napoletana di produzione propria</dd></div>
-<div><dt>Storia</dt><dd>Famiglia Ceraldi dal 1973, in Piazza Carità dal 2002</dd></div>
-<div><dt>Indirizzo</dt><dd>Piazza Carità 14, 80134 Napoli, vicino a via Toledo e alla metro Toledo</dd></div>
-<div><dt>Orari</dt><dd>Tutti i giorni, 6:30 – 20:30</dd></div>
-<div><dt>Specialità</dt><dd>Sfogliatella riccia e frolla, babà, pastiera, Caffè Ceraldi, Cestino, Segreto amalfitano</dd></div>
-<div><dt>Colazione</dt><dd>Croissant, brioche, graffa napoletana, cappuccino e caffè</dd></div>
-<div><dt>Contatti</dt><dd>Telefono <a href="tel:{BAR["tel_link"]}">081 552 3488</a>, cellulare <a href="tel:{BAR["cell_link"]}">328 438 8404</a></dd></div>
-<div><dt>Menu</dt><dd><a href="menu/">Menu completo con prezzi</a></dd></div>
-</dl>
+<section class="p-sez p-giornata"><div class="p-wrap">
+<div class="p-testa"><p class="p-occhiello scuro">{e(T["giorno_occ"])}</p><h2>{e(T["giorno_h2"])}</h2></div>
+{giornata}
 </div></section>
 
-<section class="sezione" id="colazione"><div class="contenitore due-colonne">
-<div><h2>La colazione, all'italiana e alla napoletana</h2>
-<p class="intro">Il cornetto caldo con il cappuccino, come in tutta Italia. Oppure la sfogliatella e la graffa, come si fa a Napoli. Al nostro bancone trovi entrambe, dalle 6:30 del mattino.</p>
-{lista(COLAZIONE)}
-<p class="nota"><a href="storie/colazione-napoletana/">Leggi: la colazione a Napoli, tra cornetto e sfogliatella</a></p></div>
-<figure class="foto-alta">{immagine("sfogliatella-riccia", "", "(max-width: 900px) 100vw, 480px")}</figure>
+<section class="p-sez p-storia"><div class="p-wrap p-storia-griglia">
+<div><p class="p-occhiello">{e(T["storia_occ"])}</p><h2>{e(T["storia_h2"])}</h2>
+<ol class="p-tappe">{tappe}</ol>
+<a class="p-btn" href="{rl}storia/">{e(T["storia_btn"])}</a></div>
+<figure class="p-arco grande"><img src="{rr}img/famiglia-1024.webp" srcset="{rr}img/famiglia-640.webp 640w, {rr}img/famiglia-1024.webp 1024w, {rr}img/famiglia-1600.webp 1600w"
+ sizes="(max-width: 760px) 92vw, 500px" width="1600" height="1064" alt="{e(FOTO["famiglia"]["alt"])}" loading="lazy" decoding="async">
+<figcaption>{e(T["storia_cap"])}</figcaption></figure>
 </div></section>
 
-<section class="sezione" id="specialita" style="background:var(--marmo-2)"><div class="contenitore">
-<h2>Le specialità della casa</h2>
-<p class="intro">Oltre all'espresso e ai classici napoletani, caffè e dolci nati da Ceraldi.</p>
-<div class="trittico">{immagine("cestino", "", "(max-width: 640px) 33vw, 300px")}{immagine("babamisu", "", "(max-width: 640px) 33vw, 300px")}{immagine("pellecchiella", "", "(max-width: 640px) 33vw, 300px")}</div>
-{carta("Al bancone", CAFFE_CASA, "In vetrina", DOLCI_CASA)}
-<p class="nota"><a href="specialita/">Scopri tutte le specialità della casa</a>, oppure guarda il <a href="menu/">menu completo</a> con prezzi e allergeni.</p>
+<section class="p-sez p-voci"><div class="p-wrap p-voci-griglia">
+<div class="p-testa"><p class="p-occhiello scuro">{e(T["voci_occ"])}</p><h2>{e(T["voci_h2"])}</h2></div>
+<div class="p-voce"><p class="p-grande">Gambero Rosso</p><p>{T["gambero"].format(dal=BAR["gambero_dal"])}</p>
+<a class="p-link" href="{BAR["gambero_rosso"]}" rel="noopener"{"" if it else ' hreflang="it"'}>{e(T["gambero_link"])}</a></div>
+<div class="p-voce"><p class="p-grande">{BAR["google_voto"] if it else BAR["google_voto_en"]} <small>{e(T["su5"])}</small></p>
+<p>{e(T["google"].format(n=BAR["google_n"] if it else BAR["google_n_en"], data=BAR["google_data"]))}</p>
+<p class="p-link-riga"><a class="p-link" href="{BAR["google_recensioni"]}" rel="noopener">{e(l_rec[0])}</a><a class="p-link" href="{BAR["tripadvisor"]}" rel="noopener">{e(l_rec[1])}</a><a class="p-link" href="{BAR["google_scrivi"]}" rel="noopener">{e(l_rec[2])}</a></p></div>
 </div></section>
 
-<section class="sezione"><div class="contenitore">
-<h2>La tradizione napoletana, fatta da noi</h2>
-<p class="intro">Sfogliatelle, babà, pastiera e zeppole: i dolci che raccontano Napoli, con la loro storia.</p>
-<div class="vetrina">{vetr}</div>
+<section class="p-sez p-storie"><div class="p-wrap">
+<div class="p-testa riga"><div><p class="p-occhiello scuro">{e(T["storie_occ"])}</p><h2>{e(T["storie_h2"])}</h2></div>
+<a class="p-link" href="{rr}storie/"{"" if it else ' hreflang="it"'}>{e(T["storie_tutte"])}</a></div>
+<div class="p-storie-griglia">{storie}</div>
 </div></section>
 
-<section class="sezione aperitivo"><div class="contenitore due-colonne inverti">
-<figure class="foto-alta">{immagine("aperitivo", "", "(max-width: 900px) 100vw, 520px")}</figure>
-<div><h2>E la sera, l'aperitivo</h2>
-<p class="intro">Spritz, il nostro Aspritz, cocktail e birre: la giornata in Piazza Carità finisce al tavolo, con gli amici.</p>
-<div class="azioni sinistra"><a class="btn scuro" href="aspritz/">Scopri l'Aspritz</a><a class="btn scuro-vuoto" href="menu/#cocktails-birre-alcolici">Cocktail e drink</a></div></div>
-</div></section>
-
-{recensioni('it')}
-
-<section class="sezione"><div class="contenitore">
-<h2>Storie dal caffè</h2>
-<p class="intro">Riti, leggende, ricette e luoghi: la cultura napoletana raccontata dal bancone di Piazza Carità.</p>
-<ul class="storie">{storie}</ul>
-</div></section>
-
-<section class="sezione dove" id="dove"><div class="contenitore">
-<h2>Dove siamo</h2>
-<p class="intro">In Piazza Carità, lungo via Toledo, a pochi minuti a piedi dalle stazioni Toledo e Dante della Linea 1.</p>
-<dl><div><dt>Indirizzo</dt><dd>{e(BAR["indirizzo"])}<br>{e(BAR["cap_citta"])}</dd></div>
-<div><dt>Orari</dt><dd>Tutti i giorni<br>dalle 6:30 alle 20:30</dd></div>
-<div><dt>Telefono</dt><dd><a href="tel:{BAR["tel_link"]}">081 552 3488</a><br>Cellulare <a href="tel:{BAR["cell_link"]}">328 438 8404</a> (anche <a href="{BAR["whatsapp"]}" rel="noopener">WhatsApp</a>)</dd></div></dl>
-<div class="azioni sinistra" style="margin-top:36px"><a class="btn pieno" href="{BAR["mappa"]}" rel="noopener">Apri in Google Maps</a><a class="btn" href="{BAR["instagram"]}" rel="noopener">Seguici su Instagram</a></div>
-</div></section>
-
-<section class="sezione"><div class="contenitore">
-<h2>Domande frequenti</h2>
-<div class="domande">{faq_html(FAQ)}</div>
+<section class="p-sez p-visita" id="{'visita' if it else 'visit'}"><div class="p-wrap p-visita-griglia">
+<div><p class="p-occhiello">{e(T["visita_occ"])}</p><h2>{e(T["visita_h2"])}</h2>
+<p>{e(T["visita_p"])}</p>
+<div class="p-azioni"><a class="p-btn pieno" href="{BAR["mappa"]}" rel="noopener">{e(T["btn_maps"])}</a><a class="p-btn" href="tel:{BAR["tel_link"]}">{e(T["btn_chiama"])} {tel}</a></div></div>
+<dl class="p-scheda">{scheda}</dl>
 </div></section>
 </main>
-''' + piede("")
+''' + piede(rr, lang)
 
-# ── Home inglese ──────────────────────────────────────────────────────
-def home_en():
-    alt = [("it", BASE), ("en", BASE + "en/"), ("x-default", BASE)]
-    h = testa("en", "Ceraldi Caffè | Café and pastry shop in Naples, Piazza Carità",
-              "Café and in-house pastry shop in Piazza Carità 14, Naples, since 1973: sfogliatella, babà, breakfast and aperitivo. Open daily 6:30 am – 8:30 pm.",
-              BASE + "en/", "../", ld=[ld_bar('en'), ld_faq(FAQ_EN)], alternates=alt, preload="../img/sfogliatella-riccia-1024.webp")
-    vetr = ''.join(f'<a href="../storie/{s}/" hreflang="it"><figure>{immagine(k, "../", "(max-width: 900px) 50vw, 25vw")}<h3>{t}</h3><p>{e(d)}</p></figure></a>'
-                   for (s, k, t, _), d in zip(TRAD, TRAD_EN))
-    return h + f'''<header class="hero">
-{barra("../", "en", "")}
-<div class="contenitore hero-griglia">
-<div class="hero-testo">
-<p class="dal">Craftspeople by passion since 1973</p>
-<h1>Neapolitan café and pastry shop in Piazza Carità</h1>
-<p class="tag">From breakfast to aperitivo, in the heart of Naples. Pastries made in-house from family recipes handed down through the generations.</p>
-<div class="azioni sinistra"><a class="btn pieno" href="{BAR["mappa"]}" rel="noopener">Get directions</a><a class="btn" href="menu/">See the menu</a><a class="btn" href="tel:{BAR["tel_link"]}">Call</a></div>
-<p class="aperto">Open every day from 6:30 am to 8:30 pm<br><a href="#reviews">Rated {BAR["google_voto_en"]} on Google</a><br><a href="{BAR["gambero_rosso"]}" rel="noopener">Listed in Gambero Rosso's Bar d'Italia guide</a></p>
-</div>
-<figure class="specchio">{immagine("sfogliatella-riccia", "../", "(max-width: 900px) 92vw, 480px", eager=True, cls="fuoco-sx")}</figure>
-</div>
-</header>
-<main id="contenuto">
-<section class="sezione"><div class="contenitore storia">
-<div><h2>Craftspeople by passion, since 1973</h2>
-<p>The Ceraldi family's story in Naples cafés began in 1973 in Piazza Garibaldi, with Michele Ceraldi. In 2002 we moved to Piazza Carità, on Via Toledo, steps from the Pignasecca market and the Spanish Quarter. Locals come in early for their first espresso and a warm sfogliatella, stop by during the day for something from the pastry case, and come back in the evening for aperitivo.</p>
-<p>Our pastries are <strong>made in-house</strong> from family recipes handed down through the generations, alongside our own creations. It is an elegant Neapolitan bar, with mirrors, red leather armchairs and a busy counter.</p></div>
-<figure class="foto-larga">{immagine("squadra", "../", "(max-width: 900px) 100vw, 560px")}<figcaption>The Ceraldi Caffè team at the counter.</figcaption></figure>
-</div></section>
-<section class="sezione" id="breakfast"><div class="contenitore due-colonne">
-<div><h2>Breakfast, Italian and Neapolitan style</h2>
-<p class="intro">A warm croissant with a cappuccino, as everywhere in Italy, or a sfogliatella and a graffa, the Neapolitan way. Served from 6:30 am.</p>
-{lista(COLAZIONE_EN)}</div>
-<figure class="foto-alta">{immagine("sfogliatella-riccia", "../", "(max-width: 900px) 100vw, 480px")}</figure>
-</div></section>
-<section class="sezione" id="specialities" style="background:var(--marmo-2)"><div class="contenitore">
-<h2>House specialities</h2>
-<p class="intro">Besides espresso and Neapolitan classics, coffees and cakes created at Ceraldi.</p>
-<div class="trittico">{immagine("cestino", "../", "(max-width: 640px) 33vw, 300px")}{immagine("babamisu", "../", "(max-width: 640px) 33vw, 300px")}{immagine("pellecchiella", "../", "(max-width: 640px) 33vw, 300px")}</div>
-{carta("At the counter", CAFFE_CASA_EN, "From the pastry case", DOLCI_CASA_EN)}
-<p class="nota"><a href="specialita/">See all our house specialities</a>, or the full menu with prices: <a href="menu/">see the menu</a>. You can also use our <a href="{BAR["menu"]}" rel="noopener">interactive menu</a>.</p>
-</div></section>
-<section class="sezione"><div class="contenitore">
-<h2>Neapolitan tradition, made in-house</h2>
-<p class="intro">Sfogliatella, babà, pastiera and zeppola, and the stories behind them (in Italian).</p>
-<div class="vetrina">{vetr}</div>
-</div></section>
-{recensioni('en')}
-<section class="sezione dove" id="find-us"><div class="contenitore">
-<h2>Find us</h2>
-<p class="intro">In Piazza Carità on Via Toledo, a few minutes' walk from Toledo and Dante stations on Metro Line 1.</p>
-<dl><div><dt>Address</dt><dd>Piazza Carità, 14<br>80134 Naples, Italy</dd></div>
-<div><dt>Opening hours</dt><dd>Every day<br>6:30 am – 8:30 pm</dd></div>
-<div><dt>Phone</dt><dd><a href="tel:{BAR["tel_link"]}">+39 081 552 3488</a><br>Mobile <a href="tel:{BAR["cell_link"]}">+39 328 438 8404</a> (also <a href="{BAR["whatsapp"]}" rel="noopener">WhatsApp</a>)</dd></div></dl>
-<div class="azioni sinistra" style="margin-top:36px"><a class="btn pieno" href="{BAR["mappa"]}" rel="noopener">Open in Google Maps</a><a class="btn" href="{BAR["instagram"]}" rel="noopener">Follow us on Instagram</a></div>
-</div></section>
-<section class="sezione"><div class="contenitore">
-<h2>Frequently asked questions</h2>
-<div class="domande">{faq_html(FAQ_EN)}</div>
-</div></section>
-</main>
-''' + piede("../", "en")
 
 # ── Articoli ──────────────────────────────────────────────────────────
 MESI = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"]
@@ -388,7 +400,7 @@ def articolo(a):
     prova = ''.join(f'<li><b>{e(n)}</b><br><span>{e(d)}</span></li>' for n, d in a["provare"])
     fonti = ''.join(f'<li><a href="{e(u)}" rel="noopener">{e(t)}</a></li>' for t, u in a["fonti"])
     altre = ''.join(f'<li><a href="../{b["slug"]}/"><b>{e(b["titolo"])}</b><span>{e(b["dek"])}</span><small>{b["lettura"]} min</small></a></li>' for b in sorted(ARTICOLI, key=lambda b: CATEGORIA_DI[b["slug"]] is not CATEGORIA_DI[a["slug"]]) if b is not a)
-    return h + f'''<header class="testata-scura">{barra("../../")}</header>
+    return h + f'''<header class="testata-scura">{barra("../../", "it", "storie/")}</header>
 <main id="contenuto" class="articolo"><div class="contenitore">
 <p class="briciole"><a href="../../">Ceraldi Caffè</a> / <a href="../">Storie</a> / <a href="../{CATEGORIA_DI[a["slug"]]["slug"]}/">{e(CATEGORIA_DI[a["slug"]]["nome"])}</a></p>
 <article>
@@ -417,7 +429,7 @@ def indice_storie():
         f'<section class="categoria"><h2><a href="{c["slug"]}/">{e(c["nome"])}</a></h2><ul class="storie">'
         + ''.join(f'<li><a href="{PER[s]["slug"]}/"><b>{e(PER[s]["titolo"])}</b><span>{e(PER[s]["dek"])}</span><small>{PER[s]["lettura"]} min di lettura</small></a></li>' for s in c["articoli"])
         + '</ul></section>' for c in CATEGORIE)
-    return h + f'''<header class="testata-scura">{barra("../")}</header>
+    return h + f'''<header class="testata-scura">{barra("../", "it", "storie/")}</header>
 <main id="contenuto" class="articolo"><div class="contenitore">
 <p class="briciole"><a href="../">Ceraldi Caffè</a></p>
 <h1>Storie dal caffè</h1>
@@ -436,7 +448,7 @@ def pagina_categoria(c):
     h = testa("it", f"{c['nome']}: storie dal caffè | Ceraldi Caffè", c["intro"], url, "../../", ld=ld)
     voci = ''.join(f'<li><a href="../{s}/"><b>{e(PER[s]["titolo"])}</b><span>{e(PER[s]["dek"])}</span><small>{PER[s]["lettura"]} min di lettura</small></a></li>' for s in c["articoli"])
     altre = ''.join(f'<a href="../{x["slug"]}/">{e(x["nome"])}</a>' for x in CATEGORIE if x is not c)
-    return h + f'''<header class="testata-scura">{barra("../../")}</header>
+    return h + f'''<header class="testata-scura">{barra("../../", "it", "storie/")}</header>
 <main id="contenuto" class="articolo"><div class="contenitore">
 <p class="briciole"><a href="../../">Ceraldi Caffè</a> / <a href="../">Storie</a></p>
 <h1>{e(c["nome"])}</h1>
@@ -586,6 +598,37 @@ CTA_LINK = {"mappa": (BAR["mappa"], True), "menu_interno": ("../menu/", False), 
             "menu_dolci": ("../menu/#bar-dolci", False), "menu_food": ("../menu/#food", False),
             "menu_drink": ("../menu/#cocktails-birre-alcolici", False)}
 
+# «Da vedere anche»: collega le pagine autonome (specialità, rosticceria, Aspritz) alle pagine madri,
+# così restano raggiungibili anche con la navigazione a sei voci. (percorso IT, titolo IT, testo IT, titolo EN, testo EN)
+CORRELATI = {
+    "bar": [("specialita/", "Specialità della casa", "Caffè Ceraldi, Caffè Babà, Michelino e i dolci nati da noi", "House specialities", "Caffè Ceraldi, Caffè Babà and our own pastries"),
+            ("rosticceria/", "Rosticceria e pranzo veloce", "Frittatine, crocchè, pizza fritta, saltimbocca e freselle", "Street food and quick lunch", "Frittatine, croquettes, fried pizza and freselle"),
+            ("aspritz/", "Aspritz e aperitivi", "Il nostro spritz fatto in casa", "Aspritz and aperitivo", "Our homemade spritz")],
+    "pasticceria": [("specialita/", "Specialità della casa", "Cestino, Segreto amalfitano, Babàmisù, Pellecchiella", "House specialities", "Cestino, Segreto amalfitano, Babàmisù, Pellecchiella"),
+                    ("storie/pasticceria-napoletana/", "Storie della pasticceria napoletana", "Sfogliatella, babà, pastiera, zeppole e i dolci dei conventi", "Neapolitan pastry stories", "In Italian: sfogliatella, babà, pastiera, zeppole"),
+                    ("bar/", "Il bar e la colazione", "Il caffè al bancone e la colazione napoletana", "Coffee and breakfast", "Espresso at the counter and Neapolitan breakfast")],
+    "rosticceria": [("bar/", "Il bar e la colazione", "Dalla colazione all'English breakfast", "Coffee and breakfast", "From espresso to Full English Breakfast"),
+                    ("aspritz/", "Aspritz e aperitivi", "La sera, al tavolo, con il nostro spritz", "Aspritz and aperitivo", "In the evening, with our homemade spritz"),
+                    ("menu/", "Il menu completo", "Prezzi e allergeni di tutta la rosticceria", "The full menu", "Prices and allergens")],
+    "aspritz": [("bar/", "Il bar e la colazione", "La giornata comincia alle 6:30", "Coffee and breakfast", "The day starts at 6:30 am"),
+                ("specialita/", "Specialità della casa", "Caffè e dolci nati da Ceraldi", "House specialities", "Coffees and pastries created at Ceraldi"),
+                ("menu/", "Cocktail, birre e alcolici", "Tutta la carta del bar, con i prezzi", "Cocktails, beers and spirits", "The full drinks list, with prices")],
+    "storia": [("storie/", "Storie dal caffè", "Il caffè, i dolci e le tradizioni di Napoli", "Stories from the café", "In Italian: coffee, pastries and Neapolitan traditions"),
+               ("pasticceria/", "La pasticceria", "Produzione propria, dal laboratorio alla vetrina", "Our pastries", "Made in-house, from our kitchens to the display case"),
+               ("contatti/", "Orari e contatti", "Piazza Carità 14, tutti i giorni dalle 6:30 alle 20:30", "Hours and contact", "Piazza Carità 14, every day 6:30 am – 8:30 pm")],
+}
+
+def correlati(slug, rr, it=True):
+    voci = CORRELATI.get(slug)
+    if not voci:
+        return ''
+    li = ''
+    for path, t_it, d_it, t_en, d_en in voci:
+        solo_it = path.startswith("storie/")
+        href = rr + (path if it or solo_it else "en/" + path)
+        li += f'<li><a href="{href}"{"" if it or not solo_it else " hreflang=" + chr(34) + "it" + chr(34)}><b>{e(t_it if it else t_en)}</b><span>{e(d_it if it else d_en)}</span></a></li>'
+    return f'<nav class="correlati" aria-label="{"Da vedere anche" if it else "See also"}"><h2>{"Da vedere anche" if it else "See also"}</h2><ul>{li}</ul></nav>'
+
 def pagina(p, lang='it'):
     it = lang == 'it'
     rr = "../" if it else "../../"
@@ -615,6 +658,7 @@ def pagina(p, lang='it'):
 <main id="contenuto" class="articolo"><div class="contenitore">
 <div class="corpo">{p["corpo"]}</div>
 {galleria}
+{correlati(p["slug"], rr, it)}
 <aside class="cartellino"><h2>{'Vieni a trovarci' if it else 'Visit us'}</h2><p>{'Piazza Carità 14, Napoli, lungo via Toledo. Tutti i giorni dalle 6:30 alle 20:30.' if it else 'Piazza Carità 14, Naples, on via Toledo. Open every day from 6:30 am to 8:30 pm.'}</p>
 <div class="azioni sinistra"><a class="btn" href="{BAR["mappa"]}" rel="noopener">{'Come arrivare' if it else 'Get directions'}</a><a class="btn" href="tel:{BAR["tel_link"]}">{'Chiama' if it else 'Call'} {BAR["telefono"] if it else '+39 081 552 3488'}</a></div></aside>
 </div></main>
@@ -624,7 +668,7 @@ def pagina_contatti():
     url = BASE + "contatti/"
     h = testa("it", "Orari e contatti | Ceraldi Caffè, Piazza Carità 14",
               "Ceraldi Caffè, Piazza Carità 14, Napoli: aperto tutti i giorni 6:30–20:30. Telefono 081 552 3488, WhatsApp 328 438 8404 e come arrivare in metro.",
-              url, "../", ld=[ld_bar('it'), ld_breadcrumb([("Contatti", url)])], alternates=alt_coppia("contatti/"))
+              url, "../", ld=[ld_bar('it'), ld_breadcrumb([("Contatti", url)]), ld_faq(FAQ)], alternates=alt_coppia("contatti/"))
     return h + f"""<header class="testata-scura">{barra("../", "it", "contatti/")}</header>
 <main id="contenuto" class="articolo"><div class="contenitore">
 <p class="briciole"><a href="../">Ceraldi Caffè</a></p>
@@ -649,6 +693,8 @@ def pagina_contatti():
 <p>Leggi cosa dicono di noi su <a href="{BAR["google_recensioni"]}" rel="noopener">Google</a> e su <a href="{BAR["tripadvisor"]}" rel="noopener">Tripadvisor</a>. Se sei stato da noi, <a href="{BAR["google_scrivi"]}" rel="noopener">lascia una recensione</a>: ci aiuta a migliorare.</p>
 <h2>Social</h2>
 <p>Seguici su <a href="{BAR["instagram"]}" rel="noopener">Instagram</a> e <a href="{BAR["facebook"]}" rel="noopener">Facebook</a>.</p>
+<h2>Domande frequenti</h2>
+<div class="domande">{faq_html(FAQ)}</div>
 <h2>Dati aziendali</h2>
 <p>{RAGIONE_SOCIALE}<br>Piazza Carità 14, 80134 Napoli (NA)<br>P. IVA {PIVA}</p>
 </div>
@@ -691,7 +737,7 @@ def pagina_contatti_en():
     url = BASE + "en/contatti/"
     h = testa("en", "Opening hours and contact | Ceraldi Caffè, Naples",
               "Ceraldi Caffè, Piazza Carità 14, Naples: open daily 6:30 am – 8:30 pm. Phone +39 081 552 3488, WhatsApp +39 328 438 8404 and how to get here by metro.",
-              url, "../../", ld=[ld_bar('en'), ld_breadcrumb([("Contact", url)])], alternates=alt_coppia("contatti/"))
+              url, "../../", ld=[ld_bar('en'), ld_breadcrumb([("Contact", url)]), ld_faq(FAQ_EN)], alternates=alt_coppia("contatti/"))
     return h + f"""<header class="testata-scura">{barra("../../", "en", "contatti/")}</header>
 <main id="contenuto" class="articolo"><div class="contenitore">
 <p class="briciole"><a href="../">Ceraldi Caffè</a></p>
@@ -716,6 +762,8 @@ def pagina_contatti_en():
 <p>Read what people say about us on <a href="{BAR["google_recensioni"]}" rel="noopener">Google</a> and <a href="{BAR["tripadvisor"]}" rel="noopener">Tripadvisor</a>. If you have visited us, please <a href="{BAR["google_scrivi"]}" rel="noopener">leave a review</a>: it helps us improve.</p>
 <h2>Social media</h2>
 <p>Follow us on <a href="{BAR["instagram"]}" rel="noopener">Instagram</a> and <a href="{BAR["facebook"]}" rel="noopener">Facebook</a>.</p>
+<h2>Frequently asked questions</h2>
+<div class="domande">{faq_html(FAQ_EN)}</div>
 <h2>Company details</h2>
 <p>{RAGIONE_SOCIALE}<br>Piazza Carità 14, 80134 Napoli (NA), Italy<br>VAT no. {PIVA}</p>
 </div>
@@ -790,7 +838,7 @@ def pagina_specialita(lang='it'):
     intro = ("Oltre all'espresso e ai classici napoletani, al bancone e in vetrina ci sono prodotti che trovi solo da noi. Descrizioni, ingredienti e allergeni vengono dal nostro menu e si aggiornano con lui; in caso di allergie chiedi sempre al personale."
              if it else "Besides espresso and the Neapolitan classics, our counter and display case hold products you will only find here. Descriptions, ingredients and allergens come from our menu and are updated with it; if you have allergies, always ask our staff.")
     return h + f"""<header class="testata-scura">{barra(rr, lang, "specialita/")}</header>
-<main id="contenuto" class="articolo"><div class="contenitore">
+<main id="contenuto" class="articolo pagina-larga"><div class="contenitore">
 <p class="briciole"><a href="{rr}{'' if it else 'en/'}">Ceraldi Caffè</a></p>
 <h1>{titolo}</h1>
 <p class="dek">{e(intro)}</p>
@@ -896,8 +944,8 @@ def robots():
     return f"User-agent: *\nAllow: /\n\nSitemap: {BASE}sitemap.xml\n"
 
 if __name__ == "__main__":
-    scrivi("index.html", home_it())
-    scrivi("en/index.html", home_en())
+    scrivi("index.html", home("it"))
+    scrivi("en/index.html", home("en"))
     scrivi("storie/index.html", indice_storie())
     for a in ARTICOLI:
         scrivi(f"storie/{a['slug']}/index.html", articolo(a))
