@@ -36,7 +36,10 @@ BAR = {
     # Scheda Google con le recensioni (formato ufficiale Google Maps URLs; il vecchio search.google.com/local/reviews risponde 404)
     "google_recensioni": "https://www.google.com/maps/search/?api=1&query=Ceraldi%20Caff%C3%A8&query_place_id=ChIJj5ui8loIOxMRCpGd6YqmVy0",
     "google_scrivi": "https://search.google.com/local/writereview?placeid=ChIJj5ui8loIOxMRCpGd6YqmVy0",
-    # Scheda nella guida Bar d'Italia del Gambero Rosso (edizione 2026 verificata online; "da oltre dieci anni" dichiarato dal titolare)
+    # Valutazione Google: dato scritto a mano, va aggiornato insieme alla data di rilevazione
+    "google_voto": "4,3", "google_voto_en": "4.3", "google_n": "1.946", "google_n_en": "1,946", "google_data": "20/10/2026",
+    # Gambero Rosso: edizione 2026 verificata online; presenza dal 2014 dichiarata dal titolare (21/10/2026)
+    "gambero_dal": "2014",
     "gambero_rosso": "https://www.gamberorosso.it/luoghi/locali/caffe-bar/ceraldi-caffe/",
     "tripadvisor": "https://www.tripadvisor.it/Restaurant_Review-g187785-d2695184-Reviews-Ceraldi_Caffe-Naples_Province_of_Naples_Campania.html",
 }
@@ -314,35 +317,6 @@ ARTICOLI += [
  "provare": [("Croissant", "vuoto, crema, crema e amarena, cioccolato, albicocca, integrali e vegani"), ("Graffa napoletana", "fritta e zuccherata"), ("Sfogliatella riccia e frolla", "calda, con il caffè"), ("Maritozzo", "brioche ripiena di panna")],
 },
 {
- "slug": "pasticceria-artigianale",
- "titolo": "La nostra pasticceria: produzione propria e ricette di famiglia",
- "titolo_seo": "Produzione propria: la pasticceria di Ceraldi",
- "descrizione": "Da Ceraldi Caffè i dolci sono di produzione propria, con ricette di famiglia custodite da oltre cento anni: sfogliatelle, babà, pastiera e creazioni della casa.",
- "dek": "Quello che vedi in vetrina nasce da noi, con ricette di famiglia tramandate da oltre cento anni e custodite con cura.",
- "foto": "cestino",
- "lettura": 3,
- "corpo": """
-<p>Da Ceraldi Caffè la pasticceria è di <strong>produzione propria</strong>. Sfogliatelle, babà, pastiere, zeppole, torte e pasticcini nascono da ricette di famiglia, tramandate da oltre cento anni e custodite con la stessa cura di allora. È il significato del nostro motto: <em>artigiani per passione</em>, dal 1973.</p>
-
-<h2>Le ricette della tradizione</h2>
-<p>I classici napoletani seguono le ricette di sempre: la sfogliatella riccia e frolla con ricotta, semola, canditi e cannella; il babà bagnato al rum; la pastiera con grano, ricotta e fiori d'arancio; la zeppola di San Giuseppe con crema e amarena. Sono dolci che a Napoli tutti conoscono, e proprio per questo vanno fatti bene.</p>
-
-<h2>Le creazioni della casa</h2>
-<p>Accanto ai classici ci sono i dolci nati da Ceraldi, che uniscono la tradizione a ingredienti del territorio:</p>
-<ul>
-<li><strong>Cestino</strong>: il riccio della sfogliatella diventa un cesto croccante, farcito con chantilly e frutti di bosco.</li>
-<li><strong>Segreto amalfitano</strong>: babà al limoncello con un cuore di chantilly ai limoni di Amalfi.</li>
-<li><strong>Babàmisù</strong>: una cupola di babà con crema al mascarpone e caffè.</li>
-<li><strong>Pellecchiella</strong>: torta con le albicocche Pellecchielle del Vesuvio.</li>
-<li><strong>Torta di mele</strong>: con mela Annurca IGP, crema pasticcera e cannella.</li>
-</ul>
-
-<h2>Anche al bancone</h2>
-<p>La stessa idea vale per i caffè della casa: il Caffè Ceraldi con cioccolata, crema di caffè e panna fresca, il Caffè Babà, il Michelino. Sono il modo più semplice per assaggiare la nostra pasticceria anche in una tazza.</p>
-""",
- "provare": [("Cestino", "riccio della sfogliatella, chantilly e frutti di bosco"), ("Segreto amalfitano", "babà al limoncello e chantilly ai limoni di Amalfi"), ("Pellecchiella", "albicocche Pellecchielle del Vesuvio")],
-},
-{
  "slug": "dolci-dei-conventi",
  "titolo": "I dolci nati nei conventi di Napoli",
  "titolo_seo": "Dolci dei conventi napoletani: storia e leggende",
@@ -424,7 +398,7 @@ ARTICOLI += [
 <li><strong>La stazione Toledo</strong> della metropolitana Linea 1, aperta nel 2012 e famosa per le sue decorazioni.</li>
 <li><strong>Piazza Dante</strong> e, verso il mare, la Galleria Umberto I e piazza del Plebiscito.</li>
 </ul>
-<p>In mezzo a tutto questo, dal 2002, c'è Ceraldi Caffè, la cui storia era cominciata nei primi anni Settanta in Piazza Garibaldi: un caffè al bancone è il modo più napoletano per cominciare la passeggiata.</p>
+<p>In mezzo a tutto questo, dal 2002, c'è Ceraldi Caffè, la cui storia era cominciata nel 1973 in Piazza Garibaldi: un caffè al bancone è il modo più napoletano per cominciare la passeggiata.</p>
 """,
  "provare": [("Espresso al bancone", "prima di partire per via Toledo"), ("Sfogliatella riccia", "da mangiare calda, anche passeggiando")],
 },
@@ -455,7 +429,7 @@ ARTICOLI += [
 {
  "slug": "festa-della-mamma",
  "titolo": "Festa della mamma: fragole, cioccolato e dolci fatti col cuore",
- "titolo_seo": "Festa della mamma: idee di dolci con fragole e cioccolato",
+ "titolo_seo": "Festa della mamma: dolci con fragole e cioccolato",
  "descrizione": "Per la festa della mamma, la seconda domenica di maggio, i dolci che non sbagliano mai: fragole e cioccolato, crostata, macarons, biscotti e torta di rose.",
  "dek": "Non esiste un dolce ufficiale per la festa della mamma. Ma qualche abbinamento che non sbaglia mai c'è.",
  "foto": "crostatina",
@@ -524,21 +498,21 @@ FAQ = [
     ("Dove si trova il bar?", "In Piazza Carità 14, nel centro di Napoli, lungo via Toledo e vicino alla Pignasecca. Le stazioni Toledo e Dante della metropolitana Linea 1 sono a pochi minuti a piedi.", None),
     ("Posso vedere il menu prima di venire?", "Sì, il menu completo con prezzi è sul sito: " + BASE + "menu/ e c'è anche il menu interattivo con filtro allergeni: https://ceraldicaffe.qromo.it",
      'Sì, il menu completo con prezzi è qui sul sito: <a href="' + BASE + 'menu/">apri il menu di Ceraldi Caffè</a>. C\'è anche il <a href="https://ceraldicaffe.qromo.it" rel="noopener">menu interattivo</a> con filtro allergeni.'),
-    ("I dolci sono fatti da voi?", "Sì. La pasticceria è di produzione propria, con ricette di famiglia custodite da oltre cento anni: sfogliatelle, babà, pastiera, zeppole e le creazioni della casa.", None),
+    ("I dolci sono fatti da voi?", "Sì. La pasticceria è di produzione propria, con ricette di famiglia tramandate di generazione in generazione: sfogliatelle, babà, pastiera, zeppole e le creazioni della casa.", None),
     ("Cosa posso mangiare a colazione?", "La classica colazione all'italiana con croissant (vuoti, alla crema, al cioccolato, integrali, vegani), brioche, kranz e pain au chocolat, insieme ai dolci napoletani come sfogliatella, graffa e babà.", None),
     ("Fate anche l'aperitivo?", "Sì, fino alle 20:30, con il nostro Aspritz fatto in casa, spritz, negroni, gin tonic, vini campani al calice e birre.", None),
     ("Si può pranzare?", "Sì, con la rosticceria napoletana (frittatine, crocchè, pizza fritta), saltimbocca e panini, freselle e insalate.", None),
     ("Servite la colazione inglese?", "Sì, tutte le mattine serviamo la Full English Breakfast: uova, bacon, salsicce, fagioli, funghi, pomodori, pane tostato e tè.", None),
     ("Come posso contattarvi?", "Al telefono fisso 081 552 3488, al cellulare 328 438 8404 (anche WhatsApp) oppure su Instagram @ceraldicaffe.", None),
-    ("Dove posso leggere le recensioni?", "Su Google e su Tripadvisor, dove trovi quasi 2.000 recensioni dei nostri clienti.",
-     'Su <a href="https://search.google.com/local/reviews?placeid=ChIJj5ui8loIOxMRCpGd6YqmVy0" rel="noopener">Google</a> e su <a href="https://www.tripadvisor.it/Restaurant_Review-g187785-d2695184-Reviews-Ceraldi_Caffe-Naples_Province_of_Naples_Campania.html" rel="noopener">Tripadvisor</a>, dove trovi quasi 2.000 recensioni dei nostri clienti.'),
+    ("Dove posso leggere le recensioni?", "Su Google e su Tripadvisor, dove trovi le recensioni dei nostri clienti.",
+     'Su <a href="https://www.google.com/maps/search/?api=1&amp;query=Ceraldi%20Caff%C3%A8&amp;query_place_id=ChIJj5ui8loIOxMRCpGd6YqmVy0" rel="noopener">Google</a> e su <a href="https://www.tripadvisor.it/Restaurant_Review-g187785-d2695184-Reviews-Ceraldi_Caffe-Naples_Province_of_Naples_Campania.html" rel="noopener">Tripadvisor</a>, dove trovi le recensioni dei nostri clienti.'),
 ]
 FAQ_EN = [
     ("What are the opening hours?", "We are open every day, Sundays included, from 6:30 am to 8:30 pm.", None),
     ("Where is the café?", "At Piazza Carità 14 in central Naples, on Via Toledo near the Pignasecca market. Toledo and Dante stations on Metro Line 1 are a few minutes' walk away.", None),
     ("Can I see the menu online?", "Yes, the full menu with prices is on our website: " + BASE + "en/menu/ and there is also an interactive menu with an allergen filter: https://ceraldicaffe.qromo.it",
      'Yes: <a href="' + BASE + 'en/menu/">see the full menu with prices</a>, or the <a href="https://ceraldicaffe.qromo.it" rel="noopener">interactive menu</a>, available in English with an allergen filter.'),
-    ("Do you make your own pastries?", "Yes. Our pastries are made in-house from family recipes kept for over a hundred years.", None),
+    ("Do you make your own pastries?", "Yes. Our pastries are made in-house from family recipes handed down through the generations.", None),
     ("What can I have for breakfast?", "A classic Italian breakfast with croissants, brioche, kranz and pain au chocolat, plus Neapolitan pastries such as sfogliatella, graffa and babà.", None),
     ("Do you serve an English breakfast?", "Yes, every morning: eggs, bacon, sausages, beans, mushrooms, tomatoes, toast and tea.", None),
     ("How can I contact you?", "Call +39 081 552 3488, or mobile +39 328 438 8404 (also WhatsApp), or find us on Instagram @ceraldicaffe.", None),
@@ -560,7 +534,6 @@ FONTI = {
  "zeppole-di-san-giuseppe": [("Zeppola di San Giuseppe, Wikipedia", _W + "Zeppola_di_San_Giuseppe"), ("Ippolito Cavalcanti, Wikipedia", _W + "Ippolito_Cavalcanti"),
                              ("Zeppole di San Giuseppe: storia e varianti regionali, Dissapore", "https://www.dissapore.com/cucina/zeppole-di-san-giuseppe-storia-e-varianti-regionali-di-un-dolce-frittissimo/")],
  "colazione-napoletana": [("Croissant, Wikipedia", _W + "Croissant"), ("Kipferl, Wikipedia", _W + "Kipferl"), ("Sfogliatella, Wikipedia", _W + "Sfogliatella")],
- "pasticceria-artigianale": [("Albicocca vesuviana, Wikipedia", _W + "Albicocca_vesuviana")],
  "dolci-dei-conventi": [("Monastero di Santa Rosa, Wikipedia", _W + "Monastero_di_Santa_Rosa"), ("Chiesa di San Gregorio Armeno, Wikipedia", _W + "Chiesa_di_San_Gregorio_Armeno"),
                         ("Roccocò, Wikipedia", _W + "Roccoc%C3%B2"), ("Susamielli, Wikipedia", _W + "Susamielli")],
  "dolci-di-natale": [("Struffoli, Wikipedia", _W + "Struffoli"), ("Roccocò, Wikipedia", _W + "Roccoc%C3%B2"), ("Mustaccioli, Wikipedia", _W + "Mostaccioli"),
@@ -586,7 +559,7 @@ CATEGORIE = [
   "articoli": ["caffe-napoletano", "caffe-sospeso", "a-tazza-e-cafe", "colazione-napoletana"]},
  {"slug": "pasticceria-napoletana", "nome": "Pasticceria napoletana",
   "intro": "Storie, leggende e ingredienti dei dolci napoletani: sfogliatella, babà, pastiera, zeppole, i dolci dei conventi e quelli di Natale.",
-  "articoli": ["sfogliatella", "baba", "pastiera", "zeppole-di-san-giuseppe", "dolci-dei-conventi", "dolci-di-natale", "pasticceria-artigianale", "festa-della-mamma"]},
+  "articoli": ["sfogliatella", "baba", "pastiera", "zeppole-di-san-giuseppe", "dolci-dei-conventi", "dolci-di-natale", "festa-della-mamma"]},
  {"slug": "napoli", "nome": "Napoli: luoghi e tradizioni",
   "intro": "Piazza Carità, via Toledo e le tradizioni che si vedono ogni giorno per le strade di Napoli.",
   "articoli": ["piazza-carita-via-toledo", "tradizioni-napoletane"]},
@@ -600,7 +573,7 @@ MENU_APPROFONDIMENTI = {
  153840: "storie/sfogliatella/", 153867: "storie/sfogliatella/", 153868: "storie/sfogliatella/",
  153848: "storie/pastiera/",
  153854: "storie/baba/", 153855: "storie/baba/", 153860: "storie/baba/", 153861: "storie/baba/",
- 219384: "storie/pasticceria-artigianale/", 472126: "storie/pasticceria-artigianale/", 616031: "storie/pasticceria-artigianale/", 638146: "storie/pasticceria-artigianale/",
+ 219384: "pasticceria/", 472126: "pasticceria/", 616031: "pasticceria/", 638146: "pasticceria/",
  153960: "aspritz/",
  278576: "bar/", 296968: "bar/",
 }

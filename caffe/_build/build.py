@@ -138,8 +138,8 @@ def ld_bar(lang='it'):
         "slogan": "Artigiani per passione dal 1973", "url": BASE,
         "logo": BASE + "img/logo-ceraldi.svg",
         "image": [BASE + "img/sfogliatella-riccia-1024.webp", BASE + "img/baba-1024.webp", BASE + "img/squadra-1600.webp", BASE + "img/sala-1024.webp"],
-        "description": ("Bar e pasticceria napoletana della famiglia Ceraldi, attiva dal 1973 (prima in Piazza Garibaldi, dal 2002 in Piazza Carità, Napoli). Pasticceria di produzione propria con ricette di famiglia custodite da oltre cento anni: sfogliatelle, babà, pastiera, zeppole. Colazione all'italiana con croissant e brioche, caffè della casa, buffet freddi e aperitivo."
-                        if lang == 'it' else "Neapolitan café and pastry shop run by the Ceraldi family since 1973 (first in Piazza Garibaldi, in Piazza Carità, Naples, since 2002). In-house pastries from family recipes kept for over a hundred years: sfogliatella, babà, pastiera, zeppole. Italian breakfast with croissants and brioche, house coffees, cold buffet and aperitivo."),
+        "description": ("Bar e pasticceria napoletana della famiglia Ceraldi, attiva dal 1973 (prima in Piazza Garibaldi, dal 2002 in Piazza Carità, Napoli). Pasticceria di produzione propria con ricette di famiglia tramandate di generazione in generazione: sfogliatelle, babà, pastiera, zeppole. Colazione all'italiana con croissant e brioche, caffè della casa, aperitivo con l'Aspritz fatto in casa."
+                        if lang == 'it' else "Neapolitan café and pastry shop run by the Ceraldi family since 1973 (first in Piazza Garibaldi, in Piazza Carità, Naples, since 2002). In-house pastries from family recipes handed down through the generations: sfogliatella, babà, pastiera, zeppole. Italian breakfast with croissants and brioche, house coffees, aperitivo with our homemade Aspritz."),
         "foundingDate": "1973", "telephone": "+39 081 552 3488", "priceRange": "€",
         "contactPoint": [{"@type": "ContactPoint", "telephone": "+39 081 552 3488", "contactType": "customer service", "availableLanguage": ["it", "en"]},
                          {"@type": "ContactPoint", "telephone": "+39 328 438 8404", "contactType": "customer service", "availableLanguage": ["it"]}],
@@ -173,9 +173,9 @@ TRAD_EN = ["Crisp layers or soft shortcrust, from a convent on the Amalfi Coast.
 def recensioni(lang='it'):
     it = lang == 'it'
     return f'''<section class="sezione recensioni" id="{'recensioni' if it else 'reviews'}"><div class="contenitore recensioni-griglia">
-<div><p class="voto"><span class="voto-num">4,3</span><span class="voto-stelle" aria-hidden="true">★★★★<i>★</i></span></p>
-<p class="voto-txt">{'Valutazione media su Google, con quasi 2.000 recensioni dei nostri clienti.' if it else 'Average rating on Google, from almost 2,000 customer reviews.'}</p>
-<p class="voto-txt premio">{'Da oltre dieci anni nella guida <strong>Bar d&#39;Italia del Gambero Rosso</strong>, presenti anche nell&#39;edizione 2026.' if it else 'Listed for over ten years in the <strong>Gambero Rosso Bar d&#39;Italia</strong> guide, including the 2026 edition.'} <a href="{BAR["gambero_rosso"]}" rel="noopener">{'Leggi la scheda' if it else 'Read the listing'}</a></p></div>
+<div><p class="voto"><span class="voto-num">{BAR["google_voto"]}</span><span class="voto-stelle" aria-hidden="true">★★★★<i>★</i></span></p>
+<p class="voto-txt">{f'Valutazione media su Google, su {BAR["google_n"]} recensioni. Dato rilevato il {BAR["google_data"]}.' if it else f'Average Google rating from {BAR["google_n_en"]} reviews, as of {BAR["google_data"]}.'}</p>
+<p class="voto-txt premio">{f'Nella guida <strong>Bar d&#39;Italia del Gambero Rosso</strong> dal {BAR["gambero_dal"]}, presenti anche nell&#39;edizione 2026.' if it else f'Listed in the <strong>Gambero Rosso Bar d&#39;Italia</strong> guide since {BAR["gambero_dal"]}, including the 2026 edition.'} <a href="{BAR["gambero_rosso"]}" rel="noopener">{'Leggi la scheda' if it else 'Read the listing'}</a></p></div>
 <div><h2>{'Cosa dicono di noi' if it else 'What our customers say'}</h2>
 <p class="intro">{'Leggi le opinioni di chi è passato da Piazza Carità, o lascia la tua dopo la visita.' if it else 'Read what visitors say about us, or leave your own review after your visit.'}</p>
 <div class="azioni sinistra"><a class="btn scuro" href="{BAR["google_recensioni"]}" rel="noopener">{'Recensioni su Google' if it else 'Reviews on Google'}</a>
@@ -202,9 +202,9 @@ def home_it():
 <div class="hero-testo">
 <p class="dal">Artigiani per passione dal 1973</p>
 <h1>Bar e pasticceria napoletana in Piazza Carità</h1>
-<p class="tag">{e(BAR["tagline"])} Dolci di produzione propria, con ricette di famiglia custodite da oltre cento anni.</p>
+<p class="tag">{e(BAR["tagline"])} Dolci di produzione propria, con ricette di famiglia tramandate di generazione in generazione.</p>
 <div class="azioni sinistra"><a class="btn pieno" href="{BAR["mappa"]}" rel="noopener">Come arrivare</a><a class="btn" href="menu/">Guarda il menu</a><a class="btn" href="tel:{BAR["tel_link"]}">Chiama</a></div>
-<p class="aperto">Aperto tutti i giorni dalle 6:30 alle 20:30<br><a href="#recensioni">Valutazione 4,3 su Google</a><br><a href="{BAR["gambero_rosso"]}" rel="noopener">Nella guida Bar d'Italia del Gambero Rosso</a></p>
+<p class="aperto">Aperto tutti i giorni dalle 6:30 alle 20:30<br><a href="#recensioni">Valutazione {BAR["google_voto"]} su Google</a><br><a href="{BAR["gambero_rosso"]}" rel="noopener">Nella guida Bar d'Italia del Gambero Rosso</a></p>
 </div>
 <figure class="specchio">{immagine("sfogliatella-riccia", "", "(max-width: 900px) 92vw, 480px", eager=True, cls="fuoco-sx")}</figure>
 </div>
@@ -217,8 +217,8 @@ def home_it():
 
 <section class="sezione"><div class="contenitore storia">
 <div><h2>Artigiani per passione, dal 1973</h2>
-<p>La storia della famiglia Ceraldi nei bar di Napoli comincia nei primi anni Settanta in Piazza Garibaldi. Nel 2002 l'arrivo in Piazza Carità, lungo via Toledo, a due passi dalla Pignasecca e dai Quartieri Spagnoli: da allora è il nostro bar. Si entra la mattina presto per il primo caffè e una sfogliatella calda, si torna a metà giornata per un dolce dalla vetrina, ci si ferma la sera per l'aperitivo.</p>
-<p>La nostra pasticceria è di <strong>produzione propria</strong>: sfogliatelle, babà, pastiere e torte nascono da ricette di famiglia custodite da oltre cento anni, insieme alle creazioni della casa. Il locale è quello di un bar napoletano elegante, con specchi, poltroncine in pelle rossa e un bancone sempre affollato.</p>
+<p>La storia della famiglia Ceraldi nei bar di Napoli comincia nel 1973 in Piazza Garibaldi, con Michele Ceraldi. Nel 2002 l'arrivo in Piazza Carità, lungo via Toledo, a due passi dalla Pignasecca e dai Quartieri Spagnoli: da allora è il nostro bar. Si entra la mattina presto per il primo caffè e una sfogliatella calda, si torna a metà giornata per un dolce dalla vetrina, ci si ferma la sera per l'aperitivo.</p>
+<p>La nostra pasticceria è di <strong>produzione propria</strong>: sfogliatelle, babà, pastiere e torte nascono da ricette di famiglia tramandate di generazione in generazione, insieme alle creazioni della casa. Il locale è quello di un bar napoletano elegante, con specchi, poltroncine in pelle rossa e un bancone sempre affollato.</p>
 <p><a class="link-forte" href="storia/">Leggi la nostra storia</a></p></div>
 <figure class="foto-larga">{immagine("squadra", "", "(max-width: 900px) 100vw, 560px")}<figcaption>La squadra di Ceraldi Caffè al bancone.</figcaption></figure>
 </div></section>
@@ -262,7 +262,7 @@ def home_it():
 <section class="sezione aperitivo"><div class="contenitore due-colonne inverti">
 <figure class="foto-alta">{immagine("aperitivo", "", "(max-width: 900px) 100vw, 520px")}</figure>
 <div><h2>E la sera, l'aperitivo</h2>
-<p class="intro">Spritz, cocktail, birre e buffet freddi: la giornata in Piazza Carità finisce al tavolo, con gli amici.</p>
+<p class="intro">Spritz, il nostro Aspritz, cocktail e birre: la giornata in Piazza Carità finisce al tavolo, con gli amici.</p>
 <div class="azioni sinistra"><a class="btn scuro" href="aspritz/">Scopri l'Aspritz</a><a class="btn scuro-vuoto" href="menu/#cocktails-birre-alcolici">Cocktail e drink</a></div></div>
 </div></section>
 
@@ -304,9 +304,9 @@ def home_en():
 <div class="hero-testo">
 <p class="dal">Craftspeople by passion since 1973</p>
 <h1>Neapolitan café and pastry shop in Piazza Carità</h1>
-<p class="tag">From breakfast to aperitivo, in the heart of Naples. Pastries made in-house from family recipes kept for over a hundred years.</p>
+<p class="tag">From breakfast to aperitivo, in the heart of Naples. Pastries made in-house from family recipes handed down through the generations.</p>
 <div class="azioni sinistra"><a class="btn pieno" href="{BAR["mappa"]}" rel="noopener">Get directions</a><a class="btn" href="menu/">See the menu</a><a class="btn" href="tel:{BAR["tel_link"]}">Call</a></div>
-<p class="aperto">Open every day from 6:30 am to 8:30 pm<br><a href="#reviews">Rated 4.3 on Google</a><br><a href="{BAR["gambero_rosso"]}" rel="noopener">Listed in Gambero Rosso's Bar d'Italia guide</a></p>
+<p class="aperto">Open every day from 6:30 am to 8:30 pm<br><a href="#reviews">Rated {BAR["google_voto_en"]} on Google</a><br><a href="{BAR["gambero_rosso"]}" rel="noopener">Listed in Gambero Rosso's Bar d'Italia guide</a></p>
 </div>
 <figure class="specchio">{immagine("sfogliatella-riccia", "../", "(max-width: 900px) 92vw, 480px", eager=True, cls="fuoco-sx")}</figure>
 </div>
@@ -314,8 +314,8 @@ def home_en():
 <main id="contenuto">
 <section class="sezione"><div class="contenitore storia">
 <div><h2>Craftspeople by passion, since 1973</h2>
-<p>The Ceraldi family's story in Naples cafés began in the early 1970s in Piazza Garibaldi. In 2002 we moved to Piazza Carità, on Via Toledo, steps from the Pignasecca market and the Spanish Quarter. Locals come in early for their first espresso and a warm sfogliatella, stop by during the day for something from the pastry case, and come back in the evening for aperitivo.</p>
-<p>Our pastries are <strong>made in-house</strong> from family recipes kept for over a hundred years, alongside our own creations. It is an elegant Neapolitan bar, with mirrors, red leather armchairs and a busy counter.</p></div>
+<p>The Ceraldi family's story in Naples cafés began in 1973 in Piazza Garibaldi, with Michele Ceraldi. In 2002 we moved to Piazza Carità, on Via Toledo, steps from the Pignasecca market and the Spanish Quarter. Locals come in early for their first espresso and a warm sfogliatella, stop by during the day for something from the pastry case, and come back in the evening for aperitivo.</p>
+<p>Our pastries are <strong>made in-house</strong> from family recipes handed down through the generations, alongside our own creations. It is an elegant Neapolitan bar, with mirrors, red leather armchairs and a busy counter.</p></div>
 <figure class="foto-larga">{immagine("squadra", "../", "(max-width: 900px) 100vw, 560px")}<figcaption>The Ceraldi Caffè team at the counter.</figcaption></figure>
 </div></section>
 <section class="sezione" id="breakfast"><div class="contenitore due-colonne">
@@ -468,6 +468,18 @@ def _pulisci(t):
 def _prezzo(c):
     return ('€ ' + f"{c / 100:.2f}".replace('.', ',')) if c else ''
 
+# Nomi delle sezioni del menu come appaiono sul sito (su qromo restano quelli interni).
+# L'ancora (#bar-dolci, ...) resta ricavata dal nome qromo, così i collegamenti esistenti non cambiano.
+NOMI_MENU = {
+    "Bar & Dolci": ("Bar e dolci", "Coffee bar and pastries"),
+    "Food": ("Rosticceria e pranzo", "Street food and lunch"),
+    "Cocktails, Birre & Alcolici": ("Cocktail, birre e alcolici", "Cocktails, beers and spirits"),
+    "Tè & Tisane Damman": ("Tè e tisane Dammann", "Dammann teas and infusions"),
+    "Oriental latte": ("Matcha, chai e golden milk", "Matcha, chai and golden milk"),
+    "Senza Glutine": ("Senza glutine", "Gluten-free"),
+    "Gelati": ("Gelati", "Ice cream"),
+}
+
 def dati_menu():
     d = json.load(open(os.path.join(QUI, 'menu_grezzo.json'), encoding='utf-8'))
     all_by = {}
@@ -491,7 +503,9 @@ def dati_menu():
             if voci:
                 cats.append({"nome": _pulisci(c['name']), "voci": voci})
         if cats:
-            out.append({"nome": _pulisci(m['name']), "id": _slug(_pulisci(m['name'])), "categorie": cats})
+            n = _pulisci(m['name'])
+            it_, en_ = NOMI_MENU.get(n, (n, n))
+            out.append({"nome": it_, "nome_en": en_, "id": _slug(n), "categorie": cats})
     return out
 
 def ld_breadcrumb(voci):
@@ -541,10 +555,10 @@ def pagina_menu(lang='it'):
         h = testa("en", "Menu and prices | Ceraldi Caffè, Naples",
                   f"The full menu of Ceraldi Caffè, Naples: {n_voci} items, from coffee and pastries to street food and cocktails, with prices and allergens.",
                   url, rr, ld=[ld, ld_breadcrumb([("Menu", url)])], alternates=alt_coppia("menu/"))
-    chips = ''.join('<a href="#' + m['id'] + '">' + e(m['nome']) + '</a>' for m in M)
+    chips = ''.join('<a href="#' + m['id'] + '">' + e(m['nome'] if it else m['nome_en']) + '</a>' for m in M)
     sezioni = ''
     for m in M:
-        sezioni += '<section class="menu-sezione" id="' + m['id'] + '"><h2' + ('' if it else ' lang="it"') + '>' + e(m['nome']) + '</h2>'
+        sezioni += '<section class="menu-sezione" id="' + m['id'] + '"><h2>' + e(m['nome'] if it else m['nome_en']) + '</h2>'
         for c in m['categorie']:
             sezioni += '<h3>' + e(c['nome']) + '</h3><ul class="menu-voci"' + ('' if it else ' lang="it"') + '>' + ''.join(_voce_html(v, rr, it) for v in c['voci']) + '</ul>'
         sezioni += '</section>'
@@ -807,7 +821,7 @@ def llms():
     righe = '\n'.join(f'- [{a["titolo"]}]({BASE}storie/{a["slug"]}/): {a["descrizione"]}' for a in ARTICOLI)
     return f'''# Ceraldi Caffè
 
-> Bar e pasticceria napoletana in Piazza Carità 14, Napoli (80134). Attività della famiglia Ceraldi dal 1973 (primi anni a Piazza Garibaldi), in Piazza Carità dal 2002. Motto: "Artigiani per passione dal 1973". Pasticceria di produzione propria con ricette di famiglia custodite da oltre cento anni.
+> Bar e pasticceria napoletana in Piazza Carità 14, Napoli (80134). Attività della famiglia Ceraldi, fondata da Michele Ceraldi nel 1973 in Piazza Garibaldi, in Piazza Carità dal 2002. Motto: "Artigiani per passione dal 1973". Pasticceria di produzione propria con ricette di famiglia tramandate di generazione in generazione.
 
 ## Informazioni essenziali
 - Indirizzo: Piazza Carità 14, 80134 Napoli, Italia (lungo via Toledo, vicino alle stazioni metro Toledo e Dante, Linea 1)
@@ -815,8 +829,8 @@ def llms():
 - Telefono: +39 081 552 3488; cellulare e WhatsApp: +39 328 438 8404
 - Menu completo con prezzi: {BASE}menu/ (menu interattivo con allergeni: {BAR["menu"]})
 - Ragione sociale: {RAGIONE_SOCIALE}, P. IVA {PIVA}
-- Recensioni: Google ({BAR["google_recensioni"]}), Tripadvisor ({BAR["tripadvisor"]}); valutazione 4,3/5 su Google con quasi 2.000 recensioni
-- Riconoscimenti: da oltre dieci anni nella guida Bar d'Italia del Gambero Rosso (scheda: {BAR["gambero_rosso"]})
+- Recensioni: Google ({BAR["google_recensioni"]}), Tripadvisor ({BAR["tripadvisor"]}); valutazione {BAR['google_voto']}/5 su Google con {BAR['google_n']} recensioni (dato rilevato il {BAR['google_data']})
+- Riconoscimenti: nella guida Bar d'Italia del Gambero Rosso dal {BAR['gambero_dal']}, presenti nell'edizione 2026 (scheda: {BAR["gambero_rosso"]})
 - Instagram: {BAR["instagram"]}
 - Mappa: {BAR["mappa"]}
 
@@ -857,14 +871,25 @@ def pagina_404(rr):
 ''' + piede(rr)
 
 # Vecchi indirizzi di ceraldicaffe.it che cambiano nome: pagina di rimando (GitHub Pages non fa redirect 301)
-RIMANDI = {"1973-2": "storia", "gastronomia": "rosticceria"}
+# Vecchi indirizzi -> nuova pagina. Comprende gli articoli 2019 del vecchio WordPress (permalink /anno/mese/giorno/nome/)
+# e gli articoli del sito nuovo assorbiti da una pagina principale.
+RIMANDI = {
+    "1973-2": "storia",
+    "gastronomia": "rosticceria",
+    "2019/02/26/artigiani-per-passione": "storia",
+    "2019/02/26/caffe-napoletano": "storie/caffe-napoletano",
+    "2019/04/01/a-napoli-e-sempre-dolce-la-primavera": "storie/pastiera",
+    "2019/04/15/aspritz-aperitivo-ceraldi-caffe": "aspritz",
+    "2019/05/09/festa-della-mamma-ceraldi-caffe": "storie/festa-della-mamma",
+    "storie/pasticceria-artigianale": "pasticceria",
+}
 def rimando(dest):
     u = BASE + dest + "/"
     return f'''<!DOCTYPE html>
-<html lang="it"><head><meta charset="utf-8"><title>Ceraldi Caffè</title>
-<meta name="robots" content="noindex"><link rel="canonical" href="{u}">
-<meta http-equiv="refresh" content="0; url=../{dest}/"></head>
-<body><p><a href="../{dest}/">Vai alla pagina</a></p></body></html>
+<html lang="it"><head><meta charset="utf-8"><title>Pagina spostata | Ceraldi Caffè</title>
+<link rel="canonical" href="{u}">
+<meta http-equiv="refresh" content="0; url={u}"></head>
+<body><p>Questa pagina si è spostata: <a href="{u}">vai alla nuova pagina</a>.</p></body></html>
 '''
 
 def robots():

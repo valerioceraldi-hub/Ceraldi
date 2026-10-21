@@ -9,27 +9,27 @@ PAGINE_EN = [
  "nav": "Our story",
  "titolo": "A corner of Piazza Carità that was waiting for us",
  "titolo_seo": "Our story: the Ceraldi family, Naples since 1973",
- "descrizione": "The Ceraldi family, from Piazza Garibaldi in the early 1970s to Piazza Carità in 2002: a father and two sons carrying on a Neapolitan café tradition.",
- "dek": "From Piazza Garibaldi in the early seventies to Piazza Carità in 2002: the story of a father, his two sons and a café that seemed to be waiting for them.",
+ "descrizione": "Michele Ceraldi opened his first café in Piazza Garibaldi in 1973 and moved to Piazza Carità in 2002. Today he runs it with his sons Vincenzo and Valerio.",
+ "dek": "From Piazza Garibaldi in 1973 to Piazza Carità in 2002: the story of a father, his two sons and a café that seemed to be waiting for them.",
  "foto": "squadra",
  "corpo": """
-<p class="capolettera">Naples, the early 1970s. In Piazza Garibaldi, in front of the station, the city arrives and leaves all day long: suitcases, trains, voices, car horns. This is where the Ceraldi family opens its first café. The trade is learned at the counter, one cup at a time, between people rushing to catch a train and people who have just arrived and want, before anything else, a proper coffee.</p>
+<p class="capolettera">Naples, 1973. In Piazza Garibaldi, in front of the station, the city arrives and leaves all day long: suitcases, trains, voices, car horns. This is where Michele Ceraldi opens his first café. The trade is learned at the counter, one cup at a time, between people rushing to catch a train and people who have just arrived and want, before anything else, a proper coffee.</p>
 
 <h2>2002 and the empty corner</h2>
-<p>The years go by and the business grows. Then, one day in 2002, the founder is walking through the streets of the old centre without looking for anything in particular, and reaches the heart of the city: Piazza Carità. All around, the usual bustle of traders, office workers and passers-by, with the Pignasecca market calling from its stalls. His eye falls on an empty, lifeless corner.</p>
+<p>The years go by and the business grows. Then, one day in 2002, Michele is walking through the streets of the old centre without looking for anything in particular, and reaches the heart of the city: Piazza Carità. All around, the usual bustle of traders, office workers and passers-by, with the Pignasecca market calling from its stalls. His eye falls on an empty, lifeless corner.</p>
 <p>Anyone else would have walked on. He didn't. That corner, he says, seemed to have been waiting for him all along. Since that day, Ceraldi Caffè has been at Piazza Carità 14.</p>
 
 <h2>From the first coffee to the last aperitivo</h2>
 <p>Ever since, the café's day has followed the rhythm of the square. Early in the morning come the office workers, only truly awake after the first sip. Then the tourists, map in hand and a little unsure. Then the people in no hurry at all. And in the evening, before heading home loaded with bags, papers and wonders, many stop for one last aperitivo. It is the happy ending of every day, and for us the sweetest.</p>
 
 <h2>A father and two sons</h2>
-<p>Today the tradition is carried on by the founder together with his two sons, <strong>Vincenzo and Valerio</strong>. Two generations of Neapolitan taste behind the same counter: one who learned the trade in Piazza Garibaldi, and those who grew up surrounded by the scents of the bakery.</p>
-<p>Because that is where everything in the display case is born, in our own kitchens: sfogliatelle, babà, pastiere, cakes and savoury pastries, made with <a href="../pasticceria/">family recipes kept for over a hundred years</a>. Recipes that are not written on a website, but held in the hands of the people who make them every morning.</p>
+<p>Today the tradition is carried on by Michele together with his two sons, <strong>Vincenzo and Valerio</strong>. Two generations of Neapolitan taste behind the same counter: one who learned the trade in Piazza Garibaldi, and those who grew up surrounded by the scents of the bakery.</p>
+<p>Because that is where everything in the display case is born, in our own kitchens: sfogliatelle, babà, pastiere, cakes and savoury pastries, made with <a href="../pasticceria/">family recipes handed down through the generations</a>. Recipes that are not written on a website, but held in the hands of the people who make them every morning.</p>
 
 <h2>Craftspeople by passion</h2>
 <p>Our motto is written in our logo: <em>artigiani per passione</em>, craftspeople by passion. It means doing things the way they were always done, even when there is a quicker way. It means coffee is served in a warm cup, a sfogliatella has to crunch, and whoever walks in should feel at home, even if they come from far away.</p>
 <p>In 2019 we refreshed our logo and our tagline, «Artigiani per passione dal 1973» (craftspeople by passion since 1973): looking back at our past to build the future, without forgetting our roots, and sometimes simplifying and focusing on what matters.</p>
-<p>That commitment has been noticed: for over ten years Ceraldi Caffè has been listed in the <a href="https://www.gamberorosso.it/luoghi/locali/caffe-bar/ceraldi-caffe/" rel="noopener" hreflang="it">Gambero Rosso Bar d'Italia guide</a>.</p>
+<p>That commitment has been noticed: since 2014 Ceraldi Caffè has been listed in the <a href="https://www.gamberorosso.it/luoghi/locali/caffe-bar/ceraldi-caffe/" rel="noopener" hreflang="it">Gambero Rosso Bar d'Italia guide</a>.</p>
 <p>Come and see us in Piazza Carità: we write the rest of the story every day, at the counter.</p>
 """,
  "galleria": ["famiglia", "logo-ceraldi-caffe-carta"],
@@ -72,11 +72,11 @@ PAGINE_EN = [
  "nav": "Pastry shop",
  "titolo": "The pastry shop: made in-house with family recipes",
  "titolo_seo": "Neapolitan pastry shop in central Naples",
- "descrizione": "Pastries made in-house in Piazza Carità with family recipes kept for over a hundred years: sfogliatelle, babà, pastiera and house creations.",
- "dek": "Everything in our display case is made in our own kitchens, with family recipes kept for over a hundred years.",
+ "descrizione": "Pastries made in-house in Piazza Carità with family recipes handed down through the generations: sfogliatelle, babà, pastiera and house creations.",
+ "dek": "Everything in our display case is made in our own kitchens, with family recipes handed down through the generations.",
  "foto": "cestino",
  "corpo": """
-<p>An old Neapolitan saying goes: "Naples has three beautiful things: the sun, the sea and the sfogliatella." It still holds true here. Ceraldi Caffè's pastries are <strong>made in-house</strong>: they are born in our kitchens every day, with family recipes kept for over a hundred years.</p>
+<p>An old Neapolitan saying goes: "Naples has three beautiful things: the sun, the sea and the sfogliatella." It still holds true here. Ceraldi Caffè's pastries are <strong>made in-house</strong>: they are born in our kitchens every day, with family recipes handed down through the generations.</p>
 
 <h2>Neapolitan classics</h2>
 <ul>

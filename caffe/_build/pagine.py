@@ -13,27 +13,27 @@ PAGINE = [
  "nav": "La nostra storia",
  "titolo": "Un angolo di Piazza Carità che aspettava noi",
  "titolo_seo": "La storia di Ceraldi, bar a Napoli dal 1973",
- "descrizione": "La famiglia Ceraldi dai primi anni Settanta in Piazza Garibaldi a Piazza Carità nel 2002: un padre e due figli che portano avanti bar e pasticceria.",
- "dek": "Dai primi anni Settanta in Piazza Garibaldi al 2002 in Piazza Carità: la storia di un padre, dei suoi due figli e di un bar che sembrava aspettarli.",
+ "descrizione": "Michele Ceraldi apre il primo bar in Piazza Garibaldi nel 1973; nel 2002 l'arrivo in Piazza Carità. Oggi lo porta avanti con i figli Vincenzo e Valerio.",
+ "dek": "Dal 1973 in Piazza Garibaldi al 2002 in Piazza Carità: la storia di un padre, dei suoi due figli e di un bar che sembrava aspettarli.",
  "foto": "squadra",
  "corpo": """
-<p class="capolettera">Napoli, primi anni Settanta. In Piazza Garibaldi, davanti alla stazione, la città arriva e riparte in continuazione: valigie, treni, voci, clacson. È lì che la famiglia Ceraldi apre il suo primo bar. Il mestiere si impara al bancone, una tazzina alla volta, tra chi ha fretta di partire e chi è appena arrivato e cerca, prima di tutto, un caffè fatto come si deve.</p>
+<p class="capolettera">Napoli, 1973. In Piazza Garibaldi, davanti alla stazione, la città arriva e riparte in continuazione: valigie, treni, voci, clacson. È lì che Michele Ceraldi apre il suo primo bar. Il mestiere si impara al bancone, una tazzina alla volta, tra chi ha fretta di partire e chi è appena arrivato e cerca, prima di tutto, un caffè fatto come si deve.</p>
 
 <h2>Il 2002 e l'angolo vuoto</h2>
-<p>Passano gli anni, il bar cresce. Poi, un giorno del 2002, il fondatore cammina per i vicoli del centro senza cercare niente di preciso, e arriva nel cuore della città: <a href="../storie/piazza-carita-via-toledo/">Piazza Carità</a>. Intorno c'è il brulichio di sempre, mercanti, impiegati, passanti, la Pignasecca che chiama dai suoi banchi. Il suo sguardo si ferma su un angolo vuoto e senza vita.</p>
+<p>Passano gli anni, il bar cresce. Poi, un giorno del 2002, Michele cammina per i vicoli del centro senza cercare niente di preciso, e arriva nel cuore della città: <a href="../storie/piazza-carita-via-toledo/">Piazza Carità</a>. Intorno c'è il brulichio di sempre, mercanti, impiegati, passanti, la Pignasecca che chiama dai suoi banchi. Il suo sguardo si ferma su un angolo vuoto e senza vita.</p>
 <p>Un altro avrebbe tirato dritto. Lui no. Quell'angolo, racconta, sembrava aver aspettato proprio lui per tutto quel tempo. Da quel giorno, in Piazza Carità 14, c'è Ceraldi Caffè.</p>
 
 <h2>Dalla prima tazzina all'ultimo aperitivo</h2>
 <p>Da allora la giornata del bar segue quella della piazza. Al mattino presto arrivano gli impiegati ancora assonnati, che si svegliano davvero solo al primo sorso. Poi i turisti, con la mappa in mano e l'aria incerta. Poi i passanti senza fretta. E la sera, prima di tornare a casa carichi di borse, carte e meraviglie, molti si concedono un ultimo aperitivo. È il lieto fine di ogni giornata, e per noi il più dolce.</p>
 
 <h2>Un padre e due figli</h2>
-<p>Oggi la tradizione è portata avanti dal fondatore insieme ai suoi due figli, <strong>Vincenzo e Valerio</strong>. Due generazioni di gusto napoletano dietro lo stesso bancone: chi ha imparato il mestiere in Piazza Garibaldi e chi è cresciuto tra i profumi del laboratorio.</p>
-<p>Perché è lì, nei nostri laboratori, che nasce tutto quello che vedi in vetrina: sfogliatelle, babà, pastiere, torte e la rosticceria, con <a href="../pasticceria/">ricette di famiglia custodite da oltre cento anni</a>. Ricette che non stanno scritte su un sito, ma nelle mani di chi le prepara ogni mattina.</p>
+<p>Oggi la tradizione è portata avanti da Michele insieme ai suoi due figli, <strong>Vincenzo e Valerio</strong>. Due generazioni di gusto napoletano dietro lo stesso bancone: chi ha imparato il mestiere in Piazza Garibaldi e chi è cresciuto tra i profumi del laboratorio.</p>
+<p>Perché è lì, nei nostri laboratori, che nasce tutto quello che vedi in vetrina: sfogliatelle, babà, pastiere, torte e la rosticceria, con <a href="../pasticceria/">ricette di famiglia tramandate di generazione in generazione</a>. Ricette che non stanno scritte su un sito, ma nelle mani di chi le prepara ogni mattina.</p>
 
 <h2>Artigiani per passione</h2>
 <p>Il nostro motto è scritto nel logo: <em>artigiani per passione</em>. Vuol dire fare le cose come si facevano, anche quando ci sarebbe un modo più veloce. Vuol dire che il caffè si serve nella tazzina calda, che la sfogliatella deve scrocchiare, che chi entra deve sentirsi a casa, anche se viene da lontano.</p>
 <p>Nel 2019 abbiamo rinnovato il logo e il pay-off, «Artigiani per passione dal 1973»: guardare al passato per costruire il futuro, senza dimenticare le nostre radici, e per farlo, a volte, semplificare e guardare all'essenziale.</p>
-<p>Un impegno che negli anni è stato notato: da oltre dieci anni Ceraldi Caffè è nella guida <a href="https://www.gamberorosso.it/luoghi/locali/caffe-bar/ceraldi-caffe/" rel="noopener">Bar d'Italia del Gambero Rosso</a>.</p>
+<p>Un impegno che negli anni è stato notato: dal 2014 Ceraldi Caffè è nella guida <a href="https://www.gamberorosso.it/luoghi/locali/caffe-bar/ceraldi-caffe/" rel="noopener">Bar d'Italia del Gambero Rosso</a>.</p>
 <p>Vieni a trovarci in Piazza Carità: il resto della storia lo scriviamo ogni giorno, al bancone.</p>
 """,
  "galleria": ["famiglia", "logo-ceraldi-caffe-carta"],
@@ -77,11 +77,11 @@ PAGINE = [
  "nav": "La pasticceria",
  "titolo": "La pasticceria: produzione propria e ricette di famiglia",
  "titolo_seo": "Pasticceria napoletana in centro a Napoli",
- "descrizione": "Pasticceria di produzione propria in Piazza Carità, con ricette di famiglia custodite da oltre cento anni: sfogliatelle, babà, pastiera e dolci della casa.",
- "dek": "Tutto quello che vedi in vetrina nasce nei nostri laboratori, con ricette di famiglia custodite da oltre cento anni.",
+ "descrizione": "Pasticceria di produzione propria in Piazza Carità, con ricette di famiglia tramandate nel tempo: sfogliatelle, babà, pastiera e dolci della casa.",
+ "dek": "Tutto quello che vedi in vetrina nasce nei nostri laboratori, con ricette di famiglia tramandate di generazione in generazione.",
  "foto": "cestino",
  "corpo": """
-<p>"Napoli tre cose tene belle: 'o sole, 'o mare e 'a sfugliatella." Il detto è vecchio, ma da noi vale ancora. La pasticceria di Ceraldi Caffè è di <strong>produzione propria</strong>: i dolci nascono nei nostri laboratori, ogni giorno, con ricette di famiglia custodite da oltre cento anni.</p>
+<p>"Napoli tre cose tene belle: 'o sole, 'o mare e 'a sfugliatella." Il detto è vecchio, ma da noi vale ancora. La pasticceria di Ceraldi Caffè è di <strong>produzione propria</strong>: i dolci nascono nei nostri laboratori, ogni giorno, con ricette di famiglia tramandate di generazione in generazione.</p>
 
 <h2>I classici napoletani</h2>
 <ul>
