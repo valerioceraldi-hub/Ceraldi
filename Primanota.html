@@ -590,7 +590,7 @@ function avvisoCreditoIA(){
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.37.2</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.38.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -1729,6 +1729,14 @@ html[data-theme="dark"] .reg-import-link{border-color:rgba(255,255,255,.08)}
     <div class="rcard-hd" onclick="paApri()">
       <div class="rcard-hd-left"><span class="rcard-ico ds-g ds-g-teal"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/></svg></span>
         <div><div class="rcard-title">Prodotti acquistati</div><div class="rcard-sub">Cosa ho comprato, da chi, quanto e a che prezzo: letto dalle fatture</div></div>
+      </div><span class="rcard-arr">&#8250;</span>
+    </div>
+  </div>
+  <!-- 21/10/2026: Utenze — luce, gas, acqua lette dalle bollette PDF -->
+  <div class="rcard" id="rc-utenze">
+    <div class="rcard-hd" onclick="utApri()">
+      <div class="rcard-hd-left"><span class="rcard-ico ds-g ds-g-orange"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg></span>
+        <div><div class="rcard-title">Utenze</div><div class="rcard-sub" id="rsub-utenze">Luce, gas e acqua: costo unitario, consumi, scadenze</div></div>
       </div><span class="rcard-arr">&#8250;</span>
     </div>
   </div>
@@ -26264,8 +26272,10 @@ function _anAggiornaHomeDebounce(){ clearTimeout(_anTimer); _anTimer=setTimeout(
 async function _anAggiornaHome(forza){
   var slot=document.getElementById('homeAnomalie'); if(!slot) return;
   try{
-    await Promise.all([_anCaricaMovAbbinati(forza), _anCaricaIgnorate(forza), (typeof _ncCaricaRiferimenti==='function'?_ncCaricaRiferimenti():null)]);
+    await Promise.all([_anCaricaMovAbbinati(forza), _anCaricaIgnorate(forza), (typeof _ncCaricaRiferimenti==='function'?_ncCaricaRiferimenti():null), (typeof _utCarica==='function'?_utCarica(forza).catch(function(){}):null)]);
     var tutte=_anCalcola(typeof fatture!=='undefined'?fatture:[], _anMovimentiCorrenti(), _anEntrate);
+    // 21/10/2026: avvisi delle utenze (arretrati, offerte in scadenza, letture…) nello stesso elenco
+    if(typeof _utAnomalie==='function'){ try{ tutte=tutte.concat(_utAnomalie()); }catch(e){} }
     var ign=_anIgnorate||{};
     var attive=tutte.filter(function(a){ return !ign[a.chiave]; });
     window._anStato={tutte:tutte, attive:attive};
@@ -26409,6 +26419,7 @@ function _anHtmlVoce(a, ignorata){
     ((a.tipo==='doppione'||a.tipo==='simile') && a.fatture.length===2 && !ignorata ? _anSceltaDoppione(a) :
       a.trovato ? _anHtmlTrovato(a, ignorata) :
       a.senzaBanca ? _anHtmlSenzaBanca(a, ignorata) :
+      a.utHtml ? a.utHtml :
       a.ncVerifica ? _anHtmlNcVerifica(a, ignorata) :
       (a.pag
         ? _anHtmlPagamento(a, ignorata)
@@ -39430,6 +39441,567 @@ function _paCsv(){
   document.body.appendChild(a); a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 1500);
   if(typeof toast === 'function') toast('⬇︎ ' + L.length + ' righe scaricate');
 }
+</script>
+
+<style>
+/* ── 21/10/2026: Utenze (luce, gas, acqua) ── */
+#utOv{position:fixed;inset:0;z-index:955;background:var(--bg);display:none;flex-direction:column}
+#utOv.on{display:flex;animation:dsFade .22s ease}
+.ut-bar{padding:calc(10px + env(safe-area-inset-top)) 14px 10px;border-bottom:.5px solid var(--ds-hair);background:var(--bg);display:flex;align-items:center;justify-content:space-between;gap:10px}
+.ut-bar h3{margin:0;font-size:19px;font-weight:800;letter-spacing:-.4px;color:var(--ink)}
+.ut-bar small{display:block;font-size:11.5px;color:var(--ink3);font-weight:500;margin-top:1px}
+.ut-ris{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:10px 14px calc(30px + env(safe-area-inset-bottom))}
+.ut-az{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+.ut-az button{border:.5px solid var(--ds-hair);background:var(--surface);border-radius:14px;padding:11px 10px;font:inherit;font-size:13px;font-weight:700;color:var(--ink);cursor:pointer;box-shadow:var(--ds-shadow);text-align:left;display:flex;gap:8px;align-items:center}
+.ut-az button small{display:block;font-size:11px;font-weight:500;color:var(--ink3)}
+.ut-card{background:var(--surface);border:.5px solid var(--ds-hair);border-radius:18px;box-shadow:var(--ds-shadow);padding:13px 14px;margin-bottom:10px;cursor:pointer}
+.ut-card:active{background:rgba(120,120,128,.08)}
+.ut-r1{display:flex;gap:11px;align-items:flex-start}
+.ut-ico{width:38px;height:38px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:19px;flex:0 0 auto}
+.ut-ico.luce{background:rgba(255,204,0,.18)}.ut-ico.gas{background:rgba(255,149,0,.16)}.ut-ico.acqua{background:rgba(10,132,255,.14)}
+.ut-t{font-size:15px;font-weight:800;letter-spacing:-.2px;color:var(--ink)}
+.ut-s{font-size:11.5px;color:var(--ink3);margin-top:2px;line-height:1.4}
+.ut-kv{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px}
+.ut-kv div{background:var(--surface2);border-radius:11px;padding:7px 8px}
+.ut-kv span{display:block;font-size:10px;color:var(--ink3);font-weight:600;line-height:1.25}
+.ut-kv b{display:block;font-size:13.5px;font-weight:800;margin-top:2px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.ut-av{margin-top:9px;display:flex;flex-direction:column;gap:5px}
+.ut-av div{font-size:12px;line-height:1.4;padding:7px 9px;border-radius:10px}
+.ut-av .alta{background:rgba(255,59,48,.1);color:#c4271c}.ut-av .media{background:rgba(255,149,0,.12);color:#a35a00}.ut-av .info{background:var(--surface2);color:var(--ink2)}
+.ut-lbl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--ink3);margin:16px 4px 6px}
+.ut-lbl em{font-style:normal;text-transform:none;letter-spacing:0;font-weight:500}
+.ut-box{background:var(--surface);border:.5px solid var(--ds-hair);border-radius:16px;padding:4px 12px;margin-bottom:8px}
+.ut-riga{display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:.5px solid var(--ds-hair);font-size:13px}
+.ut-riga:last-child{border-bottom:none}
+.ut-riga>span:first-child{color:var(--ink2);min-width:0}
+.ut-riga b{text-align:right;font-variant-numeric:tabular-nums}
+.ut-riga small{display:block;font-size:11px;color:var(--ink3);font-weight:500}
+.ut-graf{background:var(--surface);border:.5px solid var(--ds-hair);border-radius:16px;padding:10px 10px 4px;margin-bottom:8px}
+.ut-graf svg{width:100%;height:auto;display:block;overflow:visible}
+.ut-graf .ut-gt{font-size:12px;font-weight:700;color:var(--ink2);margin:0 2px 4px}
+.ut-graf .ut-gv{font-size:11.5px;color:var(--ink3);margin:2px 2px 6px;min-height:16px}
+.ut-bol{display:flex;justify-content:space-between;gap:10px;padding:10px 2px;border-bottom:.5px solid var(--ds-hair);font-size:12.5px}
+.ut-bol:last-child{border-bottom:none}
+.ut-bol .dx{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.ut-btn{border:none;background:none;color:var(--blue);font:inherit;font-size:12px;font-weight:700;cursor:pointer;padding:3px 0;margin-right:10px}
+.ut-pill{display:inline-block;font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:99px;background:var(--surface2);color:var(--ink2);margin-left:4px}
+.ut-pill.ok{background:rgba(52,199,89,.14);color:#1f8a3d}.ut-pill.no{background:rgba(255,149,0,.15);color:#a35a00}
+.ut-campo{padding:9px 0;border-bottom:.5px solid var(--ds-hair)}
+.ut-campo:last-child{border-bottom:none}
+.ut-campo .c1{display:flex;justify-content:space-between;gap:10px;font-size:13px}
+.ut-campo .c1 b{text-align:right;word-break:break-word}
+.ut-campo .c2{font-size:11px;color:var(--ink3);margin-top:3px;line-height:1.35;word-break:break-word}
+.ut-campo input{width:100%;margin-top:6px;padding:9px 10px;border-radius:10px;border:.5px solid var(--ds-hair);background:var(--surface2);font:inherit;font-size:15px;color:var(--ink)}
+.ut-ban{border-radius:14px;padding:11px 12px;font-size:12.5px;line-height:1.45;margin-bottom:10px}
+.ut-ban.blu{background:rgba(10,132,255,.1);color:var(--ink)}.ut-ban.gia{background:rgba(255,149,0,.12);color:var(--ink)}.ut-ban.ross{background:rgba(255,59,48,.1);color:var(--ink)}
+.ut-passi{counter-reset:p;padding:0;margin:0;list-style:none}
+.ut-passi li{counter-increment:p;position:relative;padding:8px 0 8px 30px;font-size:13px;line-height:1.45;border-bottom:.5px solid var(--ds-hair)}
+.ut-passi li:last-child{border-bottom:none}
+.ut-passi li:before{content:counter(p);position:absolute;left:0;top:8px;width:21px;height:21px;border-radius:50%;background:var(--blue);color:#fff;font-size:11.5px;font-weight:800;display:flex;align-items:center;justify-content:center}
+.ut-passi code{font-size:11.5px;background:var(--surface2);padding:1px 5px;border-radius:5px;word-break:break-all}
+.ut-vuoto{text-align:center;padding:34px 16px;color:var(--ink3);font-size:13px}
+.ut-vuoto b{display:block;font-size:15px;color:var(--ink);margin-bottom:4px}
+</style>
+<script>
+/* ══════════════════════════════════════════════════════════════════════════
+   UTENZE — luce, gas, acqua (21/10/2026, richiesta di Valerio)
+   «Il grafico deve basarsi sul costo unitario, non sul totale: una bolletta
+   più alta non significa che l'energia costi di più, posso aver consumato di
+   più». Qui prezzo, quantità e spesa sono SEMPRE separati:
+   · costo unitario: €/kWh, €/Smc, €/m³, letto dalla bolletta (prezzo medio
+     dichiarato dal fornitore) e mai stimato; si dice sempre QUALE costo:
+     solo energia/materia, quota consumi (energia + rete + oneri), oppure
+     bolletta intera senza IVA ÷ consumo (comprende quote fisse e accise);
+   · consumo: kWh, Smc, m³ del periodo, e al giorno (i periodi sono diversi);
+   · spesa: totale della bolletta.
+   I dati arrivano dal PDF della bolletta, letto sul server dalla funzione
+   utenze-bolletta (regole fisse, nessuna IA): per ogni numero si vede la riga
+   del PDF da cui viene. Fonti: PDF allegato all'XML (gas), PDF caricato a
+   mano, email della casella della società (script Gmail).
+   ══════════════════════════════════════════════════════════════════════════ */
+var UT = { forn: [], bol: [], arrivi: [], ts: 0, inCarica: null, sel: null, lettura: null };
+var UT_ICO = { luce: '⚡', gas: '🔥', acqua: '💧' };
+var UT_NOME = { luce: 'Luce', gas: 'Gas', acqua: 'Acqua' };
+// nomi leggibili dei campi (stessi del lettore sul server: funzioni/utenze-bolletta/parsers.js)
+var UT_ETICH = {
+  tipo: 'Tipo di utenza', fornitore_nome: 'Fornitore', fornitore_piva: 'P. IVA fornitore', codice_fornitura: 'Codice fornitura (POD / PDR / n° fornitura)', codice_cliente: 'Codice cliente',
+  numero_fattura: 'Numero fattura', data_emissione: 'Data emissione', mese_competenza: 'Mese di competenza', periodo_dal: 'Periodo dal', periodo_al: 'Periodo al',
+  totale: 'Totale bolletta €', imponibile: 'Imponibile €', iva: 'IVA €', scadenza_pagamento: 'Da pagare entro', metodo_pagamento: 'Metodo di pagamento', stato_pagamenti: 'Stato pagamenti precedenti',
+  consumo: 'Consumo del periodo', unita: 'Unità', consumo_fasce: 'Consumo per fascia', letture: 'Letture', letture_dettaglio: 'Letture del contatore', consumo_annuo: 'Consumo annuo', consumo_fatturato: 'Consumo fatturato',
+  prezzo_medio_consumi: 'Prezzo medio consumi (tutto compreso)', prezzo_medio_vendita: 'Prezzo medio solo energia/materia', prezzo_medio_rete: 'Prezzo medio rete e oneri', costo_consumi: 'Quota consumi €', costo_vendita_consumi: 'di cui vendita €', costo_rete_consumi: 'di cui rete e oneri €',
+  quota_fissa: 'Quota fissa €', quota_fissa_mese: 'Quota fissa €/mese', quota_potenza: 'Quota potenza €', prezzo_potenza: 'Prezzo potenza €/kW/mese', potenza_fatturata: 'Potenza fatturata kW', potenza_impegnata: 'Potenza impegnata kW', potenza_max: 'Potenza massima prelevata kW', picchi_potenza: 'Picchi di potenza mensili',
+  accise_iva: 'Accise e IVA €', altre_partite: 'Altre partite €', prezzi_fasce: 'Prezzi per fascia €/kWh', reattiva_fatturata: 'Energia reattiva fatturata kVarh', cosfi: 'Cos φ',
+  offerta_nome: 'Offerta', offerta_tipo: 'Tipo offerta', offerta_codice: 'Codice offerta', offerta_decorrenza: 'Condizioni economiche dal', offerta_scadenza: 'Scadenza condizioni economiche', contratto_scadenza: 'Scadenza contratto', oneri_recesso: 'Oneri di recesso',
+  spesa_annua: 'Spesa annua dichiarata €', storico: 'Storico consumi', insoluto: 'Arretrati dichiarati dal fornitore', autolettura: 'Periodo per l\'autolettura', deposito_cauzionale: 'Deposito cauzionale €', tipologia: 'Tipologia bolletta', acconto: 'Bolletta di acconto', tariffa: 'Tariffa', contatore: 'Contatore',
+  costo_acquedotto: 'Acquedotto €', costo_fognatura: 'Fognatura €', costo_depurazione: 'Depurazione €', costo_oneri: 'Oneri perequazione €', altri_addebiti: 'Altri addebiti €', scaglioni: 'Scaglioni acqua', prezzi_unitari: 'Prezzi €/m³'
+};
+
+async function _utChiama(corpo){
+  if(typeof _authPronto === 'function'){ try{ await _authPronto(); }catch(e){} }
+  var r = await fetch(SB_URL + '/functions/v1/utenze-bolletta', { method: 'POST', headers: { 'Content-Type': 'application/json', 'apikey': SB_KEY, 'Authorization': SB_H.Authorization }, body: JSON.stringify(corpo || {}) });
+  var j = {}; try{ j = await r.json(); }catch(e){}
+  if(!r.ok && !j.errore) j.errore = 'Errore del server (' + r.status + ')';
+  return j;
+}
+async function _utCarica(forza){
+  if(UT.inCarica) return UT.inCarica;
+  if(!forza && UT.ts && Date.now() - UT.ts < 5 * 60000) return;
+  UT.inCarica = (async function(){
+    var r = await Promise.all([
+      sbFetchAll('utenze_forniture?select=*&order=tipo.asc'),
+      sbFetchAll('utenze_bollette?select=id,fornitura_id,fattura_id,fornitore_piva,fornitore_nome,numero,data_emissione,periodo_dal,periodo_al,scadenza_pagamento,totale,consumo,unita,dati,provenienza,controlli,fonte,stato,pdf_path&order=periodo_al.asc'),
+      sbFetchAll('utenze_in_arrivo?select=id,ricevuto_il,origine,mittente,oggetto,email_data,nome_file,attesa,esito,messaggio,bolletta_id,risultato&order=ricevuto_il.desc&limit=200')
+    ]);
+    UT.forn = r[0] || []; UT.bol = r[1] || []; UT.arrivi = r[2] || []; UT.ts = Date.now();
+  })();
+  try{ await UT.inCarica; } finally { UT.inCarica = null; }
+}
+
+// ── numeri e date ──
+function _utN(v, dec){ return (+v || 0).toLocaleString('it-IT', { minimumFractionDigits: dec == null ? 0 : dec, maximumFractionDigits: dec == null ? 2 : dec }); }
+function _utEu(v, dec){ return v == null || !isFinite(v) ? '—' : '€ ' + _utN(v, dec == null ? 2 : dec); }
+function _utU(b){ return (b && (b.unita || (b.dati || {}).unita)) || ''; }
+function _utD(iso){ if(!iso || !/^\d{4}-\d{2}-\d{2}/.test(iso)) return iso || '—'; var p = iso.slice(0, 10).split('-'); return p[2] + '/' + p[1] + '/' + p[0]; }
+function _utGiorni(dal, al){ if(!dal || !al) return null; var a = Date.parse(dal + 'T12:00:00'), b = Date.parse(al + 'T12:00:00'); return isFinite(a) && isFinite(b) ? Math.round((b - a) / 86400000) + 1 : null; }
+function _utOggi(){ var d = new Date(); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+function _utFraGiorni(iso){ if(!iso || !/^\d{4}-\d{2}-\d{2}/.test(iso)) return null; return Math.round((Date.parse(iso + 'T12:00:00') - Date.parse(_utOggi() + 'T12:00:00')) / 86400000); }
+function _utPct(a, b){ return (b && isFinite(a) && isFinite(b) && b !== 0) ? (a - b) / b : null; }
+function _utPctTxt(p){ if(p == null) return ''; var r = Math.round(p * 1000) / 10; return (r > 0 ? '+' : '') + r.toLocaleString('it-IT') + '%'; }
+function _utMese(k){ var d = new Date(k + '-15T12:00:00'); var s = d.toLocaleDateString('it-IT', { month: 'short', year: '2-digit' }); return s.charAt(0).toUpperCase() + s.slice(1); }
+
+// Costi unitari di UNA bolletta, ognuno col suo nome: mai mescolati
+function _utCosti(b){
+  var d = b.dati || {}, c = +b.consumo || +d.consumo || 0, u = _utU(b), out = [];
+  if(!(c > 0)) return out;
+  var imponibile = d.imponibile != null ? +d.imponibile : (d.totale != null && d.iva != null ? +d.totale - +d.iva : null);
+  if(d.prezzo_medio_vendita != null) out.push({ k: 'materia', nome: b && d.tipo === 'gas' ? 'Solo gas (vendita)' : 'Solo energia (vendita)', v: +d.prezzo_medio_vendita, spiega: 'Prezzo medio della spesa per la vendita, dichiarato in bolletta. È quello che cambia col contratto.' });
+  if(d.tipo === 'acqua' && d.costo_acquedotto != null) out.push({ k: 'materia', nome: 'Solo acqua (acquedotto)', v: +d.costo_acquedotto / c, spiega: 'Quota acquedotto ÷ m³ (comprende gli scaglioni).' });
+  if(d.prezzo_medio_consumi != null) out.push({ k: 'consumi', nome: 'Quota consumi (energia + rete + oneri)', v: +d.prezzo_medio_consumi, spiega: 'Prezzo medio della quota consumi dichiarato in bolletta: tutto ciò che si paga a ' + u + ', senza quote fisse e senza accise/IVA.' });
+  if(d.tipo === 'acqua' && d.costo_acquedotto != null && d.costo_fognatura != null && d.costo_depurazione != null) out.push({ k: 'consumi', nome: 'Acqua + fognatura + depurazione + oneri', v: (+d.costo_acquedotto + +d.costo_fognatura + +d.costo_depurazione + (+d.costo_oneri || 0)) / c, spiega: 'Tutte le voci che si pagano a m³ ÷ m³, senza quota fissa e IVA.' });
+  if(imponibile != null) out.push({ k: 'tutto', nome: 'Bolletta intera senza IVA ÷ consumo', v: imponibile / c, spiega: 'Comprende anche quote fisse' + (d.tipo === 'luce' ? ', quota potenza' : '') + ' e accise: utile per il costo vero, ma cambia anche se cambia il consumo (le quote fisse pesano di più quando consumi poco).' });
+  return out;
+}
+function _utCosto(b, k){ var c = _utCosti(b).find(function(x){ return x.k === k; }); return c ? c.v : null; }
+
+function _utBolletteDi(fid){ return UT.bol.filter(function(b){ return String(b.fornitura_id) === String(fid); }).sort(function(a, b){ return String(a.periodo_al || a.data_emissione || '').localeCompare(String(b.periodo_al || b.data_emissione || '')); }); }
+function _utUltima(fid){ var L = _utBolletteDi(fid).filter(function(b){ return b.stato === 'confermata'; }); return L[L.length - 1] || null; }
+
+// ══ AVVISI ══ (tutti calcolati da numeri scritti nelle bollette e nelle fatture)
+function _utAvvisi(f){
+  var L = _utBolletteDi(f.id).filter(function(b){ return b.stato === 'confermata'; }), out = [];
+  var b = L[L.length - 1]; if(!b) return out;
+  var d = b.dati || {}, u = _utU(b), nome = (UT_NOME[f.tipo] || f.tipo) + ' · ' + (f.fornitore_nome || '');
+  var add = function(k, gravita, titolo, testo, extra){ out.push(Object.assign({ chiave: 'ut|' + k + '|' + f.id + '|' + b.numero, tipo: 'ut_' + k, gravita: gravita, titolo: titolo, testo: testo, fornitura: f, bolletta: b }, extra || {})); };
+  // 1) arretrati dichiarati dal fornitore, confrontati con l'app
+  if(d.insoluto && d.insoluto.importo > 0){
+    var piva = String(b.fornitore_piva || f.fornitore_piva || '').replace(/\D/g, '');
+    var apert = (typeof fatture !== 'undefined' ? fatture : []).filter(function(x){ return x && !x.deletedAt && x.tipo !== 'nota_credito' && x.tipo !== 'ddt' && String(x.piva || '').replace(/\D/g, '') === piva && x.stato !== 'pagata' && String(x.data || '') < String(b.data_emissione || '9999') && String(x.id) !== String(b.fattura_id); })
+      .sort(function(x, y){ return String(x.data).localeCompare(String(y.data)); });
+    var inApp = apert.reduce(function(s, x){ return s + (typeof residuoFattura === 'function' ? residuoFattura(x) : Math.abs(x.importo || 0)); }, 0);
+    var diff = Math.round((d.insoluto.importo - inApp) * 100) / 100;
+    var prima = (typeof fatture !== 'undefined' ? fatture : []).filter(function(x){ return x && !x.deletedAt && String(x.piva || '').replace(/\D/g, '') === piva; }).map(function(x){ return String(x.data || ''); }).sort()[0];
+    add('insoluto', 'alta', 'Arretrati dichiarati da ' + (f.fornitore_nome || 'fornitore') + ': ' + fmt(d.insoluto.importo),
+      'Nella bolletta n° ' + b.numero + ' del ' + _utD(b.data_emissione) + ' il fornitore dichiara un insoluto scaduto di ' + fmt(d.insoluto.importo) + (d.insoluto.documenti ? ' per ' + d.insoluto.documenti + ' bollette' : '') + (d.insoluto.primo ? ' (dalla ' + d.insoluto.primo.numero + ' del ' + _utD(d.insoluto.primo.data) + ' alla ' + d.insoluto.ultimo.numero + ' del ' + _utD(d.insoluto.ultimo.data) + ')' : '') + ', con interessi di mora in corso.\n' +
+      'In app risultano non pagate ' + apert.length + (apert.length === 1 ? ' bolletta' : ' bollette') + ' di questo fornitore per ' + fmt(inApp) + '.' +
+      (Math.abs(diff) < 1 ? ' I conti tornano: sono proprio queste.' : (diff > 0 ? ' Mancano ' + fmt(diff) + ': sono bollette che in app non ci sono' + (prima ? ' (qui le fatture di questo fornitore partono dal ' + _utD(prima) + ')' : '') + ', oppure pagate in un modo che il fornitore non ha registrato. Chiedi l\'estratto conto al fornitore e confrontalo con le ricevute.' : ' In app risultano più bollette aperte di quelle che il fornitore dichiara: forse alcune le hai pagate ma in app sono ancora «da pagare».')),
+      { fatture: apert, rischio: 0 });
+  }
+  if(d.stato_pagamenti && !/^regolar/i.test(d.stato_pagamenti)) add('pagamenti', 'alta', 'Pagamenti precedenti non regolari (' + (f.fornitore_nome || '') + ')', 'La bolletta n° ' + b.numero + ' dice: «' + d.stato_pagamenti + '». Controlla quali bollette risultano scadute.');
+  // 2) scadenza delle condizioni economiche dell'offerta
+  var sc = d.offerta_scadenza && /^\d{4}-/.test(d.offerta_scadenza) ? _utFraGiorni(d.offerta_scadenza) : null;
+  if(sc != null && sc <= 60){
+    add('offerta', sc <= 30 ? 'alta' : 'media', sc < 0 ? 'Offerta scaduta: ' + nome : 'Offerta in scadenza fra ' + sc + (sc === 1 ? ' giorno' : ' giorni') + ': ' + nome,
+      'Le condizioni economiche «' + (d.offerta_nome || 'dell\'offerta') + '»' + (d.offerta_tipo ? ' (' + d.offerta_tipo.toLowerCase() + ')' : '') + (sc < 0 ? ' sono scadute il ' : ' scadono il ') + _utD(d.offerta_scadenza) + '. Dopo quella data il fornitore applica le condizioni nuove che ti ha comunicato (o deve comunicarti): è il momento di confrontare le offerte.' +
+      (d.prezzi_fasce ? ' Oggi l\'energia costa ' + ['F1', 'F2', 'F3'].filter(function(x){ return d.prezzi_fasce[x] && d.prezzi_fasce[x].energia != null; }).map(function(x){ return x + ' € ' + _utN(d.prezzi_fasce[x].energia, 4); }).join(' · ') + ' al kWh (solo energia, senza perdite di rete).' : '') +
+      (d.oneri_recesso ? ' Oneri di recesso: ' + d.oneri_recesso + '.' : ''));
+  }
+  // 3) periodo per l'autolettura
+  if(d.autolettura && d.autolettura.dal && d.autolettura.al){
+    var g1 = _utFraGiorni(d.autolettura.dal), g2 = _utFraGiorni(d.autolettura.al);
+    if(g2 >= 0 && g1 <= 7) add('autolettura', g1 <= 0 ? 'alta' : 'media', g1 <= 0 ? 'Comunica la lettura del contatore entro il ' + _utD(d.autolettura.al) : 'Dal ' + _utD(d.autolettura.dal) + ' puoi comunicare la lettura (' + (UT_NOME[f.tipo] || '') + ')',
+      'La bolletta indica il periodo ' + _utD(d.autolettura.dal) + ' – ' + _utD(d.autolettura.al) + ' per comunicare la lettura' + (d.contatore ? ' del contatore ' + d.contatore : '') + '. Fuori da queste date non viene accettata.' + (d.letture === 'stimata' ? ' Serve davvero: l\'ultima bolletta è su letture stimate.' : ''));
+  }
+  // 4) bolletta su consumi stimati più alti di quelli reali
+  if(d.letture === 'stimata'){
+    var gg = _utGiorni(b.periodo_dal, b.periodo_al), stimG = gg ? (+b.consumo || 0) / gg : null;
+    var reali = (d.storico || []).filter(function(s){ return s.mc_giorno != null; });
+    var ult = reali[reali.length - 1];
+    var txt = 'La bolletta n° ' + b.numero + ' è calcolata su letture stimate' + (d.acconto ? ' (bolletta di acconto)' : '') + ': ' + _utN(b.consumo) + ' ' + u + (gg ? ' in ' + gg + ' giorni = ' + _utN(stimG, 2) + ' ' + u + ' al giorno' : '') + '.';
+    if(ult && stimG && stimG > ult.mc_giorno * 1.15){
+      var dm = Math.round((stimG - ult.mc_giorno) * gg);
+      var pr = (d.scaglioni && d.scaglioni.length ? d.scaglioni[d.scaglioni.length - 1].prezzo : 0) + ((d.prezzi_unitari || {}).fognatura || 0) + ((d.prezzi_unitari || {}).depurazione || 0);
+      add('stimata', 'media', 'Consumo stimato più alto del reale (' + (UT_NOME[f.tipo] || '') + ')', txt + ' L\'ultimo periodo con lettura reale (' + _utD(ult.dal) + ' – ' + _utD(ult.al) + ') dice ' + _utN(ult.mc_giorno, 2) + ' ' + u + ' al giorno: la stima è più alta di circa ' + _utN(dm) + ' ' + u + (pr ? ' (≈ ' + fmt(dm * pr) + ' senza IVA, al prezzo dello scaglione più alto)' : '') + '. Con l\'autolettura il prossimo conguaglio lo corregge.');
+    } else add('stimata', 'bassa', 'Bolletta su letture stimate (' + (UT_NOME[f.tipo] || '') + ')', txt + ' Il prossimo conguaglio la correggerà con la lettura vera.');
+  }
+  // 5) consumo anomalo: stesso mese dell'anno prima (luce, storico mensile della bolletta)
+  if(f.tipo === 'luce' && d.storico && d.storico.length >= 13 && d.mese_competenza){
+    var st = d.storico, ora = st.find(function(s){ return s.mese === d.mese_competenza; });
+    var ann = d.mese_competenza ? st.find(function(s){ return s.mese === (+d.mese_competenza.slice(0, 4) - 1) + d.mese_competenza.slice(4); }) : null;
+    if(ora && ann && ann.kwh > 0){ var pp = _utPct(ora.kwh, ann.kwh); if(Math.abs(pp) >= 0.25 && Math.abs(ora.kwh - ann.kwh) >= 500) add('consumo', 'media', 'Consumo ' + (pp > 0 ? 'molto più alto' : 'molto più basso') + ' dell\'anno scorso (luce)', _utMese(ora.mese) + ': ' + _utN(ora.kwh) + ' kWh contro ' + _utN(ann.kwh) + ' kWh di ' + _utMese(ann.mese) + ' (' + _utPctTxt(pp) + '). Se non c\'è un motivo (chiusura, macchinari nuovi o guasti), controlla.'); }
+  } else if(L.length >= 2){
+    var prec = L[L.length - 2], g0 = _utGiorni(prec.periodo_dal, prec.periodo_al), g = _utGiorni(b.periodo_dal, b.periodo_al);
+    if(g0 && g && prec.consumo > 0 && d.letture !== 'stimata'){ var a0 = prec.consumo / g0, a1 = b.consumo / g, p1 = _utPct(a1, a0); if(Math.abs(p1) >= 0.4) add('consumo', 'bassa', 'Consumo al giorno ' + (p1 > 0 ? 'più alto' : 'più basso') + ' della bolletta prima (' + (UT_NOME[f.tipo] || '') + ')', _utN(a1, 2) + ' ' + u + ' al giorno contro ' + _utN(a0, 2) + ' (' + _utPctTxt(p1) + '). Le stagioni contano: confronta con lo stesso periodo dell\'anno prima quando ci sarà.'); }
+  }
+  // 6) prezzo dell'energia cambiato senza che l'offerta sia scaduta
+  if(L.length >= 2 && d.prezzi_fasce){
+    var p0 = (L[L.length - 2].dati || {}), cambi = [];
+    if(p0.prezzi_fasce && p0.offerta_scadenza === d.offerta_scadenza && /fisso/i.test(d.offerta_tipo || '')){
+      ['F1', 'F2', 'F3'].forEach(function(x){ var a = (p0.prezzi_fasce[x] || {}).energia, c = (d.prezzi_fasce[x] || {}).energia; if(a != null && c != null && Math.abs(a - c) > 0.00005) cambi.push(x + ': € ' + _utN(a, 4) + ' → € ' + _utN(c, 4) + ' (' + _utPctTxt(_utPct(c, a)) + ')'); });
+      if(cambi.length) add('prezzo', 'alta', 'Prezzo dell\'energia cambiato con l\'offerta a prezzo fisso ancora valida', 'L\'offerta «' + (d.offerta_nome || '') + '» è a prezzo fisso fino al ' + _utD(d.offerta_scadenza) + ', ma rispetto alla bolletta prima il prezzo è cambiato: ' + cambi.join(' · ') + '. Chiedi spiegazioni al fornitore.');
+    }
+  }
+  // 7) picchi di potenza sopra quella impegnata
+  if(d.potenza_impegnata && d.picchi_potenza && d.picchi_potenza.length){
+    var sopra = d.picchi_potenza.filter(function(p){ return p.kw > d.potenza_impegnata; });
+    if(sopra.length){
+      var mx = sopra.reduce(function(m, p){ return p.kw > m.kw ? p : m; }, sopra[0]);
+      var extra = (d.potenza_fatturata && d.prezzo_potenza && d.potenza_fatturata > d.potenza_impegnata) ? (d.potenza_fatturata - d.potenza_impegnata) * d.prezzo_potenza : null;
+      add('potenza', 'media', 'Potenza prelevata oltre quella impegnata (' + sopra.length + ' mes' + (sopra.length === 1 ? 'e' : 'i') + ' su ' + d.picchi_potenza.length + ')', 'Potenza impegnata ' + _utN(d.potenza_impegnata, 1) + ' kW; picco più alto ' + _utN(mx.kw, 1) + ' kW a ' + _utMese(mx.mese) + '. La quota potenza si paga sul picco del mese' + (d.potenza_fatturata ? ' (nell\'ultima bolletta ' + _utN(d.potenza_fatturata, 1) + ' kW' + (extra ? ': ' + fmt(extra) + ' in più rispetto a ' + _utN(d.potenza_impegnata, 1) + ' kW' : '') + ')' : '') + '. Da valutare col fornitore: adeguare la potenza o evitare di accendere insieme le macchine più potenti.');
+    }
+  }
+  // 8) energia reattiva pagata
+  if(d.reattiva_fatturata > 0) add('reattiva', 'media', 'Energia reattiva fatturata (' + _utN(d.reattiva_fatturata) + ' kVarh)', 'È un costo evitabile (rifasamento dell\'impianto).' + (d.cosfi ? ' Cos φ ' + _utN(d.cosfi, 2) + '.' : '') + ' Chiedi a un elettricista.');
+  return out;
+}
+// Avvisi delle utenze dentro il Controllo anomalie (stesso elenco, stesso «ignora»)
+function _utAnomalie(){
+  var out = [];
+  (UT.forn || []).filter(function(f){ return f.attiva !== false; }).forEach(function(f){ _utAvvisi(f).forEach(function(a){ if(a.gravita === 'bassa' && a.tipo !== 'ut_stimata') return; a.utHtml = _utHtmlAvvisoAnomalia(a); a.fatture = a.fatture || []; a.movimenti = []; a.rischio = 0; out.push(a); }); });
+  var daConf = (UT.arrivi || []).filter(function(x){ return x.esito === 'da confermare'; }).length + (UT.bol || []).filter(function(b){ return b.stato === 'da_confermare'; }).length;
+  if(daConf) out.push({ chiave: 'ut|daconf|' + daConf, tipo: 'ut_daconf', gravita: 'media', titolo: daConf + (daConf === 1 ? ' bolletta da confermare' : ' bollette da confermare'), testo: 'L\'app le ha lette ma vuole che tu controlli i dati prima di usarli (fornitore nuovo, un dato mancante o un totale che non torna).', fatture: [], movimenti: [], rischio: 0, utHtml: '<button class="an-fix" style="margin-top:10px;width:100%;padding:11px" onclick="utApri()">Apri Utenze</button>' });
+  return out;
+}
+function _utHtmlAvvisoAnomalia(a){
+  var h = '<div class="an-rows">';
+  (a.fatture || []).slice(0, 12).forEach(function(f){ h += _anRigaFattura(f); });
+  if((a.fatture || []).length > 12) h += '<div class="an-row" style="font-size:12px;color:var(--ink3)">… e altre ' + (a.fatture.length - 12) + '</div>';
+  h += '</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">' +
+    '<button class="an-fix" data-f="' + esc(String(a.fornitura.id)) + '" onclick="utApri(this.dataset.f)">Apri la scheda ' + esc(UT_NOME[a.fornitura.tipo] || '') + '</button>' +
+    (a.bolletta && a.bolletta.pdf_path ? '<button class="an-fix" data-b="' + esc(String(a.bolletta.id)) + '" onclick="_utPdf(this.dataset.b)">Vedi la bolletta (PDF)</button>' : '') +
+    (a.bolletta && a.bolletta.fattura_id && typeof _btnXml === 'function' && _utFattura(a.bolletta.fattura_id) ? _btnXml(_utFattura(a.bolletta.fattura_id)) : '') + '</div>';
+  return h;
+}
+function _utFattura(id){ return (typeof fatture !== 'undefined' ? fatture : []).find(function(f){ return String(f.id) === String(id); }) || null; }
+
+// ══ APERTURA E ELENCO ══
+async function utApri(fid){
+  var ov = document.getElementById('utOv');
+  if(!ov){
+    ov = document.createElement('div'); ov.id = 'utOv';
+    ov.innerHTML = '<div class="ut-bar"><div style="min-width:0"><h3 id="utTit">Utenze</h3><small id="utSott">Luce, gas e acqua del bar: costi, consumi, scadenze</small></div><button class="pa-x" onclick="utChiudi()">Chiudi</button></div><div class="ut-ris" id="utRis"></div>';
+    document.body.appendChild(ov);
+  }
+  ov.classList.add('on');
+  var box = document.getElementById('utRis');
+  if(!UT.ts) box.innerHTML = '<div class="ut-vuoto"><b>Carico le bollette…</b></div>';
+  try{ await _utCarica(true); }catch(e){ box.innerHTML = '<div class="ut-vuoto"><b>Non riesco a caricare le utenze</b>' + esc(String(e.message || e).slice(0, 140)) + '</div>'; return; }
+  if(fid) _utScheda(fid); else _utElenco();
+}
+function utChiudi(){ var ov = document.getElementById('utOv'); if(ov) ov.classList.remove('on'); }
+function _utElenco(){
+  UT.sel = null;
+  document.getElementById('utTit').textContent = 'Utenze';
+  document.getElementById('utSott').textContent = 'Luce, gas e acqua del bar: costi, consumi, scadenze';
+  var box = document.getElementById('utRis'), h = '';
+  h += '<div class="ut-az"><button onclick="_utScegliPdf()"><span style="font-size:20px">📄</span><span>Allega bolletta<small>PDF della bolletta</small></span></button><button onclick="_utGmail()"><span style="font-size:20px">✉️</span><span>Leggi da Gmail<small>' + (UT.arrivi.length ? 'ultima: ' + _utD(String(UT.arrivi[0].ricevuto_il).slice(0, 10)) : 'da configurare') + '</small></span></button></div>';
+  var daConf = UT.arrivi.filter(function(x){ return x.esito === 'da confermare'; }), bolDa = UT.bol.filter(function(b){ return b.stato === 'da_confermare'; });
+  if(daConf.length || bolDa.length){
+    h += '<div class="ut-lbl">Da confermare <em>l\'app le ha lette: controlla i dati</em></div><div class="ut-box">';
+    daConf.forEach(function(x){ h += '<div class="ut-riga" style="cursor:pointer" data-a="' + x.id + '" onclick="_utConfermaArrivo(this.dataset.a)"><span>' + esc(x.nome_file || 'bolletta') + '<small>' + esc(x.messaggio || '') + ' · arrivata il ' + _utD(String(x.ricevuto_il).slice(0, 10)) + '</small></span><b style="color:var(--blue)">Controlla ›</b></div>'; });
+    bolDa.forEach(function(b){ h += '<div class="ut-riga" style="cursor:pointer" data-b="' + b.id + '" onclick="_utConfermaBolletta(this.dataset.b)"><span>' + esc(b.fornitore_nome || '') + ' n° ' + esc(b.numero) + '<small>' + (b.controlli || []).filter(function(c){ return !c.ok; }).map(function(c){ return esc(c.testo); }).join(' · ') + '</small></span><b style="color:var(--blue)">Controlla ›</b></div>'; });
+    h += '</div>';
+  }
+  if(!UT.forn.length) h += '<div class="ut-vuoto"><b>Nessuna utenza ancora</b>Allega il PDF di una bolletta di luce, gas o acqua: alla prima lettura l\'app crea la scheda della fornitura.</div>';
+  UT.forn.slice().sort(function(a, b){ return ['luce', 'gas', 'acqua'].indexOf(a.tipo) - ['luce', 'gas', 'acqua'].indexOf(b.tipo); }).forEach(function(f){
+    var b = _utUltima(f.id), u = _utU(b), av = _utAvvisi(f).filter(function(a){ return a.gravita !== 'bassa'; });
+    var gg = b ? _utGiorni(b.periodo_dal, b.periodo_al) : null;
+    h += '<div class="ut-card" data-f="' + f.id + '" onclick="_utScheda(this.dataset.f)"><div class="ut-r1"><div class="ut-ico ' + f.tipo + '">' + (UT_ICO[f.tipo] || '•') + '</div><div style="min-width:0;flex:1"><div class="ut-t">' + esc(UT_NOME[f.tipo] || f.tipo) + ' · ' + esc(f.fornitore_nome || '—') + '</div><div class="ut-s">' + (f.tipo === 'luce' ? 'POD ' : f.tipo === 'gas' ? 'PDR ' : 'Fornitura ') + esc(f.codice) + (b ? ' · ultima bolletta ' + _utD(b.periodo_dal) + ' – ' + _utD(b.periodo_al) : '') + '</div></div><span class="pa-x" style="font-size:20px;color:var(--ink3)">›</span></div>';
+    if(b){
+      var cm = _utCosto(b, 'materia'), ct = _utCosto(b, 'tutto');
+      h += '<div class="ut-kv"><div><span>Consumo</span><b>' + _utN(b.consumo) + ' ' + esc(u) + '</b>' + (gg ? '<span style="margin-top:2px">' + _utN(b.consumo / gg, 1) + ' al giorno</span>' : '') + '</div>' +
+        '<div><span>' + (cm != null ? (f.tipo === 'acqua' ? 'Solo acqua' : 'Solo ' + (f.tipo === 'gas' ? 'gas' : 'energia')) : 'Costo') + ' /' + esc(u) + '</span><b>' + (cm != null ? _utEu(cm, 4) : '—') + '</b>' + (ct != null ? '<span style="margin-top:2px">tutto compreso ' + _utEu(ct, 3) + '</span>' : '') + '</div>' +
+        '<div><span>Bolletta</span><b>' + _utEu(b.totale) + '</b><span style="margin-top:2px">con IVA</span></div></div>';
+    }
+    if(av.length) h += '<div class="ut-av">' + av.slice(0, 3).map(function(a){ return '<div class="' + a.gravita + '">' + esc(a.titolo) + '</div>'; }).join('') + (av.length > 3 ? '<div class="info">… e altri ' + (av.length - 3) + ' avvisi</div>' : '') + '</div>';
+    h += '</div>';
+  });
+  h += '<div class="pa-nota">Ogni numero viene da una riga precisa della bolletta (la vedi toccando il dato nella scheda). «Solo energia/gas/acqua» è il prezzo del fornitore; «tutto compreso» è la bolletta intera senza IVA divisa per il consumo, quindi comprende anche quote fisse e accise.</div>';
+  box.innerHTML = h;
+}
+
+// ══ SCHEDA DI UNA FORNITURA ══
+function _utScheda(fid){
+  var f = UT.forn.find(function(x){ return String(x.id) === String(fid); }); if(!f) return _utElenco();
+  UT.sel = f.id;
+  var L = _utBolletteDi(f.id).filter(function(b){ return b.stato === 'confermata'; }), b = L[L.length - 1], d = (b && b.dati) || {}, u = _utU(b);
+  document.getElementById('utTit').textContent = (UT_NOME[f.tipo] || f.tipo) + ' · ' + (f.fornitore_nome || '');
+  document.getElementById('utSott').textContent = (f.tipo === 'luce' ? 'POD ' : f.tipo === 'gas' ? 'PDR ' : 'Fornitura ') + f.codice + ' · ' + L.length + (L.length === 1 ? ' bolletta' : ' bollette');
+  var h = '<button class="ut-btn" style="margin:0 0 6px" onclick="_utElenco()">‹ Tutte le utenze</button>';
+  if(!b){ document.getElementById('utRis').innerHTML = h + '<div class="ut-vuoto"><b>Nessuna bolletta confermata</b></div>'; return; }
+  // avvisi
+  var av = _utAvvisi(f);
+  if(av.length) h += '<div class="ut-av" style="margin-top:0">' + av.map(function(a){ return '<div class="' + (a.gravita === 'bassa' ? 'info' : a.gravita) + '"><b>' + esc(a.titolo) + '</b><br>' + esc(a.testo).replace(/\n/g, '<br>') + '</div>'; }).join('') + '</div>';
+  // 1) costo unitario dell'ultima bolletta: tre misure, ognuna col suo nome
+  h += '<div class="ut-lbl">Costo unitario <em>ultima bolletta, ' + _utD(b.periodo_dal) + ' – ' + _utD(b.periodo_al) + '</em></div><div class="ut-box">';
+  _utCosti(b).forEach(function(c){ h += '<div class="ut-riga"><span>' + esc(c.nome) + '<small>' + esc(c.spiega) + '</small></span><b>' + _utEu(c.v, 4) + '<small>al ' + esc(u) + '</small></b></div>'; });
+  if(d.prezzi_fasce) h += '<div class="ut-riga"><span>Prezzo energia per fascia<small>solo energia, come da contratto (con perdite di rete: ' + ['F1', 'F2', 'F3'].filter(function(x){ return d.prezzi_fasce[x] && d.prezzi_fasce[x].prezzo_fisso != null; }).map(function(x){ return x + ' ' + _utN(d.prezzi_fasce[x].prezzo_fisso, 4); }).join(' · ') + ')</small></span><b>' + ['F1', 'F2', 'F3'].filter(function(x){ return d.prezzi_fasce[x] && d.prezzi_fasce[x].energia != null; }).map(function(x){ return x + ' ' + _utN(d.prezzi_fasce[x].energia, 4); }).join('<br>') + '</b></div>';
+  if(d.scaglioni) h += '<div class="ut-riga"><span>Scaglioni acquedotto<small>più consumi, più costa ogni m³ oltre la soglia</small></span><b>' + d.scaglioni.map(function(s){ return _utN(s.mc) + ' m³ × € ' + _utN(s.prezzo, 4); }).join('<br>') + '</b></div>';
+  h += '</div>';
+  // 2) andamento: costo unitario (grafico A) e consumo (grafico B) separati
+  var conC = L.filter(function(x){ return _utCosto(x, 'materia') != null || _utCosto(x, 'tutto') != null; });
+  if(conC.length >= 2){
+    var kc = conC.every(function(x){ return _utCosto(x, 'materia') != null; }) ? 'materia' : 'tutto';
+    var pts = conC.map(function(x){ return { d: x.periodo_al, v: _utCosto(x, kc), et: _utD(x.periodo_dal) + ' – ' + _utD(x.periodo_al) }; });
+    var p0 = pts[0], p1 = pts[pts.length - 1], dv = p1.v - p0.v;
+    h += '<div class="ut-graf"><div class="ut-gt">A · Costo unitario: ' + (kc === 'materia' ? (f.tipo === 'acqua' ? 'solo acqua' : 'solo ' + (f.tipo === 'gas' ? 'gas' : 'energia')) : 'tutto compreso') + ' (€/' + esc(u) + ')</div>' + _utGrafLinea(pts, 'utGA') +
+      '<div class="ut-gv" id="utGA">Bolletta ' + p0.et + ' → bolletta ' + p1.et + ': ' + _utEu(p0.v, 4) + ' → ' + _utEu(p1.v, 4) + ' (' + (dv >= 0 ? '+' : '') + _utN(dv, 4) + ' €, ' + _utPctTxt(_utPct(p1.v, p0.v)) + '). Tocca un punto per il valore.</div></div>';
+  }
+  if(f.tipo === 'luce' && d.storico && d.storico.length){
+    var sto = d.storico, tot12 = sto.slice(-12).reduce(function(s, x){ return s + x.kwh; }, 0);
+    h += '<div class="ut-graf"><div class="ut-gt">B · Consumo mese per mese (kWh) <span style="font-weight:500;color:var(--ink3)">dallo storico scritto in bolletta</span></div>' + _utGrafBarre(sto.map(function(x){ return { et: _utMese(x.mese), v: x.kwh, sotto: 'F1 ' + _utN(x.F1) + ' · F2 ' + _utN(x.F2) + ' · F3 ' + _utN(x.F3) + (x.lettura ? ' · lettura ' + x.lettura : '') }; }), 'utGB') +
+      '<div class="ut-gv" id="utGB">Ultimi 12 mesi: ' + _utN(tot12) + ' kWh · media ' + _utN(tot12 / Math.min(12, sto.length)) + ' al mese. Tocca una barra.</div></div>';
+  } else if(f.tipo === 'acqua' && d.storico && d.storico.length){
+    h += '<div class="ut-graf"><div class="ut-gt">B · Consumo medio al giorno (m³) <span style="font-weight:500;color:var(--ink3)">letture reali, dallo storico in bolletta</span></div>' + _utGrafBarre(d.storico.map(function(x){ return { et: _utD(x.dal).slice(3), v: x.mc_giorno, sotto: _utD(x.dal) + ' – ' + _utD(x.al) + ' · ' + _utN(x.mc) + ' m³ in ' + x.giorni + ' giorni' }; }), 'utGB', 2) + '<div class="ut-gv" id="utGB">Tocca una barra per il dettaglio.</div></div>';
+  } else if(L.length >= 2){
+    h += '<div class="ut-graf"><div class="ut-gt">B · Consumo al giorno (' + esc(u) + ') per bolletta</div>' + _utGrafBarre(L.map(function(x){ var g = _utGiorni(x.periodo_dal, x.periodo_al) || 1; return { et: _utD(x.periodo_al).slice(3), v: x.consumo / g, sotto: _utD(x.periodo_dal) + ' – ' + _utD(x.periodo_al) + ' · ' + _utN(x.consumo) + ' ' + u + ' in ' + g + ' giorni' }; }), 'utGB', 2) + '<div class="ut-gv" id="utGB">Al giorno, perché le bollette coprono periodi diversi. Tocca una barra.</div></div>';
+  }
+  // 3) perché la spesa è cambiata: prezzo o quantità (ultime due bollette)
+  if(L.length >= 2){
+    var A = L[L.length - 2], B = b, kA = _utCosto(A, 'tutto'), kB = _utCosto(B, 'tutto');
+    var gA = _utGiorni(A.periodo_dal, A.periodo_al), gB = _utGiorni(B.periodo_dal, B.periodo_al);
+    if(kA != null && kB != null && gA && gB){
+      var qA = A.consumo / gA, qB = B.consumo / gB, sA = kA * qA, sB = kB * qB;
+      var effP = (kB - kA) * qA, effQ = (qB - qA) * kB;
+      h += '<div class="ut-lbl">Perché la spesa è cambiata <em>bolletta prima → ultima, al giorno, senza IVA</em></div><div class="ut-box">' +
+        '<div class="ut-riga"><span>Spesa al giorno</span><b>' + _utEu(sA) + ' → ' + _utEu(sB) + '<small>' + _utPctTxt(_utPct(sB, sA)) + '</small></b></div>' +
+        '<div class="ut-riga"><span>Dovuto al prezzo<small>costo tutto compreso ' + _utEu(kA, 4) + ' → ' + _utEu(kB, 4) + ' al ' + esc(u) + '</small></span><b style="color:' + (effP > 0 ? 'var(--red)' : 'var(--green)') + '">' + (effP >= 0 ? '+' : '') + _utEu(effP) + '</b></div>' +
+        '<div class="ut-riga"><span>Dovuto al consumo<small>' + _utN(qA, 1) + ' → ' + _utN(qB, 1) + ' ' + esc(u) + ' al giorno</small></span><b style="color:' + (effQ > 0 ? 'var(--red)' : 'var(--green)') + '">' + (effQ >= 0 ? '+' : '') + _utEu(effQ) + '</b></div>' +
+        '</div><div class="pa-nota" style="margin-top:2px">Prezzo × consumo: la somma delle due voci è esattamente la differenza di spesa al giorno. Il «tutto compreso» contiene anche le quote fisse, che pesano di più quando il consumo scende.</div>';
+    }
+  }
+  // 4) contratto
+  h += '<div class="ut-lbl">Contratto</div><div class="ut-box">' +
+    _utRigaDato(b, 'offerta_nome') + _utRigaDato(b, 'offerta_tipo') + _utRigaDato(b, 'offerta_decorrenza', 'data') + _utRigaDato(b, 'offerta_scadenza', 'data') + _utRigaDato(b, 'contratto_scadenza', 'data') + _utRigaDato(b, 'oneri_recesso') +
+    _utRigaDato(b, 'potenza_impegnata', 'kW') + _utRigaDato(b, 'tariffa') + _utRigaDato(b, 'metodo_pagamento') + _utRigaDato(b, 'stato_pagamenti') + _utRigaDato(b, 'deposito_cauzionale', 'eu') + _utRigaDato(b, 'contatore') + '</div>';
+  // 5) tutte le bollette
+  h += '<div class="ut-lbl">Bollette <em>tocca per tutti i dati e da dove vengono</em></div><div class="ut-box">';
+  L.slice().reverse().forEach(function(x){
+    var g = _utGiorni(x.periodo_dal, x.periodo_al), ct = _utCosto(x, 'tutto');
+    h += '<div class="ut-bol" style="cursor:pointer" data-b="' + x.id + '" onclick="_utDettaglio(this.dataset.b)"><div style="min-width:0"><b>' + _utD(x.periodo_dal) + ' – ' + _utD(x.periodo_al) + '</b><div class="ut-s">n° ' + esc(x.numero) + ' · ' + _utN(x.consumo) + ' ' + esc(_utU(x)) + (g ? ' in ' + g + ' gg' : '') + (x.dati && x.dati.letture === 'stimata' ? ' · <span class="ut-pill no">stimata</span>' : '') + (x.dati && x.dati.acconto ? ' <span class="ut-pill">acconto</span>' : '') + '</div></div>' +
+      '<div class="dx"><b>' + _utEu(x.totale) + '</b><div class="ut-s">' + (ct != null ? _utEu(ct, 3) + '/' + esc(_utU(x)) + ' tutto compr.' : '') + '</div></div></div>';
+  });
+  h += '</div>';
+  var fornitoriVisti = Array.from(new Set(L.map(function(x){ return x.fornitore_nome; }).filter(Boolean)));
+  if(fornitoriVisti.length > 1) h += '<div class="pa-nota">Fornitori avuti su questa fornitura: ' + fornitoriVisti.map(esc).join(' → ') + '. Il codice ' + esc(f.codice) + ' resta lo stesso anche quando cambi fornitore.</div>';
+  document.getElementById('utRis').innerHTML = h;
+  document.getElementById('utRis').scrollTop = 0;
+}
+function _utRigaDato(b, k, genere){
+  var d = b.dati || {}, v = d[k]; if(v == null || v === '') return '';
+  var et = { offerta_nome: 'Offerta', offerta_tipo: 'Tipo di prezzo', offerta_decorrenza: 'Condizioni economiche dal', offerta_scadenza: 'Scadenza condizioni economiche', contratto_scadenza: 'Scadenza del contratto', oneri_recesso: 'Oneri di recesso', potenza_impegnata: 'Potenza impegnata', tariffa: 'Tariffa', metodo_pagamento: 'Pagamento', stato_pagamenti: 'Pagamenti precedenti', deposito_cauzionale: 'Deposito cauzionale', contatore: 'Contatore' }[k] || k;
+  var t = genere === 'data' ? (/^\d{4}-/.test(v) ? _utD(v) : v) : (genere === 'eu' ? _utEu(v) : (genere === 'kW' ? _utN(v, 1) + ' kW' : v));
+  var pr = (b.provenienza || {})[k];
+  return '<div class="ut-riga"><span>' + esc(et) + (pr && pr.riga ? '<small>«' + esc(pr.riga.slice(0, 120)) + '»</small>' : '') + '</span><b>' + esc(String(t)) + '</b></div>';
+}
+
+// ── grafici leggeri: valore al tocco, numeri sempre visibili sotto ──
+function _utGrafLinea(P, idInfo){
+  var W = 320, H = 120, l = 46, r = 10, t = 10, bo = 22;
+  var vs = P.map(function(p){ return p.v; }), mn = Math.min.apply(null, vs), mx = Math.max.apply(null, vs);
+  if(mx - mn < 1e-6){ mn = mn * 0.95; mx = mx * 1.05 + 0.001; } var pad = (mx - mn) * 0.12; mn -= pad; mx += pad;
+  var t0 = Date.parse(P[0].d), t1 = Date.parse(P[P.length - 1].d); if(t1 <= t0) t1 = t0 + 1;
+  var X = function(d){ return l + (Date.parse(d) - t0) / (t1 - t0) * (W - l - r); }, Y = function(v){ return t + (mx - v) / (mx - mn) * (H - t - bo); };
+  var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Andamento del costo unitario">';
+  [mx - pad, (mx + mn) / 2, mn + pad].forEach(function(v){ s += '<line x1="' + l + '" x2="' + (W - r) + '" y1="' + Y(v).toFixed(1) + '" y2="' + Y(v).toFixed(1) + '" class="gr-grid"/><text x="' + (l - 5) + '" y="' + (Y(v) + 3).toFixed(1) + '" text-anchor="end" class="gr-ax">' + _utN(v, 3) + '</text>'; });
+  s += '<path d="' + P.map(function(p, i){ return (i ? 'L' : 'M') + X(p.d).toFixed(1) + ' ' + Y(p.v).toFixed(1); }).join(' ') + '" fill="none" stroke="var(--gr-1,#2a78d6)" stroke-width="2" stroke-linejoin="round"/>';
+  P.forEach(function(p){ var info = esc(p.et + ': € ' + _utN(p.v, 4)); s += '<circle cx="' + X(p.d).toFixed(1) + '" cy="' + Y(p.v).toFixed(1) + '" r="4.5" fill="var(--gr-1,#2a78d6)" style="cursor:pointer" onclick="var e=document.getElementById(\'' + idInfo + '\');if(e)e.textContent=\'' + info.replace(/'/g, '&#39;') + '\'"><title>' + info + '</title></circle>'; });
+  s += '<text x="' + l + '" y="' + (H - 5) + '" class="gr-ax">' + _utD(P[0].d) + '</text><text x="' + (W - r) + '" y="' + (H - 5) + '" text-anchor="end" class="gr-ax">' + _utD(P[P.length - 1].d) + '</text></svg>';
+  return s;
+}
+function _utGrafBarre(P, idInfo, dec){
+  var W = 320, H = 120, l = 40, r = 6, t = 8, bo = 22, n = P.length;
+  var mx = Math.max.apply(null, P.map(function(p){ return p.v; }).concat([0.0001]));
+  var bw = (W - l - r) / n, Y = function(v){ return t + (1 - v / mx) * (H - t - bo); };
+  var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Consumi">';
+  [mx, mx / 2].forEach(function(v){ s += '<line x1="' + l + '" x2="' + (W - r) + '" y1="' + Y(v).toFixed(1) + '" y2="' + Y(v).toFixed(1) + '" class="gr-grid"/><text x="' + (l - 4) + '" y="' + (Y(v) + 3).toFixed(1) + '" text-anchor="end" class="gr-ax">' + _utN(v, dec || 0) + '</text>'; });
+  P.forEach(function(p, i){ var x = l + i * bw + bw * 0.15, y = Y(p.v), info = esc(p.et + ': ' + _utN(p.v, dec || 0) + (p.sotto ? ' · ' + p.sotto : '')); s += '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + (bw * 0.7).toFixed(1) + '" height="' + Math.max(0.5, H - bo - y).toFixed(1) + '" rx="2" fill="var(--gr-1,#2a78d6)" style="cursor:pointer" onclick="var e=document.getElementById(\'' + idInfo + '\');if(e)e.textContent=\'' + info.replace(/'/g, '&#39;') + '\'"><title>' + info + '</title></rect>'; });
+  var passo = Math.ceil(n / 6); P.forEach(function(p, i){ if(i % passo === 0 || i === n - 1) s += '<text x="' + (l + i * bw + bw / 2).toFixed(1) + '" y="' + (H - 6) + '" text-anchor="middle" class="gr-ax">' + esc(p.et) + '</text>'; });
+  return s + '</svg>';
+}
+
+// ══ DETTAGLIO DI UNA BOLLETTA: ogni dato con la riga da cui viene ══
+function _utDettaglio(bid){
+  var b = UT.bol.find(function(x){ return String(x.id) === String(bid); }); if(!b) return;
+  var d = b.dati || {}, pr = b.provenienza || {};
+  var mo = pnFoglio('utDet', { titolo: (b.fornitore_nome || '') + ' n° ' + b.numero, sotto: _utD(b.periodo_dal) + ' – ' + _utD(b.periodo_al) + ' · ' + _utEu(b.totale), z: 975 });
+  var fa = b.fattura_id ? _utFattura(b.fattura_id) : null;
+  var h = '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">' + (b.pdf_path ? '<button class="an-fix" data-b="' + b.id + '" onclick="_utPdf(this.dataset.b)">Vedi la bolletta (PDF)</button>' : '') + (fa && typeof _btnXml === 'function' ? _btnXml(fa) : '') + '</div>';
+  if(fa) h += '<div class="an-rows" style="margin-bottom:10px">' + _anRigaFattura(fa) + '</div>';
+  h += '<div class="ut-box">' + (b.controlli || []).map(function(c){ return '<div class="ut-riga"><span>' + esc(c.testo) + '</span><b>' + (c.ok ? '<span class="ut-pill ok">torna</span>' : '<span class="ut-pill no">non torna</span>') + '</b></div>'; }).join('') + '</div>';
+  h += '<div class="ut-box">' + _utCampiHtml(d, pr, false) + '</div>';
+  h += '<div class="pa-nota">Fonte: ' + ({ pdf: 'PDF caricato', xml: 'PDF allegato alla fattura elettronica', gmail: 'email della casella della società' }[b.fonte] || b.fonte) + '.</div>';
+  mo.querySelector('.pn-sh-bd').innerHTML = h;
+}
+function _utValTxt(k, v){
+  if(v == null) return '—';
+  if(typeof v === 'boolean') return v ? 'sì' : 'no';
+  if(k === 'consumo_fasce') return Object.keys(v).map(function(f){ return f + ' ' + _utN(v[f]); }).join(' · ');
+  if(k === 'insoluto') return fmt(v.importo) + (v.documenti ? ' · ' + v.documenti + ' bollette' : '') + (v.primo ? ' · dal ' + _utD(v.primo.data) + ' al ' + _utD(v.ultimo.data) : '');
+  if(k === 'autolettura') return _utD(v.dal) + ' – ' + _utD(v.al);
+  if(k === 'storico') return v.length + ' periodi';
+  if(k === 'picchi_potenza') return v.map(function(p){ return _utMese(p.mese) + ' ' + _utN(p.kw, 1); }).join(' · ');
+  if(k === 'letture_dettaglio') return v.map(function(l){ return _utD(l.data) + ' ' + _utN(l.lettura) + ' (' + l.tipo + ')'; }).join(' · ');
+  if(k === 'scaglioni') return v.map(function(s){ return _utN(s.mc) + ' m³ × ' + _utN(s.prezzo, 4); }).join(' · ');
+  if(k === 'prezzi_fasce') return Object.keys(v).map(function(f){ return f + ' ' + _utN(v[f].energia != null ? v[f].energia : v[f].prezzo_fisso, 4); }).join(' · ');
+  if(k === 'prezzi_unitari') return Object.keys(v).map(function(f){ return f + ' ' + _utN(v[f], 4); }).join(' · ');
+  if(typeof v === 'object') return JSON.stringify(v).slice(0, 80);
+  if(typeof v === 'number') return /prezzo|_mese$/.test(k) ? _utN(v, 4) : _utN(v, 2);
+  if(/^\d{4}-\d{2}-\d{2}$/.test(v)) return _utD(v);
+  return String(v);
+}
+var UT_ORDINE = ['tipo', 'fornitore_nome', 'fornitore_piva', 'codice_fornitura', 'numero_fattura', 'data_emissione', 'periodo_dal', 'periodo_al', 'totale', 'scadenza_pagamento', 'consumo', 'unita', 'consumo_fasce', 'letture', 'prezzo_medio_vendita', 'prezzo_medio_consumi', 'prezzo_medio_rete', 'costo_consumi', 'quota_fissa', 'quota_potenza', 'accise_iva', 'altre_partite', 'imponibile', 'iva', 'offerta_nome', 'offerta_tipo', 'offerta_scadenza', 'insoluto', 'stato_pagamenti', 'autolettura'];
+function _utCampiHtml(d, pr, modifica, mancanti){
+  var et = Object.assign({}, UT_ETICH, (UT.lettura && UT.lettura.etichette) || {});
+  var chiavi = UT_ORDINE.filter(function(k){ return d[k] != null || (mancanti || []).indexOf(k) >= 0; }).concat(Object.keys(d).filter(function(k){ return UT_ORDINE.indexOf(k) < 0; }));
+  return chiavi.map(function(k){
+    var p = pr[k] || {}, manca = d[k] == null, nome = et[k] || k.replace(/_/g, ' ');
+    var semplice = !(d[k] && typeof d[k] === 'object');
+    return '<div class="ut-campo"><div class="c1"><span>' + esc(nome) + (modifica && !manca && p.certo === false ? ' <span class="ut-pill no">da confermare</span>' : '') + (manca ? ' <span class="ut-pill no">non trovato</span>' : '') + '</span><b id="utV_' + k + '">' + esc(_utValTxt(k, d[k])) + '</b></div>' +
+      (p.riga ? '<div class="c2">dal PDF: «' + esc(p.riga) + '»</div>' : '') +
+      (modifica && semplice ? '<div class="c2"><button class="ut-btn" data-k="' + k + '" onclick="_utCorreggi(this.dataset.k)">' + (manca ? 'Scrivilo come appare nel PDF' : 'Correggi') + '</button></div><div id="utC_' + k + '"></div>' : '') + '</div>';
+  }).join('');
+}
+async function _utPdf(bid){
+  var w = window.open('', '_blank');
+  var j = await _utChiama({ azione: 'pdf_url', bolletta_id: +bid });
+  if(j.errore || !j.url){ if(w) w.close(); toast('⚠️ ' + (j.errore || 'PDF non disponibile')); return; }
+  if(w) w.location = j.url; else location.href = j.url;
+}
+
+// ══ LETTURA DI UNA BOLLETTA (PDF caricato, email o XML) E CONFERMA ══
+function _utScegliPdf(){
+  var i = document.createElement('input'); i.type = 'file'; i.accept = 'application/pdf,.pdf';
+  i.onchange = function(){ var f = i.files && i.files[0]; if(f) _utLeggiFile(f); };
+  i.click();
+}
+async function _utLeggiFile(file){
+  if(file.size > 15 * 1024 * 1024){ toast('⚠️ PDF troppo grande (max 15 MB)'); return; }
+  var mo = pnFoglio('utLeggi', { titolo: 'Leggo la bolletta…', sotto: esc(file.name), z: 970 });
+  mo.querySelector('.pn-sh-bd').innerHTML = '<div class="ut-vuoto"><b>Sto leggendo il PDF</b>Ci vogliono pochi secondi.</div>';
+  var b64 = await new Promise(function(ok, ko){ var r = new FileReader(); r.onload = function(){ ok(String(r.result).split(',')[1]); }; r.onerror = ko; r.readAsDataURL(file); });
+  var j = await _utChiama({ azione: 'leggi', pdf_base64: b64 });
+  if(j.errore){ mo.querySelector('.pn-sh-bd').innerHTML = '<div class="ut-ban ross"><b>Non archiviata</b><br>' + esc(j.errore) + '</div>'; return; }
+  _utMostraLettura(j, { fonte: 'pdf' });
+}
+function _utConfermaArrivo(aid){
+  var a = UT.arrivi.find(function(x){ return String(x.id) === String(aid); }); if(!a || !a.risultato) return;
+  _utMostraLettura(a.risultato, { fonte: 'gmail', arrivo_id: a.id, nota: 'Arrivata per email il ' + _utD(String(a.ricevuto_il).slice(0, 10)) + (a.oggetto ? ' · «' + a.oggetto + '»' : '') });
+}
+async function _utConfermaBolletta(bid){
+  var b = UT.bol.find(function(x){ return String(x.id) === String(bid); }); if(!b) return;
+  if(b.fattura_id){ var mo = pnFoglio('utLeggi', { titolo: 'Rileggo la bolletta…', z: 970 }); mo.querySelector('.pn-sh-bd').innerHTML = '<div class="ut-vuoto"><b>Un attimo</b></div>'; var j = await _utChiama({ azione: 'leggi', fattura_id: b.fattura_id }); if(j.errore){ mo.querySelector('.pn-sh-bd').innerHTML = '<div class="ut-ban ross">' + esc(j.errore) + '</div>'; return; } _utMostraLettura(j, { fonte: 'xml', fattura_id: b.fattura_id }); }
+}
+function _utMostraLettura(j, opz){
+  UT.lettura = Object.assign({}, j, { opz: opz || {}, correzioni: {}, dati: Object.assign({}, j.dati) });
+  var d = UT.lettura.dati, tipo = d.tipo;
+  var mo = pnFoglio('utLeggi', { titolo: (UT_ICO[tipo] || '📄') + ' ' + (UT_NOME[tipo] || 'Bolletta') + (d.fornitore_nome ? ' · ' + d.fornitore_nome : ''), sotto: (d.numero_fattura ? 'n° ' + esc(d.numero_fattura) + ' · ' : '') + (d.periodo_dal ? _utD(d.periodo_dal) + ' – ' + _utD(d.periodo_al) : ''), z: 970 });
+  var h = '';
+  if(opz && opz.nota) h += '<div class="pa-nota" style="margin:0 2px 8px">' + esc(opz.nota) + '</div>';
+  if(j.gia_presente) h += '<div class="ut-ban gia"><b>Questa bolletta è già archiviata.</b> Se confermi, i dati vengono aggiornati con questa lettura.</div>';
+  if(j.cambio_fornitore) h += '<div class="ut-ban blu"><b>Cambio fornitore.</b> Per ' + esc(j.fornitura.codice) + ' finora il fornitore era ' + esc(j.fornitura.fornitore_nome || '—') + ', ora ' + esc(d.fornitore_nome || 'un fornitore nuovo') + '. La scheda resta la stessa (il codice della fornitura non cambia) e lo storico continua.</div>';
+  else if(j.nuovo_fornitore) h += '<div class="ut-ban blu"><b>Fornitore nuovo: prima lettura.</b> L\'app ha cercato le voci che ogni bolletta deve avere per legge. Controlla i dati segnati «da confermare» e scrivi quelli «non trovati» <b>esattamente come appaiono nel PDF</b>: l\'app impara dove stanno e dalla prossima bolletta li legge da sola.</div>';
+  else if(!j.fornitura) h += '<div class="ut-ban blu"><b>Nuova fornitura.</b> Alla conferma l\'app crea la scheda ' + esc(UT_NOME[tipo] || '') + ' per il codice ' + esc(d.codice_fornitura || '—') + '.</div>';
+  if(j.fattura){ var fa = _utFattura(j.fattura.id); h += '<div class="ut-lbl" style="margin-top:4px">Fattura elettronica corrispondente</div>' + (fa ? '<div class="an-rows">' + _anRigaFattura(fa) + '</div>' : '<div class="ut-box"><div class="ut-riga"><span>' + esc(j.fattura.fornitore || '') + ' n° ' + esc(j.fattura.numero) + '</span><b>' + _utEu(Math.abs(j.fattura.importo)) + '</b></div></div>'); }
+  else h += '<div class="pa-nota" style="margin:0 2px 8px">Nessuna fattura elettronica con questo numero in app (se arriva dopo, la bolletta resta valida lo stesso).</div>';
+  if((j.controlli || []).length) h += '<div class="ut-lbl">Controlli sui totali</div><div class="ut-box">' + j.controlli.map(function(c){ return '<div class="ut-riga"><span>' + esc(c.testo) + '</span><b>' + (c.ok ? '<span class="ut-pill ok">torna</span>' : '<span class="ut-pill no">non torna</span>') + '</b></div>'; }).join('') + '</div>';
+  h += '<div class="ut-lbl">Dati letti <em>' + ((j.mancanti || []).length ? 'mancano: ' + j.mancanti.map(function(k){ return (j.etichette || {})[k] || k; }).join(', ') : 'tutti i dati principali trovati') + '</em></div><div class="ut-box" id="utCampi">' + _utCampiHtml(d, j.provenienza || {}, true, j.mancanti) + '</div>';
+  h += '<button class="btn btn-p" id="utSalvaBtn" style="width:100%;margin-top:12px;padding:13px" onclick="_utSalvaLettura(this)">Conferma e archivia</button>' +
+    '<div style="font-size:11.5px;color:var(--ink3);margin-top:8px;text-align:center">Il PDF resta archiviato con la bolletta e si può riaprire quando vuoi.</div>';
+  mo.querySelector('.pn-sh-bd').innerHTML = h;
+}
+function _utCorreggi(k){
+  var box = document.getElementById('utC_' + k); if(!box) return;
+  var gen = /^(data_|periodo_|scadenza_|offerta_scadenza|offerta_decorrenza)/.test(k) ? 'data' : (/^(numero_fattura|codice_|fornitore_piva)/.test(k) ? 'codice' : (/(_nome|_tipo|stato_|metodo_|tariffa|tipologia|contatore|unita|letture)/.test(k) || k === 'tipo' ? 'testo' : 'numero'));
+  var ph = gen === 'data' ? 'es. 30/11/2026' : (gen === 'numero' ? 'es. 1.234,56' : (k === 'tipo' ? 'luce, gas o acqua' : 'come scritto nel PDF'));
+  box.innerHTML = '<input id="utI_' + k + '" placeholder="' + ph + '" data-g="' + gen + '" oninput="_utApplicaCorr(\'' + k + '\')">';
+  var i = document.getElementById('utI_' + k); if(i) i.focus();
+}
+function _utNumIt(s){ var t = String(s || '').trim().replace(/[€\s]/g, ''); if(/^-?\d{1,3}(\.\d{3})+(,\d+)?$/.test(t)) t = t.replace(/\./g, '').replace(',', '.'); else t = t.replace(',', '.'); var n = parseFloat(t); return isFinite(n) ? n : null; }
+function _utDataIt(s){ var m = String(s || '').match(/(\d{1,2})[\/.](\d{1,2})[\/.](\d{2,4})/); if(!m) return null; var a = +m[3]; if(a < 100) a += 2000; return a + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2); }
+function _utApplicaCorr(k){
+  var i = document.getElementById('utI_' + k); if(!i || !UT.lettura) return;
+  var s = i.value.trim(), g = i.dataset.g, v = s === '' ? null : (g === 'data' ? _utDataIt(s) : (g === 'numero' ? _utNumIt(s) : (k === 'tipo' ? (/luce|elettr/i.test(s) ? 'luce' : (/gas/i.test(s) ? 'gas' : (/acqua|idric/i.test(s) ? 'acqua' : null))) : s)));
+  if(v == null){ delete UT.lettura.correzioni[k]; } else { UT.lettura.dati[k] = v; UT.lettura.correzioni[k] = { scritto: s }; }
+  var e = document.getElementById('utV_' + k); if(e) e.textContent = v == null ? (s ? 'non riconosciuto' : '—') : _utValTxt(k, v);
+}
+async function _utSalvaLettura(btn){
+  var L = UT.lettura; if(!L) return;
+  var d = L.dati, manca = ['tipo', 'codice_fornitura', 'numero_fattura'].filter(function(k){ return d[k] == null || d[k] === ''; });
+  if(manca.length){ toast('Servono almeno: ' + manca.map(function(k){ return (L.etichette || {})[k] || k; }).join(', ')); return; }
+  if(['luce', 'gas', 'acqua'].indexOf(d.tipo) < 0){ toast('Tipo: scrivi luce, gas o acqua'); return; }
+  btn.disabled = true; btn.textContent = 'Archivio…';
+  // i dati confermati da chi guarda la bolletta diventano «certi»
+  var prov = Object.assign({}, L.provenienza || {}); Object.keys(L.correzioni).forEach(function(k){ prov[k] = { riga: 'scritto a mano: «' + L.correzioni[k].scritto + '»', certo: true }; });
+  var j = await _utChiama({ azione: 'salva', attesa: L.attesa, dati: d, provenienza: prov, controlli: L.controlli, correzioni: L.correzioni, lettore: L.lettore, fonte: L.opz.fonte, fattura_id: (L.fattura && L.fattura.id) || L.opz.fattura_id || null, arrivo_id: L.opz.arrivo_id || null });
+  if(j.errore){ btn.disabled = false; btn.textContent = 'Conferma e archivia'; toast('⚠️ ' + j.errore); return; }
+  pnChiudi('utLeggi'); UT.lettura = null;
+  toast('✓ Bolletta archiviata' + (Object.keys(L.correzioni).length ? ': l\'app ha imparato dove leggere i dati corretti' : ''), { forza: true });
+  await _utCarica(true);
+  if(document.getElementById('utOv') && document.getElementById('utOv').classList.contains('on')){ if(j.fornitura) _utScheda(j.fornitura.id); else _utElenco(); }
+  if(typeof _anAggiornaHome === 'function') _anAggiornaHome(false);
+  _utCardRiepilogo();
+}
+
+// ══ GMAIL ══
+async function _utGmail(){
+  var mo = pnFoglio('utGm', { titolo: 'Leggi bollette da Gmail', sotto: 'casella ceraldigroupsrl@gmail.com', z: 970 });
+  var bd = mo.querySelector('.pn-sh-bd'); bd.innerHTML = '<div class="ut-vuoto"><b>Un attimo…</b></div>';
+  var c = await _utChiama({ azione: 'gmail_config' });
+  if(c.errore){ bd.innerHTML = '<div class="ut-ban ross">' + esc(c.errore) + '</div>'; return; }
+  var h = '';
+  if(c.url_script){
+    h += '<button class="btn btn-p" style="width:100%;padding:13px" onclick="_utGmailOra(this)">Leggi adesso</button><div class="pa-nota" style="text-align:center">Gira anche da sola il 20 di ogni mese.</div>';
+  } else h += '<div class="ut-ban blu"><b>Da installare una volta sola</b> (2 minuti, gratis). Lo script vive nella casella della società: prende solo i PDF delle bollette, non legge altro, non cancella niente.</div>';
+  var arr = UT.arrivi.slice(0, 15);
+  if(arr.length) h += '<div class="ut-lbl">Ultime ricevute</div><div class="ut-box">' + arr.map(function(x){ var col = x.esito === 'archiviata' ? 'ok' : (x.esito === 'da confermare' ? 'no' : ''); return '<div class="ut-riga"><span>' + esc(x.nome_file || '') + '<small>' + esc(x.messaggio || '') + ' · ' + _utD(String(x.ricevuto_il).slice(0, 10)) + '</small></span><b><span class="ut-pill ' + col + '">' + esc(x.esito) + '</span></b></div>'; }).join('') + '</div>';
+  h += '<div class="ut-lbl">' + (c.url_script ? 'Istruzioni (già fatto)' : 'Come si installa') + '</div><div class="ut-box" style="padding:4px 12px"><ol class="ut-passi">' +
+    '<li>Sul computer, entra in Google con <b>ceraldigroupsrl@gmail.com</b> e apri <code>script.google.com</code> → <b>Nuovo progetto</b>.</li>' +
+    '<li>Cancella quello che c\'è e incolla il testo dello script: <button class="ut-btn" onclick="_utCopiaScript()">Copia lo script</button></li>' +
+    '<li>Nella riga <code>const CHIAVE = …</code> metti la chiave: <button class="ut-btn" data-c="' + esc(c.chiave || '') + '" onclick="_utCopia(this.dataset.c,\'Chiave copiata\')">Copia la chiave</button> <span style="color:var(--ink3);font-size:11.5px">(non condividerla: serve solo a consegnare PDF all\'app)</span></li>' +
+    '<li>Salva (icona del disco), scegli la funzione <b>installa</b> in alto e premi <b>Esegui</b>. Google chiede le autorizzazioni: accetta (è il tuo script, gira nel tuo account). Così parte la lettura del 20 di ogni mese e fa subito un primo giro.</li>' +
+    '<li>Per il pulsante «Leggi adesso»: <b>Esegui il deployment → Nuovo deployment → App web</b>, «Esegui come: me», «Chi ha accesso: chiunque» (senza chiave non fa nulla). Copia l\'indirizzo che finisce con <code>/exec</code> e incollalo qui:</li></ol>' +
+    '<input id="utUrlScript" value="' + esc(c.url_script || '') + '" placeholder="https://script.google.com/macros/s/…/exec" style="width:100%;margin:4px 0 10px;padding:10px;border-radius:10px;border:.5px solid var(--ds-hair);background:var(--surface2);font:inherit;font-size:14px"><button class="btn" style="width:100%;margin-bottom:10px" onclick="_utSalvaUrlScript(this)">Salva indirizzo</button></div>';
+  bd.innerHTML = h;
+}
+async function _utGmailOra(btn){
+  btn.disabled = true; btn.textContent = 'Controllo la posta…';
+  var j = await _utChiama({ azione: 'gmail_avvia' });
+  btn.disabled = false; btn.textContent = 'Leggi adesso';
+  if(j.errore){ toast('⚠️ ' + j.errore); return; }
+  toast('✉️ ' + (j.pdf || 0) + ' PDF: ' + (j.archiviate || 0) + ' archiviate, ' + (j.da_confermare || 0) + ' da confermare' + (j.gia ? ', ' + j.gia + ' già presenti' : '') + (j.scartate ? ', ' + j.scartate + ' scartate' : ''), { forza: true });
+  await _utCarica(true); _utGmail(); if(document.getElementById('utOv') && document.getElementById('utOv').classList.contains('on') && !UT.sel) _utElenco();
+}
+async function _utSalvaUrlScript(btn){
+  var v = (document.getElementById('utUrlScript') || {}).value || '';
+  btn.disabled = true; var j = await _utChiama({ azione: 'gmail_config', url_script: v.trim() }); btn.disabled = false;
+  if(j.errore){ toast('⚠️ ' + j.errore); return; }
+  toast('✓ Indirizzo salvato', { forza: true }); _utGmail();
+}
+function _utCopia(t, msg){ try{ navigator.clipboard.writeText(t).then(function(){ toast(msg || 'Copiato'); }, function(){ prompt('Copia:', t); }); }catch(e){ prompt('Copia:', t); } }
+async function _utCopiaScript(){
+  try{ var r = await fetch('https://raw.githubusercontent.com/valerioceraldi-hub/Ceraldi/main/funzioni/utenze-bolletta/gmail-script.gs', { cache: 'no-store' }); var t = await r.text(); if(!/leggiBollette/.test(t)) throw new Error('script non trovato'); _utCopia(t, 'Script copiato'); }
+  catch(e){ toast('⚠️ Non riesco a scaricare lo script: aprilo dal repo (funzioni/utenze-bolletta/gmail-script.gs)'); }
+}
+
+// ══ card in Riepilogo ══
+async function _utCardRiepilogo(){
+  var el = document.getElementById('rsub-utenze'); if(!el) return;
+  try{ await _utCarica(false); }catch(e){ return; }
+  var n = 0, alte = 0; (UT.forn || []).forEach(function(f){ _utAvvisi(f).forEach(function(a){ if(a.gravita !== 'bassa'){ n++; if(a.gravita === 'alta') alte++; } }); });
+  var dc = UT.arrivi.filter(function(x){ return x.esito === 'da confermare'; }).length;
+  el.innerHTML = UT.forn.length ? (UT.forn.length + (UT.forn.length === 1 ? ' fornitura' : ' forniture') + (n ? ' · <b style="color:' + (alte ? 'var(--red)' : '#a35a00') + '">' + n + (n === 1 ? ' avviso' : ' avvisi') + '</b>' : ' · nessun avviso') + (dc ? ' · ' + dc + ' da confermare' : '')) : 'Luce, gas e acqua: costo unitario, consumi, scadenze';
+}
+setTimeout(function(){ try{ _utCardRiepilogo(); }catch(e){} }, 4000);
 </script>
 
 </body>

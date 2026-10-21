@@ -14,7 +14,7 @@
 // ══════════════════════════════════════════════════════════════════════
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { extractText, getDocumentProxy } from 'npm:unpdf@0.12.1';
-import { crea } from 'https://raw.githubusercontent.com/valerioceraldi-hub/Ceraldi/__COMMIT__/funzioni/utenze-bolletta/servizio.js';
+import { crea } from 'https://raw.githubusercontent.com/valerioceraldi-hub/Ceraldi/bfab808eab9d8cf9fdef762095f1e98386be3281/funzioni/utenze-bolletta/servizio.js';
 
 const gestisci = crea({
   createClient, extractText, getDocumentProxy,
