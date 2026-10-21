@@ -39,7 +39,11 @@ def scrivi(rel, testo):
 def testa(lang, titolo, descr, url, rr, og_img="img/og.jpg", ld=None, alternates=None, tipo="website", preload=None):
     alt = ''.join(f'<link rel="alternate" hreflang="{h}" href="{u}">' for h, u in (alternates or []))
     lds = ''.join(f'<script type="application/ld+json">{json.dumps(x, ensure_ascii=False)}</script>' for x in (ld or []))
-    pre = f'<link rel="preload" as="image" href="{preload}" fetchpriority="high">' if preload else ''
+    # preload: un indirizzo, oppure (indirizzo, srcset, sizes) per far scaricare al telefono la versione piccola
+    if isinstance(preload, tuple):
+        pre = f'<link rel="preload" as="image" href="{preload[0]}" imagesrcset="{preload[1]}" imagesizes="{preload[2]}" fetchpriority="high">'
+    else:
+        pre = f'<link rel="preload" as="image" href="{preload}" fetchpriority="high">' if preload else ''
     return f'''<!DOCTYPE html>
 <html lang="{lang}">
 <head>
@@ -275,7 +279,8 @@ def home(lang='it'):
     larghezze = (640, 1024, 1280, 1890, 2362)
     alt = [("it", BASE), ("en", BASE + "en/"), ("x-default", BASE)]
     h = testa(lang, T["titolo"], T["descr"], BASE + ("" if it else "en/"), rr, og_img=f"img/{k}-1280.webp",
-              ld=[ld_bar(lang)] + ([ld_sito()] if it else []), alternates=alt, preload=f"{rr}img/{k}-1890.webp")
+              ld=[ld_bar(lang)] + ([ld_sito()] if it else []), alternates=alt,
+              preload=(f"{rr}img/{k}-1890.webp", ", ".join(f"{rr}img/{k}-{w}.webp {w}w" for w in larghezze), "100vw"))
     srcset = ", ".join(f"{rr}img/{k}-{w}.webp {w}w" for w in larghezze)
     tel = BAR["telefono"] if it else "+39 081 552 3488"
     cell = BAR["cellulare"] if it else "+39 328 438 8404"
