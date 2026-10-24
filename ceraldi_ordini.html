@@ -342,6 +342,7 @@ html[data-theme="dark"] .todo-ft{background:rgba(255,255,255,.03)}
 .bub.a{align-self:flex-start;background:var(--surface);box-shadow:var(--shadow);border-bottom-left-radius:5px}
 .map-tbl{width:100%;border-collapse:collapse;font-size:12px}
 .map-tbl td,.map-tbl th{border-bottom:.5px solid var(--sep2);padding:6px 4px;text-align:left;white-space:nowrap;max-width:150px;overflow:hidden;text-overflow:ellipsis}
+.drag-h{flex-shrink:0;width:44px;height:44px;margin:-8px -8px -8px 0;display:flex;align-items:center;justify-content:center;font-size:24px;line-height:1;color:var(--muted,#8e8e93);touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;cursor:grab}
 .imp-row{display:flex;gap:10px;align-items:flex-start;padding:10px 14px;border-bottom:.5px solid var(--sep2)}
 .imp-row:last-child{border-bottom:none}
 .prog{height:6px;background:var(--surface3);border-radius:99px;overflow:hidden;margin:10px 0}
@@ -460,7 +461,7 @@ function avvisoCreditoIA(){
 </nav>
 
 <script>
-var APP_VERSION='8.16.1';
+var APP_VERSION='8.16.2';
 var BUILD_VERSION=APP_VERSION, BUILD_NUM=APP_VERSION;
 var APP={key:'ordini',nome:'Ordini',versione:APP_VERSION,authKey:'or_auth_v2',oldAuthKey:'ceraldi_ordini_auth_session',
   markBg:'linear-gradient(145deg,#FFC04D 0%,#FF9F0A 50%,#C2410C 100%)',
@@ -6133,21 +6134,55 @@ function apriFornitori(){
     var l = FORN.filter(function(f){ return fornCompatibile(f, st); }); if(!l.length) return;
     h += '<div class="sec-title">' + esc(st) + ' · ' + l.length + '</div><div class="grp">' + l.map(function(f, i){
       var n = CAT.filter(function(p){ return prezzoDi(p, f.nome) != null; }).length, ex = extraForn(f.nome);
-      return '<div class="row"><span class="sup-av" style="background:' + coloreForn(f.nome) + '">' + esc(iniziali(f.nome)) + '</span><button class="row-main" style="background:none;border:none;text-align:left;padding:0" onclick="apriFornitore(' + f.id + ')"><div class="row-t"><span class="muted" style="font-size:12px">' + (i + 1) + '.</span> ' + esc(f.nome) + '</div><div class="row-s">' + n + ' prodotti' + ((f.settori || []).length ? ((f.settori || []).length > 1 ? ' · anche ' + esc(f.settori.filter(function(x){ return x !== st; }).join(', ')) : '') : ' · tutti i settori') + (f.piva ? ' · P.IVA ' + esc(f.piva) : (f.senza_piva ? '' : ' · <b style="color:var(--orange-ink)">manca P.IVA</b>')) + (ex.giorni && ex.giorni.length ? ' · ordini ' + giorniTesto(ex.giorni) : '') + (!f.whatsapp && !f.email ? ' · <span style="color:var(--orange-ink)">senza contatti</span>' : '') + '</div></button>' +
-        (U.lettura ? '' : '<div style="display:flex;flex-direction:column;gap:2px"><button class="more-b" style="height:22px" ' + (i === 0 ? 'disabled' : '') + ' onclick="spostaForn(' + f.id + ',-1,\'' + esc(st) + '\')">▲</button><button class="more-b" style="height:22px" ' + (i === l.length - 1 ? 'disabled' : '') + ' onclick="spostaForn(' + f.id + ',1,\'' + esc(st) + '\')">▼</button></div>') + '</div>';
+      return '<div class="row" data-fid="' + f.id + '"><span class="sup-av" style="background:' + coloreForn(f.nome) + '">' + esc(iniziali(f.nome)) + '</span><button class="row-main" style="background:none;border:none;text-align:left;padding:0" onclick="apriFornitore(' + f.id + ')"><div class="row-t"><span class="muted" style="font-size:12px">' + (i + 1) + '.</span> ' + esc(f.nome) + '</div><div class="row-s">' + n + ' prodotti' + ((f.settori || []).length ? ((f.settori || []).length > 1 ? ' · anche ' + esc(f.settori.filter(function(x){ return x !== st; }).join(', ')) : '') : ' · tutti i settori') + (f.piva ? ' · P.IVA ' + esc(f.piva) : (f.senza_piva ? '' : ' · <b style="color:var(--orange-ink)">manca P.IVA</b>')) + (ex.giorni && ex.giorni.length ? ' · ordini ' + giorniTesto(ex.giorni) : '') + (!f.whatsapp && !f.email ? ' · <span style="color:var(--orange-ink)">senza contatti</span>' : '') + '</div></button>' +
+        (U.lettura ? '' : '<span class="drag-h" role="button" aria-label="Trascina per cambiare posizione" onpointerdown="trascinaForn(event,\'' + esc(st) + '\')">≡</span>') + '</div>';
     }).join('') + '</div>';
   });
-  h += '<p class="hint">In ogni settore, se due fornitori hanno lo stesso prezzo vince quello con il numero più basso (il più in alto). Un fornitore di più settori compare in ognuno: se lo sposti, cambia solo la sua posizione rispetto agli altri di quel settore.</p>' +
+  h += '<p class="hint">In ogni settore, se due fornitori hanno lo stesso prezzo vince quello più in alto. Tieni premuta la maniglia ≡ e trascina per spostare un fornitore. Uno di più settori compare in ognuno: se lo sposti, cambia solo la sua posizione rispetto agli altri di quel settore.</p>' +
   (fornitoriOrfani().length ? '<div class="sec-title">Non ci sono più</div>' + sezioneOrfani().replace(/<div class="sec-title">[\s\S]*?<\/div>/, '') : '') +
   (Object.keys(conf().fornSostituiti || {}).length ? '<div class="sec-title">Sostituiti</div><div class="grp">' + Object.keys(conf().fornSostituiti).map(function(k){ return '<div class="row"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(k) + ' → ' + esc(conf().fornSostituiti[k]) + '</div><div class="row-s">fatture e listini con il vecchio nome vanno al nuovo</div></div></div>'; }).join('') + '</div>' : '') +
   (U.lettura ? '' : '<button class="btn btn-s" style="margin-top:10px" onclick="apriCestinoFornitori()">Fornitori eliminati</button>');
   sotto('shForn', 'Fornitori', h);
 }
-async function spostaForn(id, d, settore){
-  var l = FORN.filter(function(f){ return fornCompatibile(f, settore); }), i = l.findIndex(function(f){ return f.id === id; });
-  var a = l[i], b = l[i + d]; if(!a || !b) return;
-  var oa = a.ordine || 0, ob = b.ordine || 0; if(oa === ob){ ob = oa + d; }
-  try{ await salvaFornitore(a.id, { ordine: ob }); await salvaFornitore(b.id, { ordine: oa }); FORN.sort(function(x, y){ return (x.ordine || 0) - (y.ordine || 0) || x.nome.localeCompare(y.nome); }); apriFornitori(); }catch(e){ toast('⚠️ ' + e.message); }
+/* Trascinamento (come su iPhone): tieni premuta la maniglia ≡ e sposta la riga nel suo settore. Al rilascio salvo il nuovo ordine. */
+function trascinaForn(ev, settore){
+  var riga = ev.target.closest('.row'), box = riga && riga.parentNode; if(!riga || !box) return;
+  ev.preventDefault();
+  var h = ev.target, grab = ev.clientY - riga.getBoundingClientRect().top;
+  try{ h.setPointerCapture(ev.pointerId); }catch(e){}
+  riga.style.cssText += ';position:relative;z-index:5;background:var(--surface);box-shadow:0 6px 20px rgba(0,0,0,.18);transition:none';
+  function muovi(e){
+    riga.style.transform = '';
+    var y = e.clientY, altre = Array.prototype.filter.call(box.children, function(r){ return r !== riga && r.dataset.fid; });
+    for(var k = 0; k < altre.length; k++){
+      var rc = altre[k].getBoundingClientRect(), sopra = altre[k].compareDocumentPosition(riga) & 2, meta = rc.top + rc.height / 2;   // sopra: la riga trascinata sta sopra a questa
+      if(y > rc.top && y < rc.bottom){
+        if(sopra && y > meta){ box.insertBefore(riga, altre[k].nextSibling); break; }
+        if(!sopra && y < meta){ box.insertBefore(riga, altre[k]); break; }
+      }
+    }
+    riga.style.transform = 'translateY(' + Math.round(e.clientY - grab - riga.getBoundingClientRect().top) + 'px)';
+  }
+  function fine(e){
+    h.removeEventListener('pointermove', muovi); h.removeEventListener('pointerup', fine); h.removeEventListener('pointercancel', fine);
+    riga.style.transform = ''; riga.style.position = riga.style.zIndex = riga.style.background = riga.style.boxShadow = riga.style.transition = '';
+    var ids = Array.prototype.map.call(box.children, function(r){ return parseInt(r.dataset.fid, 10); }).filter(Boolean);
+    riordinaForn(settore, ids);
+  }
+  h.addEventListener('pointermove', muovi); h.addEventListener('pointerup', fine); h.addEventListener('pointercancel', fine);
+}
+// Il settore ha un nuovo ordine: i suoi fornitori si rimettono negli stessi posti della lista generale, quindi gli altri settori non cambiano
+async function riordinaForn(settore, ids){
+  var membri = FORN.filter(function(f){ return fornCompatibile(f, settore); });
+  if(ids.length !== membri.length || ids.every(function(id, i){ return membri[i].id === id; })) return;   // niente è cambiato
+  var nuovi = ids.map(function(id){ return FORN.find(function(f){ return f.id === id; }); }); if(nuovi.some(function(f){ return !f; })) return;
+  var glob = FORN.slice(), k = 0;
+  FORN.forEach(function(f, i){ if(fornCompatibile(f, settore)) glob[i] = nuovi[k++]; });
+  try{
+    for(var i = 0; i < glob.length; i++){ var o = (i + 1) * 10; if((glob[i].ordine || 0) !== o) await salvaFornitore(glob[i].id, { ordine: o }); }
+    FORN.sort(function(x, y){ return (x.ordine || 0) - (y.ordine || 0) || x.nome.localeCompare(y.nome); });
+  }catch(e){ toast('⚠️ ' + e.message); }
+  apriFornitori();
 }
 function creaFornitore(){ apriNuovoFornitore({ onCreato: function(){ renderOrdina(); apriFornitori(); } }); }
 function apriFornitore(id){
