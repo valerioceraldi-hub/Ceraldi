@@ -6723,7 +6723,7 @@ function showMsg(id, txt, tipo) {
 function hideMsg(id) { $(id).className = 'msg'; }
 
 function openSheet(id)  { $(id).classList.add('on'); }
-function closeSheet(id) { $(id).classList.remove('on'); }
+function closeSheet(id) { const el = $(id); if (el && el._bloccato) return; el.classList.remove('on'); }
 
 // Ricarica la pagina forzando lo scaricamento dell'ultima versione dal
 // server (bypassa la cache del browser aggiungendo un parametro sempre
@@ -11359,7 +11359,7 @@ async function recApri() {
       return `<div class="rec-card ${mia(r.id) ? '' : 'nuova'} ${(r.voto || 0) <= 3 ? 'bassa' : ''}" onclick="recApriUna('${esc(r.id)}')">
         <div class="rec-h">${r.foto ? `<img src="${esc(r.foto)}" alt="" referrerpolicy="no-referrer">` : `<span class="rec-av">${esc((r.autore || '?')[0])}</span>`}<div><b>${esc(r.autore || '')}</b>${stelle(r.voto)}<small>${r.pubblicata_il ? new Date(r.pubblicata_il).toLocaleDateString('it-IT', { day: 'numeric', month: 'short', year: 'numeric' }) : ''}${r.lingua && r.lingua !== 'it' ? ' · tradotta dal ' + esc(r.lingua) : ''}</small></div>${mia(r.id) ? '' : '<i class="rec-dot"></i>'}</div>
         <div class="rec-t">${esc(r.testo || '(solo voto)')}</div>
-        <div class="rec-lett"><span class="${lette.length ? 'ok' : ''}">👁 Letta da ${lette.length} su ${admins.length}</span>${admins.some(a => a.ruolo !== 'admin') ? `<span>${admins.filter(a => a.ruolo !== 'admin' && lette.some(l => l.admin_id === a.id)).length}/${admins.filter(a => a.ruolo !== 'admin').length} dipendenti</span>` : ''}${mia(r.id) ? '<span class="ok">✓✓ tu</span>' : ''}</div>
+        <div class="rec-lett"><span class="${lette.length ? 'ok' : ''}">👁 Letta da ${lette.length} su ${admins.length}</span>${admins.some(a => a.ruolo !== 'admin') ? (() => { const dip = admins.filter(a => a.ruolo !== 'admin'), n = dip.filter(a => lette.some(l => l.admin_id === a.id)).length; return `<span class="${n === dip.length ? 'ok' : ''}">${n === dip.length ? '✓✓ lette da tutti' : (n ? '✓ ' : '') + n + '/' + dip.length + ' dipendenti'}</span>`; })() : ''}${mia(r.id) ? '<span class="ok">✓✓ tu</span>' : ''}</div>
       </div>`; }).join('') : `<div class="empty"><div class="empty-txt">${_recFiltro === 'da_leggere' ? 'Hai letto tutte le recensioni ✓' : 'Nessuna recensione'}</div></div>`}
     ${R.length ? `<button class="btn-sm" style="width:100%;margin-top:6px" onclick="recSegnaTutte()">Segna tutte come lette</button>` : ''}
     <div class="note-small" style="margin-top:12px">${gbp ? 'Collegato a Google Business Profile: arrivano tutte le recensioni, dalla più recente (controllo ogni 2 ore). Puoi rispondere direttamente da qui. I dipendenti le vedono nell\'app e la loro lettura resta segnata qui.' : 'Google fornisce a ogni lettura solo le 5 recensioni che considera "più rilevanti", non per forza le ultime: collega Google Business Profile per averle tutte in ordine di data. I dipendenti vedono le recensioni nell\'app e la loro lettura resta segnata qui.'}</div>`;
@@ -11377,12 +11377,33 @@ async function recApriUna(id) {
     ${r.risposta && !r.gbp_nome ? `<div class="rec-risp"><b>Risposta del locale</b>${esc(r.risposta)}</div>` : ''}
     <div class="va-sez">Chi l'ha letta (${lette.length} su ${V24.rec.admins.length})</div>
     <div class="va-box">${[['Amministratori', V24.rec.admins.filter(a => a.ruolo === 'admin')], ['Dipendenti', V24.rec.admins.filter(a => a.ruolo !== 'admin')]].map(([tit, lista]) => lista.length ? `<div class="rec-chi-t">${tit}</div>` + lista.map(a => { const l = lette.find(x => x.admin_id === a.id); return `<div class="va-kv"><span>${esc(a.nome + ' ' + (a.cognome || ''))}</span><b class="${l ? 'rec-ok' : 'rec-no'}">${l ? '✓✓ ' + new Date(l.letta_il).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : 'non ancora'}</b></div>`; }).join('') : '').join('')}</div>
-    <div class="va-azioni">${r.gbp_nome ? `<div class="va-sez" style="margin-top:0">${r.risposta ? 'La tua risposta' : 'Rispondi pubblicamente'}</div>
+    <div class="va-azioni"><button class="btn-secondary" id="rec-ai-btn" onclick="recSuggerisci('${esc(id)}')">✨ Suggerisci 3 risposte</button><div id="rec-ai"></div>${r.gbp_nome ? `<div class="va-sez" style="margin-top:8px">${r.risposta ? 'La tua risposta' : 'Rispondi pubblicamente'}</div>
       <textarea class="field-inp" id="rec-risp" rows="4" placeholder="Grazie per la recensione…">${esc(r.risposta || '')}</textarea>
       <button class="btn-primary" id="rec-risp-btn" onclick="recRispondi('${esc(id)}')">${r.risposta ? 'Aggiorna la risposta' : 'Pubblica la risposta su Google'}</button>`
       : (r.link ? `<a class="btn-primary" href="${esc(r.link)}" target="_blank" rel="noopener" style="text-align:center;text-decoration:none">Rispondi su Google</a>` : '')}</div>`;
   openSheet('sh-rec');
   if (!gia) { recApri(); aggiornaNavBadge && aggiornaNavBadge(); }
+}
+async function recSuggerisci(id) {
+  const b = $('rec-ai-btn'), box = $('rec-ai'); if (!b || !box) return;
+  b.disabled = true; b.textContent = 'Scrivo le risposte…'; box.innerHTML = '';
+  const { data, error } = await sb.functions.invoke('recensioni-risposte', { body: { id } });
+  b.disabled = false; b.textContent = '✨ Suggerisci 3 risposte di nuovo';
+  if (error || !data || !data.ok) { toast('Non riuscito: ' + ((data && data.errore) || (error && error.message) || '')); return; }
+  const r = (V24.rec.R || []).find(x => x.id === id);
+  V24.recAI = data.varianti;
+  box.innerHTML = data.varianti.map((v, i) => `<div class="card p24-card" style="margin:8px 0"><b>${esc(v.tono)}</b><div class="rec-t full" style="margin:6px 0">${esc(v.testo)}</div>
+    ${r && r.gbp_nome ? `<button class="btn-primary" onclick="recPubblicaVariante('${esc(id)}',${i})">Pubblica questa</button><button class="btn-link" onclick="recUsaVariante(${i})">Modifica prima</button>` : `<button class="btn-primary" onclick="recCopiaVariante(${i})">Copia</button>`}</div>`).join('');
+}
+function recUsaVariante(i) { const t = $('rec-risp'), v = V24.recAI && V24.recAI[i]; if (t && v) { t.value = v.testo; t.scrollIntoView({ block: 'center' }); t.focus(); } }
+function recPubblicaVariante(id, i) {
+  const v = V24.recAI && V24.recAI[i], t = $('rec-risp'); if (!v || !t) return;
+  if (!confirm('Pubblicare questa risposta su Google? Sarà visibile a tutti.')) return;
+  t.value = v.testo; recRispondi(id);
+}
+async function recCopiaVariante(i) {
+  const v = V24.recAI && V24.recAI[i]; if (!v) return;
+  try { await navigator.clipboard.writeText(v.testo); toast('✓ Copiata: incollala su Google'); } catch (e) { toast('Copia non riuscita: tieni premuto sul testo per copiarlo'); }
 }
 async function recSegnaTutte() {
   const mancanti = (V24.rec.R || []).filter(r => !V24.rec.L.some(l => l.recensione_id === r.id && l.admin_id === ME.id)).map(r => ({ recensione_id: r.id, admin_id: ME.id }));
@@ -11966,8 +11987,9 @@ async function _recMieLette() {
   return new Set((data || []).map(x => x.recensione_id));
 }
 async function _recSegna(ids) {
-  if (!ids.length) return;
-  await sb.from('recensioni_letture').insert(ids.map(id => ({ recensione_id: id, admin_id: ME.id })));
+  if (!ids.length) return true;
+  const { error } = await sb.from('recensioni_letture').insert(ids.map(id => ({ recensione_id: id, admin_id: ME.id })));
+  return !error;
 }
 async function recDipApri() {
   const body = _sheetDinamico('sh-rec-dip', 'Recensioni Google');
@@ -11997,38 +12019,53 @@ async function recDipTutte() {
   REC25.nonLette = 0; toast('✓ Segnate come lette'); recDipApri();
 }
 // finestra all'apertura: le recensioni nuove (ultime 3 settimane) non ancora lette
+// 2.8 Obbligo di lettura: vale solo per le recensioni pubblicate da questa data in poi
+const REC_OBBLIGO_DAL = '2026-10-24T00:00:00+02:00';
 async function recDipControlla(tentativi) {
   if (!ME || (typeof KIOSK !== 'undefined' && KIOSK)) return;
   const adm = ME.ruolo === 'admin';
+  const aperta = $('sh-rec-nuove'); if (aperta && aperta.classList.contains('on')) return;
   const altra = [...document.querySelectorAll('.overlay.on')].length > 0;
   if (altra) { if ((tentativi || 0) < 60) setTimeout(() => recDipControlla((tentativi || 0) + 1), 3000); return; }
   try {
-    const dal = new Date(Date.now() - 21 * 86400000).toISOString();
-    const [rR, lette] = await Promise.all([sb.from('recensioni_google').select('*').gte('pubblicata_il', dal).order('pubblicata_il', { ascending: false }).limit(20), _recMieLette()]);
+    const dal = new Date(Math.max(Date.now() - 21 * 86400000, new Date(REC_OBBLIGO_DAL).getTime())).toISOString();
+    const [rR, lette] = await Promise.all([sb.from('recensioni_google').select('*').gte('pubblicata_il', dal).order('pubblicata_il', { ascending: false }).limit(60), _recMieLette()]);
     const non = (rR.data || []).filter(r => !lette.has(r.id));
     REC25.nonLette = non.length;
     if (!non.length) return;
-    const mostra = non.slice(0, 5);
-    const body = _sheetDinamico('sh-rec-nuove', mostra.length === 1 ? 'Nuova recensione di un cliente' : 'Nuove recensioni dei clienti');
-    const vediTutte = adm ? "closeSheet('sh-rec-nuove');switchPage('pg-recensioni')" : "closeSheet('sh-rec-nuove');recDipApri()";
-    body.innerHTML = `<div class="note-small" style="margin:0 2px 10px">${adm ? 'Appena arrivate su Google. Segnale come lette oppure aprile per rispondere.' : 'Ecco cosa hanno scritto su Google del locale. Leggile: aiutano tutti a lavorare meglio.'}</div>
-      ${mostra.map(r => _recCard(r, false)).join('')}
-      <button class="btn-primary" style="margin-top:6px" onclick="recDipConferma(${JSON.stringify(mostra.map(r => r.id)).replace(/"/g, '&quot;')})">✓ Ho letto${mostra.length > 1 ? ' tutte' : ''}</button>
-      ${adm ? `<button class="btn-secondary" style="margin-top:8px" onclick="${vediTutte}">Apri Recensioni${non.length > mostra.length ? ' (' + non.length + ' da leggere)' : ''}</button>` : non.length > mostra.length ? `<button class="btn-link" onclick="${vediTutte}">Vedi tutte (${non.length})</button>` : ''}`;
+    // con commento: una per una (al massimo 6 per volta); solo voto: accorpate per punteggio
+    const conTesto = non.filter(r => (r.testo || '').trim()).slice(0, 6);
+    const senza = non.filter(r => !(r.testo || '').trim());
+    const gruppi = {}; senza.forEach(r => { (gruppi[r.voto || 0] = gruppi[r.voto || 0] || []).push(r); });
+    const ids = conTesto.map(r => r.id).concat(senza.map(r => r.id));
+    const cardGruppo = (v, l) => `<div class="rec-card nuova ${v <= 3 ? 'bassa' : ''}"><div class="rec-h"><span class="rec-av">${l.length}</span><div><b>${l.length === 1 ? 'Una valutazione' : l.length + ' valutazioni'} senza commento</b>${_stelle25(Number(v))}<small>${esc(l.slice(0, 3).map(r => (r.autore || '').split(' ')[0]).filter(Boolean).join(', '))}${l.length > 3 ? ' e altri' : ''}</small></div></div></div>`;
+    const body = _sheetDinamico('sh-rec-nuove', non.length === 1 ? 'Nuova recensione di un cliente' : 'Nuove recensioni dei clienti');
+    const ov = $('sh-rec-nuove'); ov._bloccato = !adm;
+    const cls = ov.querySelector('.sheet-cls'); if (cls) cls.style.display = adm ? '' : 'none';
+    const vediTutte = "closeSheet('sh-rec-nuove');switchPage('pg-recensioni')";
+    body.innerHTML = `<div class="note-small" style="margin:0 2px 10px">${adm ? 'Appena arrivate su Google. Segnale come lette oppure aprile per rispondere.' : 'Ecco cosa hanno scritto su Google del locale. Leggile e tocca “Ho letto” per continuare.'}</div>
+      ${conTesto.map(r => _recCard(r, false)).join('')}
+      ${Object.keys(gruppi).sort((x, y) => x - y).map(v => cardGruppo(v, gruppi[v])).join('')}
+      <button class="btn-primary" style="margin-top:6px" id="rec-ho-letto" onclick="recDipConferma(${JSON.stringify(ids).replace(/"/g, '&quot;')})">✓ Ho letto${ids.length > 1 ? ' tutto' : ''}</button>
+      ${adm ? `<button class="btn-secondary" style="margin-top:8px" onclick="${vediTutte}">Apri Recensioni${non.length > ids.length ? ' (' + non.length + ' da leggere)' : ''}</button>` : ''}`;
     openSheet('sh-rec-nuove');
   } catch (e) { console.warn('rec dip', e); }
 }
 async function recDipConferma(ids) {
-  await _recSegna(ids);
+  const b = $('rec-ho-letto'); if (b) b.disabled = true;
+  const ok = await _recSegna(ids);
+  if (!ok) { if (b) b.disabled = false; toast('Non registrata: controlla la connessione e riprova'); return; }
+  const ov = $('sh-rec-nuove'); if (ov) ov._bloccato = false;
   REC25.nonLette = Math.max(0, (REC25.nonLette || 0) - ids.length);
   closeSheet('sh-rec-nuove'); toast(ME && ME.ruolo === 'admin' ? '✓ Segnate come lette' : '✓ Grazie');
   if (ME && ME.ruolo === 'admin') { try { if (typeof calcolaPromemoria === 'function') { await calcolaPromemoria(); if (typeof dashRenderTodo === 'function') dashRenderTodo(); } } catch (e) {} }
+  if (REC25.nonLette > 0) setTimeout(() => recDipControlla(), 500);
 }
-// 2.7 admin: la finestra delle recensioni nuove si apre da sola all'avvio e
-// quando si torna sull'app (al massimo una volta ogni 10 minuti)
+// la finestra delle recensioni nuove si apre da sola all'avvio e quando si torna
+// sull'app (al massimo una volta ogni 10 minuti), per admin e dipendenti
 let _recUltimoControllo = 0;
 function recAdminControlla() {
-  if (!ME || ME.ruolo !== 'admin' || Date.now() - _recUltimoControllo < 10 * 60000) return;
+  if (!ME || Date.now() - _recUltimoControllo < 10 * 60000) return;
   _recUltimoControllo = Date.now(); recDipControlla();
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') setTimeout(recAdminControlla, 1500); });
