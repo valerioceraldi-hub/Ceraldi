@@ -8208,7 +8208,7 @@ async function pubblicaAvviso() {
     + (richiede ? '\n\n✍️ <i>Apri l\'app e conferma di averlo letto.</i>' : '');
   closeSheet('sh-nuovoAvviso');
   toast('Avviso pubblicato — invio in corso…');
-  await inviaNotificaTuttiDipendenti(tg, '#avvisi', { tabella: 'presenze_avvisi', rif: idAvviso, tipo: 'avviso' });
+  await inviaNotificaTuttiDipendenti(tg, idAvviso ? '#avviso-' + idAvviso : '#avvisi', { tabella: 'presenze_avvisi', rif: idAvviso, tipo: 'avviso' });
   inviaNotificaTelegram('📢 Avviso pubblicato: <b>' + escTG(titolo) + '</b>' + (richiede ? ' (con conferma di lettura)' : ''));
   toast('✓ Avviso inviato a tutti i dipendenti');
   caricaBachecaAdmin();
@@ -8291,7 +8291,7 @@ async function sollecitaAvviso(id) {
   const L = _lettureCache[id] || [], dips = await _dipAttivi();
   const mancanti = dips.filter(d => !(L.find(x => x.dipendente_id === d.id) || {}).confermato_il);
   for (const d of mancanti) {
-    await inviaNotificaDipendente(d.id, '🔔 <b>Promemoria: avviso da confermare</b>\n\n<b>' + escTG(a.titolo) + '</b>\n' + escTG(a.testo).slice(0, 400), '#avvisi', { tabella: 'presenze_avvisi', rif: id, tipo: 'sollecito' });
+    await inviaNotificaDipendente(d.id, '🔔 <b>Promemoria: avviso da confermare</b>\n\n<b>' + escTG(a.titolo) + '</b>\n' + escTG(a.testo).slice(0, 400), '#avviso-' + id, { tabella: 'presenze_avvisi', rif: id, tipo: 'sollecito' });
   }
   toast('✓ Promemoria inviato a ' + mancanti.length + ' person' + (mancanti.length === 1 ? 'a' : 'e'));
   closeSheet('sh-avviso-stato');
@@ -8334,18 +8334,59 @@ async function caricaBachecaDip() {
     }
   }
 }
-async function confermaLetturaAvviso(id) {
-  const card = $('avv-' + id), a = card ? { titolo: card.querySelector('.avviso-titolo').innerText, testo: card.querySelector('.avviso-testo').innerText } : null;
-  if (!a) return;
+async function confermaLetturaAvviso(id, dati) {
+  const card = $('avv-' + id), a = dati || (card ? { titolo: card.querySelector('.avviso-titolo').innerText, testo: card.querySelector('.avviso-testo').innerText } : null);
+  if (!a) return false;
   const testo = 'Confermo di aver letto e compreso l\'avviso: "' + a.titolo.trim() + '" — ' + a.testo.trim();
   const firma = await firmaPrima('conferma_lettura_avviso', { tabella: 'presenze_avvisi', rif: id, testo });
-  if (firma === false) return;
+  if (firma === false) return false;
   const ora = new Date().toISOString();
   const { error } = await sb.from('presenze_avvisi_letture').upsert({ avviso_id: id, dipendente_id: ME.id, visto_il: (_mieLetture[id] || {}).visto_il || ora, confermato_il: ora, firmato: !!firma }, { onConflict: 'avviso_id,dipendente_id' });
-  if (error) { toast('Conferma non salvata: ' + error.message); return; }
+  if (error) { toast('Conferma non salvata: ' + error.message); return false; }
   await certifica('dichiarazione', 'conferma_lettura_avviso', { tabella: 'presenze_avvisi', rif: id, testo, firma });
   inviaNotificaTelegram('✍️ <b>Avviso confermato</b>\n' + escTG(ME.nome + ' ' + (ME.cognome || '')) + ' ha confermato di aver letto: <b>' + escTG(a.titolo.trim()) + '</b>' + (firma ? ' (firmato col telefono)' : ''));
   caricaBachecaDip(); dipHomeExtra();
+  return true;
+}
+/* ── DIPENDENTE: finestra BLOCCANTE per gli avvisi con conferma ──
+   Si apre all'avvio, al ritorno sull'app e toccando la notifica (#avviso-<id>).
+   Non si chiude finché non preme "Ho letto e confermo"; poi passa al
+   prossimo avviso e, finiti quelli, alle recensioni nuove. Per l'admin no. */
+async function avvDipControlla(preferId) {
+  if (!ME || ME.ruolo === 'admin' || (typeof KIOSK !== 'undefined' && KIOSK)) return false;
+  const aperta = $('sh-avv-blocca'); if (aperta && aperta.classList.contains('on')) return true;
+  if ([...document.querySelectorAll('.overlay.on')].length) return false;
+  try {
+    const lista = await avvisiDaConfermareDip();
+    if (!lista.length) return false;
+    const a = (preferId && lista.find(x => x.id === preferId)) || lista[0];
+    const body = _sheetDinamico('sh-avv-blocca', lista.length > 1 ? 'Avvisi da confermare (' + lista.length + ')' : 'Avviso da confermare');
+    const ov = $('sh-avv-blocca'); ov._bloccato = true;
+    const cls = ov.querySelector('.sheet-cls'); if (cls) cls.style.display = 'none';
+    window._avvBlocco = { id: a.id, titolo: a.titolo, testo: a.testo };
+    body.innerHTML = `<div class="avviso-card ${esc(a.priorita || 'normale')}"><div class="avviso-titolo">${prioritaIcon(a.priorita)} ${esc(a.titolo)}</div>
+      <div class="avviso-testo">${esc(a.testo)}</div><div class="avviso-meta">${new Date(a.creato_il).toLocaleDateString('it-IT', { day: '2-digit', month: 'long', year: 'numeric' })}</div></div>
+      <div class="note-small" style="margin:10px 2px">Leggi l'avviso e tocca “Ho letto e confermo” per continuare.</div>
+      <button class="btn-primary" id="avv-ho-letto" onclick="avvBloccoConferma('${a.id}')">✓ Ho letto e confermo</button>`;
+    openSheet('sh-avv-blocca');
+    // "visto": registrato una sola volta, come nella bacheca
+    if (_lettureAttive) {
+      const { data: l0 } = await sb.from('presenze_avvisi_letture').select('visto_il').eq('avviso_id', a.id).eq('dipendente_id', ME.id).maybeSingle();
+      if (!l0 || !l0.visto_il) {
+        await sb.from('presenze_avvisi_letture').upsert({ avviso_id: a.id, dipendente_id: ME.id, visto_il: new Date().toISOString() }, { onConflict: 'avviso_id,dipendente_id' });
+        certifica('visione', 'avvisi_visualizzati', { silenzioso: true, tabella: 'presenze_avvisi', rif: a.id, dati: { avvisi: [{ id: a.id, titolo: a.titolo, testo: String(a.testo || '').slice(0, 500) }] } });
+      }
+    }
+    return true;
+  } catch (e) { console.warn('avviso bloccante', e); return false; }
+}
+async function avvBloccoConferma(id) {
+  const b = $('avv-ho-letto'); if (b) b.disabled = true;
+  const ok = await confermaLetturaAvviso(id, window._avvBlocco && window._avvBlocco.id === id ? window._avvBlocco : null);
+  if (!ok) { if (b) b.disabled = false; return; }
+  const ov = $('sh-avv-blocca'); if (ov) ov._bloccato = false;
+  closeSheet('sh-avv-blocca'); toast('✓ Grazie');
+  setTimeout(async () => { if (!(await avvDipControlla())) recDipControlla(); }, 450);
 }
 async function avvisiDaConfermareDip() {
   if (!_lettureAttive || !ME) return [];
@@ -12027,8 +12068,9 @@ async function recDipControlla(tentativi) {
   const aperta = $('sh-rec-nuove'); if (aperta && aperta.classList.contains('on')) return;
   const altra = [...document.querySelectorAll('.overlay.on')].length > 0;
   if (altra) { if ((tentativi || 0) < 60) setTimeout(() => recDipControlla((tentativi || 0) + 1), 3000); return; }
+  if (!adm && await avvDipControlla()) return; // prima gli avvisi con conferma (poi riparte da solo)
   try {
-    const dal = new Date(Math.max(Date.now() - 21 * 86400000, new Date(REC_OBBLIGO_DAL).getTime())).toISOString();
+    const dal =new Date(Math.max(Date.now() - 21 * 86400000, new Date(REC_OBBLIGO_DAL).getTime())).toISOString();
     const [rR, lette] = await Promise.all([sb.from('recensioni_google').select('*').gte('pubblicata_il', dal).order('pubblicata_il', { ascending: false }).limit(60), _recMieLette()]);
     const non = (rR.data || []).filter(r => !lette.has(r.id));
     REC25.nonLette = non.length;
@@ -12068,7 +12110,7 @@ function recAdminControlla() {
   if (!ME || Date.now() - _recUltimoControllo < 10 * 60000) return;
   _recUltimoControllo = Date.now(); recDipControlla();
 }
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') setTimeout(recAdminControlla, 1500); });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { setTimeout(recAdminControlla, 1500); setTimeout(() => { avvDipControlla(); }, 1200); } });
 
 /* ── Admin: Google Business (collegamento e risposte) ── */
 function recCollegaScegli(box) {
@@ -32258,6 +32300,7 @@ function apriLink(h) {
   if ((m = h.match(/^#richiesta-([0-9a-f-]{36})$/))) { switchPage(adm ? 'pg-assenze-admin' : 'pg-assenze-dip'); dopo(() => openDettaglioAssenza(m[1], adm)); return true; }
   if (h === '#richieste' || h === '#assenze') { switchPage(adm ? 'pg-assenze-admin' : 'pg-assenze-dip'); return true; }
   if (h === '#turni' || h === '#cambi') { switchPage(adm ? 'pg-turni-resp' : 'pg-turni-dip'); return true; }
+  if ((m = h.match(/^#avviso-([0-9a-f-]{36})$/))) { if (adm) switchPage('pg-bacheca-admin'); else { switchPage('pg-bacheca-dip'); dopo(() => avvDipControlla(m[1]), 500); } return true; }
   if (h === '#avvisi' || h === '#bacheca') { switchPage(adm ? 'pg-bacheca-admin' : 'pg-bacheca-dip'); return true; }
   if (adm) {
     if ((m = h.match(/^#stipendi-([0-9a-f-]{36})$/))) { switchPage('pg-stipendi'); stApriScheda(m[1]); return true; }
