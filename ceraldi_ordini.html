@@ -460,7 +460,7 @@ function avvisoCreditoIA(){
 </nav>
 
 <script>
-var APP_VERSION='8.15.0';
+var APP_VERSION='8.16.0';
 var BUILD_VERSION=APP_VERSION, BUILD_NUM=APP_VERSION;
 var APP={key:'ordini',nome:'Ordini',versione:APP_VERSION,authKey:'or_auth_v2',oldAuthKey:'ceraldi_ordini_auth_session',
   markBg:'linear-gradient(145deg,#FFC04D 0%,#FF9F0A 50%,#C2410C 100%)',
@@ -6440,41 +6440,75 @@ async function confrontaImport(){
   });
   IMP.grande = IMP.righe.length > 400;   // listino completo: confronto solo con quello che è già a catalogo, il resto va nel listino
   if(daRic.length){ var ris = await riconosci(daRic, idx.map(function(i){ return { forn: IMP.forn, prezzo: IMP.righe[i].prezzo * (IMP.iva === 'esclusa' ? 1.22 : 1) }; }), IMP.grande ? { senzaIA: true, veloce: true } : null); ris.forEach(function(m, j){ var e = IMP.esiti[idx[j]]; if(m.id && CATMAP[m.id]){ e.p = CATMAP[m.id]; e.tipo = m.tipo; } else if(m.cand && m.cand[0] && m.cand[0].s >= 45){ e.p = m.cand[0].c; e.tipo = 'probabile'; } }); }
-  IMP.esiti.forEach(function(e){
-    var p = e.p, prezzo = e.r.prezzo;
-    if(IMP.iva === 'esclusa'){ var al = num(p && p.iva) || 22; prezzo = Math.round(prezzo * (1 + al / 100) * 10000) / 10000; }
-    e.prezzo = prezzo;
-    if(!p){ e.gruppo = 'nuovo'; e.sel = false; return; }
-    e.att = prezzoDi(p, IMP.forn);
-    if(e.tipo !== 'esatto'){ e.gruppo = 'incerto'; e.sel = false; return; }
-    if(e.att == null){ e.gruppo = 'aggiunto'; e.sel = true; }
-    else if(Math.abs(e.att - prezzo) < 0.005){ e.gruppo = 'uguale'; e.sel = false; }
-    else { e.gruppo = 'cambiato'; e.sel = Math.abs((prezzo - e.att) / e.att) < 0.4; }
-  });
+  IMP.esiti.forEach(classificaImport);
   // stesso prodotto presente due volte nel file: tengo solo la prima
   var visti = {}; IMP.esiti.forEach(function(e){ if(e.p && e.gruppo !== 'nuovo'){ if(visti[e.p.id]){ e.gruppo = 'doppio'; e.sel = false; } visti[e.p.id] = 1; } });
   renderImport();
 }
+// in che gruppo finisce una riga del file (prezzo calcolato con l'IVA scelta)
+function classificaImport(e){
+  var p = e.p, prezzo = e.r.prezzo;
+  if(IMP.iva === 'esclusa'){ var al = num(p && p.iva) || 22; prezzo = Math.round(prezzo * (1 + al / 100) * 10000) / 10000; }
+  e.prezzo = prezzo; e.att = null;
+  if(!p){ e.gruppo = 'nuovo'; e.sel = !!e.manuale; return; }   // «nuovo» scelto da te = già spuntato
+  e.att = prezzoDi(p, IMP.forn);
+  if(e.tipo !== 'esatto'){ e.gruppo = 'incerto'; e.sel = false; return; }
+  if(e.att == null){ e.gruppo = 'aggiunto'; e.sel = true; }
+  else if(Math.abs(e.att - prezzo) < 0.005){ e.gruppo = 'uguale'; e.sel = false; }
+  else { e.gruppo = 'cambiato'; e.sel = e.manuale ? true : Math.abs((prezzo - e.att) / e.att) < 0.4; }
+}
+/* Abbinamento manuale: la riga del file può essere collegata a un altro prodotto del catalogo
+   (o creata come nuova). La scelta è tua, quindi vale come «esatto» e viene ricordata come alias. */
+function apriAbbinaImport(i){
+  var e = IMP.esiti[i]; if(!e) return;
+  var c = RIC.cerca(e.r.nome, { storia: storiaProdotti() }).cand.slice(0, 8).map(function(x){ return x.c; });
+  if(e.p && !c.some(function(p){ return p.id === e.p.id; })) c.unshift(e.p);
+  apriSheet('shImpA', { titolo: 'Abbina a un prodotto', sotto: 'Nel file: <b>' + esc(e.r.nome) + '</b> · ' + eur(e.r.prezzo), corpo:
+    '<div class="sw"><span class="si">🔎</span><input id="impAQ" placeholder="Cerca nel catalogo" oninput="abbinaImportCerca(' + i + ')"></div><div id="impARis">' + abbinaImportRighe(i, c) + '</div>',
+    piede: '<button class="btn btn-s" onclick="abbinaImportA(' + i + ',null)">Non c\'è: crea come prodotto nuovo</button>' });
+}
+function abbinaImportRighe(i, l){
+  var cur = IMP.esiti[i].p;
+  return '<div class="grp">' + (l.length ? l.map(function(p){ return '<button class="row" onclick="abbinaImportA(' + i + ',' + p.id + ')"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(p.name) + (cur && cur.id === p.id ? ' <span class="muted" style="font-size:12px">· attuale</span>' : '') + '</div><div class="row-s">' + esc([p.conf, migliore(p).forn ? migliore(p).forn + ' ' + eur(migliore(p).prezzo) : ''].filter(Boolean).join(' · ')) + '</div></div><span class="chev">›</span></button>'; }).join('') : '<div class="row"><div class="row-main row-s">Nessun prodotto trovato.</div></div>') + '</div>';
+}
+function abbinaImportCerca(i){ var q = document.getElementById('impAQ').value; document.getElementById('impARis').innerHTML = abbinaImportRighe(i, cercaCatalogo(q, 30)); }
+function abbinaImportA(i, id){
+  var e = IMP.esiti[i]; if(!e) return;
+  var p = id == null ? null : CATMAP[id];
+  if(id != null && !p) return;
+  // un prodotto del catalogo può avere una sola riga del file: altrimenti due prezzi si pesterebbero
+  if(p && IMP.esiti.some(function(x, k){ return k !== i && x.p && x.p.id === p.id && x.gruppo !== 'nuovo' && x.gruppo !== 'doppio'; })){ toast('Quel prodotto è già abbinato a un\'altra riga del file'); return; }
+  e.p = p; e.tipo = p ? 'esatto' : null; e.manuale = true;
+  classificaImport(e);
+  // se questa riga teneva occupato un prodotto, una riga «ripetuta» può tornare in gioco
+  var occ = {}; IMP.esiti.forEach(function(x){ if(x.p && x.gruppo !== 'nuovo' && x.gruppo !== 'doppio') occ[x.p.id] = 1; });
+  IMP.esiti.forEach(function(x){ if(x.gruppo === 'doppio' && x.p && !occ[x.p.id]){ occ[x.p.id] = 1; classificaImport(x); } });
+  chiudiSheet('shImpA'); renderImport();
+  toast(p ? 'Abbinato a ' + nomeBreve(p.name, 30) : 'Sarà creato come prodotto nuovo');
+}
 function renderImport(){
   var b = corpoSheet('shImpR'); if(!b) return;
+  var scorri = b.scrollTop;   // dopo una modifica la lista resta dov'eri
   var G = [['cambiato', 'Prezzo cambiato', 'Aggiorno il prezzo di ' + IMP.forn], ['aggiunto', 'Prezzo nuovo per ' + IMP.forn, 'Il prodotto c\'è già ma non da questo fornitore'], ['incerto', 'Da verificare', 'Nome simile ma non identico: spunta solo se è lo stesso prodotto'], ['nuovo', 'Non a catalogo', 'Spunta per crearli come prodotti nuovi'], ['uguale', 'Già uguali', 'Nessuna modifica'], ['doppio', 'Ripetuti nel file', 'Già presi una volta']];
   var h = '';
   if(IMP.grande){ var nn = IMP.esiti.filter(function(e){ return e.gruppo === 'nuovo'; }).length; if(nn) h += '<div class="banner b"><span>📚</span><div><b>' + nn.toLocaleString('it-IT') + ' articoli non sono nel catalogo</b>: ' + (IMP.salvaListino ? 'restano nel listino cercabile, li trovi quando cerchi o sostituisci un prodotto.' : 'non li salvo (hai tolto «Salva anche come listino»).') + '</div></div>'; }
   G.forEach(function(g){
     var l = IMP.esiti.map(function(e, i){ return { e: e, i: i }; }).filter(function(x){ return x.e.gruppo === g[0]; });
-    if(!l.length || (IMP.grande && g[0] === 'nuovo')) return;
+    if(IMP.grande && g[0] === 'nuovo') l = l.filter(function(x){ return x.e.manuale; });   // nei listini enormi mostro solo quelli che hai scelto tu
+    if(!l.length) return;
     var chiuso = (g[0] === 'uguale' || g[0] === 'doppio');
     h += '<div class="sec-title">' + g[1] + ' · ' + l.length + (chiuso ? '' : '<button class="lnk" onclick="selImport(\'' + g[0] + '\')">Tutti / nessuno</button>') + '</div><p class="hint" style="margin:-4px 4px 8px">' + g[2] + '</p>';
     if(chiuso){ h += '<div class="grp"><div class="row"><div class="row-main row-s">' + l.slice(0, 3).map(function(x){ return esc(x.e.r.nome); }).join(', ') + (l.length > 3 ? '…' : '') + '</div></div></div>'; return; }
     h += '<div class="grp">' + l.slice(0, 300).map(function(x){
       var e = x.e, v = e.att ? (e.prezzo - e.att) / e.att * 100 : null;
       return '<label class="imp-row"><input type="checkbox" ' + (e.sel ? 'checked' : '') + ' onchange="IMP.esiti[' + x.i + '].sel=this.checked;piedeImport()"><div class="row-main"><div class="row-t" style="font-size:13.5px">' + esc(e.r.nome) + '</div>' +
-        (e.p && e.gruppo !== 'cambiato' && e.gruppo !== 'aggiunto' ? '<div class="row-s">→ ' + esc(e.p.name) + '</div>' : (e.p && norm(e.p.name) !== norm(e.r.nome) ? '<div class="row-s">→ ' + esc(e.p.name) + '</div>' : '')) +
+        '<div class="row-s">' + (e.p ? (norm(e.p.name) !== norm(e.r.nome) || (e.gruppo !== 'cambiato' && e.gruppo !== 'aggiunto') ? '→ ' + esc(e.p.name) + ' ' : '') : '') + (e.manuale ? '<span style="color:var(--blue,#007aff)">· scelto da te </span>' : '') +
+          '<button type="button" class="lnk" style="padding:4px 0;font-size:12.5px" onclick="event.preventDefault();event.stopPropagation();apriAbbinaImport(' + x.i + ')">' + (e.p ? 'Cambia abbinamento' : 'Abbina a un prodotto') + '</button></div>' +
         (v != null && Math.abs(v) >= 40 ? '<div class="row-s" style="color:var(--orange-ink)">⚠️ differenza grande: controlla l\'unità</div>' : '') + '</div>' +
         '<div style="text-align:right;flex-shrink:0">' + (e.att != null ? '<span class="muted" style="font-size:12px;text-decoration:line-through">' + eur(e.att) + '</span><br>' : '') + '<b class="tnum">' + eur(e.prezzo) + '</b>' + (v != null ? '<br><span class="' + (v > 0 ? 'var-up' : 'var-dn') + '" style="font-size:11.5px">' + (v > 0 ? '+' : '') + v.toFixed(1) + '%</span>' : '') + '</div></label>';
     }).join('') + '</div>';
   });
-  b.innerHTML = h || '<div class="empty"><b>Niente da importare</b></div>';
+  b.innerHTML = h || '<div class="empty"><b>Niente da importare</b></div>'; b.scrollTop = scorri;
   var ft = document.querySelector('#shImpR .sheet-ft'); if(!ft){ var s = document.querySelector('#shImpR .sheet'); ft = document.createElement('div'); ft.className = 'sheet-ft'; s.appendChild(ft); }
   piedeImport();
 }
@@ -6514,6 +6548,8 @@ async function applicaImport(){
   var b = corpoSheet('shImpR'); b.innerHTML = '<div class="loading"><span class="spinner"></span><span id="impProg">Applico…</span></div><div class="prog"><i id="impBar" style="width:0"></i></div>';
   var ft = document.querySelector('#shImpR .sheet-ft'); if(ft) ft.innerHTML = '';
   var sett = (fornDi(IMP.forn) || {}).settori || [];
+  // abbinamenti scelti da te: li ricordo (anche se il prezzo era già uguale), così la prossima volta quel nome si riconosce da solo
+  IMP.esiti.forEach(function(e){ if(e.manuale && e.p && (e.sel || e.gruppo === 'uguale')) salvaAlias(e.r.nome, e.p.id); });
   for(var i = 0; i < sel.length; i++){
     var e = sel[i];
     try{
