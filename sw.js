@@ -18,7 +18,7 @@ self.addEventListener('push', function (e) {
     badge: 'icon-' + app + '-192.png',
     tag: d.tag || ('ceraldi-' + app + '-' + (d.id || Date.now())),
     renotify: false,
-    data: { link: d.link || '', app: app, id: d.id || null }
+    data: { link: d.link || '', app: app, id: d.id || null, ack: d.ack || null }
   }).then(function () { return confermaMostrata(d.ack); }));
 });
 
@@ -30,16 +30,24 @@ var SB_URL_SW = 'https://qaqqptpprmfjlolordaq.supabase.co';
 var SB_ANON_SW = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFhcXFwdHBwcm1mamxvbG9yZGFxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4NDQ3MDgsImV4cCI6MjA5MTQyMDcwOH0.kTnxsNY3tua_ya4LCB8-vkVdQ1QBPGtLL7Gfg121d1o';
 function confermaMostrata(ack) {
   if (!ack) return Promise.resolve();
-  return fetch(SB_URL_SW + '/functions/v1/notifica', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', apikey: SB_ANON_SW, Authorization: 'Bearer ' + SB_ANON_SW },
-    body: JSON.stringify({ azione: 'mostrata', ack: ack })
-  }).catch(function () {});
+  // 26/10: se la prima conferma non parte (rete lenta, tante notifiche insieme) si riprova fino a 3 volte
+  var prova = function (n) {
+    return fetch(SB_URL_SW + '/functions/v1/notifica', {
+      method: 'POST', keepalive: true,
+      headers: { 'Content-Type': 'application/json', apikey: SB_ANON_SW, Authorization: 'Bearer ' + SB_ANON_SW },
+      body: JSON.stringify({ azione: 'mostrata', ack: ack })
+    }).then(function (r) { if (!r.ok) throw new Error('ack ' + r.status); }).catch(function () {
+      if (n >= 3) return;
+      return new Promise(function (ok) { setTimeout(ok, n * 2500); }).then(function () { return prova(n + 1); });
+    });
+  };
+  return prova(1);
 }
 
 self.addEventListener('notificationclick', function (e) {
   e.notification.close();
   var dati = e.notification.data || {};
+  e.waitUntil(confermaMostrata(dati.ack)); // 26/10: toccarla vale come conferma anche se la prima non era arrivata
   var pagina = dati.link || ({
     fatture: 'Primanota.html', presenze: 'ceraldi_presenze.html',
     ordini: 'ceraldi_ordini.html', richieste: 'ceraldi_richieste.html'

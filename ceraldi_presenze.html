@@ -8535,7 +8535,7 @@ async function tpCarica() {
   const colsDip = 'id,nome,cognome,ruolo,attivo,paga_giornaliera,turni_partecipa,turni_riposo_fisso,turni_idoneo_sala,turni_idoneo_banco_bar,turni_idoneo_banco_pasticceria,responsabile_turni';
   const [rT, rD, rX, rA, rP, rC, rR] = await Promise.all([
     sb.from('presenze_turni').select('*').eq('settimana_inizio', TP.lun).order('data'),
-    TP.admin ? sb.from('presenze_profili').select('*').eq('ruolo', 'dipendente').eq('attivo', true).order('nome') : sb.from('presenze_profili').select(colsDip).eq('ruolo', 'dipendente').eq('attivo', true).order('nome'),
+    TP.admin ? sb.from('presenze_profili').select('*').eq('ruolo', 'dipendente').eq('attivo', true).order('nome') : sb.rpc('presenze_elenco_turni'), // responsabile turni: solo i nomi e i dati del planner (mai paghe), lo decide il database
     sb.from('presenze_turni_extra').select('*').order('nome'),
     sb.from('presenze_assenze').select('dipendente_id,data_inizio,data_fine,tipo,stato').in('stato', ['approvata', 'confermata']).lte('data_inizio', dom).gte('data_fine', TP.lun),
     TP.admin ? sb.from('presenze').select('dipendente_id,data,ts_entrata').gte('data', TP.lun).lte('data', dom) : Promise.resolve({ data: [] }),
@@ -8649,8 +8649,9 @@ function tpRenderGriglia() {
     const P = tpPersona(chi), c = costi.per[chi];
     const min = c ? c.minuti : 0;
     let sub = '';
-    if (P.tipo === 'dip') { const k = tpOreContratto(P.p) * 60, cls = min > k ? 'over' : min >= k * 0.9 ? 'ok' : min ? 'under' : ''; sub = `<span class="tp-ore ${cls}">${tpOreDec(min)}/${tpOreContratto(P.p)} h</span>`; }
-    else sub = `<span class="tp-tag">${esc(TP_TIPI_EXTRA[P.p && P.p.tipo] || 'Extra')}</span>${min ? ' <span class="tp-ore">' + tpOreDec(min) + ' h</span>' : ''}`;
+    if (P.tipo === 'dip' && !TP.admin) sub = ''; // il responsabile vede solo i nomi dei colleghi: niente monte ore
+    else if (P.tipo === 'dip') { const k = tpOreContratto(P.p) * 60, cls = min > k ? 'over' : min >= k * 0.9 ? 'ok' : min ? 'under' : ''; sub = `<span class="tp-ore ${cls}">${tpOreDec(min)}/${tpOreContratto(P.p)} h</span>`; }
+    else sub = `<span class="tp-tag">${esc(TP_TIPI_EXTRA[P.p && P.p.tipo] || 'Extra')}</span>${min && TP.admin ? ' <span class="tp-ore">' + tpOreDec(min) + ' h</span>' : ''}`;
     return `<tr><th class="tp-nome" onclick="tpApriPersona('${chi}')"><div class="tp-av ${P.tipo}">${esc((P.nome || '?').trim().split(/\s+/).map(x => x[0]).slice(0, 2).join('').toUpperCase())}</div><div class="tp-nm"><b>${esc(P.breve)}</b>${sub}${TP.admin && c && c.costo ? '<small>' + _eur(c.costo) + '</small>' : ''}</div></th>${giorni.map(g => cella(chi, g)).join('')}</tr>`;
   };
   const scoperti = TP.turni.filter(t => tpChi(t) === 'o');
