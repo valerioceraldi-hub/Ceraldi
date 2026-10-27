@@ -530,7 +530,20 @@
     'presenze_cambi_turno', 'presenze_turni', 'presenze_profili', 'presenze_avvisi', 'presenze_correzioni', 'presenze_storico_paga', 'presenze_contratto_template',
     'presenze_inviti', 'presenze_bonifici_stipendio', 'presenze_portafoglio_movimenti', 'presenze_otp'];
   var ESCLUSI = ['tg_link_code', 'reset_pwd_code', 'reset_pwd_scadenza', 'invite_token', 'token', 'file_base64', 'scadenza_ultima_notifica', 'tutorial_visto'];
+  // come il trigger del server: ogni modifica a un turno già pubblicato resta in attesa di essere comunicata
+  function demoVariazioneTurno(op, vecchio, nuovo) {
+    if (!vecchio || vecchio.stato !== 'pubblicato' || (op === 'update' && (!nuovo || nuovo.stato !== 'pubblicato'))) return;
+    var ist = function (x) { return { dipendente_id: x.dipendente_id || null, extra_id: x.extra_id || null, data: x.data, settimana_inizio: x.settimana_inizio, fascia_oraria: x.fascia_oraria, reparto: x.reparto, postazione: x.postazione || '', pausa_min: x.pausa_min || 0, nota: x.nota || null }; };
+    var p = ist(vecchio), d = op === 'delete' ? null : ist(nuovo);
+    if (d && JSON.stringify(p) === JSON.stringify(d)) return;
+    var V = tbl('presenze_turni_variazioni'), adesso = new Date().toISOString();
+    var v = V.find(function (x) { return x.turno_id === vecchio.id && !x.comunicato_il; });
+    if (!v) { V.push({ id: uid('v000'), turno_id: vecchio.id, settimana_inizio: vecchio.settimana_inizio, prima: p, dopo: d, creato_il: adesso, aggiornato_il: adesso, comunicato_il: null }); return; }
+    v.dopo = d; v.aggiornato_il = adesso;
+    if (JSON.stringify(v.dopo) === JSON.stringify(v.prima)) V.splice(V.indexOf(v), 1);
+  }
   function regTrigger(t, op, vecchio, nuovo) {
+    if (t === 'presenze_turni') { try { demoVariazioneTurno(op, vecchio, nuovo); } catch (e) {} }
     try {
       if (TAB_REG.indexOf(t) < 0) return;
       if (t === 'presenze_turni' && (nuovo && nuovo.stato) !== 'pubblicato' && (vecchio && vecchio.stato) !== 'pubblicato') return;
@@ -827,6 +840,17 @@
     rpc: function (name, args) {
       var d = null;
       if (name === 'ceraldi_mio_accesso') { var me = profili.find(function (p) { return p.id === (sessUser && sessUser.id); }); d = { stato: 'approvato', permessi: { presenze: me && me.ruolo === 'admin' ? 'admin' : 'dipendente' } }; }
+      else if (name === 'presenze_turni_richiedi_conferma') {
+        // come la funzione del server: una richiesta di conferma ancora aperta non si cancella inviando senza conferma
+        var cfT = tbl('presenze_turni_conferme'), oraRc = new Date().toISOString();
+        (args.p_dipendenti || []).forEach(function (dip) {
+          var c = cfT.find(function (x) { return x.dipendente_id === dip && x.settimana_inizio === args.p_settimana; });
+          if (!c) { cfT.push({ dipendente_id: dip, settimana_inizio: args.p_settimana, visto_il: null, confermato_il: null, firmato: false, richiesta_il: oraRc, conferma_richiesta: !!args.p_conferma }); return; }
+          var aperta = c.conferma_richiesta !== false && (!c.confermato_il || (c.richiesta_il && c.confermato_il < c.richiesta_il));
+          if (args.p_conferma) { c.richiesta_il = oraRc; c.conferma_richiesta = true; }
+          else if (!aperta) { c.richiesta_il = oraRc; c.conferma_richiesta = false; }
+        });
+      }
       else if (name === 'presenze_colleghi') d = profili.map(function (p) { return { id: p.id, nome: p.nome, cognome: p.cognome, ruolo: p.ruolo, attivo: p.attivo }; });
       else if (name === 'presenze_chat_admin') d = [];
       else if (name === 'presenze_chat_dipendente') d = [];
@@ -8475,7 +8499,7 @@ async function avvisiDaConfermareDip() {
      incassi di Prima Nota, copertura oraria, previsto vs effettivo,
      esportazione per il consulente del lavoro e stampa.
    ══════════════════════════════════════════════════════════════════ */
-const TP = { lun: null, turni: [], dip: [], extra: [], assenze: [], pres: [], conferme: [], requisiti: [], cfg: null,
+const TP = { lun: null, turni: [], dip: [], extra: [], assenze: [], pres: [], conferme: [], requisiti: [], variazioni: [], cfg: null,
   vista: 'persone', giorno: null, extraOk: true, admin: false, storico: null, periodo: 'settimana' };
 const TP_COLORI = ['#5E5CE6', '#FF9500', '#FF2D55', '#30B0C7', '#34C759', '#AF52DE', '#A2845E', '#007AFF'];
 const TP_GG = ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'];
@@ -8584,7 +8608,7 @@ async function tpCarica() {
   if (!TP.turni.length) root.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
   const dom = aggiungiGiorni(TP.lun, 6);
   const colsDip = 'id,nome,cognome,ruolo,attivo,paga_giornaliera,turni_partecipa,turni_riposo_fisso,turni_idoneo_sala,turni_idoneo_banco_bar,turni_idoneo_banco_pasticceria,responsabile_turni';
-  const [rT, rD, rX, rA, rP, rC, rR] = await Promise.all([
+  const [rT, rD, rX, rA, rP, rC, rR, rV] = await Promise.all([
     sb.from('presenze_turni').select('*').eq('settimana_inizio', TP.lun).order('data'),
     TP.admin ? sb.from('presenze_profili').select('*').eq('ruolo', 'dipendente').eq('attivo', true).order('nome') : sb.rpc('presenze_elenco_turni'), // responsabile turni: solo i nomi e i dati del planner (mai paghe), lo decide il database
     sb.from('presenze_turni_extra').select('*').order('nome'),
@@ -8592,8 +8616,11 @@ async function tpCarica() {
     TP.admin ? sb.from('presenze').select('dipendente_id,data,ts_entrata').gte('data', TP.lun).lte('data', dom) : Promise.resolve({ data: [] }),
     sb.from('presenze_turni_conferme').select('*').eq('settimana_inizio', TP.lun),
     sb.from('presenze_turni_requisiti').select('*'),
+    // modifiche a turni già pubblicati non ancora comunicate (anche turni spostati da/verso un'altra settimana)
+    sb.from('presenze_turni_variazioni').select('*').is('comunicato_il', null).gte('settimana_inizio', aggiungiGiorni(TP.lun, -7)).lte('settimana_inizio', aggiungiGiorni(TP.lun, 7)),
   ]);
   TP.turni = rT.data || [];
+  TP.variazioni = rV.error ? [] : (rV.data || []).filter(v => (v.prima && v.prima.settimana_inizio === TP.lun) || (v.dopo && v.dopo.settimana_inizio === TP.lun));
   TP.dip = (rD.data || []).filter(d => d.turni_partecipa !== false || TP.turni.some(t => t.dipendente_id === d.id));
   TP.extraOk = !rX.error;
   TP.extra = rX.data || [];
@@ -8638,9 +8665,10 @@ function tpAvvisi(t, lista) {
 /* ══════════════ RENDER ══════════════ */
 function tpStatoSettimana() {
   const T = TP.turni, n = s => T.filter(t => t.stato === s).length;
-  const modif = T.filter(t => t.stato === 'pubblicato' && t.modificato_il && (!t.pubblicato_il || t.modificato_il > t.pubblicato_il)).length;
+  const M = tpModifichePendenti();
+  const modif = M ? M.voci.filter(v => !v.nuovo).length : 0;
   const scop = T.filter(t => tpChi(t) === 'o').length;
-  return { bozza: n('bozza'), attesa: n('in_approvazione'), pubbl: n('pubblicato'), modif, scop, tot: T.length };
+  return { bozza: n('bozza'), attesa: n('in_approvazione'), pubbl: n('pubblicato'), modif, daComunicare: M ? M.voci.length : 0, scop, tot: T.length };
 }
 function tpRender() {
   const root = $('tp-root'); if (!root) return;
@@ -8648,11 +8676,15 @@ function tpRender() {
   const pill = st.tot === 0 ? '<span class="tp-pill vuota">Settimana vuota</span>'
     : (st.bozza ? `<span class="tp-pill bozza">${st.bozza} in bozza</span>` : '') + (st.attesa ? `<span class="tp-pill attesa">${st.attesa} da approvare</span>` : '')
       + (st.pubbl ? `<span class="tp-pill pubbl">${st.pubbl} pubblicati</span>` : '') + (st.modif ? `<span class="tp-pill modif">${st.modif} modificati</span>` : '') + (st.scop ? `<span class="tp-pill scop">${st.scop} scopert${st.scop === 1 ? 'o' : 'i'}</span>` : '');
-  const nConf = TP.conferme.filter(c => c.confermato_il).length, nCoinvolti = new Set(TP.turni.filter(t => t.dipendente_id && t.stato === 'pubblicato').map(t => t.dipendente_id)).size;
+  const idCoinvolti = [...new Set(TP.turni.filter(t => t.dipendente_id && t.stato === 'pubblicato').map(t => t.dipendente_id))];
+  const statiConf = idCoinvolti.map(id => tpStatoConferma(TP.conferme.find(c => c.dipendente_id === id), TP.turni.filter(t => t.dipendente_id === id && t.stato === 'pubblicato')));
+  const nCoinvolti = idCoinvolti.length, nRich = statiConf.filter(s => s.richiesta).length, nConf = statiConf.filter(s => s.richiesta && s.valida).length;
+  const nVisti = idCoinvolti.filter(id => (TP.conferme.find(c => c.dipendente_id === id) || {}).visto_il).length;
+  // settimana già pubblicata: aggiunte, modifiche ed eliminazioni si comunicano tutte insieme come correzione
   const azione = !TP.admin
     ? (st.bozza ? `<button class="btn-primary tp-cta" onclick="tpInviaApprovazione()">Invia ${st.bozza} turni all'admin</button>` : '')
-    : (st.bozza || st.attesa ? `<button class="btn-primary tp-cta" onclick="tpApriPubblica()">Pubblica ${st.bozza + st.attesa} turn${st.bozza + st.attesa === 1 ? 'o' : 'i'}</button>`
-      : st.modif ? `<button class="btn-primary tp-cta" onclick="tpApriPubblica(true)">Comunica ${st.modif} modific${st.modif === 1 ? 'a' : 'he'}</button>` : '');
+    : (st.daComunicare ? `<button class="btn-primary tp-cta" onclick="tpApriPubblica(true)">Comunica ${st.daComunicare} modific${st.daComunicare === 1 ? 'a' : 'he'}</button>`
+      : st.bozza || st.attesa ? `<button class="btn-primary tp-cta" onclick="tpApriPubblica()">Pubblica ${st.bozza + st.attesa} turn${st.bozza + st.attesa === 1 ? 'o' : 'i'}</button>` : '');
   root.innerHTML = `
     <div class="tp-head">
       <div class="tp-nav"><button class="tp-ico" onclick="tpSettimana(-1)" aria-label="Settimana precedente">‹</button>
@@ -8660,7 +8692,7 @@ function tpRender() {
         <button class="tp-ico" onclick="tpSettimana(1)" aria-label="Settimana successiva">›</button>
         ${TP.lun !== oggiLun ? '<button class="tp-oggi" onclick="tpSettimana(0)">Oggi</button>' : ''}
         <button class="tp-ico" onclick="tpMenu()" aria-label="Altre azioni">⋯</button></div>
-      <div class="tp-pills">${pill}${nCoinvolti && TP.admin ? `<span class="tp-pill conf" onclick="tpApriConferme()">✍️ ${nConf}/${nCoinvolti} confermati</span>` : ''}</div>
+      <div class="tp-pills">${pill}${nCoinvolti && TP.admin ? `<span class="tp-pill conf" onclick="tpApriConferme()">${nRich ? `✍️ ${nConf}/${nRich} confermati` : `👁 ${nVisti}/${nCoinvolti} visti`}</span>` : ''}</div>
       ${azione}
     </div>
     <div class="seg tp-seg"><button class="btn-sm ${TP.vista === 'persone' ? 'primary' : ''}" onclick="tpVista('persone')">Persone</button><button class="btn-sm ${TP.vista === 'giorno' ? 'primary' : ''}" onclick="tpVista('giorno')">Giorno</button>${TP.admin ? `<button class="btn-sm ${TP.vista === 'report' ? 'primary' : ''}" onclick="tpVista('report')">Report</button>` : ''}</div>
@@ -8855,13 +8887,56 @@ async function tpEdSalva() {
 }
 async function tpEdElimina() {
   const E = _tpEd; if (!E || !E.id) return;
-  if (E.orig.stato === 'pubblicato' && !confirm('Il turno è già pubblicato: eliminarlo? La persona vedrà la modifica.')) return;
+  if (E.orig.stato === 'pubblicato' && !confirm('Il turno è già pubblicato: eliminarlo?\nLa persona verrà avvisata quando premi «Comunica modifiche», insieme alle altre correzioni.')) return;
   const { error } = await sb.from('presenze_turni').delete().eq('id', E.id);
   if (error) { showMsg('tp-ed-msg', error.message, 'err'); return; }
-  if (E.orig.stato === 'pubblicato' && E.orig.dipendente_id) inviaNotificaDipendente(E.orig.dipendente_id, '🗓 <b>Turno annullato</b>\n' + tpDescrTurno(E.orig), '#turni', { tabella: 'presenze_turni', rif: TP.lun, tipo: 'turno_annullato' });
+  // nessun avviso immediato: l'eliminazione resta registrata sul server e si comunica con «Comunica modifiche»
   closeSheet('sh-tp-turno'); _tpEd = null; toast('Turno eliminato'); await tpCarica();
 }
 function tpDescrTurno(t) { const d = new Date(t.data + 'T12:00:00').toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long' }); return d.charAt(0).toUpperCase() + d.slice(1) + ' · ' + t.fascia_oraria.replace('-', '–') + ' · ' + tpSez(t).nome + (t.pausa_min ? ' (pausa ' + t.pausa_min + ' min)' : '') + (t.nota ? '\n' + t.nota : ''); }
+/* ── settimana già pubblicata: cosa è cambiato da comunicare, e a chi ── */
+const TP_CAMPI_TURNO = ['dipendente_id', 'extra_id', 'data', 'fascia_oraria', 'reparto', 'postazione', 'pausa_min', 'nota'];
+function tpTurnoUguale(a, b) { const n = (t, k) => t[k] == null || t[k] === '' ? (k === 'pausa_min' ? '0' : '') : String(t[k]); return TP_CAMPI_TURNO.every(k => n(a, k) === n(b, k)); }
+function tpModifichePendenti() {
+  const T = TP.turni, var_ = TP.variazioni || [];
+  if (!T.some(t => t.stato === 'pubblicato') && !var_.length) return null; // settimana mai pubblicata: si usa «Pubblica»
+  const conRegistro = new Set(var_.map(v => v.turno_id)), voci = [];
+  var_.forEach(v => { if (!v.dopo || !tpTurnoUguale(v.prima, v.dopo)) voci.push({ prima: v.prima, dopo: v.dopo }); });
+  T.filter(t => t.stato === 'bozza' || t.stato === 'in_approvazione').forEach(t => voci.push({ prima: null, dopo: t, nuovo: true }));
+  // turni modificati prima che esistesse il registro: si comunica com'è ora
+  T.filter(t => t.stato === 'pubblicato' && !conRegistro.has(t.id) && t.modificato_il && (!t.pubblicato_il || t.modificato_il > t.pubblicato_il)).forEach(t => voci.push({ prima: null, dopo: t, aggiornato: true }));
+  const persone = new Set();
+  voci.forEach(v => { if (v.prima && v.prima.dipendente_id) persone.add(v.prima.dipendente_id); if (v.dopo && v.dopo.dipendente_id) persone.add(v.dopo.dipendente_id); });
+  return { voci, persone };
+}
+// Righe "cosa cambia per te" del messaggio di correzione, per una persona
+function tpRigheCorrezione(id, voci) {
+  const riga = t => tpDescrTurno(t).split('\n')[0], out = [];
+  voci.forEach(v => {
+    const eraMio = !!(v.prima && v.prima.dipendente_id === id), eMio = !!(v.dopo && v.dopo.dipendente_id === id);
+    if (eraMio && eMio) {
+      const a = riga(v.prima), b = riga(v.dopo);
+      if (a === b) { if ((v.prima.nota || '') !== (v.dopo.nota || '')) out.push('• ✏️ ' + escTG(b) + (v.dopo.nota ? ' — nota: <i>' + escTG(v.dopo.nota) + '</i>' : ' — nota tolta')); return; }
+      if (v.prima.data === v.dopo.data) { const pa = a.split(' · '), pb = b.split(' · '); out.push('• ' + escTG(pa[0]) + ': ' + escTG(pa.slice(1).join(' · ')) + ' → <b>' + escTG(pb.slice(1).join(' · ')) + '</b>'); }
+      else out.push('• ' + escTG(a) + ' → <b>' + escTG(b) + '</b>');
+    } else if (eraMio) out.push('• ❌ Non sei più di turno: ' + escTG(riga(v.prima)));
+    else if (eMio) out.push('• ' + (v.aggiornato ? '✏️ Aggiornato: ' : '➕ Nuovo turno: ') + escTG(riga(v.dopo)));
+  });
+  return out;
+}
+// Conferma dei turni di una persona per la settimana. Dalla nuova versione decide la richiesta fatta all'invio
+// (con o senza conferma); per le settimane inviate prima resta la regola di sempre (ultima modifica dei turni).
+function tpStatoConferma(c, tt) {
+  c = c || {};
+  const dt = s => s ? new Date(s).getTime() : 0;
+  if (c.richiesta_il) {
+    const richiesta = c.conferma_richiesta !== false, valida = !!c.confermato_il && dt(c.confermato_il) >= dt(c.richiesta_il);
+    return { richiesta, valida, daConf: richiesta && !valida, riconf: richiesta && !valida && !!c.confermato_il };
+  }
+  const ultimaMod = Math.max(0, ...(tt || []).map(t => dt(t.modificato_il || t.pubblicato_il)));
+  const valida = !!c.confermato_il && dt(c.confermato_il) >= ultimaMod;
+  return { richiesta: true, valida, daConf: !valida, riconf: !valida && !!c.confermato_il };
+}
 async function tpSalvaRighe(righe) {
   const rows = righe.map(r => Object.assign({ settimana_inizio: lunediDi(r.data), stato: 'bozza', creato_da: ME.id }, r));
   let { error } = await sb.from('presenze_turni').insert(rows);
@@ -8943,41 +9018,54 @@ async function tpSalvaOre(id) {
 function tpApriPubblica(soloModifiche) {
   const daPubbl = TP.turni.filter(t => t.stato === 'bozza' || t.stato === 'in_approvazione');
   const modif = TP.turni.filter(t => t.stato === 'pubblicato' && t.modificato_il && (!t.pubblicato_il || t.modificato_il > t.pubblicato_il));
-  const coinvolti = new Set(daPubbl.concat(modif).filter(t => t.dipendente_id).map(t => t.dipendente_id));
+  const M = soloModifiche ? tpModifichePendenti() : null;
+  const coinvolti = M ? M.persone : new Set(daPubbl.concat(modif).filter(t => t.dipendente_id).map(t => t.dipendente_id));
   const scop = daPubbl.filter(t => tpChi(t) === 'o').length;
   const avvisiAlti = daPubbl.reduce((s, t) => s + tpAvvisi(t, TP.turni).filter(a => a.liv === 'alto').length, 0);
   const body = _sheetDinamico('sh-tp-pubblica', soloModifiche ? 'Comunica le modifiche' : 'Pubblica la settimana');
-  body.innerHTML = `<div class="kpi-grid"><div class="kpi"><div class="kpi-l">${soloModifiche ? 'Turni modificati' : 'Turni da pubblicare'}</div><div class="kpi-v">${soloModifiche ? modif.length : daPubbl.length}</div></div><div class="kpi"><div class="kpi-l">Persone avvisate</div><div class="kpi-v">${coinvolti.size}</div></div></div>
+  body.innerHTML = `<div class="kpi-grid"><div class="kpi"><div class="kpi-l">${soloModifiche ? 'Modifiche' : 'Turni da pubblicare'}</div><div class="kpi-v">${M ? M.voci.length : daPubbl.length}</div></div><div class="kpi"><div class="kpi-l">Persone avvisate</div><div class="kpi-v">${coinvolti.size}</div></div></div>
+    ${M ? `<div class="note-small" style="margin-top:0">Ognuno riceve «⚠️ Correzione turni» con solo ciò che cambia per lui (prima → ora) e i suoi turni aggiornati. Viene avvisato anche chi perde un turno.</div>` : ''}
     ${avvisiAlti ? `<div class="tp-avvisi"><div class="alto">⛔ ${avvisiAlti} turni con un avviso importante (assenze o sovrapposizioni): controllali prima.</div></div>` : ''}
     ${scop ? `<div class="note-small">${scop} turni scoperti verranno pubblicati come "turni liberi": i dipendenti potranno candidarsi.</div>` : ''}
-    <label class="av-check"><input type="checkbox" id="tp-pub-notif" checked><span><b>Manda a ciascuno i suoi turni</b><small>Su Telegram o come notifica, con l'elenco dei SUOI turni della settimana. Consegna registrata dal server.</small></span></label>
-    <label class="av-check"><input type="checkbox" id="tp-pub-conf" checked><span><b>Chiedi la conferma dei turni</b><small>Ognuno conferma dall'app (firmando col telefono se attivo). Vedi chi ha confermato nella barra in alto.</small></span></label>
-    <button class="btn-primary" style="margin-top:12px" onclick="tpPubblica(${!!soloModifiche})">${soloModifiche ? 'Comunica le modifiche' : 'Pubblica ora'}</button>`;
+    <label class="av-check"><input type="checkbox" id="tp-pub-notif" checked><span><b>${M ? 'Manda a ciascuno la correzione' : 'Manda a ciascuno i suoi turni'}</b><small>Su Telegram o come notifica${M ? '' : ", con l'elenco dei SUOI turni della settimana"}. Consegna registrata dal server.</small></span></label>
+    <label class="av-check"><input type="checkbox" id="tp-pub-conf" checked><span><b>Chiedi la conferma dei turni</b><small>Ognuno conferma dall'app (firmando col telefono se attivo). Senza spunta i turni arrivano come semplice avviso, senza conferma da dare.</small></span></label>
+    <button class="btn-primary" id="tp-pub-btn" style="margin-top:12px" onclick="tpPubblica(${!!soloModifiche})">${soloModifiche ? 'Comunica le modifiche' : 'Pubblica ora'}</button>`;
   openSheet('sh-tp-pubblica');
 }
 async function tpPubblica(soloModifiche) {
+  const btn = $('tp-pub-btn'); if (btn) { if (btn.disabled) return; btn.disabled = true; btn.textContent = 'Invio…'; }
   const notif = $('tp-pub-notif') && $('tp-pub-notif').checked, conf = $('tp-pub-conf') && $('tp-pub-conf').checked;
   const ora = new Date().toISOString();
   const daPubbl = TP.turni.filter(t => t.stato === 'bozza' || t.stato === 'in_approvazione');
   const modif = TP.turni.filter(t => t.stato === 'pubblicato' && t.modificato_il && (!t.pubblicato_il || t.modificato_il > t.pubblicato_il));
-  if (!soloModifiche && daPubbl.length) {
+  const M = soloModifiche ? tpModifichePendenti() : null;
+  const variazioni = (TP.variazioni || []).slice();
+  if (daPubbl.length) {
     const { error } = await sb.from('presenze_turni').update({ stato: 'pubblicato', pubblicato_il: ora }).in('id', daPubbl.map(t => t.id));
-    if (error) { toast('Errore: ' + error.message); return; }
+    if (error) { toast('Errore: ' + error.message); if (btn) { btn.disabled = false; btn.textContent = soloModifiche ? 'Comunica le modifiche' : 'Pubblica ora'; } return; }
   }
   if (modif.length) await sb.from('presenze_turni').update({ pubblicato_il: ora }).in('id', modif.map(t => t.id));
+  if (variazioni.length) { const { error } = await sb.from('presenze_turni_variazioni').update({ comunicato_il: ora }).in('id', variazioni.map(v => v.id)); if (error) console.warn('variazioni turni:', error.message); }
+  const coinvolti = M ? M.persone : new Set(daPubbl.concat(modif).filter(t => t.dipendente_id).map(t => t.dipendente_id));
+  // con o senza conferma: lo decide questa scelta, per ognuno dei coinvolti (anche chi ha perso un turno)
+  if (coinvolti.size) { const { error } = await sb.rpc('presenze_turni_richiedi_conferma', { p_settimana: TP.lun, p_dipendenti: [...coinvolti], p_conferma: !!conf }); if (error) console.warn('richiesta conferma turni:', error.message); }
   closeSheet('sh-tp-pubblica');
   if (notif) {
-    const coinvolti = new Set(daPubbl.concat(modif).filter(t => t.dipendente_id).map(t => t.dipendente_id));
     for (const id of coinvolti) {
       const miei = TP.turni.filter(t => t.dipendente_id === id).sort((a, b) => (a.data + a.fascia_oraria < b.data + b.fascia_oraria ? -1 : 1));
       const min = miei.reduce((s, t) => s + tpMinuti(t), 0);
-      const testo = (soloModifiche ? '🔄 <b>Turni modificati</b>' : '🗓 <b>I tuoi turni</b>') + ' · ' + fmtSettimanaLbl(TP.lun) + '\n\n'
-        + (miei.length ? miei.map(t => '• ' + escTG(tpDescrTurno(t).split('\n')[0]) + (t.nota ? ' — <i>' + escTG(t.nota) + '</i>' : '')).join('\n') : 'Nessun turno questa settimana (riposo)')
-        + '\n\nTotale: ' + tpOre(min) + (conf ? '\n\n✍️ <i>Apri l\'app e conferma i tuoi turni.</i>' : '');
-      await inviaNotificaDipendente(id, testo, '#turni', { tabella: 'presenze_turni', rif: TP.lun, tipo: soloModifiche ? 'turni_modificati' : 'turni' });
+      const elenco = miei.length ? miei.map(t => '• ' + escTG(tpDescrTurno(t).split('\n')[0]) + (t.nota ? ' — <i>' + escTG(t.nota) + '</i>' : '')).join('\n') : 'Nessun turno questa settimana (riposo)';
+      let testo;
+      if (M) {
+        const righe = tpRigheCorrezione(id, M.voci); if (!righe.length) continue;
+        testo = '⚠️ <b>Correzione turni</b> · ' + fmtSettimanaLbl(TP.lun) + '\n\nC\'era un errore nei turni che ti abbiamo mandato. Cosa cambia per te:\n' + righe.join('\n')
+          + '\n\n<b>I tuoi turni aggiornati</b>\n' + elenco + '\n\nTotale: ' + tpOre(min);
+      } else testo = '🗓 <b>I tuoi turni</b> · ' + fmtSettimanaLbl(TP.lun) + '\n\n' + elenco + '\n\nTotale: ' + tpOre(min);
+      testo += conf ? '\n\n✍️ <i>Apri l\'app e conferma i tuoi turni.</i>' : '';
+      await inviaNotificaDipendente(id, testo, '#turni', { tabella: 'presenze_turni', rif: TP.lun, tipo: M ? 'turni_modificati' : 'turni' });
     }
     const scop = daPubbl.filter(t => tpChi(t) === 'o');
-    if (scop.length && !soloModifiche) inviaNotificaTuttiDipendenti('🙋 <b>Turni liberi</b> · ' + fmtSettimanaLbl(TP.lun) + '\n\n' + scop.map(t => '• ' + escTG(tpDescrTurno(t).split('\n')[0])).join('\n') + '\n\nApri l\'app → Turni per candidarti.', '#turni', { tabella: 'presenze_turni', rif: TP.lun, tipo: 'turni_liberi' });
+    if (scop.length) inviaNotificaTuttiDipendenti('🙋 <b>Turni liberi</b> · ' + fmtSettimanaLbl(TP.lun) + '\n\n' + scop.map(t => '• ' + escTG(tpDescrTurno(t).split('\n')[0])).join('\n') + '\n\nApri l\'app → Turni per candidarti.', '#turni', { tabella: 'presenze_turni', rif: TP.lun, tipo: 'turni_liberi' });
   }
   toast(soloModifiche ? '✓ Modifiche comunicate' : '✓ Settimana pubblicata' + (notif ? ' e inviata' : ''));
   await tpCarica();
@@ -8992,14 +9080,13 @@ async function tpInviaApprovazione() {
 async function tpApriConferme() {
   const coinvolti = [...new Set(TP.turni.filter(t => t.dipendente_id && t.stato === 'pubblicato').map(t => t.dipendente_id))];
   const body = _sheetDinamico('sh-tp-conferme', 'Conferme dei turni');
-  body.innerHTML = `<div class="note-small" style="margin-top:0">Chi ha visto e confermato i propri turni della settimana ${fmtSettimanaLbl(TP.lun)}. ✍️ = conferma firmata col telefono. Se modifichi un turno dopo la conferma, alla persona viene richiesta di nuovo.</div>` +
+  body.innerHTML = `<div class="note-small" style="margin-top:0">Chi ha visto e confermato i propri turni della settimana ${fmtSettimanaLbl(TP.lun)}. ✍️ = conferma firmata col telefono. Se comunichi una modifica chiedendo la conferma, alla persona viene richiesta di nuovo.</div>` +
     coinvolti.map(id => {
       const d = TP.dip.find(x => x.id === id) || { nome: '?' }, c = TP.conferme.find(x => x.dipendente_id === id) || {};
-      const ultimaMod = TP.turni.filter(t => t.dipendente_id === id).map(t => t.modificato_il || t.pubblicato_il || '').sort().pop() || '';
-      const valida = c.confermato_il && c.confermato_il >= ultimaMod;
+      const s = tpStatoConferma(c, TP.turni.filter(t => t.dipendente_id === id && t.stato === 'pubblicato'));
       return `<div class="av-riga" style="grid-template-columns:1.4fr 1fr 1fr"><div class="av-n">${esc(d.nome + ' ' + (d.cognome || ''))}</div>
         <div class="av-c ${c.visto_il ? 'ok' : ''}">${c.visto_il ? '👁<small>' + _oraBreve(c.visto_il) + '</small>' : '—'}</div>
-        <div class="av-c ${valida ? 'ok' : 'wait'}">${valida ? (c.firmato ? '✍️' : '✓') + '<small>' + _oraBreve(c.confermato_il) + '</small>' : c.confermato_il ? 'da riconfermare' : 'in attesa'}</div></div>`;
+        <div class="av-c ${s.valida ? 'ok' : s.richiesta ? 'wait' : ''}">${s.valida ? (c.firmato ? '✍️' : '✓') + '<small>' + _oraBreve(c.confermato_il) + '</small>' : !s.richiesta ? 'non richiesta' : s.riconf ? 'da riconfermare' : 'in attesa'}</div></div>`;
     }).join('');
   openSheet('sh-tp-conferme');
 }
@@ -9140,18 +9227,18 @@ async function tpDipRender() {
   const sett = [lun, lunProx].map(L => {
     const tt = (miei || []).filter(t => t.settimana_inizio === L || lunediDi(t.data) === L);
     const c = (conf || []).find(x => x.settimana_inizio === L) || {};
-    const ultimaMod = tt.map(t => t.modificato_il || t.pubblicato_il || '').sort().pop() || '';
-    return { L, tt, c, daConf: tt.length && !(c.confermato_il && c.confermato_il >= ultimaMod), riconf: !!c.confermato_il && c.confermato_il < ultimaMod };
+    const st = tpStatoConferma(c, tt);
+    return { L, tt, c, daConf: !!tt.length && st.daConf, riconf: st.riconf, richiesta: st.richiesta };
   }).filter(s => s.tt.length);
   const card = s => {
     const min = s.tt.reduce((x, t) => x + tpMinuti(t), 0);
     const gg = Array.from({ length: 7 }, (_, i) => aggiungiGiorni(s.L, i));
     return `<div class="card tp-dip-sett"><div class="tp-dip-h"><div><b>${s.L === lun ? 'Questa settimana' : 'Prossima settimana'}</b><small>${fmtSettimanaLbl(s.L)} · ${tpOre(min)}</small></div>
-        ${s.daConf ? '' : `<span class="chip-st ok">${s.c.firmato ? '✍️ firmati' : '✓ confermati'}</span>`}</div>
+        ${s.daConf || !s.richiesta ? '' : `<span class="chip-st ok">${s.c.firmato ? '✍️ firmati' : '✓ confermati'}</span>`}</div>
       <div class="tp-dip-strip">${gg.map((g, i) => { const t = s.tt.filter(x => x.data === g); const oggi = g === todayISO();
         return `<div class="${oggi ? 'oggi' : ''} ${t.length ? 'lav' : ''}"><small>${TP_GG[i]}</small><b>${new Date(g + 'T12:00:00').getDate()}</b>${t.map(x => `<i style="--c:${tpSez(x).colore}">${x.fascia_oraria.split('-')[0]}<br>${x.fascia_oraria.split('-')[1]}</i>`).join('') || '<em>riposo</em>'}</div>`; }).join('')}</div>
       <div class="tp-dip-det">${s.tt.map(t => { const con = (tutti || []).filter(x => x.data === t.data && x.dipendente_id && x.dipendente_id !== ME.id && x.reparto === t.reparto && tpSpan(x.fascia_oraria).i < tpSpan(t.fascia_oraria).f && tpSpan(t.fascia_oraria).i < tpSpan(x.fascia_oraria).f).map(x => nomeCol(x.dipendente_id)).filter(Boolean);
-        return `<div class="ric-row"><div style="flex:1;min-width:0"><div class="ric-t">${esc(tpDescrTurno(t).split('\n')[0])}${t.modificato_il && (!s.c.confermato_il || t.modificato_il > s.c.confermato_il) ? ' <span class="tp-pill modif">modificato</span>' : ''}</div><div class="ric-s">${tpOre(tpMinuti(t))}${con.length ? ' · con ' + esc(con.join(', ')) : ''}${t.nota ? ' · ' + esc(t.nota) : ''}</div></div></div>`; }).join('')}</div>
+        return `<div class="ric-row"><div style="flex:1;min-width:0"><div class="ric-t">${esc(tpDescrTurno(t).split('\n')[0])}${t.modificato_il && t.pubblicato_il && new Date(t.pubblicato_il) >= new Date(t.modificato_il) && (!s.c.confermato_il || t.modificato_il > s.c.confermato_il) ? ' <span class="tp-pill modif">modificato</span>' : ''}</div><div class="ric-s">${tpOre(tpMinuti(t))}${con.length ? ' · con ' + esc(con.join(', ')) : ''}${t.nota ? ' · ' + esc(t.nota) : ''}</div></div></div>`; }).join('')}</div>
       ${s.daConf ? `<button class="btn-primary" style="margin-top:10px" onclick="tpDipConferma('${s.L}')">${s.riconf ? 'I turni sono cambiati: conferma di nuovo' : 'Confermo i miei turni'}</button>` : ''}</div>`;
   };
   const libHtml = !eL && (liberi || []).length ? `<div class="sec-title" style="margin-top:6px">Turni liberi</div><div class="card" style="padding:4px 14px;margin-bottom:14px">${liberi.map(t => { const io = (t.candidati || []).includes(ME.id);
