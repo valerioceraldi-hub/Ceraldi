@@ -3,7 +3,7 @@
 Uso:  MENU_SB_URL=https://xxx.supabase.co MENU_SB_KEY=<chiave anon> python3 menu_genera.py --out DIR [--lingua it|en] [--copia-foto] [--esporta-json F]
       python3 menu_genera.py --json F --out DIR           (senza rete, per i test)
 Il modello (menu_template.html) non contiene nomi, testi, prodotti o colori di nessuna attività: tutto arriva dai dati."""
-import argparse, json, os, re, sys, hashlib, datetime, urllib.request, urllib.parse
+import argparse, json, os, re, sys, time, hashlib, datetime, urllib.request, urllib.error, urllib.parse
 QUI = os.path.dirname(os.path.abspath(__file__))
 TAB = ['menu_sezioni','menu_categorie','menu_voci','menu_varianti','menu_voci_allergeni','allergeni','menu_disponibilita',
        'menu_pagine','menu_blocchi','menu_raccomandazioni','menu_momenti','menu_momenti_voci','locale']
@@ -37,7 +37,22 @@ def scarica(url, chiave, rpc=False):
     out['config'] = rich(url + '/rest/v1/rpc/menu_config_pubblica', {'Content-Type': 'application/json'}, b'{}')
     return out
 
-def costruisci(src, lingua, foto_base):
+def file_esiste(url, cache={}):
+    """Vero solo se l'indirizzo risponde 200: la foto grande (-1200) esiste solo per una parte delle voci."""
+    if url in cache: return cache[url]
+    for tent in range(4):
+        try:
+            cache[url] = urllib.request.urlopen(urllib.request.Request(url, method='HEAD'), timeout=30).status == 200
+            return cache[url]
+        except urllib.error.HTTPError as e:
+            if e.code in (400, 403, 404): cache[url] = False; return False   # file assente (Supabase Storage risponde 400 per un oggetto che non esiste)
+            err = 'HTTP %s' % e.code
+        except Exception as e:
+            err = type(e).__name__
+        time.sleep(1 + tent)
+    sys.exit('Verifica foto non riuscita (%s): %s. Riprova: non genero una pagina con foto scartate per un errore di rete.' % (err, url))
+
+def costruisci(src, lingua, foto_base, esiste=None):
     en = lingua == 'en'
     def L(r, k):  # campo nella lingua scelta, con ripiego sull'italiano
         return ((r.get(k + '_en') if en else None) or r.get(k) or '')
@@ -46,7 +61,9 @@ def costruisci(src, lingua, foto_base):
     testi = {k: (v.get('en') if en else v.get('it')) for k, v in (cfg.get('testi') or {}).items() if isinstance(v, dict) and (v.get('en') if en else v.get('it'))}
     def U(p):  # percorso foto del bucket -> indirizzo
         return foto_base + p if p else None
-    def grande(p): return U(re.sub(r'-320\.(webp|jpg)$', r'-1200.\1', p)) if p and re.search(r'-320\.(webp|jpg)$', p) else None
+    def grande(p):
+        u = U(re.sub(r'-320\.(webp|jpg)$', r'-1200.\1', p)) if p and re.search(r'-320\.(webp|jpg)$', p) else None
+        return u if u and (esiste is None or esiste(u)) else None  # senza file grande resta la miniatura
     oggi = datetime.date.today().isoformat()
     pub = lambda r: r.get('stato') == 'pubblicato'
     ordina = lambda l: sorted(l, key=lambda r: (r.get('ordine') or 0, r.get('id') or 0))
@@ -165,7 +182,7 @@ def main():
         src = scarica(url.rstrip('/'), k); src['_url'] = url.rstrip('/')
     if a.esporta_json: json.dump(src, open(a.esporta_json, 'w', encoding='utf-8'), ensure_ascii=False)
     base = (src.get('_url') or os.environ.get('MENU_SB_URL', '')).rstrip('/') + '/storage/v1/object/public/menu-foto/'
-    d, DEF, cfg = costruisci(src, a.lingua, base)
+    d, DEF, cfg = costruisci(src, a.lingua, base, None if a.json else file_esiste)  # --json = prove senza rete: nessun controllo
     n = copia_foto(d, a.out) if a.copia_foto else 0
     css, link = tema_css(cfg)
     t = open(a.modello, encoding='utf-8').read()
