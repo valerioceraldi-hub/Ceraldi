@@ -2361,21 +2361,36 @@ async function chiamaClaude(contenuto, maxTok, messaggi){
   return tb ? tb.text : '';
 }
 var _ultimoStopIA = '';
-/* Legge un listino anche lungo: se la risposta dell'IA si interrompe a metà,
-   tiene gli oggetti completi già ricevuti e chiede il seguito, finché la lista è chiusa. */
+/* Legge un listino anche lungo. Se la risposta dell'IA si interrompe per lunghezza,
+   recupera i prodotti completi già ricevuti e chiede il seguito con un normale messaggio
+   (questo modello non accetta risposte "da proseguire"), poi unisce le parti senza doppioni. */
+function righeDaTestoParziale(t){
+  t = String(t || '').replace(/```json|```/g, '').trim();
+  var i = t.indexOf('['); if(i < 0) return [];
+  t = t.slice(i);
+  var j = t.lastIndexOf('}'); if(j < 0) return [];
+  t = t.slice(0, j + 1);
+  try{ return JSON.parse(t + ']'); }catch(e){}
+  try{ return JSON.parse(t); }catch(e){ return []; }
+}
 async function estraiListinoCompleto(blocchi){
-  var s = '';
-  for(var giro = 0; giro < 8; giro++){
-    var msgs = [{ role: 'user', content: blocchi }];
-    if(s) msgs.push({ role: 'assistant', content: s });
+  var tutte = [], viste = {}, msgs = [{ role: 'user', content: blocchi }];
+  for(var giro = 0; giro < 10; giro++){
     var t = await chiamaClaude(null, 16000, msgs);
-    s += t;
-    if(_ultimoStopIA !== 'max_tokens') return s;
-    var fine = s.lastIndexOf('}');
-    if(fine < 0) break;
-    s = s.slice(0, fine + 1);
+    var parte = righeDaTestoParziale(t), nuove = 0;
+    parte.forEach(function(x){
+      var k = [x && x.nome, x && x.prezzo, x && x.codice].join('|').toLowerCase();
+      if(x && x.nome && !viste[k]){ viste[k] = 1; tutte.push(x); nuove++; }
+    });
+    if(_ultimoStopIA !== 'max_tokens') return tutte;
+    if(!nuove) break;
+    var ultimo = tutte[tutte.length - 1];
+    msgs = [{ role: 'user', content: blocchi },
+            { role: 'assistant', content: JSON.stringify(tutte) },
+            { role: 'user', content: 'La lista si è interrotta. Continua dal prodotto successivo a "' + ultimo.nome + '" (codice "' + (ultimo.codice || '') + '") fino alla fine del documento. Rispondi SOLO con un array JSON dei prodotti rimanenti, nello stesso formato, senza ripetere quelli già elencati. Se il documento è finito rispondi [].' }];
   }
-  throw new Error('Il documento è molto lungo: non sono riuscito a leggerlo tutto. Prova a importarne una parte alla volta.');
+  if(tutte.length) return tutte;
+  throw new Error('Non sono riuscito a leggere il documento. Riprova; se si ripete, usa un file Excel o CSV.');
 }
 function jsonDaTesto(t){
   t = String(t || '').replace(/```json|```/g, '').trim();
@@ -6458,11 +6473,7 @@ async function leggiImport(){
       var b64 = await new Promise(function(ok, ko){ var r = new FileReader(); r.onload = function(){ ok(String(r.result).split(',')[1]); }; r.onerror = ko; r.readAsDataURL(f); });
       var tipo = f.type === 'application/pdf' ? 'document' : 'image', mt = f.type || (tipo === 'document' ? 'application/pdf' : 'image/jpeg');
       st.innerHTML = '<div class="loading"><span class="spinner"></span>L\'intelligenza artificiale sta leggendo il documento… (può volerci un minuto)</div>';
-      var testo = await estraiListinoCompleto([{ type: tipo, source: { type: 'base64', media_type: mt, data: b64 } }, { type: 'text', text: 'Estrai TUTTI i prodotti con prezzo da questo listino/preventivo/fattura del fornitore "' + IMP.forn + '". Rispondi SOLO con un array JSON: [{"nome":"descrizione completa con marca e formato","conf":"confezione o unità (es. CT, BT, PZ, KG) o vuoto","prezzo":12.34,"codice":"codice articolo o vuoto"}]. Prezzo unitario come numero, punto decimale, senza simbolo. Non inventare righe e non saltarne.' }]);
-      var arr;
-      try{ arr = jsonDaTesto(testo); }catch(errParse){
-        throw new Error('L\'IA ha restituito una risposta non leggibile. Riprova; se si ripete, prova con un file Excel o CSV.');
-      }
+      var arr = await estraiListinoCompleto([{ type: tipo, source: { type: 'base64', media_type: mt, data: b64 } }, { type: 'text', text: 'Estrai TUTTI i prodotti con prezzo da questo listino/preventivo/fattura del fornitore "' + IMP.forn + '". Rispondi SOLO con un array JSON: [{"nome":"descrizione completa con marca e formato","conf":"confezione o unità (es. CT, BT, PZ, KG) o vuoto","prezzo":12.34,"codice":"codice articolo o vuoto"}]. Prezzo unitario come numero, punto decimale, senza simbolo. Non inventare righe e non saltarne.' }]);
       if(!Array.isArray(arr) || !arr.length) throw new Error('Nessun prodotto trovato nel documento');
       IMP.righe = arr.map(function(x){ return { nome: maiusc(x.nome), conf: x.conf || '', prezzo: numIt(x.prezzo), codice: x.codice || '' }; }).filter(function(x){ return x.nome && x.prezzo > 0; });
       if(IMP.modo === 'solo'){ await salvaSoloListino(); return; }
