@@ -450,7 +450,7 @@ select.inp{background-image:none}
   <button class="tab-item" data-tab="altro" onclick="vaiTab('altro')"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></span><span class="tab-lbl">Altro</span></button>
 </nav>
 <script>
-var APP_VERSION='0.4';
+var APP_VERSION='0.5';
 var APP={key:'menu',nome:'Menu',versione:APP_VERSION,authKey:'mn_auth_v1',oldAuthKey:null,
   markBg:'linear-gradient(145deg,#C08A4D 0%,#8B5A2B 55%,#4A2C14 100%)',
   markSvg:'<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3v7a3 3 0 0 0 3 3v8"/><path d="M7 3v6"/><path d="M10 3v7a3 3 0 0 1-3 3"/><path d="M17 21V3c-2 1.5-3 4-3 7v4h3"/></svg>',
@@ -962,6 +962,7 @@ async function carica(mostra){
     D.sezioni = r[0] || []; D.categorie = r[1] || []; D.voci = r[2] || []; D.legami = r[3] || []; D.allergeni = r[4] || [];
     D.varianti = r[5] || []; D.disp = r[6] || []; D.modulo = (r[7] || [])[0] || null; D.locale = (r[8] || [])[0] || null;
     D.caricato = new Date().toISOString();
+    await caricaContenuti();
     if(!V.sezione || !sezDi(V.sezione)){ var s0 = D.sezioni.find(function(s){ return s.stato !== 'archiviato'; }) || D.sezioni[0]; V.sezione = s0 ? s0.id : null; }
     if(mostra) toast('✓ Aggiornato');
   }catch(e){ toast('⚠️ ' + e.message); _registraErrore('carica', e.message); }
@@ -1757,6 +1758,11 @@ function renderAltro(){
     '<div><b class="tnum">' + conta('archiviato') + '</b><span>Archiviate</span></div><div><b class="tnum">' + D.voci.filter(function(v){ return v.foto_path; }).length + '</b><span>Con foto</span></div></div>' +
     '<div class="sec-title">Il locale</div><div class="grp">' +
       '<button class="row" onclick="apriLocale()"><span class="row-ico">📍</span><div class="row-main"><div class="row-t">Indirizzo, contatti e orari</div><div class="row-s">' + esc([loc.indirizzo, loc.orari && loc.orari.testo].filter(Boolean).join(' · ') || 'Da compilare') + '</div></div><span class="chev">›</span></button></div>' +
+    '<div class="sec-title">Pagina del menu per i clienti</div><div class="grp">' +
+      '<button class="row" onclick="apriMomenti()"><span class="row-ico">🌅</span><div class="row-main"><div class="row-t">Momenti della giornata</div><div class="row-s">Saluto e consiglio per mattina, pomeriggio, sera…</div></div><span class="chev">›</span></button>' +
+      '<button class="row" onclick="apriRacc()"><span class="row-ico">🤝</span><div class="row-main"><div class="row-t">Abbinamenti e consigli</div><div class="row-s">' + (D.racc || []).length + ' impostati</div></div><span class="chev">›</span></button>' +
+      '<button class="row" onclick="apriPagine()"><span class="row-ico">🧩</span><div class="row-main"><div class="row-t">Pagine e blocchi</div><div class="row-s">Storia, foto, vetrine e altre pagine</div></div><span class="chev">›</span></button>' +
+      '<button class="row" onclick="apriTesti()"><span class="row-ico">✏️</span><div class="row-main"><div class="row-t">Testi dell\'interfaccia</div><div class="row-s">Le piccole scritte fisse del menu</div></div><span class="chev">›</span></button></div>' +
     '<div class="sec-title">Menu</div><div class="grp">' +
       '<button class="row" onclick="apriEtichette()"><span class="row-ico">🏷</span><div class="row-main"><div class="row-t">Etichette</div><div class="row-s">' + esc(badgeDisponibili().join(', ')) + '</div></div><span class="chev">›</span></button>' +
       '<button class="row" onclick="apriStruttura()"><span class="row-ico">⚙︎</span><div class="row-main"><div class="row-t">Sezioni e categorie</div><div class="row-s">Crea, rinomina, ordina, archivia</div></div><span class="chev">›</span></button>' +
@@ -1818,8 +1824,315 @@ function apriEtichette(){
   };
 }
 
+/* ── PAGINA CLIENTE: pagine, blocchi, momenti, abbinamenti, testi (0.5) ─────────────────────────
+   Tutto ciò che il cliente legge nel menu, oltre ai prodotti, vive nel database e si modifica da qui. */
+async function caricaContenuti(){
+  var tab = ['menu_pagine?select=*&order=ordine,codice', 'menu_blocchi?select=*&order=ordine,id', 'menu_raccomandazioni?select=*&order=ordine,id', 'menu_momenti?select=*&order=ordine,id', 'menu_momenti_voci?select=*&order=ordine,id'];
+  try{
+    var r = await Promise.all(tab.map(function(p){ return api(p); }));
+    D.pagine = r[0] || []; D.blocchi = r[1] || []; D.racc = r[2] || []; D.momenti = r[3] || []; D.momVoci = r[4] || [];
+  }catch(e){ D.pagine = D.pagine || []; D.blocchi = D.blocchi || []; D.racc = D.racc || []; D.momenti = D.momenti || []; D.momVoci = D.momVoci || []; toast('⚠️ ' + e.message); }
+}
+function ctNomeVoce(id){ var v = D.voci.find(function(x){ return x.id === id; }); return v ? v.nome : '(prodotto eliminato)'; }
+function ctNomeCat(id){ var c = D.categorie.find(function(x){ return x.id === id; }); return c ? c.nome : '(categoria eliminata)'; }
+function ctOrd(a, b){ return (a.ordine || 0) - (b.ordine || 0) || (a.id || 0) - (b.id || 0); }
+function ctMax(l){ return l.reduce(function(m, x){ return Math.max(m, x.ordine || 0); }, 0); }
+function ctBdg(on, nome){ return on ? '' : '<span class="bdg n">' + (nome || 'Nascosto') + '</span>'; }
+function ctFreccie(chiave, id, i, n, gr){
+  return '<span class="ord-b"><button aria-label="Sposta su" onclick="event.stopPropagation();ctSposta(\'' + chiave + '\',\'' + id + '\',-1,\'' + gr + '\')"' + (i ? '' : ' disabled') + '>↑</button><button aria-label="Sposta giù" onclick="event.stopPropagation();ctSposta(\'' + chiave + '\',\'' + id + '\',1,\'' + gr + '\')"' + (i < n - 1 ? '' : ' disabled') + '>↓</button></span>';
+}
+/* ordine: scambia con il vicino dello stesso gruppo */
+function ctGruppo(chiave, gr){
+  var S = CT[chiave];
+  if(chiave === 'blocchi') return D.blocchi.filter(function(b){ return b.pagina === _ctPag && (_ctPag !== 'home' || b.posizione === gr); });
+  if(chiave === 'racc') return D.racc.filter(function(r){ return gr === (r.tipo + ':' + (r.voce_id || '') + ':' + (r.categoria_id || '')); });
+  return D[S.dati].slice();
+}
+async function ctSposta(chiave, id, dir, gr){
+  var S = CT[chiave], l = ctGruppo(chiave, gr).sort(ctOrd), i = l.findIndex(function(x){ return String(x[S.pk]) === String(id); }), j = i + dir;
+  if(i < 0 || j < 0 || j >= l.length) return;
+  var a = l.splice(i, 1)[0]; l.splice(j, 0, a);
+  try{
+    await Promise.all(l.map(function(x, n){ if(x.ordine === (n + 1) * 10) return null;
+      return api(S.tab + '?' + S.pk + '=eq.' + encodeURIComponent(x[S.pk]), { method: 'PATCH', prefer: 'return=minimal', body: { ordine: (n + 1) * 10 } }); }));
+    await caricaContenuti(); S.mostra();
+  }catch(e){ toast('⚠️ ' + e.message); }
+}
+
+/* modulo generico di modifica */
+var CT_TIPI = [['testo', 'Solo testo'], ['testo_foto', 'Testo e foto'], ['foto', 'Solo foto'], ['banner', 'Banner (foto, testo e pulsante)'], ['link_pagina', 'Collegamento a un\'altra pagina']];
+var CT_POS = [['alto', 'In alto, prima di tutto'], ['dopo_proposte', 'Dopo le proposte'], ['dopo_sezioni', 'Dopo le sezioni del menu'], ['piede', 'In fondo alla pagina']];
+var CT = {
+  pagine: { tab: 'menu_pagine', pk: 'codice', dati: 'pagine', nome: 'pagina', mostra: function(){ apriPagine(); }, campi: [
+    { k: 'titolo', et: 'Titolo della pagina', m: 80, en: 1 },
+    { k: 'attiva', et: 'Pagina visibile ai clienti', t: 'bool' } ] },
+  blocchi: { tab: 'menu_blocchi', pk: 'id', dati: 'blocchi', nome: 'blocco', ctrl: 'tipo', mostra: function(){ apriPagina(_ctPag); }, campi: [
+    { k: 'tipo', et: 'Che tipo di blocco è', t: 'sel', o: CT_TIPI },
+    { k: 'posizione', et: 'Dove lo mostro', t: 'sel', o: CT_POS, home: 1 },
+    { k: 'sopratitolo', et: 'Scritta piccola sopra il titolo', m: 60, en: 1, per: 'testo,testo_foto,banner,link_pagina' },
+    { k: 'titolo', et: 'Titolo', m: 120, en: 1, per: 'testo,testo_foto,banner,link_pagina' },
+    { k: 'testo', et: 'Testo', t: 'area', r: 5, en: 1, per: 'testo,testo_foto,banner,link_pagina' },
+    { k: 'foto_url', et: 'Foto', t: 'foto', per: 'testo_foto,foto,banner' },
+    { k: 'foto_alt', et: 'Descrizione della foto (per chi non la vede)', m: 160, en: 1, per: 'testo_foto,foto,banner', hint: 'Obbligatoria se c\'è una foto.' },
+    { k: 'link_testo', et: 'Scritta del pulsante (facoltativa)', m: 40, en: 1, per: 'testo,testo_foto,banner,foto,link_pagina' },
+    { k: 'link_url', et: 'Indirizzo web del pulsante (facoltativo)', ph: 'https://…', per: 'testo,testo_foto,banner,foto' },
+    { k: 'link_pagina', et: 'Pagina del menu a cui porta', t: 'sel', o: 'pagine', per: 'link_pagina' },
+    { k: 'attivo', et: 'Visibile ai clienti', t: 'bool' } ] },
+  momenti: { tab: 'menu_momenti', pk: 'id', dati: 'momenti', nome: 'momento', ctrl: 'quando', mostra: function(){ apriMomenti(); }, campi: [
+    { k: 'nome', et: 'Nome (lo vedi solo tu)', m: 40, ph: 'Es. Mattina' },
+    { k: 'quando', et: 'Quando si mostra', t: 'sel', o: [['orario', 'In una fascia oraria'], ['chiuso', 'Quando il locale è chiuso']] },
+    { k: 'dalle', et: 'Dalle', t: 'time', per: 'orario' }, { k: 'alle', et: 'Alle', t: 'time', per: 'orario' },
+    { k: 'saluto', et: 'Saluto in cima alla pagina', m: 60, en: 1 },
+    { k: 'introduzione', et: 'Frase sotto il saluto', t: 'area', r: 2, en: 1 },
+    { k: 'sopratitolo', et: 'Scritta piccola sopra il titolo', m: 60, en: 1 },
+    { k: 'titolo', et: 'Titolo del consiglio', m: 120, en: 1 },
+    { k: 'testo', et: 'Testo del consiglio', t: 'area', r: 4, en: 1 },
+    { k: 'foto_url', et: 'Foto', t: 'foto' },
+    { k: 'foto_alt', et: 'Descrizione della foto', m: 160, en: 1, hint: 'Obbligatoria se c\'è una foto.' },
+    { k: 'testo_pulsante', et: 'Scritta del pulsante «prendi i prodotti insieme»', m: 40, en: 1 },
+    { k: 'attivo', et: 'Visibile ai clienti', t: 'bool' } ] }
+};
+var _ct = null, _ctPag = 'home';
+function ctFotoHtml(url){ return url ? '<img src="' + esc(url) + '" alt="" style="max-width:100%;max-height:150px;border-radius:10px;display:block;margin:6px 0">' : '<div class="hint">Nessuna foto</div>'; }
+function ctCampo(c, v){
+  var id = 'ct_' + c.k, val = v[c.k] == null ? '' : v[c.k], h;
+  if(c.t === 'bool'){
+    var on = v[c.k] === undefined ? true : !!v[c.k];
+    return '<div class="grp" style="box-shadow:none;border:1px solid var(--sep2);margin:10px 0"><div class="row"><div class="row-main"><div class="row-t">' + c.et + '</div></div><label class="tgl"><input type="checkbox" id="' + id + '"' + (on ? ' checked' : '') + '><span></span></label></div></div>';
+  }
+  if(c.t === 'area') h = '<textarea class="inp" id="' + id + '" rows="' + (c.r || 3) + '" style="resize:vertical">' + esc(val) + '</textarea>';
+  else if(c.t === 'sel'){
+    var o = c.o === 'pagine' ? [['', '— scegli —']].concat(D.pagine.filter(function(p){ return p.codice !== 'home' && p.codice !== (_ct && _ct.id); }).map(function(p){ return [p.codice, p.titolo || p.codice]; })) : c.o;
+    h = '<select class="inp" id="' + id + '"' + (c.k === (CT[_ct.chiave].ctrl) ? ' onchange="ctMostra()"' : '') + '>' + o.map(function(x){ return '<option value="' + esc(x[0]) + '"' + (String(x[0]) === String(val) ? ' selected' : '') + '>' + esc(x[1]) + '</option>'; }).join('') + '</select>';
+  }
+  else if(c.t === 'foto') h = '<div id="' + id + 'Box">' + ctFotoHtml(val) + '</div><input type="hidden" id="' + id + '" value="' + esc(val) + '"><input type="file" accept="image/*" id="' + id + 'File" style="display:none" onchange="ctFoto(this,\'' + c.k + '\')">' +
+    '<div class="btn-row"><button type="button" class="btn-sm" onclick="document.getElementById(\'' + id + 'File\').click()">Scegli foto</button><button type="button" class="btn-sm r" onclick="ctTogliFoto(\'' + c.k + '\')">Togli</button></div>';
+  else h = '<input class="inp" id="' + id + '" type="' + (c.t === 'time' ? 'time' : 'text') + '" value="' + esc(val) + '"' + (c.ph ? ' placeholder="' + esc(c.ph) + '"' : '') + (c.m ? ' maxlength="' + c.m + '"' : '') + '>';
+  return '<div class="field" data-per="' + (c.per || '') + '" data-home="' + (c.home ? 1 : 0) + '"><label for="' + id + '">' + c.et + '</label>' + h + (c.hint ? '<div class="hint">' + c.hint + '</div>' : '') + '</div>';
+}
+function ctMostra(){
+  var S = CT[_ct.chiave], sel = S.ctrl && document.getElementById('ct_' + S.ctrl), val = sel ? sel.value : '';
+  document.querySelectorAll('#shCt [data-per]').forEach(function(el){
+    var p = el.dataset.per, ok = !p || p.split(',').indexOf(val) >= 0;
+    if(el.dataset.home === '1' && _ctPag !== 'home') ok = false;
+    el.style.display = ok ? '' : 'none';
+  });
+}
+function ctApri(chiave, id, base){
+  var S = CT[chiave], v = id != null ? (D[S.dati].find(function(x){ return String(x[S.pk]) === String(id); }) || {}) : Object.assign({}, base || {});
+  _ct = { chiave: chiave, id: id, base: base || {} };
+  var en = [];
+  S.campi.forEach(function(c){ if(c.en) en.push({ k: c.k + '_en', et: c.et, t: c.t, r: c.r, m: c.m, per: c.per }); });
+  var extra = '';
+  if(chiave === 'momenti') extra = id != null ? '<div class="sec-title">Prodotti da prendere insieme</div><div id="ctVoci"></div>' : '<div class="hint" style="margin:8px 4px">Salva il momento: poi potrai scegliere i prodotti da proporre insieme.</div>';
+  apriSheet('shCt', { titolo: (id != null ? 'Modifica ' : 'Nuovo ') + S.nome, alto: true,
+    corpo: S.campi.map(function(c){ return ctCampo(c, v); }).join('') + extra +
+      (en.length ? '<details style="margin:12px 0"><summary style="font-weight:600;cursor:pointer;padding:6px 0">In inglese (facoltativo)</summary>' + en.map(function(c){ return ctCampo(c, v); }).join('') + '</details>' : ''),
+    piede: '<div class="btn-row">' + (id != null && !(chiave === 'pagine' && id === 'home') ? '<button class="btn btn-d" onclick="ctElimina()">Elimina</button>' : '') + '<button class="btn btn-s" onclick="chiudiSheet(\'shCt\')">Annulla</button><button class="btn btn-p" id="ctSalva" onclick="ctSalva()">Salva</button></div>' });
+  ctMostra(); if(chiave === 'momenti' && id != null) ctVoci();
+}
+async function ctFoto(inp, k){
+  var file = inp.files && inp.files[0]; if(!file) return;
+  toast('Preparo la foto…');
+  try{
+    var f = await preparaFoto(file), path = await caricaFoto(f, 'pagina', f.adattaGrande);
+    var url = FOTO_URL + (f.adattaGrande ? path.replace(/-320\.(webp|jpg)$/, '-1200.$1') : path);
+    document.getElementById('ct_' + k).value = url; document.getElementById('ct_' + k + 'Box').innerHTML = ctFotoHtml(url);
+    toast('✓ Foto caricata. Scrivi la descrizione e salva.');
+  }catch(e){ toast('⚠️ ' + e.message); }
+  inp.value = '';
+}
+function ctTogliFoto(k){ document.getElementById('ct_' + k).value = ''; document.getElementById('ct_' + k + 'Box').innerHTML = ctFotoHtml(''); }
+var CT_NULLABILI = ['foto_url', 'link_url', 'link_pagina', 'dalle', 'alle'];
+async function ctSalva(){
+  var S = CT[_ct.chiave], corpo = {}, tutti = S.campi.concat(S.campi.filter(function(c){ return c.en; }).map(function(c){ return { k: c.k + '_en' }; }));
+  tutti.forEach(function(c){
+    var el = document.getElementById('ct_' + c.k); if(!el) return;
+    var x = el.type === 'checkbox' ? el.checked : el.value.trim();
+    if(x === '' && CT_NULLABILI.indexOf(c.k) >= 0) x = null;
+    corpo[c.k] = x;
+  });
+  if(_ct.chiave === 'blocchi'){
+    if(corpo.foto_url && !corpo.foto_alt){ toast('Scrivi la descrizione della foto'); return; }
+    if(!corpo.titolo && !corpo.testo && !corpo.foto_url && !corpo.link_pagina){ toast('Il blocco è vuoto: scrivi qualcosa o scegli una foto'); return; }
+    if(corpo.tipo === 'link_pagina' && !corpo.link_pagina){ toast('Scegli la pagina a cui porta'); return; }
+  }
+  if(_ct.chiave === 'momenti'){
+    if(!corpo.nome){ toast('Dai un nome al momento'); return; }
+    if(corpo.quando === 'orario' && (!corpo.dalle || !corpo.alle)){ toast('Indica da che ora a che ora'); return; }
+    if(corpo.quando === 'chiuso'){ corpo.dalle = null; corpo.alle = null; }
+    if(corpo.foto_url && !corpo.foto_alt){ toast('Scrivi la descrizione della foto'); return; }
+  }
+  if(!(corpo.posizione) && _ct.chiave === 'blocchi') corpo.posizione = 'dopo_sezioni';
+  var nuovo = _ct.id == null;
+  if(nuovo){ Object.assign(corpo, _ct.base); if(S.pk === 'id') corpo.ordine = ctMax(D[S.dati].filter(function(x){ return _ct.chiave !== 'blocchi' || x.pagina === _ct.base.pagina; })) + 10; }
+  var b = document.getElementById('ctSalva'); if(b) b.disabled = true;
+  try{
+    var r = await api(S.tab + (nuovo ? '' : '?' + S.pk + '=eq.' + encodeURIComponent(_ct.id)), { method: nuovo ? 'POST' : 'PATCH', prefer: 'return=representation', body: corpo });
+    await caricaContenuti(); chiudiSheet('shCt'); toast('✓ Salvato');
+    if(nuovo && _ct.chiave === 'momenti' && r && r[0]) ctApri('momenti', r[0].id); else S.mostra();
+  }catch(e){ if(b) b.disabled = false; toast('⚠️ ' + e.message); }
+}
+async function ctElimina(){
+  var S = CT[_ct.chiave], extra = _ct.chiave === 'pagine' ? ' Verranno eliminati anche i suoi blocchi.' : '';
+  if(!await conferma('Eliminare questo ' + S.nome + '?', 'Sparisce dal menu dei clienti.' + extra + ' Lo ritrovi nello Storico delle modifiche, da dove puoi ripristinarlo.', 'Elimina', true)) return;
+  try{ await api(S.tab + '?' + S.pk + '=eq.' + encodeURIComponent(_ct.id), { method: 'DELETE', prefer: 'return=minimal' }); await caricaContenuti(); chiudiSheet('shCt'); toast('✓ Eliminato'); S.mostra(); }
+  catch(e){ toast('⚠️ ' + e.message); }
+}
+
+/* scelta di un prodotto */
+function ctScegliVoce(cb, titolo){
+  var voci = D.voci.filter(function(v){ return v.stato !== 'archiviato'; });
+  function disegna(q){
+    var n = norm(q), l = (n ? voci.filter(function(v){ return norm(v.nome).indexOf(n) >= 0; }) : voci).slice(0, 40);
+    corpoSheet('shSc').querySelector('#scLista').innerHTML = l.length ? '<div class="grp">' + l.map(function(v){ return '<button class="row" data-id="' + v.id + '"><div class="row-main"><div class="row-t">' + esc(v.nome) + '</div><div class="row-s">' + esc(ctNomeCat(v.categoria_id)) + '</div></div></button>'; }).join('') + '</div>' : '<div class="hint">Nessun prodotto trovato</div>';
+    corpoSheet('shSc').querySelectorAll('[data-id]').forEach(function(b){ b.onclick = function(){ chiudiSheet('shSc'); cb(+b.dataset.id); }; });
+  }
+  apriSheet('shSc', { titolo: titolo || 'Scegli un prodotto', alto: true, corpo: '<div class="field"><input class="inp" id="scQ" placeholder="Cerca per nome" autocomplete="off"></div><div id="scLista"></div>' });
+  var i = document.getElementById('scQ'); i.oninput = function(){ disegna(i.value); }; disegna(''); setTimeout(function(){ try{ i.focus(); }catch(e){} }, 80);
+}
+
+/* pagine e blocchi */
+function apriPagine(){
+  var righe = D.pagine.slice().sort(function(a, b){ return (a.codice === 'home' ? -1 : b.codice === 'home' ? 1 : ctOrd(a, b)); });
+  apriSheet('shPag', { titolo: 'Pagine e blocchi', alto: true,
+    corpo: '<div class="hint" style="margin:0 4px 10px">La pagina principale è quella che il cliente vede aprendo il menu. Puoi aggiungere altre pagine (per esempio una vetrina di un prodotto) e collegarle con un blocco.</div><div class="grp">' +
+      righe.map(function(p){ var n = D.blocchi.filter(function(b){ return b.pagina === p.codice; }).length;
+        return '<div class="row voce" role="button" tabindex="0" onclick="apriPagina(\'' + p.codice + '\')"><div class="row-main"><div class="row-t">' + esc(p.codice === 'home' ? 'Pagina principale' : (p.titolo || p.codice)) + '</div><div class="row-s">' + n + (n === 1 ? ' blocco' : ' blocchi') + '</div></div>' + ctBdg(p.attiva, 'Nascosta') + '<span class="chev">›</span></div>'; }).join('') + '</div>' +
+      '<button class="btn btn-s" onclick="ctNuovaPagina()">＋ Nuova pagina</button>' });
+}
+async function ctNuovaPagina(){
+  var nome = await chiediTesto('Nuova pagina', 'Titolo della pagina', '', 'Es. Il nostro aperitivo'); if(!nome) return;
+  var cod = nome.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'pagina', base = cod, n = 2;
+  while(D.pagine.some(function(p){ return p.codice === cod; })) cod = base.slice(0, 36) + '-' + (n++);
+  try{ await api('menu_pagine', { method: 'POST', prefer: 'return=minimal', body: { codice: cod, titolo: nome, ordine: ctMax(D.pagine) + 10 } }); await caricaContenuti(); toast('✓ Pagina creata'); apriPagina(cod); }
+  catch(e){ toast('⚠️ ' + e.message); }
+}
+function apriPagina(cod){
+  _ctPag = cod; var home = cod === 'home', p = D.pagine.find(function(x){ return x.codice === cod; }) || {};
+  chiudiSheet('shPag', true); chiudiSheet('shCt', true);
+  function riga(b, i, n, gr){
+    var t = CT_TIPI.find(function(x){ return x[0] === b.tipo; });
+    return '<div class="row voce" role="button" tabindex="0" onclick="ctApri(\'blocchi\',' + b.id + ')"><div class="row-main"><div class="row-t">' + esc(b.titolo || (b.testo || '').slice(0, 40) || '(senza titolo)') + '</div><div class="row-s">' + esc(t ? t[1] : b.tipo) + '</div></div>' + ctBdg(b.attivo) + ctFreccie('blocchi', b.id, i, n, gr) + '</div>';
+  }
+  var tutti = D.blocchi.filter(function(b){ return b.pagina === cod; }), h = '';
+  if(home){
+    h += '<div class="hint" style="margin:0 4px 10px">In automatico la pagina principale mostra anche il momento della giornata, le proposte e le sezioni del menu. I blocchi si aggiungono intorno a queste parti.</div>';
+    CT_POS.forEach(function(ps){ var l = tutti.filter(function(b){ return b.posizione === ps[0]; }).sort(ctOrd);
+      h += '<div class="sec-title">' + esc(ps[1]) + '</div>' + (l.length ? '<div class="grp">' + l.map(function(b, i){ return riga(b, i, l.length, ps[0]); }).join('') + '</div>' : '<div class="hint" style="margin:0 4px 6px">Nessun blocco</div>'); });
+  }else{
+    var l = tutti.sort(ctOrd); h += (l.length ? '<div class="grp">' + l.map(function(b, i){ return riga(b, i, l.length, ''); }).join('') + '</div>' : '<div class="hint" style="margin:0 4px 10px">Pagina vuota: aggiungi il primo blocco.</div>');
+  }
+  apriSheet('shPg', { titolo: home ? 'Pagina principale' : (p.titolo || cod), alto: true, indietro: 'Pagine', onIndietro: apriPagine,
+    corpo: h + '<button class="btn btn-s" onclick="ctApri(\'blocchi\',null,{pagina:\'' + cod + '\'})">＋ Nuovo blocco</button>' + (home ? '' : '<button class="btn btn-s" style="margin-top:8px" onclick="ctApri(\'pagine\',\'' + cod + '\')">Titolo, visibilità o eliminazione della pagina</button>') });
+}
+
+/* momenti della giornata */
+function ctVoci(){
+  var el = document.getElementById('ctVoci'); if(!el || !_ct) return;
+  var l = D.momVoci.filter(function(x){ return x.momento_id === _ct.id; }).sort(ctOrd);
+  el.innerHTML = (l.length ? '<div class="grp">' + l.map(function(x){ return '<div class="row"><div class="row-main"><div class="row-t">' + esc(ctNomeVoce(x.voce_id)) + '</div></div><button class="btn-sm r" onclick="ctTogliVoce(' + x.id + ')">Togli</button></div>'; }).join('') + '</div>' : '<div class="hint">Nessun prodotto scelto</div>') +
+    '<button class="btn btn-s" style="margin-top:8px" onclick="ctAggiungiVoce()">＋ Aggiungi prodotto</button>';
+}
+function ctAggiungiVoce(){
+  var mid = _ct.id;
+  ctScegliVoce(async function(vid){
+    if(D.momVoci.some(function(x){ return x.momento_id === mid && x.voce_id === vid; })){ toast('Già presente'); return; }
+    try{ await api('menu_momenti_voci', { method: 'POST', prefer: 'return=minimal', body: { momento_id: mid, voce_id: vid, ordine: ctMax(D.momVoci.filter(function(x){ return x.momento_id === mid; })) + 10 } }); await caricaContenuti(); ctVoci(); }
+    catch(e){ toast('⚠️ ' + e.message); }
+  }, 'Prodotto da proporre');
+}
+async function ctTogliVoce(id){
+  try{ await api('menu_momenti_voci?id=eq.' + id, { method: 'DELETE', prefer: 'return=minimal' }); await caricaContenuti(); ctVoci(); }catch(e){ toast('⚠️ ' + e.message); }
+}
+function apriMomenti(){
+  var l = D.momenti.slice().sort(ctOrd);
+  apriSheet('shMom', { titolo: 'Momenti della giornata', alto: true,
+    corpo: '<div class="hint" style="margin:0 4px 10px">Il menu si apre su ciò che ha senso adesso: ogni momento ha saluto, consiglio e prodotti da prendere insieme. Se due fasce si sovrappongono vale la prima della lista. Con nessun momento attivo il menu si apre senza consiglio.</div>' +
+      (l.length ? '<div class="grp">' + l.map(function(m, i){ var n = D.momVoci.filter(function(x){ return x.momento_id === m.id; }).length;
+        return '<div class="row voce" role="button" tabindex="0" onclick="chiudiSheet(\'shMom\');ctApri(\'momenti\',' + m.id + ')"><div class="row-main"><div class="row-t">' + esc(m.nome) + '</div><div class="row-s">' + (m.quando === 'chiuso' ? 'Quando il locale è chiuso' : (m.dalle || '').slice(0, 5) + ' – ' + (m.alle || '').slice(0, 5)) + ' · ' + n + (n === 1 ? ' prodotto' : ' prodotti') + '</div></div>' + ctBdg(m.attivo) + ctFreccie('momenti', m.id, i, l.length, '') + '</div>'; }).join('') + '</div>' : '') +
+      '<button class="btn btn-s" onclick="chiudiSheet(\'shMom\');ctApri(\'momenti\',null)">＋ Nuovo momento</button>' });
+}
+
+/* abbinamenti e consigli */
+var CT_KIND = { abb_voce: ['Abbinamento di un prodotto', 'Quando il cliente guarda questo prodotto, proponi:'], abb_cat: ['Abbinamento di una categoria', 'Per tutti i prodotti di questa categoria, proponi:'], consiglio: ['Consiglio della categoria', 'In cima a questa categoria metti il consiglio:'] };
+CT.racc = { tab: 'menu_raccomandazioni', pk: 'id', dati: 'racc', mostra: function(){ apriRacc(); } };
+function ctKind(r){ return r.tipo === 'consiglio_categoria' ? 'consiglio' : (r.voce_id ? 'abb_voce' : 'abb_cat'); }
+function apriRacc(){
+  chiudiSheet('shCr', true);
+  var h = '<div class="hint" style="margin:0 4px 10px">Gli abbinamenti compaiono nella scheda del prodotto («Il nostro abbinamento»); il consiglio della categoria sta in cima alla categoria. L\'ordine conta: i primi sono quelli mostrati.</div>';
+  ['abb_voce', 'abb_cat', 'consiglio'].forEach(function(k){
+    var l = D.racc.filter(function(r){ return ctKind(r) === k; });
+    h += '<div class="sec-title">' + CT_KIND[k][0] + '</div>' + (l.length ? '<div class="grp">' + l.sort(function(a, b){ return (a.voce_id || a.categoria_id) - (b.voce_id || b.categoria_id) || ctOrd(a, b); }).map(function(r){
+      var gr = r.tipo + ':' + (r.voce_id || '') + ':' + (r.categoria_id || ''), fr = D.racc.filter(function(x){ return x.tipo + ':' + (x.voce_id || '') + ':' + (x.categoria_id || '') === gr; }).sort(ctOrd), i = fr.indexOf(r);
+      return '<div class="row voce" role="button" tabindex="0" onclick="ctRaccForm(\'' + k + '\',' + r.id + ')"><div class="row-main"><div class="row-t">' + esc(r.voce_id ? ctNomeVoce(r.voce_id) : ctNomeCat(r.categoria_id)) + ' → ' + esc(ctNomeVoce(r.target_voce_id)) + '</div></div>' + ctBdg(r.attivo, 'Spento') + ctFreccie('racc', r.id, i, fr.length, gr) + '</div>'; }).join('') + '</div>' : '<div class="hint" style="margin:0 4px 6px">Nessuno</div>') +
+      '<button class="btn btn-s" onclick="ctRaccForm(\'' + k + '\',null)">＋ ' + CT_KIND[k][0] + '</button>';
+  });
+  apriSheet('shRac', { titolo: 'Abbinamenti e consigli', alto: true, corpo: h });
+}
+var _cr = null;
+function ctRaccForm(k, id){
+  var r = id != null ? D.racc.find(function(x){ return x.id === id; }) || {} : {};
+  _cr = { k: k, id: id, voce: r.voce_id || null, cat: r.categoria_id || null, target: r.target_voce_id || null };
+  chiudiSheet('shRac', true);
+  var catOpz = D.categorie.filter(function(c){ return c.stato !== 'archiviato'; }).map(function(c){ var s = D.sezioni.find(function(x){ return x.id === c.sezione_id; });
+    return '<option value="' + c.id + '"' + (c.id === _cr.cat ? ' selected' : '') + '>' + esc((s ? s.nome + ' · ' : '') + c.nome) + '</option>'; }).join('');
+  apriSheet('shCr', { titolo: CT_KIND[k][0], alto: true, indietro: 'Elenco', onIndietro: apriRacc,
+    corpo: '<div class="field"><label>' + (k === 'abb_voce' ? 'Prodotto' : 'Categoria') + '</label>' +
+        (k === 'abb_voce' ? '<button type="button" class="btn btn-s" id="crVoce" onclick="ctRaccScegli(\'voce\')"></button>' : '<select class="inp" id="crCat"><option value="">— scegli —</option>' + catOpz + '</select>') + '</div>' +
+      '<div class="field"><label>' + CT_KIND[k][1] + '</label><button type="button" class="btn btn-s" id="crTarget" onclick="ctRaccScegli(\'target\')"></button></div>' +
+      '<div class="field"><label for="crNota">Nota (facoltativa)</label><input class="inp" id="crNota" maxlength="120" value="' + esc(r.nota || '') + '"></div>' +
+      '<div class="field"><label for="crNotaEn">Nota in inglese (facoltativa)</label><input class="inp" id="crNotaEn" maxlength="120" value="' + esc(r.nota_en || '') + '"></div>' +
+      '<div class="grp" style="box-shadow:none;border:1px solid var(--sep2)"><div class="row"><div class="row-main"><div class="row-t">Visibile ai clienti</div></div><label class="tgl"><input type="checkbox" id="crAttivo"' + (r.attivo === false ? '' : ' checked') + '><span></span></label></div></div>',
+    piede: '<div class="btn-row">' + (id != null ? '<button class="btn btn-d" onclick="ctRaccElimina()">Elimina</button>' : '') + '<button class="btn btn-s" onclick="chiudiSheet(\'shCr\');apriRacc()">Annulla</button><button class="btn btn-p" id="crSalva" onclick="ctRaccSalva()">Salva</button></div>' });
+  ctRaccEtichette();
+}
+function ctRaccEtichette(){
+  var a = document.getElementById('crVoce'), b = document.getElementById('crTarget');
+  if(a) a.textContent = _cr.voce ? ctNomeVoce(_cr.voce) : 'Scegli il prodotto…';
+  if(b) b.textContent = _cr.target ? ctNomeVoce(_cr.target) : 'Scegli il prodotto…';
+}
+function ctRaccScegli(cosa){ ctScegliVoce(function(id){ _cr[cosa] = id; ctRaccEtichette(); }); }
+async function ctRaccSalva(){
+  var catEl = document.getElementById('crCat'); if(catEl) _cr.cat = catEl.value ? +catEl.value : null;
+  if(_cr.k === 'abb_voce' && !_cr.voce){ toast('Scegli il prodotto'); return; }
+  if(_cr.k !== 'abb_voce' && !_cr.cat){ toast('Scegli la categoria'); return; }
+  if(!_cr.target){ toast('Scegli il prodotto da proporre'); return; }
+  if(_cr.voce && _cr.voce === _cr.target){ toast('Il prodotto non può essere abbinato a se stesso'); return; }
+  var corpo = { tipo: _cr.k === 'consiglio' ? 'consiglio_categoria' : 'abbinamento', voce_id: _cr.k === 'abb_voce' ? _cr.voce : null, categoria_id: _cr.k === 'abb_voce' ? null : _cr.cat, target_voce_id: _cr.target,
+    nota: document.getElementById('crNota').value.trim(), nota_en: document.getElementById('crNotaEn').value.trim(), attivo: document.getElementById('crAttivo').checked };
+  if(_cr.id == null) corpo.ordine = ctMax(D.racc) + 10;
+  try{ await api('menu_raccomandazioni' + (_cr.id == null ? '' : '?id=eq.' + _cr.id), { method: _cr.id == null ? 'POST' : 'PATCH', prefer: 'return=minimal', body: corpo }); await caricaContenuti(); toast('✓ Salvato'); chiudiSheet('shCr', true); apriRacc(); }
+  catch(e){ toast(e.codice === '23505' ? 'Questo abbinamento esiste già' : '⚠️ ' + e.message); }
+}
+async function ctRaccElimina(){
+  if(!await conferma('Eliminare?', 'Sparisce dal menu dei clienti. Lo ritrovi nello Storico delle modifiche, da dove puoi ripristinarlo.', 'Elimina', true)) return;
+  try{ await api('menu_raccomandazioni?id=eq.' + _cr.id, { method: 'DELETE', prefer: 'return=minimal' }); await caricaContenuti(); toast('✓ Eliminato'); chiudiSheet('shCr', true); apriRacc(); }catch(e){ toast('⚠️ ' + e.message); }
+}
+
+/* testi dell'interfaccia: lasciando vuoto vale la scritta neutra mostrata sotto */
+var CT_TESTI = [
+  ['aggiungi', 'Pulsante «Aggiungi»', 'Aggiungi'], ['abbinamento', 'Titolo degli abbinamenti', 'Abbinamento'], ['consiglio', 'Titolo del consiglio della categoria', 'Consiglio'],
+  ['proposte', 'Titolo delle proposte del giorno', 'Proposte di oggi'], ['scorri', 'Invito a scorrere', 'Scorri'], ['ordinazione', 'Titolo del riepilogo ordinazione', 'Il mio ordine'],
+  ['ordinazione_intro', 'Frase del riepilogo per il cameriere', 'Vorrei:'], ['mostra_altre', 'Pulsante «mostra altre voci»', 'Mostra altre'],
+  ['cerca', 'Segnaposto della ricerca', 'Cerca nel menu'], ['allergeni', 'Avviso sugli allergeni', 'In caso di allergie o intolleranze chiedi al personale.']
+];
+function apriTesti(){
+  var t = config().testi || {};
+  apriSheet('shTes', { titolo: 'Testi dell\'interfaccia', alto: true,
+    corpo: '<div class="hint" style="margin:0 4px 10px">Le piccole scritte fisse del menu. Se lasci vuoto, il menu usa la scritta neutra indicata come esempio.</div>' +
+      CT_TESTI.map(function(x){ var v = t[x[0]] || {};
+        return '<div class="field"><label>' + x[1] + '</label><input class="inp" id="tes_' + x[0] + '" maxlength="120" placeholder="' + esc(x[2]) + '" value="' + esc(v.it || '') + '"><input class="inp" id="tes_' + x[0] + '_en" maxlength="120" placeholder="In inglese" style="margin-top:6px" value="' + esc(v.en || '') + '"></div>'; }).join(''),
+    piede: '<div class="btn-row"><button class="btn btn-s" onclick="chiudiSheet(\'shTes\')">Annulla</button><button class="btn btn-p" onclick="ctSalvaTesti()">Salva</button></div>' });
+}
+async function ctSalvaTesti(){
+  var t = {}; CT_TESTI.forEach(function(x){ var it = document.getElementById('tes_' + x[0]).value.trim(), en = document.getElementById('tes_' + x[0] + '_en').value.trim(); if(it || en) t[x[0]] = { it: it, en: en }; });
+  try{ var nuova = Object.assign({}, config(), { testi: t }); await api('moduli?codice=eq.menu', { method: 'PATCH', prefer: 'return=minimal', body: { configurazione: nuova } }); D.modulo.configurazione = nuova; chiudiSheet('shTes'); toast('✓ Testi salvati'); }
+  catch(e){ toast('⚠️ ' + e.message); }
+}
+
 /* storico */
-var NOMI_TAB = { menu_voci: 'Voce', menu_categorie: 'Categoria', menu_sezioni: 'Sezione', menu_varianti: 'Variante', menu_disponibilita: 'Fascia oraria', menu_voci_allergeni: 'Allergene', moduli: 'Impostazioni', locale: 'Locale' };
+var NOMI_TAB = { menu_voci: 'Voce', menu_categorie: 'Categoria', menu_sezioni: 'Sezione', menu_varianti: 'Variante', menu_disponibilita: 'Fascia oraria', menu_voci_allergeni: 'Allergene', menu_pagine: 'Pagina', menu_blocchi: 'Blocco', menu_raccomandazioni: 'Abbinamento o consiglio', menu_momenti: 'Momento', menu_momenti_voci: 'Prodotto del momento', moduli: 'Impostazioni', locale: 'Locale' };
 var CAMPI_IT = { nome: 'nome', descrizione: 'descrizione', prezzo_cent: 'prezzo', stato: 'stato', proposta_giorno: 'proposta del giorno', proposta_posizione: 'dove la proposta', foto_path: 'foto', foto_alt: 'descrizione foto', badge: 'etichette', esaurito_fino: 'finito per oggi', allergeni_verificati_il: 'verifica allergeni', in_evidenza: 'in evidenza', ordine: 'ordine', categoria_id: 'categoria', sezione_id: 'sezione', nome_en: 'nome inglese', descrizione_en: 'descrizione inglese', note: 'note', configurazione: 'aspetto/etichette', delta_cent: 'supplemento', giorni: 'giorni', orari: 'orari' };
 var SISTEMA = ['aggiornato_il', 'aggiornato_da', 'creato_il', 'verificato_da', 'allergeni_verificati_da'];
 var _stor = [];
@@ -1831,7 +2144,7 @@ async function apriStorico(){
   b.innerHTML = _stor.length ? '<div class="hint" style="margin:0 4px 10px">Ultime 150 modifiche. «Ripristina» rimette la riga com\'era prima di quella modifica.</div><div class="grp">' + _stor.map(function(r, i){
     var dati = r.dopo || r.prima || {}, nome = dati.nome || (r.tabella === 'menu_voci_allergeni' ? (D.allergeni.find(function(a){ return a.id === dati.allergene_id; }) || {}).nome + ' su ' + ((voceDi(dati.voce_id) || {}).nome || 'voce ' + dati.voce_id) : '#' + r.riga_id);
     var cosa = r.azione === 'inserimento' ? 'creata' : r.azione === 'eliminazione' ? 'eliminata' : 'modificati: ' + campiCambiati(r.prima, r.dopo).map(function(k){ return CAMPI_IT[k] || k; }).join(', ');
-    var puo = (r.azione !== 'inserimento') && ['menu_voci', 'menu_categorie', 'menu_sezioni', 'menu_varianti', 'menu_disponibilita', 'menu_voci_allergeni', 'locale'].indexOf(r.tabella) >= 0;
+    var puo = (r.azione !== 'inserimento') && ['menu_voci', 'menu_categorie', 'menu_sezioni', 'menu_varianti', 'menu_disponibilita', 'menu_voci_allergeni', 'menu_pagine', 'menu_blocchi', 'menu_raccomandazioni', 'menu_momenti', 'menu_momenti_voci', 'locale'].indexOf(r.tabella) >= 0;
     return '<div class="row"><div class="row-main"><div class="row-t">' + esc((NOMI_TAB[r.tabella] || r.tabella) + ' · ' + nome) + '</div><div class="row-s">' + esc(cosa) + ' · ' + quando(r.quando) + '</div></div>' +
       (puo ? '<button class="btn-sm" onclick="ripristina(' + i + ')">Ripristina</button>' : '') + '</div>';
   }).join('') + '</div>' : '<div class="empty"><div class="ei">🕘</div><b>Ancora nessuna modifica</b></div>';
