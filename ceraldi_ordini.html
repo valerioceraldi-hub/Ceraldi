@@ -2357,8 +2357,10 @@ async function chiamaClaude(contenuto, maxTok){
   var d = await resp.json().catch(function(){ return {}; });
   if(!resp.ok || d.error) throw new Error((d.error && d.error.message) || ('IA: errore ' + resp.status));
   var tb = (d.content || []).find(function(b){ return b.type === 'text'; });
+  _ultimoStopIA = d.stop_reason || '';
   return tb ? tb.text : '';
 }
+var _ultimoStopIA = '';
 function jsonDaTesto(t){
   t = String(t || '').replace(/```json|```/g, '').trim();
   var i = t.search(/[\[{]/); if(i > 0) t = t.slice(i);
@@ -6441,7 +6443,14 @@ async function leggiImport(){
       var tipo = f.type === 'application/pdf' ? 'document' : 'image', mt = f.type || (tipo === 'document' ? 'application/pdf' : 'image/jpeg');
       st.innerHTML = '<div class="loading"><span class="spinner"></span>L\'intelligenza artificiale sta leggendo il documento… (può volerci un minuto)</div>';
       var testo = await chiamaClaude([{ type: tipo, source: { type: 'base64', media_type: mt, data: b64 } }, { type: 'text', text: 'Estrai TUTTI i prodotti con prezzo da questo listino/preventivo/fattura del fornitore "' + IMP.forn + '". Rispondi SOLO con un array JSON: [{"nome":"descrizione completa con marca e formato","conf":"confezione o unità (es. CT, BT, PZ, KG) o vuoto","prezzo":12.34,"codice":"codice articolo o vuoto"}]. Prezzo unitario come numero, punto decimale, senza simbolo. Non inventare righe e non saltarne.' }], 16000);
-      var arr = jsonDaTesto(testo); if(!Array.isArray(arr) || !arr.length) throw new Error('Nessun prodotto trovato nel documento');
+      var arr;
+      try{ arr = jsonDaTesto(testo); }catch(errParse){
+        // La risposta dell'IA non è un JSON completo: la dico chiara invece del messaggio tecnico del parser
+        throw new Error(_ultimoStopIA === 'max_tokens'
+          ? 'Il documento è troppo lungo per una sola lettura: dividi il PDF in parti più piccole (es. metà pagine) e importale una alla volta.'
+          : 'L\'IA ha restituito una risposta incompleta (' + (_ultimoStopIA || 'motivo sconosciuto') + '). Riprova; se si ripete, prova con un file Excel o CSV.');
+      }
+      if(!Array.isArray(arr) || !arr.length) throw new Error('Nessun prodotto trovato nel documento');
       IMP.righe = arr.map(function(x){ return { nome: maiusc(x.nome), conf: x.conf || '', prezzo: numIt(x.prezzo), codice: x.codice || '' }; }).filter(function(x){ return x.nome && x.prezzo > 0; });
       if(IMP.modo === 'solo'){ await salvaSoloListino(); return; }
       await confrontaImport();
