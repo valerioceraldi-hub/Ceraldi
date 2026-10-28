@@ -6,8 +6,11 @@ async function pag(dir,fn){const p=await b.newPage({viewport:{width:390,height:8
 await pag('out',async p=>{
  const t=async s=>(await p.locator(s).first().textContent().catch(()=>''));
  ok('saluto', /Buongiorno/.test(await t('.cop h1')));
- ok('nome locale', /Trattoria Prova/i.test(await t('.cop .nome')));
+ ok('nome locale (in testo o nel logo)', /Trattoria Prova/i.test(await t('.cop .nome')) || /Trattoria Prova/i.test((await p.locator('.cop img.logo').first().getAttribute('alt').catch(()=>''))||''));
  ok('blocco alto', /Benvenuti/.test(await t('.cop')));
+ ok('testata: logo da blocco con ruolo', await p.locator('.cop img.logo').count()===1 && (await p.locator('.cop img.logo').getAttribute('alt'))==='Logo della Trattoria Prova');
+ ok('testata: sfondo da blocco con ruolo', await p.locator('.cop img.sf').count()===1);
+ ok('testata: i blocchi con ruolo non compaiono due volte', await p.locator('.blk img[src*="logo.svg"], .blk img[src*="sala.webp"]').count()===0);
  ok('momento + prezzo somma', /Metti nel piatto · 14/.test(await t('.mom .cta .btn')));
  ok('proposta home', await p.locator('#pista .pc').count()===1);
  ok('2 sezioni', await p.locator('.tav').count()===2);

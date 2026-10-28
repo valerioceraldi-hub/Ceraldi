@@ -98,7 +98,7 @@ def costruisci(src, lingua, foto_base, esiste=None):
     pagine = {}
     for p in ordina(src['menu_pagine']):
         if p.get('attiva') is False: continue
-        bl = [{'tipo': b['tipo'], 'pos': b['posizione'], 'sopra': L(b, 'sopratitolo'), 'titolo': L(b, 'titolo'), 'testo': L(b, 'testo'), 'f': b.get('foto_url'),
+        bl = [{'tipo': b['tipo'], 'pos': b['posizione'], 'ruolo': ((b.get('stile') or {}).get('ruolo') if p['codice'] == 'home' and b['posizione'] == 'alto' and (b.get('stile') or {}).get('ruolo') in ('logo', 'sfondo') else None), 'sopra': L(b, 'sopratitolo'), 'titolo': L(b, 'titolo'), 'testo': L(b, 'testo'), 'f': b.get('foto_url'),
                'fa': L(b, 'foto_alt'), 'lt': L(b, 'link_testo'), 'lu': b.get('link_url'), 'lp': b.get('link_pagina')} for b in ordina(src['menu_blocchi']) if b['pagina'] == p['codice'] and b.get('attivo') is not False]
         pagine[p['codice']] = {'titolo': L(p, 'titolo'), 'blocchi': bl}
     for b in pagine.values():
