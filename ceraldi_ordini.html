@@ -2346,10 +2346,10 @@ async function secondoParereIA(voci){
    chi ha un account abilitato a Ordini. La vecchia chiave salvata qui si cancella. */
 try{ localStorage.removeItem('ceraldi_apikey'); }catch(e){}
 function chiaveAI(){ return (typeof _authSess !== 'undefined' && _authSess && _authSess.access_token) ? 'server' : ''; }
-async function chiamaClaude(contenuto, maxTok){
+async function chiamaClaude(contenuto, maxTok, messaggi){
   if(!chiaveAI()) throw new Error('Per usare l\'IA accedi con il tuo account');
   try{ await _authPronto(); }catch(e){}
-  var corpo = JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: maxTok || 4000, messages: [{ role: 'user', content: contenuto }] });
+  var corpo = JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: maxTok || 4000, messages: messaggi || [{ role: 'user', content: contenuto }] });
   var invia = function(){ return fetch(SB_URL + '/functions/v1/ia?app=ordini', { method: 'POST',
     headers: { 'Content-Type': 'application/json', apikey: SB_KEY, Authorization: 'Bearer ' + _authToken() }, body: corpo }); };
   var resp = await invia();
@@ -2361,6 +2361,22 @@ async function chiamaClaude(contenuto, maxTok){
   return tb ? tb.text : '';
 }
 var _ultimoStopIA = '';
+/* Legge un listino anche lungo: se la risposta dell'IA si interrompe a metà,
+   tiene gli oggetti completi già ricevuti e chiede il seguito, finché la lista è chiusa. */
+async function estraiListinoCompleto(blocchi){
+  var s = '';
+  for(var giro = 0; giro < 8; giro++){
+    var msgs = [{ role: 'user', content: blocchi }];
+    if(s) msgs.push({ role: 'assistant', content: s });
+    var t = await chiamaClaude(null, 16000, msgs);
+    s += t;
+    if(_ultimoStopIA !== 'max_tokens') return s;
+    var fine = s.lastIndexOf('}');
+    if(fine < 0) break;
+    s = s.slice(0, fine + 1);
+  }
+  throw new Error('Il documento è molto lungo: non sono riuscito a leggerlo tutto. Prova a importarne una parte alla volta.');
+}
 function jsonDaTesto(t){
   t = String(t || '').replace(/```json|```/g, '').trim();
   var i = t.search(/[\[{]/); if(i > 0) t = t.slice(i);
@@ -6442,13 +6458,10 @@ async function leggiImport(){
       var b64 = await new Promise(function(ok, ko){ var r = new FileReader(); r.onload = function(){ ok(String(r.result).split(',')[1]); }; r.onerror = ko; r.readAsDataURL(f); });
       var tipo = f.type === 'application/pdf' ? 'document' : 'image', mt = f.type || (tipo === 'document' ? 'application/pdf' : 'image/jpeg');
       st.innerHTML = '<div class="loading"><span class="spinner"></span>L\'intelligenza artificiale sta leggendo il documento… (può volerci un minuto)</div>';
-      var testo = await chiamaClaude([{ type: tipo, source: { type: 'base64', media_type: mt, data: b64 } }, { type: 'text', text: 'Estrai TUTTI i prodotti con prezzo da questo listino/preventivo/fattura del fornitore "' + IMP.forn + '". Rispondi SOLO con un array JSON: [{"nome":"descrizione completa con marca e formato","conf":"confezione o unità (es. CT, BT, PZ, KG) o vuoto","prezzo":12.34,"codice":"codice articolo o vuoto"}]. Prezzo unitario come numero, punto decimale, senza simbolo. Non inventare righe e non saltarne.' }], 16000);
+      var testo = await estraiListinoCompleto([{ type: tipo, source: { type: 'base64', media_type: mt, data: b64 } }, { type: 'text', text: 'Estrai TUTTI i prodotti con prezzo da questo listino/preventivo/fattura del fornitore "' + IMP.forn + '". Rispondi SOLO con un array JSON: [{"nome":"descrizione completa con marca e formato","conf":"confezione o unità (es. CT, BT, PZ, KG) o vuoto","prezzo":12.34,"codice":"codice articolo o vuoto"}]. Prezzo unitario come numero, punto decimale, senza simbolo. Non inventare righe e non saltarne.' }]);
       var arr;
       try{ arr = jsonDaTesto(testo); }catch(errParse){
-        // La risposta dell'IA non è un JSON completo: la dico chiara invece del messaggio tecnico del parser
-        throw new Error(_ultimoStopIA === 'max_tokens'
-          ? 'Il documento è troppo lungo per una sola lettura: dividi il PDF in parti più piccole (es. metà pagine) e importale una alla volta.'
-          : 'L\'IA ha restituito una risposta incompleta (' + (_ultimoStopIA || 'motivo sconosciuto') + '). Riprova; se si ripete, prova con un file Excel o CSV.');
+        throw new Error('L\'IA ha restituito una risposta non leggibile. Riprova; se si ripete, prova con un file Excel o CSV.');
       }
       if(!Array.isArray(arr) || !arr.length) throw new Error('Nessun prodotto trovato nel documento');
       IMP.righe = arr.map(function(x){ return { nome: maiusc(x.nome), conf: x.conf || '', prezzo: numIt(x.prezzo), codice: x.codice || '' }; }).filter(function(x){ return x.nome && x.prezzo > 0; });
