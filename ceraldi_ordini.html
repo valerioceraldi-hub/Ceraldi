@@ -461,7 +461,7 @@ function avvisoCreditoIA(){
 </nav>
 
 <script>
-var APP_VERSION='8.16.2';
+var APP_VERSION='8.16.3';
 var BUILD_VERSION=APP_VERSION, BUILD_NUM=APP_VERSION;
 var APP={key:'ordini',nome:'Ordini',versione:APP_VERSION,authKey:'or_auth_v2',oldAuthKey:'ceraldi_ordini_auth_session',
   markBg:'linear-gradient(145deg,#FFC04D 0%,#FF9F0A 50%,#C2410C 100%)',
@@ -3387,7 +3387,7 @@ function renderProdotti(){
   if(l.length > m.length) h += '<button class="btn btn-s" style="margin-top:6px" onclick="VIEW.limite+=100;renderProdotti()">Mostra altri ' + (l.length - m.length) + '</button>';
   var forse = !l.length && VIEW.q && VIEW.q.length >= 3 && !/^\d{8,14}$/.test(VIEW.q) ? RIC.cerca(VIEW.q, { storia: storiaProdotti() }).cand.filter(function(x){ return x.s >= 35; }).slice(0, 6).map(function(x){ return x.c; }) : [];
   if(forse.length) h = '<div class="sec-title">Nessun prodotto con "' + esc(VIEW.q) + '" · forse cercavi</div>' + forse.map(rigaProdotto).join('') + (!U.lettura ? '<button class="btn btn-s" style="margin-top:10px" onclick="apriNuovoProdotto(VIEW.q)">Non è nessuno di questi: crea "' + esc(maiusc(VIEW.q)) + '"</button>' : '');
-  else if(!l.length) h = '<div class="empty"><div class="ei">🔎</div><b>Nessun prodotto</b><p>' + (VIEW.q ? 'Nel catalogo non c\'è "' + esc(VIEW.q) + '".' : 'Niente in questa sezione.') + '</p>' +
+  else if(!l.length) h = '<div class="empty"><div class="ei">🔎</div><b>Nessun prodotto</b><p>' + (VIEW.q ? 'Nel catalogo non c\'è "' + esc(VIEW.q) + '".' : 'Niente in questa sezione.') + '</p><div id="vuotoListino"></div>' +
     (VIEW.q && !U.lettura ? '<button class="btn btn-s" style="margin-top:14px" onclick="apriNuovoProdotto(VIEW.q)">+ Crea "' + esc(maiusc(VIEW.q)) + '"</button>' : '') + '</div>';
   el.innerHTML = h;
   cercaListini();
@@ -3413,31 +3413,52 @@ function renderAvvisiOrdina(){
   el.innerHTML = h;
 }
 // Ricerca anche nei listini caricati dai fornitori (prodotti non ancora a catalogo)
-var _listTimer = null, _listUltima = '';
+var _listTimer = null, _listUltima = '', _listSeq = 0;
+// Se nel catalogo non c'è nulla ma i listini sì, lo dico subito nel riquadro "Nessun prodotto" (ci si accorge subito che esiste)
+function avvisoVuotoListino(){
+  var v = document.getElementById('vuotoListino'); if(!v) return;
+  var n = (window._listRis || []).length;
+  v.innerHTML = n && window._listQ === VIEW.q ? '<div class="banner b" style="margin:12px 0 0;text-align:left"><span>📚</span><div style="flex:1"><strong>Non è a catalogo, ma è nei listini dei fornitori</strong><br>Lo trovi qui sotto: toccando + lo aggiungi al catalogo.</div></div>' : '';
+}
 function cercaListini(){
   var el = document.getElementById('listini'); if(!el) return;
   var q = VIEW.q;
-  if(!q || q.length < 3 || fornDi(q) || /^\d{8,}$/.test(q)){ el.innerHTML = ''; return; }
   clearTimeout(_listTimer);
+  if(!q || q.length < 3 || fornDi(q) || /^\d{8,}$/.test(q)){ _listSeq++; _listUltima = ''; window._listRis = []; el.innerHTML = ''; return; }
+  if(_listUltima === q){ avvisoVuotoListino(); return; }   // già cercato per questa parola: il riquadro resta com'è
   _listTimer = setTimeout(async function(){
-    if(_listUltima === q) return; _listUltima = q;
-    var parole = norm(q).split(' ').filter(function(w){ return w.length >= 2; }).slice(0, 3);
+    if(_listUltima === q || VIEW.q !== q) return; _listUltima = q;
+    var mio = ++_listSeq;   // se nel frattempo parte un'altra ricerca, questa risposta non conta più
+    window._listRis = [];
+    el.innerHTML = '<div class="hint" style="margin:12px 4px;display:flex;gap:8px;align-items:center"><span class="spinner" style="width:14px;height:14px;border-width:2px"></span>Cerco anche nei listini dei fornitori…</div>';
     try{
       var r = await api('rpc/listini_cerca', { method: 'POST', body: { p_q: q, p_source: null, p_limite: 30 } });
-      if(VIEW.q !== q) return;
+      if(mio !== _listSeq) return;
+      // l'elenco dei listini serve per ignorare i prezzi dei listini superati: senza, meglio dire che non ci sono riuscito che mostrare prezzi vecchi
       if(!LST.riep) await caricaRiepilogoListini();
+      if(mio !== _listSeq) return;
+      if(!LST.riep) throw new Error(LST.err || 'Elenco listini non disponibile');
       r = (r || []).filter(function(x){ return prezziListino(x).length && !CAT.some(function(p){ return norm(p.name) === norm(x.name); }) && !nelCatalogo(x); }).slice(0, 12);
-      window._listRis = r;
-      el.innerHTML = r.length ? '<div class="sec-title">Nei listini dei fornitori <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:500">non ancora a catalogo</span><button class="lnk" onclick="apriListini(VIEW.q)">Vedi tutti ›</button></div><div class="grp">' + r.map(function(x, i){
-        var pr = Object.keys(x.prices || {}).map(function(k){ return { f: k, v: num(x.prices[k]) }; }).filter(function(y){ return y.v; }).sort(function(a, b){ return a.v - b.v; })[0];
-        return '<div class="row"><div class="row-main"><div class="row-t" style="font-size:14px">' + evidenzia(x.name, q) + '</div><div class="row-s">' + esc([x.conf, x.source].filter(Boolean).join(' · ')) + '</div></div><div class="row-r"><b style="color:var(--ink)">' + (pr ? eur(pr.v) : '') + '</b></div>' + (U.lettura ? '' : '<button class="add-b" onclick="daListino(' + i + ')">+</button>') + '</div>';
+      window._listRis = r; window._listQ = q;
+      el.innerHTML = r.length ? '<div class="sec-title">📚 Solo nei listini dei fornitori <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:500">non ancora a catalogo</span><button class="lnk" onclick="apriListini(VIEW.q)">Vedi tutti ›</button></div><div class="grp">' + r.map(function(x, i){
+        var pz = prezziListino(x)[0];   // il più basso tra i prezzi validi (i listini superati non contano)
+        var sub = [x.conf, pz && pz.forn, etichettaListino(x) !== (pz && pz.forn) ? etichettaListino(x) : ''].filter(Boolean);
+        return '<div class="row"><div class="row-main"><div class="row-t" style="font-size:14px">' + evidenzia(x.name, q) + '</div><div class="row-s"><span class="bdg b">📚 Solo listino</span> ' + esc(sub.join(' · ')) + '</div></div><div class="row-r"><b style="color:var(--ink)">' + (pz ? eur(pz.v) : '') + '</b></div>' + (U.lettura ? '' : '<button class="add-b" aria-label="Aggiungi al catalogo" onclick="daListino(' + i + ')">+</button>') + '</div>';
       }).join('') + '</div>' : '';
-    }catch(e){ el.innerHTML = ''; }
+      avvisoVuotoListino();
+    }catch(e){
+      if(mio !== _listSeq) return;
+      _listUltima = '';   // così si può riprovare (prima restava bloccato e il riquadro spariva)
+      window._listRis = [];
+      el.innerHTML = '<div class="banner o" style="margin-top:12px"><span>⚠️</span><div style="flex:1"><b>Non sono riuscito a cercare nei listini</b><br><span style="font-size:12.5px">' + esc(e.message) + '</span></div><button class="btn-sm o" onclick="_listUltima=\'\';cercaListini()">Riprova</button></div>';
+      avvisoVuotoListino();
+    }
   }, 350);
 }
 async function daListino(i){
   var x = (window._listRis || [])[i]; if(!x) return;
-  var prices = {}; Object.keys(x.prices || {}).forEach(function(k){ var f = fornDi(k) || fornDi(x.source); if(f && num(x.prices[k])) prices[f.nome] = num(x.prices[k]); });
+  // stessi prezzi che si vedono nella riga: solo listini non superati e fornitori di Ordini (come nuovoDaListino)
+  var prices = {}; prezziListino(x).forEach(function(y){ if(!y.fuori && fornDi(y.forn) && prices[y.forn] == null) prices[y.forn] = y.v; });
   if(!Object.keys(prices).length && fornDi(x.source)){ var v = Object.keys(x.prices || {}).map(function(k){ return num(x.prices[k]); }).filter(Boolean)[0]; if(v) prices[fornDi(x.source).nome] = v; }
   if(!(await conferma('Aggiungere al catalogo?', '<b>' + esc(x.name) + '</b> verrà creato nel catalogo' + (Object.keys(prices).length ? ' con il prezzo di ' + esc(Object.keys(prices).join(', ')) : '') + ' e messo nel carrello.', 'Crea e aggiungi'))) return;
   try{ var p = await nuovoProdotto({ name: x.name, conf: x.conf || '', cat: maiusc(x.cat || ''), prices: prices, settore: VIEW.settore !== 'Tutti' ? VIEW.settore : 'Bar' }); aggiungi(p.id); _listUltima = ''; renderOrdina(); if(p._esistente) toast('Era già in catalogo come ' + nomeBreve(p.name, 34) + ': messo nel carrello quello'); }
@@ -3479,7 +3500,9 @@ function prezziListino(x, tutti){
     return { forn: f.nome, era: f.era, fuori: f.fuori, v: v, superato: superato };
   }).filter(Boolean).sort(function(a, b){ return a.v - b.v; });
 }
-async function caricaRiepilogoListini(){ try{ LST.riep = await api('rpc/listini_riepilogo', { method: 'POST', body: {} }) || []; }catch(e){ LST.riep = LST.riep || []; LST.err = e.message; } return LST.riep; }
+// Se il caricamento fallisce NON memorizzo una lista vuota (resterebbe così per sempre e i prezzi dei listini superati
+// tornerebbero visibili): lascio null, così al prossimo tentativo riprova; il motivo resta in LST.err.
+async function caricaRiepilogoListini(){ try{ LST.riep = await api('rpc/listini_riepilogo', { method: 'POST', body: {} }) || []; LST.err = ''; }catch(e){ LST.err = e.message; } return LST.riep; }
 async function apriListini(q){
   LST.q = q || ''; LST.src = ''; LST.ultima = '';
   apriSheet('shList', { titolo: 'Listini dei fornitori', alto: true, corpo: '<div id="lstTesta"><div class="loading"><span class="spinner"></span></div></div>' +
@@ -3526,7 +3549,7 @@ function cercaNeiListini(subito){
       LST.ris = (r || []).filter(function(x){ return prezziListino(x).length; });   // righe con soli prezzi superati: non le mostro
       el.innerHTML = LST.ris.length ? '<div class="sec-title">' + LST.ris.length + (LST.ris.length >= 60 ? '+' : '') + ' articoli' + (LST.src ? ' in ' + esc(etichettaListino({ source: LST.src })) : '') + '</div><div class="grp">' + LST.ris.map(rigaListino).join('') + '</div>'
         : '<div class="empty"><div class="ei">🔎</div><b>Niente nei listini</b><p>Prova con meno parole o un altro nome.</p></div>';
-    }catch(e){ el.innerHTML = '<div class="banner r"><span>⚠️</span><div>' + esc(e.message) + '</div></div>'; }
+    }catch(e){ if(LST.ultima !== chiave) return; LST.ultima = ''; el.innerHTML = '<div class="banner o"><span>⚠️</span><div style="flex:1"><b>Ricerca non riuscita</b><br><span style="font-size:12.5px">' + esc(e.message) + '</span></div><button class="btn-sm o" onclick="cercaNeiListini(true)">Riprova</button></div>'; }
   }, subito ? 0 : 300);
 }
 // cosa c'è già nel catalogo per questo articolo del listino
