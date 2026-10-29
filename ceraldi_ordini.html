@@ -461,7 +461,7 @@ function avvisoCreditoIA(){
 </nav>
 
 <script>
-var APP_VERSION='8.16.3';
+var APP_VERSION='8.16.4';
 var BUILD_VERSION=APP_VERSION, BUILD_NUM=APP_VERSION;
 var APP={key:'ordini',nome:'Ordini',versione:APP_VERSION,authKey:'or_auth_v2',oldAuthKey:'ceraldi_ordini_auth_session',
   markBg:'linear-gradient(145deg,#FFC04D 0%,#FF9F0A 50%,#C2410C 100%)',
@@ -6394,24 +6394,68 @@ async function riallineaPrezzi(){
 /* ── Esporta ─────────────────────────────────────────────────────── */
 function apriEsporta(){
   sotto('shEsp', 'Esporta', '<div class="grp">' +
-    '<button class="row" onclick="esportaCatalogo()"><div class="row-ico ic-g">📗</div><div class="row-main"><div class="row-t">Catalogo completo in Excel</div><div class="row-s">Un foglio con tutti i prodotti e i prezzi di ogni fornitore</div></div></button>' +
+    '<button class="row" onclick="apriEsportaCatalogo()"><div class="row-ico ic-g">📗</div><div class="row-main"><div class="row-t">Catalogo in Excel</div><div class="row-s">Scegli settore e fornitori, con i prezzi oppure senza (per un fornitore nuovo)</div></div></button>' +
     '<button class="row" onclick="apriModelloFornitore()"><div class="row-ico ic-b">📝</div><div class="row-main"><div class="row-t">Modello prezzi da mandare a un fornitore</div><div class="row-s">Lui compila solo la colonna prezzi; poi lo reimporti da "Importa listino"</div></div></button>' +
     '<button class="row" onclick="esportaOrdiniCSV()"><div class="row-ico ic-o">🧾</div><div class="row-main"><div class="row-t">Ordini in CSV</div><div class="row-s">Periodo scelto in Analisi</div></div></button>' +
     '<button class="row" onclick="esportaBackup()"><div class="row-ico ic-p">💾</div><div class="row-main"><div class="row-t">Backup completo</div><div class="row-s">Catalogo, fornitori, ordini e impostazioni in un file</div></div></button></div>');
 }
-async function esportaCatalogo(){
+/* Catalogo in Excel. Senza argomenti: tutto il catalogo e tutti i fornitori.
+   lista = prodotti da esportare, fornSel = solo i prezzi di questi fornitori (vuoto = tutti), suffisso = per il nome del file */
+async function esportaCatalogo(lista, fornSel, suffisso){
   try{
-    var X = await libXLSX(), nomi = fornNomi();
-    var righe = CAT.slice().sort(function(a, b){ return settoreDi(a).localeCompare(settoreDi(b)) || catDi(a).localeCompare(catDi(b)) || a.name.localeCompare(b.name); }).map(function(p){
+    var X = await libXLSX(), filtroF = !!(fornSel && fornSel.length), nomi = filtroF ? fornSel : fornNomi();
+    var righe = (lista || CAT).slice().sort(function(a, b){ return settoreDi(a).localeCompare(settoreDi(b)) || catDi(a).localeCompare(catDi(b)) || a.name.localeCompare(b.name); }).map(function(p){
       var r = { ID: p.id, Prodotto: p.name, Confezione: p.conf || '', Categoria: catDi(p), Reparto: repartiDi(p).join(' + '), IVA: p.iva || '' };
       nomi.forEach(function(f){ var v = prezzoDi(p, f); r[f] = v == null ? '' : v; });
-      var m = migliore(p); r['Più conveniente'] = m.forn; r['Prezzo migliore'] = m.forn ? m.prezzo : ''; r.Giacenza = p.giacenza == null ? '' : p.giacenza; r['Scorta minima'] = p.scorta_min == null ? '' : p.scorta_min; r['Codice a barre'] = p.barcode || '';
+      var m = migliore(p);
+      if(filtroF){ m = { forn: '', prezzo: null }; nomi.forEach(function(f){ var v = prezzoDi(p, f); if(v != null && (m.prezzo == null || v < m.prezzo)) m = { forn: f, prezzo: v }; }); }   // il più conveniente solo tra i fornitori scelti
+      r['Più conveniente'] = m.forn; r['Prezzo migliore'] = m.forn ? m.prezzo : ''; r.Giacenza = p.giacenza == null ? '' : p.giacenza; r['Scorta minima'] = p.scorta_min == null ? '' : p.scorta_min; r['Codice a barre'] = p.barcode || '';
       return r;
     });
     var wb = X.utils.book_new(), ws = X.utils.json_to_sheet(righe); ws['!cols'] = [{ wch: 7 }, { wch: 46 }, { wch: 10 }, { wch: 18 }, { wch: 12 }, { wch: 5 }].concat(nomi.map(function(){ return { wch: 11 }; }));
     X.utils.book_append_sheet(wb, ws, 'Catalogo');
-    X.writeFile(wb, 'Catalogo_Ceraldi_' + oggiISO() + '.xlsx');
+    X.writeFile(wb, 'Catalogo_Ceraldi' + (suffisso || '') + '_' + oggiISO() + '.xlsx');
   }catch(e){ toast('⚠️ ' + e.message); }
+}
+/* Scelte per l'export del catalogo: settore, fornitori, con o senza prezzi.
+   «Senza prezzi» = elenco dei prodotti senza fornitori né prezzi, da mandare a un fornitore NUOVO: lui scrive solo «Nuovo prezzo»,
+   poi lo carichi da Importa listino (+ Nuovo fornitore): le righe si abbinano per ID. */
+var EXC = { sett: {}, forn: {}, senza: false };
+function apriEsportaCatalogo(){
+  EXC = { sett: {}, forn: {}, senza: false };
+  apriSheet('shEC', { titolo: 'Esporta catalogo', indietro: 'Esporta', onIndietro: apriEsporta, alto: true, corpo: '<div id="ecBody"></div>', piede: '<button class="btn btn-p" id="ecGo" onclick="scaricaEC()">Scarica Excel</button>' });
+  disegnaEC();
+}
+function selEC(g){ return Object.keys(EXC[g]).filter(function(k){ return EXC[g][k]; }); }
+function listaEC(){
+  var ss = selEC('sett'), ff = EXC.senza ? [] : selEC('forn');
+  return CAT.filter(function(p){
+    if(ss.length && !ss.some(function(s){ return inReparto(p, s); })) return false;
+    if(ff.length && !ff.some(function(f){ return prezzoDi(p, f) != null; })) return false;
+    return true;
+  });
+}
+function disegnaEC(){
+  var el = document.getElementById('ecBody'); if(!el) return;
+  var wrap = 'display:flex;flex-wrap:wrap;gap:6px;overflow:visible';
+  function chip(g, v){ return '<button class="chip' + (EXC[g][v] ? ' active' : '') + '" data-v="' + esc(v) + '" onclick="EXC.' + g + '[this.dataset.v]=!EXC.' + g + '[this.dataset.v];disegnaEC()">' + esc(v) + '</button>'; }
+  el.innerHTML =
+    '<div class="field"><label>Prezzi</label><div class="seg"><button class="seg-b' + (EXC.senza ? '' : ' active') + '" onclick="EXC.senza=false;disegnaEC()">Con i prezzi</button><button class="seg-b' + (EXC.senza ? ' active' : '') + '" onclick="EXC.senza=true;disegnaEC()">Senza prezzi</button></div>' +
+    (EXC.senza
+      ? '<div class="banner b" style="margin:8px 0 0"><span>🔒</span><div style="flex:1"><strong>Sicuro da mandare a un fornitore nuovo</strong><br>Il file ha solo i prodotti: nessun fornitore e nessun prezzo. Lui scrive i suoi prezzi nella colonna «Nuovo prezzo» (le altre sono bloccate). Poi lo carichi da Impostazioni → Importa listino scegliendo «+ Nuovo fornitore…».</div></div>'
+      : '<div class="hint">Per uso tuo: contiene i prezzi dei fornitori scelti. Non mandarlo ai fornitori.</div>') + '</div>' +
+    '<div class="field"><label>Settore · nessuno = tutti</label><div class="chips" style="' + wrap + '">' + settoriPresenti().map(function(s){ return chip('sett', s); }).join('') + '</div></div>' +
+    (EXC.senza ? '' : '<div class="field"><label>Fornitori · nessuno = tutti</label><div class="chips" style="' + wrap + '">' + fornNomi().map(function(f){ return chip('forn', f); }).join('') + '</div><div class="hint">Se ne scegli, nel file ci sono solo i loro prezzi e solo i prodotti che hanno a listino.</div></div>');
+  var n = listaEC().length, b = document.getElementById('ecGo');
+  if(b){ b.textContent = 'Scarica Excel · ' + n + ' prodott' + (n === 1 ? 'o' : 'i'); b.disabled = !n; }
+}
+async function scaricaEC(){
+  var l = listaEC(); if(!l.length){ toast('Nessun prodotto con queste scelte'); return; }
+  var ss = selEC('sett'), suf = ss.length ? '_' + ss.join('-').replace(/[^A-Za-z0-9-]+/g, '_') : '';
+  if(EXC.senza){
+    l = l.slice().sort(function(a, b){ return catDi(a).localeCompare(catDi(b)) || a.name.localeCompare(b.name); });
+    await faiModello('', l, 'Catalogo_senza_prezzi' + suf + '_' + oggiISO() + '.xlsx');
+  } else await esportaCatalogo(l, selEC('forn'), suf);
 }
 function apriModelloFornitore(){
   apriSheet('shMF', { titolo: 'Modello per il fornitore', indietro: 'Esporta', onIndietro: apriEsporta, corpo:
@@ -6422,6 +6466,10 @@ function apriModelloFornitore(){
 async function scaricaModello(){
   var f = document.getElementById('mfF').value, s = document.getElementById('mfS').value;
   var l = CAT.filter(function(p){ if(s === '__forn') return f ? prezzoDi(p, f) != null : true; return !s || inReparto(p, s); }).sort(function(a, b){ return catDi(a).localeCompare(catDi(b)) || a.name.localeCompare(b.name); });
+  await faiModello(f, l);
+}
+// Scrive il file Excel del modello (colonna «Nuovo prezzo» libera, le altre bloccate). f = fornitore ('' = nessuno), l = prodotti, nomeFile = facoltativo
+async function faiModello(f, l, nomeFile){
   if(!l.length){ toast('Nessun prodotto da mettere nel modello'); return; }
   try{
     var X = await libXLSX(), Z = await libZIP();
@@ -6431,7 +6479,7 @@ async function scaricaModello(){
     var wb = X.utils.book_new(); X.utils.book_append_sheet(wb, ws, 'Prezzi');
     var bytes = X.write(wb, { type: 'array', bookType: 'xlsx' });
     var bloccato = await bloccaTranne(Z, bytes, 'F', aoa.length);
-    scaricaFile('Listino_' + (f || 'fornitore').replace(/[^A-Za-z0-9]+/g, '_') + '_' + oggiISO() + '.xlsx', new Blob([bloccato || bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    scaricaFile(nomeFile || ('Listino_' + (f || 'fornitore').replace(/[^A-Za-z0-9]+/g, '_') + '_' + oggiISO() + '.xlsx'), new Blob([bloccato || bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
     toast('Modello scaricato: il fornitore può scrivere solo nella colonna "Nuovo prezzo"');
   }catch(e){ toast('⚠️ ' + e.message); }
 }
