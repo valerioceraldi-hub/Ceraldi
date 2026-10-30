@@ -461,7 +461,7 @@ function avvisoCreditoIA(){
 </nav>
 
 <script>
-var APP_VERSION='8.16.4';
+var APP_VERSION='8.17.0';
 var BUILD_VERSION=APP_VERSION, BUILD_NUM=APP_VERSION;
 var APP={key:'ordini',nome:'Ordini',versione:APP_VERSION,authKey:'or_auth_v2',oldAuthKey:'ceraldi_ordini_auth_session',
   markBg:'linear-gradient(145deg,#FFC04D 0%,#FF9F0A 50%,#C2410C 100%)',
@@ -4522,7 +4522,7 @@ function salvaFatturaOrdine(id, modo){
 }
 async function contestaDifferenze(){
   var l = window._cfDiff || []; if(!l.length) return;
-  try{ await api('prezzi_difformi', { method: 'POST', prefer: 'return=minimal', body: l.map(function(x){ return { fornitore: x.forn, nome_prodotto: x.nome, id_prodotto_catalogo: x.id || null, prezzo_catalogo: x.prima || null, prezzo_nuovo: x.dopo, fonte: 'fattura', qta: x.qta || null, riga_fattura_id: x.riga || null }; }) }); await caricaPD(); aggiornaBadge(); toast(l.length + ' contestazioni aggiunte in Da fare'); window._cfDiff = []; }
+  try{ await salvaDifformi(l.map(function(x){ return { fornitore: x.forn, nome_prodotto: x.nome, id_prodotto_catalogo: x.id || null, prezzo_catalogo: x.prima || null, prezzo_nuovo: x.dopo, fonte: 'fattura', qta: x.qta || null, riga_fattura_id: x.riga || null }; })); await caricaPD(); aggiornaBadge(); toast(l.length + ' contestazioni aggiunte in Da fare'); window._cfDiff = []; }
   catch(e){ toast('⚠️ ' + e.message); }
 }
 
@@ -5295,12 +5295,12 @@ function rigaVariazione(r){
       // prodotto già certo (imparato dalle tue conferme o abbinato a mano): resta da decidere solo il prezzo
       ? '<div style="font-weight:700;font-size:13.5px;margin-top:10px">' + (att != null ? 'Prezzo cambiato: lo aggiorno?' : 'Nuovo prezzo da ' + esc(f) + ': lo uso?') + '</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">' +
         '<button class="btn-sm g" onclick="applicaPF(' + r.id + ')">' + (att != null ? 'Aggiorna a ' : 'Usa ') + eur(nuovo) + '</button>' +
-        '<button class="btn-sm" onclick="ignoraPF(' + r.id + ')">Ignora</button></div>' + '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:8px;font-size:12.5px;line-height:1.35;color:var(--ink2)"><input type="checkbox" style="margin-top:2px;width:auto" ' + (DF.pd[r.id] ? 'checked' : '') + ' onchange="DF.pd[' + r.id + ']=this.checked"><span>Metti anche nei <b>prezzi difformi</b>, da contestare al fornitore (vale con «Aggiorna» o con «Ignora»)</span></label>' +
+        '<button class="btn-sm" onclick="ignoraPF(' + r.id + ')">Ignora</button></div>' + '<div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btn-sm" onclick="contestaPF(' + r.id + ')">⚠️ Contesta al fornitore</button><span class="row-s" style="font-size:12px">Il prezzo in catalogo resta com\'è</span></div>' +
         '<button class="lnk-btn" style="font-size:12px;padding:6px 0 0;color:var(--ink3)" onclick="cambiaProdottoPF(' + r.id + ')">Non è questo prodotto?</button>'
       : '<div style="font-weight:700;font-size:13.5px;margin-top:10px">È lo stesso prodotto?</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">' +
       '<button class="btn-sm g" onclick="applicaPF(' + r.id + ')">Sì, ' + (att != null ? 'aggiorna a ' : 'usa ') + eur(nuovo) + '</button>' +
       '<button class="btn-sm" onclick="cambiaProdottoPF(' + r.id + ')">No, è un altro</button>' +
-      '<button class="btn-sm" onclick="ignoraPF(' + r.id + ')">Ignora</button></div>' + '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:8px;font-size:12.5px;line-height:1.35;color:var(--ink2)"><input type="checkbox" style="margin-top:2px;width:auto" ' + (DF.pd[r.id] ? 'checked' : '') + ' onchange="DF.pd[' + r.id + ']=this.checked"><span>Metti anche nei <b>prezzi difformi</b>, da contestare al fornitore (vale con «Aggiorna» o con «Ignora»)</span></label>')) + '</div>';
+      '<button class="btn-sm" onclick="ignoraPF(' + r.id + ')">Ignora</button></div>' + '<div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btn-sm" onclick="contestaPF(' + r.id + ')">⚠️ Contesta al fornitore</button><span class="row-s" style="font-size:12px">Il prezzo in catalogo resta com\'è</span></div>')) + '</div>';
 }
 async function applicaPF(id, muto){
   var r = PF.find(function(x){ return x.id === id; }); if(!r) return;
@@ -5326,10 +5326,26 @@ async function aggiornaVariazioniPiccole(){
   renderDaFare(); aggiornaBadge(); toast(ok + ' prezzi aggiornati ✓');
 }
 async function ignoraPF(id){ if(DF.pd[id]){ delete DF.pd[id]; return contestaPF(id); } var r0 = PF.find(function(x){ return x.id === id; }), st0 = r0 ? r0.stato : 'review'; try{ await patchPF([id], { stato: 'rejected', resolved_at: new Date().toISOString() }); renderDaFare(); aggiornaBadge(); toast('Ignorato', { azione: 'Annulla', onAzione: function(){ api('prezzi_da_fatture?id=eq.' + id, { method: 'PATCH', body: { stato: st0, resolved_at: null } }).then(caricaPF).then(function(){ renderDaFare(); aggiornaBadge(); }); } }); }catch(e){ toast('⚠️ ' + e.message); } }
+// Prezzi difformi senza doppioni: se per lo stesso fornitore c'è già lo stesso prodotto non ancora inviato,
+// la riga esistente viene aggiornata (prezzo, fonte e data nuovi) invece di aggiungerne un'altra.
+// Il prodotto si riconosce dall'id di catalogo (se c'è), altrimenti dal nome; le righe già inviate/archiviate non contano.
+function chiaveDifforme(x){ return String(x.fornitore || '') + '|' + (x.id_prodotto_catalogo ? 'id' + x.id_prodotto_catalogo : 'n' + String(x.nome_prodotto || '').toLowerCase().replace(/\s+/g, ' ').trim()); }
+async function salvaDifformi(righe){
+  await caricaPD();
+  var esist = {}, ultime = {}, nuove = [];
+  PD.forEach(function(x){ esist[chiaveDifforme(x)] = x; });
+  righe.forEach(function(r){ ultime[chiaveDifforme(r)] = r; });   // nello stesso invio, l'ultima riga vince
+  for(var k in ultime){
+    var r = ultime[k], e = esist[k];
+    if(e) await api('prezzi_difformi?id=eq.' + e.id, { method: 'PATCH', prefer: 'return=minimal', body: { prezzo_catalogo: r.prezzo_catalogo, prezzo_nuovo: r.prezzo_nuovo, fonte: r.fonte, riga_fattura_id: r.riga_fattura_id || null, qta: r.qta || null, data: new Date().toISOString() } });
+    else nuove.push(r);
+  }
+  if(nuove.length) await api('prezzi_difformi', { method: 'POST', prefer: 'return=minimal', body: nuove });
+}
 // Mette la riga tra i prezzi difformi (da contestare), qualunque cosa decidi per il catalogo
 async function aggiungiDifforme(r, p, f, prezzoCat){
   try{
-    await api('prezzi_difformi', { method: 'POST', prefer: 'return=minimal', body: { fornitore: f, nome_prodotto: p ? p.name : descrPulita(r.descrizione), id_prodotto_catalogo: p ? p.id : null, prezzo_catalogo: prezzoCat, prezzo_nuovo: pfPrezzo(r), fonte: 'fattura del ' + dataIt(r.data_fattura), riga_fattura_id: r.id, qta: num(r.qta) || null } });
+    await salvaDifformi([{ fornitore: f, nome_prodotto: p ? p.name : descrPulita(r.descrizione), id_prodotto_catalogo: p ? p.id : null, prezzo_catalogo: prezzoCat, prezzo_nuovo: pfPrezzo(r), fonte: 'fattura del ' + dataIt(r.data_fattura), riga_fattura_id: r.id, qta: num(r.qta) || null }]);
     await caricaPD(); aggiornaBadge(); toast('Messo anche tra i prezzi difformi');
   }catch(e){ toast('⚠️ Prezzi difformi: ' + e.message); }
 }
@@ -5337,7 +5353,7 @@ async function contestaPF(id){
   var r = PF.find(function(x){ return x.id === id; }); if(!r) return;
   var p = CATMAP[r.product_id], f = pfForn(r);
   try{
-    await api('prezzi_difformi', { method: 'POST', prefer: 'return=minimal', body: { fornitore: f, nome_prodotto: p ? p.name : r.descrizione, id_prodotto_catalogo: p ? p.id : null, prezzo_catalogo: p ? prezzoDi(p, f) : null, prezzo_nuovo: pfPrezzo(r), fonte: 'fattura', riga_fattura_id: r.id, qta: num(r.qta) || null } });
+    await salvaDifformi([{ fornitore: f, nome_prodotto: p ? p.name : r.descrizione, id_prodotto_catalogo: p ? p.id : null, prezzo_catalogo: p ? prezzoDi(p, f) : null, prezzo_nuovo: pfPrezzo(r), fonte: 'fattura del ' + dataIt(r.data_fattura), riga_fattura_id: r.id, qta: num(r.qta) || null }]);
     await patchPF([id], { stato: 'rejected', resolved_at: new Date().toISOString(), note: 'Contestato al fornitore' }); if(p) imparaRiga(r, p.id, 2);
     await caricaPD(); renderDaFare(); aggiornaBadge(); toast('Aggiunto alle contestazioni: il prezzo in catalogo resta quello di prima');
   }catch(e){ toast('⚠️ ' + e.message); }
@@ -5525,26 +5541,86 @@ function giorniPD(l){
   return Object.keys(per).sort().reverse().map(function(g){ return { g: g, l: per[g] }; });
 }
 function rigaPD(x){ return '<div class="todo-it" style="display:flex;gap:10px"><div class="row-main">' + esc(x.nome_prodotto) + '<div class="row-s">' + esc(x.fonte || '') + (x.qta ? ' · q.tà ' + num(x.qta) : '') + '</div></div><div style="text-align:right">' + (x.prezzo_catalogo != null ? '<span class="muted" style="font-size:12px">' + eur(x.prezzo_catalogo) + '</span><br>' : '') + '<b class="var-up">' + eur(x.prezzo_nuovo) + '</b></div></div>'; }
-// Scelta della tranche da inviare: tutti, solo l'ultimo giorno, da un giorno in poi, o giorni a scelta
+// Scelta dei prodotti da inviare: si spunta prodotto per prodotto (o tutti / tutti quelli di un giorno)
 var PDINV = { f: '', sel: {} };
-function apriInvioPD(f){ PDINV = { f: f, sel: {} }; giorniPD(PD.filter(function(x){ return x.fornitore === f; })).forEach(function(d){ PDINV.sel[d.g] = true; }); disegnaInvioPD(); }
-function invioPDScegli(modo, g){
-  var gg = giorniPD(PD.filter(function(x){ return x.fornitore === PDINV.f; }));
-  gg.forEach(function(d){ PDINV.sel[d.g] = modo === 'tutti' ? true : modo === 'ultimo' ? d.g === gg[0].g : modo === 'dal' ? d.g >= g : modo === 'solo' ? d.g === g : !!PDINV.sel[d.g]; });
-  if(modo === 'tocca') PDINV.sel[g] = !PDINV.sel[g];
+function righePDforn(f){ return PD.filter(function(x){ return x.fornitore === f; }); }
+function apriInvioPD(f){ PDINV = { f: f, sel: {} }; try{ libPDF().catch(function(){}); }catch(e){} disegnaInvioPD(); }  // la libreria PDF si prepara mentre scegli
+function invioPDScegli(modo, k){
+  var l = righePDforn(PDINV.f);
+  if(modo === 'tutti' || modo === 'nessuno') l.forEach(function(x){ PDINV.sel[x.id] = modo === 'tutti'; });
+  else if(modo === 'giorno'){ var gl = l.filter(function(x){ return _giornoRoma(x.data) === k; }), tutti = gl.every(function(x){ return PDINV.sel[x.id]; }); gl.forEach(function(x){ PDINV.sel[x.id] = !tutti; }); }
+  else if(modo === 'tocca') PDINV.sel[k] = !PDINV.sel[k];
   disegnaInvioPD();
 }
-function idsInvioPD(){ return PD.filter(function(x){ return x.fornitore === PDINV.f && PDINV.sel[_giornoRoma(x.data)]; }).map(function(x){ return x.id; }); }
+function idsInvioPD(){ return righePDforn(PDINV.f).filter(function(x){ return PDINV.sel[x.id]; }).map(function(x){ return x.id; }); }
 function disegnaInvioPD(){
-  var f = PDINV.f, gg = giorniPD(PD.filter(function(x){ return x.fornitore === f; })); if(!gg.length){ chiudiSheet('shPDinv'); return; }
-  var ids = idsInvioPD(), opz = gg.map(function(d){ return '<option value="' + d.g + '">' + esc(dataIt(d.g)) + '</option>'; }).join('');
-  apriSheet('shPDinv', { titolo: 'Prezzi difformi da inviare', sotto: esc(f), alto: true, corpo:
-    '<div class="chips" style="flex-wrap:wrap;margin:0 0 8px"><button class="chip" onclick="invioPDScegli(\'tutti\')">Tutti</button><button class="chip" onclick="invioPDScegli(\'ultimo\')">Solo l\'ultimo giorno (' + esc(dataIt(gg[0].g)) + ')</button></div>' +
-    '<div style="display:flex;gap:8px;align-items:center;margin:0 2px 12px;font-size:13.5px;flex-wrap:wrap"><span>Dal giorno</span><select id="pdDal" class="inp" style="width:auto;padding:6px 8px">' + opz + '</select><span>in poi</span><button class="btn-sm" onclick="invioPDScegli(\'dal\',document.getElementById(\'pdDal\').value)">Scegli</button></div>' +
-    gg.map(function(d){ var on = !!PDINV.sel[d.g];
-      return '<div class="grp" style="margin-bottom:10px;' + (on ? '' : 'opacity:.55') + '"><label class="row" style="cursor:pointer"><input type="checkbox" style="width:auto;margin-right:10px" ' + (on ? 'checked' : '') + ' onchange="invioPDScegli(\'tocca\',\'' + d.g + '\')"><div class="row-main"><div class="row-t" style="font-size:14px">Inseriti il ' + esc(dataIt(d.g)) + '</div><div class="row-s">' + d.l.length + (d.l.length === 1 ? ' prezzo' : ' prezzi') + '</div></div><button class="btn-sm" onclick="event.preventDefault();invioPDScegli(\'solo\',\'' + d.g + '\')">Solo questo</button></label>' +
-        d.l.map(function(x){ return '<div class="row" style="font-size:13px"><div class="row-main">' + esc(x.nome_prodotto) + '<div class="row-s">' + esc(x.fonte || '') + '</div></div><div style="text-align:right;white-space:nowrap">' + (x.prezzo_catalogo != null ? '<span class="muted">' + eur(x.prezzo_catalogo) + '</span> → ' : '') + '<b class="var-up">' + eur(x.prezzo_nuovo) + '</b></div></div>'; }).join('') + '</div>'; }).join(''),
-    piede: '<div class="btn-row"><button class="btn btn-s" ' + (ids.length ? '' : 'disabled') + ' onclick="chiudiSheet(\'shPDinv\');archiviaContestazioni(null, idsInvioPD())">Archivia</button><button class="btn btn-p" ' + (ids.length ? '' : 'disabled') + ' onclick="chiudiSheet(\'shPDinv\');mandaContestazione(PDINV.f, idsInvioPD())">Scrivi a ' + esc(nomeBreve(f, 14)) + ' (' + ids.length + ')</button></div>' });
+  var f = PDINV.f, l = righePDforn(f); if(!l.length){ chiudiSheet('shPDinv'); return; }
+  var gg = giorniPD(l), ids = idsInvioPD(), vecchio = document.querySelector('#shPDinv .sheet-bd'), sc = vecchio ? vecchio.scrollTop : 0;
+  apriSheet('shPDinv', { titolo: 'Prezzi difformi da inviare', sotto: esc(f) + ' · ' + ids.length + ' di ' + l.length + ' scelti', alto: true, corpo:
+    '<div class="chips" style="flex-wrap:wrap;margin:0 0 8px"><button class="chip" onclick="invioPDScegli(\'tutti\')">Seleziona tutti</button><button class="chip" onclick="invioPDScegli(\'nessuno\')">Deseleziona tutti</button></div>' +
+    '<p class="hint" style="font-size:12.5px;margin:0 4px 10px">Spunta i prodotti da contestare: nel PDF finiscono solo quelli spuntati. Gli altri restano qui, pronti per un invio successivo.</p>' +
+    gg.map(function(d){
+      return '<div class="grp" style="margin-bottom:10px"><div class="row" style="cursor:pointer" onclick="invioPDScegli(\'giorno\',\'' + d.g + '\')"><div class="row-main"><div class="row-t" style="font-size:14px">Inseriti il ' + esc(dataIt(d.g)) + '</div><div class="row-s">' + d.l.length + (d.l.length === 1 ? ' prezzo' : ' prezzi') + '</div></div><span class="lnk">Tutti / nessuno</span></div>' +
+        d.l.map(function(x){ var on = !!PDINV.sel[x.id];
+          return '<label class="row" style="font-size:13px;cursor:pointer"><input type="checkbox" style="width:auto;margin-right:10px" ' + (on ? 'checked' : '') + ' onchange="invioPDScegli(\'tocca\',' + x.id + ')"><div class="row-main">' + esc(x.nome_prodotto) + '<div class="row-s">' + esc(x.fonte || '') + (x.qta ? ' · q.tà ' + num(x.qta) : '') + '</div></div><div style="text-align:right;white-space:nowrap">' + (x.prezzo_catalogo != null ? '<span class="muted">' + eur(x.prezzo_catalogo) + '</span> → ' : '') + '<b class="var-up">' + eur(x.prezzo_nuovo) + '</b></div></label>'; }).join('') + '</div>'; }).join(''),
+    piede: '<div class="btn-row"><button class="btn btn-s" ' + (ids.length ? '' : 'disabled') + ' onclick="chiudiSheet(\'shPDinv\');archiviaContestazioni(null, idsInvioPD())">Archivia</button><button class="btn btn-p" ' + (ids.length ? '' : 'disabled') + ' onclick="inviaContestazionePDF(PDINV.f, idsInvioPD())">Crea PDF (' + ids.length + ')</button></div>' +
+      '<button class="lnk-btn" style="display:block;margin:8px auto 0;font-size:12.5px" ' + (ids.length ? '' : 'disabled') + ' onclick="chiudiSheet(\'shPDinv\');mandaContestazione(PDINV.f, idsInvioPD())">Oppure invia solo come messaggio di testo</button>' });
+  var nuovo = document.querySelector('#shPDinv .sheet-bd'); if(nuovo) nuovo.scrollTop = sc;
+}
+// PDF della segnalazione: solo i prodotti scelti, per un fornitore
+function creaPDFContestazione(f, ids){
+  var J = window.jspdf && window.jspdf.jsPDF; if(!J) return null;
+  var l = PD.filter(function(x){ return x.fornitore === f && ids.indexOf(x.id) >= 0; });
+  l.sort(function(a, b){ return String(a.nome_prodotto).localeCompare(String(b.nome_prodotto), 'it'); });
+  var doc = new J({ unit: 'mm', format: 'a4' }), az = conf().azienda || {}, y = 18;
+  function n2(v){ return Number(v).toFixed(2).replace('.', ','); }
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(17); doc.text(az.nome || 'Caffetteria Ceraldi', 15, y);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(110);
+  var info = [az.indirizzo, az.piva ? 'P.IVA ' + az.piva : '', az.tel, az.email].filter(Boolean).join(' · '); if(info){ y += 5; doc.text(info, 15, y); }
+  doc.setTextColor(0); y += 11; doc.setFontSize(13); doc.setFont('helvetica', 'bold'); doc.text('Prezzi diversi da quelli concordati', 15, y);
+  doc.setFontSize(10); doc.setFont('helvetica', 'normal'); doc.text('Data: ' + new Date().toLocaleDateString('it-IT'), 195, y, { align: 'right' });
+  y += 6; doc.setFontSize(11); doc.setFont('helvetica', 'bold'); doc.text('Fornitore: ' + f, 15, y);
+  y += 7; doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
+  var intro = doc.splitTextToSize('Buongiorno, vi segnaliamo che i prodotti qui sotto ci risultano fatturati a un prezzo diverso da quello concordato. Potete verificare? Grazie.', 180); doc.text(intro, 15, y); y += intro.length * 5 + 5;
+  var col = { p: 15, rif: 92, conc: 152, fatt: 174, diff: 195 };
+  function testata(){ doc.setFillColor(242, 242, 247); doc.rect(13, y - 5, 184, 8, 'F'); doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5);
+    doc.text('PRODOTTO', col.p, y); doc.text('RIF.', col.rif, y); doc.text('CONCORDATO', col.conc, y, { align: 'right' }); doc.text('FATTURATO', col.fatt, y, { align: 'right' }); doc.text('DIFF.', col.diff, y, { align: 'right' });
+    doc.setFont('helvetica', 'normal'); y += 7; }
+  testata();
+  l.forEach(function(x){
+    var nome = doc.splitTextToSize(String(x.nome_prodotto) + (x.qta ? '  (q.tà ' + num(x.qta) + ')' : ''), 70), rif = doc.splitTextToSize(String(x.fonte || ''), 56), righe = Math.max(nome.length, rif.length);
+    if(y + righe * 4.5 > 275){ doc.addPage(); y = 20; testata(); }
+    doc.setFontSize(9.5); doc.text(nome, col.p, y); doc.setFontSize(8.5); doc.setTextColor(90); doc.text(rif, col.rif, y); doc.setTextColor(0); doc.setFontSize(9.5);
+    var c = x.prezzo_catalogo != null ? Number(x.prezzo_catalogo) : null, nu = Number(x.prezzo_nuovo);
+    doc.text(c != null ? n2(c) : 'n/d', col.conc, y, { align: 'right' }); doc.text(n2(nu), col.fatt, y, { align: 'right' });
+    doc.text(c != null ? (nu - c >= 0 ? '+' : '') + n2(nu - c) : '—', col.diff, y, { align: 'right' });
+    y += Math.max(6, righe * 4.5 + 1.5); doc.setDrawColor(230); doc.line(13, y - 4, 197, y - 4);
+  });
+  doc.setFontSize(8); doc.setTextColor(140); doc.text('Importi in EUR — ' + (az.nome || 'Caffetteria Ceraldi'), 15, 288);
+  return doc;
+}
+// «Il messaggio è partito?» → solo allora le righe passano tra quelle inviate; le altre restano nella lista
+async function segnaInviati(f, ids){
+  if(!(await conferma('Inviato al fornitore?', ids.length + (ids.length === 1 ? ' segnalazione' : ' segnalazioni') + ' di ' + esc(f) + ' passano tra quelle inviate. Le altre restano qui.', 'Sì, inviato'))) return;
+  try{ await api('prezzi_difformi?id=in.(' + ids.join(',') + ')', { method: 'PATCH', prefer: 'return=minimal', body: { stato: 'inviato', data_invio: new Date().toISOString() } }); PD = PD.filter(function(x){ return ids.indexOf(x.id) < 0; }); renderDaFare(); aggiornaBadge(); }catch(e){ toast('⚠️ ' + e.message); }
+}
+// Crea il PDF e lo passa alla condivisione del telefono (WhatsApp, mail…); senza condivisione lo scarica.
+// Tutto sincrono dal tocco: iOS blocca navigator.share se prima c'è un'attesa.
+function inviaContestazionePDF(f, ids){
+  if(!ids || !ids.length){ toast('Spunta almeno un prodotto'); return; }
+  var nome = 'Contestazione_' + f.replace(/[^A-Za-z0-9]+/g, '_') + '_' + oggiISO() + '.pdf', az = conf().azienda || {}, doc = creaPDFContestazione(f, ids);
+  function fine(){ chiudiSheet('shPDinv'); setTimeout(function(){ segnaInviati(f, ids); }, 400); }
+  if(!doc){ // libreria PDF non ancora pronta: condivido almeno il testo
+    var t = testoContestazione(f, ids);
+    if(navigator.share) navigator.share({ title: 'Prezzi diversi da quelli concordati', text: t }).then(fine).catch(function(){});
+    else if(navigator.clipboard){ navigator.clipboard.writeText(t); toast('PDF non pronto: ho copiato il testo'); fine(); }
+    else toast('PDF non pronto: riprova tra un attimo');
+    return;
+  }
+  var blob = doc.output('blob'), file = null;
+  try{ file = new File([blob], nome, { type: 'application/pdf' }); }catch(e){}
+  if(file && navigator.canShare && navigator.canShare({ files: [file] })) navigator.share({ files: [file], title: 'Prezzi diversi da quelli concordati', text: 'Buongiorno ' + f + ', in allegato la segnalazione dei prezzi diversi da quelli concordati. Grazie! — ' + (az.nome || 'Caffetteria Ceraldi') }).then(fine).catch(function(){});
+  else { scaricaFile(nome, blob); toast('PDF scaricato'); fine(); }
 }
 function testoContestazione(f, ids){
   var l = PD.filter(function(x){ return x.fornitore === f && (!ids || ids.indexOf(x.id) >= 0); }), az = conf().azienda || {}, gg = giorniPD(l), righe = [];
@@ -5557,7 +5633,7 @@ function mandaContestazione(f, soloIds){
   if(fo.whatsapp) window.open('https://wa.me/' + telefonoWA(fo.whatsapp) + '?text=' + encodeURIComponent(t), '_blank');
   else if(navigator.share) navigator.share({ text: t }).catch(function(){}); else if(navigator.clipboard){ navigator.clipboard.writeText(t); toast('Testo copiato'); }
   var ids = soloIds || PD.filter(function(x){ return x.fornitore === f; }).map(function(x){ return x.id; });
-  setTimeout(async function(){ if(await conferma('Messaggio inviato?', ids.length + (ids.length === 1 ? ' segnalazione' : ' segnalazioni') + ' di ' + esc(f) + ' passano tra quelle inviate. Le altre restano qui.', 'Sì, inviato')){ try{ await api('prezzi_difformi?id=in.(' + ids.join(',') + ')', { method: 'PATCH', prefer: 'return=minimal', body: { stato: 'inviato', data_invio: new Date().toISOString() } }); PD = PD.filter(function(x){ return ids.indexOf(x.id) < 0; }); renderDaFare(); aggiornaBadge(); }catch(e){ toast('⚠️ ' + e.message); } } }, 600);
+  setTimeout(function(){ segnaInviati(f, ids); }, 600);
 }
 async function archiviaContestazioni(f, soloIds){ // f = fornitore oppure soloIds = elenco
   var ids = soloIds || PD.filter(function(x){ return x.fornitore === f; }).map(function(x){ return x.id; }); if(!ids.length) return;
