@@ -833,6 +833,14 @@
       return { ok: true, turni_rimossi: prima - DB.presenze_turni.length, eseguita: a.p_data < oggi24 };
     }
     if (name === 'presenze_chiudi_rapporto_annulla') { var pa = profili.find(function (x) { return x.id === a.p_dip; }); if (pa) { pa.data_fine_rapporto = null; pa.motivo_fine_rapporto = null; pa.chiusura_rapporto = null; } return true; }
+    if (name === 'presenze_rispondi_eliminazione') {
+      var tE = DB[a.p_tabella] || [], rE = tE.find(function (x) { return x.id === a.p_id; });
+      if (!rE) return { ok: false, motivo: 'non_esiste' };
+      if (!sessUser || rE.dipendente_id !== sessUser.id) throw new Error('Non autorizzato');
+      if (!rE.richiesta_elimina) return { ok: false, motivo: 'gia_gestita' };
+      if (!a.p_conferma) { rE.richiesta_elimina = false; rE.richiesta_elimina_da = null; rE.richiesta_elimina_il = null; rE.richiesta_elimina_motivo = null; return { ok: true, esito: 'rifiutata' }; }
+      tE.splice(tE.indexOf(rE), 1); return { ok: true, esito: 'eliminata' };
+    }
     throw new Error('Funzione ' + name + ' non disponibile nella demo');
   }
   var client = {
@@ -19435,7 +19443,9 @@ async function calcolaPromemoria() {
     (presMan||[]).forEach(p => {
       const isManualeDip = p.tipo_timbratura==='manuale_dip';
       const profilo = profiliMap[p.dipendente_id];
-      const dipInattivo = !!(profilo && (profilo.eliminato || !profilo.attivo));
+      // Fuori squadra = solo profilo ELIMINATO (rapporto chiuso). "Non attivo"
+      // vuol dire registrazione incompleta: quella persona può ancora rispondere.
+      const dipInattivo = !!(profilo && profilo.eliminato);
       promemoria.push({ tipo:'timbratura', urgenza:'media', icona: dipInattivo ? '⚠️' : '✍️', id:p.id, dipId:p.dipendente_id, dipInattivo,
         titolo: isManualeDip ? 'Timbratura da approvare' : 'Timbratura da confermare',
         testo:(p.nome_dipendente||'Dipendente')+' — '+new Date(p.data).toLocaleDateString('it-IT'),
@@ -19451,11 +19461,13 @@ async function calcolaPromemoria() {
     const { data: richTimbr } = await sb.from('presenze')
       .select('id,dipendente_id,nome_dipendente,data,richiesta_tipo').not('richiesta_tipo','is',null)
       .order('data',{ascending:false});
+    const fuori = await dipFuoriSquadraSet();
     (richTimbr||[]).forEach(r => {
-      promemoria.push({ tipo:'timbratura', urgenza:'media', icona:'✍️', id:r.id, dipId:r.dipendente_id,
+      const fs = fuori.has(r.dipendente_id);
+      promemoria.push({ tipo:'timbratura', urgenza:'media', icona: fs ? '⚠️' : '✍️', id:r.id, dipId:r.dipendente_id, dipInattivo: fs,
         titolo: r.richiesta_tipo==='elimina' ? 'Eliminazione timbratura — in attesa del dipendente' : 'Modifica timbratura — in attesa del dipendente',
         testo:(r.nome_dipendente||'Dipendente')+' — '+new Date(r.data).toLocaleDateString('it-IT'),
-        azione:'In attesa che il dipendente confermi (annullabile dalla scheda presenze)' });
+        azione: fs ? 'Il dipendente non è più in squadra — apri il giorno e applicala tu' : 'In attesa che il dipendente confermi (annullabile dalla scheda presenze)' });
     });
 
     // 8. Richieste admin di eliminazione di una ferie/malattia già
@@ -19464,11 +19476,29 @@ async function calcolaPromemoria() {
       .select('id,dipendente_id,nome_dipendente,tipo,data_inizio').eq('richiesta_elimina', true);
     (richAss||[]).forEach(a => {
       const lbl = a.tipo === 'ferie' ? 'ferie' : a.tipo === 'malattia' ? 'malattia' : (a.tipo||'assenza');
-      promemoria.push({ tipo:'assenza', urgenza:'media', icona:'🗑', id:a.id, dipId:a.dipendente_id,
+      const fs = fuori.has(a.dipendente_id);
+      promemoria.push({ tipo:'assenza', urgenza:'media', icona: fs ? '⚠️' : '🗑', id:a.id, dipId:a.dipendente_id, dipInattivo: fs,
         titolo:'Eliminazione '+lbl+' — in attesa del dipendente',
         testo:(a.nome_dipendente||'Dipendente')+(a.data_inizio?' — dal '+new Date(a.data_inizio).toLocaleDateString('it-IT'):''),
-        azione:'In attesa che il dipendente confermi (annullabile dal dettaglio)' });
+        azione: fs ? 'Il dipendente non è più in squadra — apri la richiesta e applicala tu' : 'In attesa che il dipendente confermi (annullabile dal dettaglio)' });
     });
+
+    // 9. Richieste admin di eliminazione di un pagamento, stipendio o
+    // documento GIÀ confermato dal dipendente: serve la sua seconda conferma.
+    const [{ data: reAcc }, { data: reLiq }, { data: reDoc }] = await Promise.all([
+      sb.from('presenze_acconti').select('id,dipendente_id,importo,data').eq('richiesta_elimina', true),
+      sb.from('presenze_liquidazioni').select('id,dipendente_id,mese,anno').eq('richiesta_elimina', true),
+      sb.from('presenze_documenti').select('id,dipendente_id,categoria,mese,anno').eq('richiesta_elimina', true),
+    ]);
+    const nomiRE = {};
+    const idsRE = [...new Set([...(reAcc||[]), ...(reLiq||[]), ...(reDoc||[])].map(r => r.dipendente_id))];
+    if (idsRE.length) { const { data: pp } = await sb.from('presenze_profili').select('id,nome,cognome').in('id', idsRE); (pp||[]).forEach(p => { nomiRE[p.id] = p.nome + (p.cognome ? ' ' + p.cognome : ''); }); }
+    const pushRE = (tab, r, lbl, cosa) => promemoria.push({ tipo:'eliminazione', tab, urgenza:'media', icona:'🗑', id:r.id, dipId:r.dipendente_id,
+      titolo:'Eliminazione '+lbl+' — in attesa del dipendente', testo:(nomiRE[r.dipendente_id]||'Dipendente')+' — '+cosa,
+      azione:'Il dipendente l’aveva confermato: deve confermare anche l’eliminazione (annullabile dalla scheda)' });
+    (reAcc||[]).forEach(r => pushRE('presenze_acconti', r, 'pagamento', '€ '+(parseFloat(r.importo)||0).toFixed(2)+' del '+new Date(r.data).toLocaleDateString('it-IT')));
+    (reLiq||[]).forEach(r => pushRE('presenze_liquidazioni', r, 'stipendio', new Date(r.anno, r.mese-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'})));
+    (reDoc||[]).forEach(r => pushRE('presenze_documenti', r, 'documento', etichettaCategoriaDoc(r.categoria)+(r.mese?' '+String(r.mese).padStart(2,'0')+'/'+r.anno:'')));
   } catch(e){ console.warn('calcolaPromemoria:', e); }
 
   // Ordina per urgenza
@@ -19530,11 +19560,15 @@ function apriPromemoria() {
               <button class="btn-sm" style="background:var(--green);color:#fff" onclick="approvaTimbrDipDaPromemoria('${p.id}',true)">✓ Approva</button>
               <button class="btn-sm" style="color:var(--red)" onclick="approvaTimbrDipDaPromemoria('${p.id}',false)">✕ Rifiuta</button>
             </div>` : ''}
-          ${p.id && p.dipId && (p.titolo==='Modifica timbratura — in attesa del dipendente' || p.titolo==='Eliminazione timbratura — in attesa del dipendente') ? `
+          ${p.tipo==='eliminazione' && p.id && p.dipId ? `
+            <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
+              <button class="btn-sm primary" onclick="reinviaRichiestaConferma('richiesta_elim:${p.tab}','${p.id}','${p.dipId}')">🔔 Sollecita</button>
+            </div>` : ''}
+          ${p.id && p.dipId && !p.dipInattivo && (p.titolo==='Modifica timbratura — in attesa del dipendente' || p.titolo==='Eliminazione timbratura — in attesa del dipendente') ? `
             <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
               <button class="btn-sm primary" onclick="reinviaRichiestaConferma('richiesta_timbr','${p.id}','${p.dipId}')">🔔 Sollecita</button>
             </div>` : ''}
-          ${p.id && p.dipId && p.titolo && p.titolo.startsWith('Eliminazione') && p.titolo.endsWith('— in attesa del dipendente') && p.tipo==='assenza' ? `
+          ${p.id && p.dipId && !p.dipInattivo && p.titolo && p.titolo.startsWith('Eliminazione') && p.titolo.endsWith('— in attesa del dipendente') && p.tipo==='assenza' ? `
             <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
               <button class="btn-sm primary" onclick="reinviaRichiestaConferma('richiesta_assenza','${p.id}','${p.dipId}')">🔔 Sollecita</button>
             </div>` : ''}
@@ -19570,10 +19604,16 @@ async function caricaAttivitaDipendenti() {
     // popolaFiltroDocAdmin) risultava erroneamente "dipendente rimosso/
     // disattivato" anche se il profilo era attivo e non rimosso affatto.
     // Ora si cerca tra TUTTI i profili attivi, non solo i dipendenti.
+    // 30/10: tutti i profili. Chi è ELIMINATO (rapporto chiuso) non potrà
+    // più confermare: le sue voci non restano "in attesa" per sempre ma
+    // vanno in una sezione a parte. "Non attivo" (registrazione incompleta)
+    // può ancora rispondere e resta tra gli in attesa.
     const { data: dips } = await sb.from('presenze_profili')
-      .select('id,nome,cognome,telegram_chat_id').eq('attivo',true);
-    const nomeDi = (id) => { const d=(dips||[]).find(x=>x.id===id); return d?(d.nome||'')+(d.cognome?' '+d.cognome:''):'⚠ dipendente rimosso/disattivato'; };
-    const hasTg  = (id) => { const d=(dips||[]).find(x=>x.id===id); return d&&d.telegram_chat_id; };
+      .select('id,nome,cognome,telegram_chat_id,eliminato');
+    const nomeDi = (id) => { const d=(dips||[]).find(x=>x.id===id); return d?(d.nome||'')+(d.cognome?' '+d.cognome:'')+(d.eliminato?' (non più in squadra)':''):'⚠ profilo non trovato'; };
+    const hasTg  = (id) => { const d=(dips||[]).find(x=>x.id===id); return d&&!d.eliminato&&d.telegram_chat_id; };
+    const fuoriS = (id) => { const d=(dips||[]).find(x=>x.id===id); return !!(d&&d.eliminato); };
+    const sezSosp = (confermato, id) => confermato ? 'confermato' : fuoriS(id) ? 'chiuso' : 'sospeso';
 
     const [{ data: acconti }, { data: liquidaz }, { data: documenti }, { data: restituzioni }] = await Promise.all([
       sb.from('presenze_acconti').select('id,dipendente_id,importo,data,letto_dip,letto_il,causale,contestata_il').gte('data',dPeriodo).order('data',{ascending:false}),
@@ -19604,7 +19644,7 @@ async function caricaAttivitaDipendenti() {
       tutti.push({ tipo:'acconto', icona:'💶', id:a.id, dipId:a.dipendente_id, dipNome:nomeDi(a.dipendente_id),
         titolo:'Acconto € '+parseFloat(a.importo).toFixed(2)+(a.causale&&a.causale!=='stipendio'?' · '+causaleLbl(a.causale):''),
         sub:nomeDi(a.dipendente_id)+' · '+new Date(a.data).toLocaleDateString('it-IT')+(a.contestata_il?' · ⚠ CONTESTATO':''),
-        sezione: a.letto_dip ? 'confermato' : 'sospeso', stato: a.letto_dip ? 'confermato' : 'sospeso',
+        sezione: sezSosp(a.letto_dip, a.dipendente_id), stato: a.letto_dip ? 'confermato' : 'sospeso',
         quando:a.letto_il, dataOrd:a.data, canResend:hasTg(a.dipendente_id) });
     });
     (liquidaz||[]).forEach(l => {
@@ -19612,7 +19652,7 @@ async function caricaAttivitaDipendenti() {
       tutti.push({ tipo:'stipendio', icona:'💰', id:l.id, dipId:l.dipendente_id, dipNome:nomeDi(l.dipendente_id),
         titolo:(l.causale&&l.causale!=='stipendio'?causaleLbl(l.causale):'Stipendio')+' '+meseLbl+' — € '+parseFloat(l.importo_netto||0).toFixed(2),
         sub:nomeDi(l.dipendente_id)+(l.contestata_il?' · ⚠ CONTESTATO':''),
-        sezione: l.confermata_dip ? 'confermato' : 'sospeso', stato: l.confermata_dip ? 'confermato' : 'sospeso',
+        sezione: sezSosp(l.confermata_dip, l.dipendente_id), stato: l.confermata_dip ? 'confermato' : 'sospeso',
         quando:l.confermata_il, dataOrd:l.liquidato_il, canResend:hasTg(l.dipendente_id) });
     });
     (documenti||[]).forEach(doc => {
@@ -19621,7 +19661,7 @@ async function caricaAttivitaDipendenti() {
       tutti.push({ tipo:'documento', icona:'📄', id:doc.id, dipId:doc.dipendente_id, dipNome:nomeDi(doc.dipendente_id),
         titolo:catLbl+' '+periodo,
         sub:nomeDi(doc.dipendente_id)+(doc.contestata_il?' · ⚠ CONTESTATO':''),
-        sezione: doc.letto_il ? 'confermato' : 'sospeso', stato: doc.letto_il ? 'confermato' : 'sospeso',
+        sezione: sezSosp(!!doc.letto_il, doc.dipendente_id), stato: doc.letto_il ? 'confermato' : 'sospeso',
         quando:doc.letto_il, dataOrd:doc.creato_il, canResend:hasTg(doc.dipendente_id) });
     });
     (restituzioni||[]).forEach(r => {
@@ -19686,6 +19726,7 @@ function renderAttivitaFiltrata() {
     (!statoFiltro || it.stato===statoFiltro)
   );
   const inSospeso = filtrati.filter(it => it.sezione==='sospeso');
+  const chiusi = filtrati.filter(it => it.sezione==='chiuso');
   const restItems = filtrati.filter(it => it.sezione==='restituzione');
   const confermati = filtrati.filter(it => it.sezione==='confermato').sort((a,b)=> new Date(b.quando||0)-new Date(a.quando||0));
 
@@ -19715,6 +19756,19 @@ function renderAttivitaFiltrata() {
         + attivitaBtnApri(it)
         + '</div>'
         + '</div>';
+    });
+  }
+  // Dipendenti non più in squadra: nessuna conferma è attesa (non possono
+  // più entrare nell'app). Restano visibili, senza solleciti.
+  if (chiusi.length) {
+    html += '<div style="font-size:13px;font-weight:700;color:var(--text);margin:18px 0 6px">🔒 Non più in squadra — nessuna conferma attesa ('+chiusi.length+')</div>'
+      + '<div style="font-size:12px;color:var(--muted);margin-bottom:10px">Il rapporto è chiuso: queste voci restano registrate così come sono.</div>';
+    chiusi.forEach(it => {
+      html += '<div style="display:flex;gap:10px;align-items:center;padding:11px 12px;background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--muted);border-radius:12px;margin-bottom:7px">'
+        + '<span style="font-size:20px;flex-shrink:0">'+it.icona+'</span>'
+        + '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">'+it.titolo+'</div>'
+        + '<div style="font-size:11px;color:var(--muted)">'+it.sub+'</div></div>'
+        + '<div style="flex-shrink:0">' + attivitaBtnApri(it) + '</div></div>';
     });
   }
   // Restituzioni registrate — non c'è nulla da "confermare" qui, solo da
@@ -19812,6 +19866,8 @@ async function reinviaRichiestaConferma(tipo, id, dipId) {
       const dataLbl = new Date(p.data).toLocaleDateString('it-IT',{day:'2-digit',month:'long'});
       const azioneLbl = p.richiesta_tipo === 'elimina' ? 'eliminare' : 'correggere';
       msg = '🔔 <b>Promemoria — Richiesta admin su una timbratura</b>\n\nL\u2019admin ha chiesto di '+azioneLbl+' la tua timbratura del <b>'+dataLbl+'</b>, ancora in attesa di una tua risposta.\n\nApri Ceraldi Presenze per confermare o rifiutare.';
+    } else if (tipo.indexOf('richiesta_elim:') === 0) {
+      msg = '🔔 <b>Promemoria — Richiesta di eliminazione</b>\n\nL’admin ha chiesto di eliminare ' + ({ presenze_acconti: 'un pagamento', presenze_liquidazioni: 'uno stipendio', presenze_documenti: 'un documento' }[tipo.slice(15)] || 'una voce') + ' che avevi già confermato. Serve la tua risposta.\n\nApri Ceraldi Presenze per confermare o rifiutare.';
     } else if (tipo === 'richiesta_assenza') {
       const { data: a } = await sb.from('presenze_assenze').select('tipo,data_inizio,data_fine').eq('id',id).single();
       const lbl = a.tipo === 'ferie' ? 'ferie' : a.tipo === 'malattia' ? 'malattia' : (a.tipo||'assenza');
@@ -19819,7 +19875,7 @@ async function reinviaRichiestaConferma(tipo, id, dipId) {
       msg = '🔔 <b>Promemoria — Richiesta eliminazione</b>\n\nL\u2019admin ha chiesto di eliminare la tua '+lbl+periodo+', ancora in attesa di una tua risposta.\n\nApri Ceraldi Presenze per confermare o rifiutare.';
     }
     // Deep link: il dipendente atterra direttamente sulla cosa sollecitata
-    const deep = tipo === 'documento' ? '#documenti' : (tipo === 'timbratura' || tipo === 'richiesta_timbr') ? '#timbra' : tipo === 'richiesta_assenza' ? '#richiesta-' + id : '#stipendi';
+    const deep = tipo === 'documento' ? '#documenti' : (tipo === 'timbratura' || tipo === 'richiesta_timbr') ? '#timbra' : tipo === 'richiesta_assenza' ? '#richiesta-' + id : tipo.indexOf('richiesta_elim:') === 0 ? '' : '#stipendi';
     await inviaNotificaDipendente(dipId, msg, deep);
     toast('✓ Sollecito inviato a '+(dip.nome||''));
   } catch(e) { console.warn('reinvia:', e); toast('Errore invio sollecito'); }
@@ -19869,17 +19925,19 @@ async function contaTutteLeRichiesteInAttesa() {
       { data: rDocumenti },
       { count: cCambiTurno },
     ] = await Promise.all([
-      sb.from('presenze_acconti').select('id').eq('letto_dip',false),
-      sb.from('presenze_liquidazioni').select('id').eq('confermata_dip',false),
+      sb.from('presenze_acconti').select('id,dipendente_id').eq('letto_dip',false),
+      sb.from('presenze_liquidazioni').select('id,dipendente_id').eq('confermata_dip',false),
       // Tutte le categorie di documento, non solo busta paga/CU — un
       // contratto o un "altro" non letto è comunque qualcosa in attesa.
       // Le buste paga ancora in bozza (non inviate) NON contano come "in
       // attesa del dipendente": non le ha ancora nemmeno ricevute.
-      sb.from('presenze_documenti').select('id').is('letto_il',null)
+      sb.from('presenze_documenti').select('id,dipendente_id').is('letto_il',null)
         .or('categoria.neq.busta_paga,inviato_dip.eq.true'),
       sb.from('presenze_cambi_turno').select('id',{count:'exact',head:true}).eq('stato','attesa_admin'),
     ]);
-    const _nOk = (righe, t) => (righe||[]).filter(r => !(typeof avvOk === 'function' && avvOk('attesa:' + t + ':' + r.id))).length;
+    // chi non è più in squadra non conferma più: non conta come "in attesa"
+    const fuori = await dipFuoriSquadraSet();
+    const _nOk = (righe, t) => (righe||[]).filter(r => !fuori.has(r.dipendente_id) && !(typeof avvOk === 'function' && avvOk('attesa:' + t + ':' + r.id))).length;
     return daPromemoria + _nOk(rAcconti,'acconto') + _nOk(rLiquid,'stipendio') + _nOk(rDocumenti,'documento') + (cCambiTurno||0);
   } catch(e) {
     console.warn('contaTutteLeRichiesteInAttesa:', e);
@@ -20069,7 +20127,8 @@ async function apriDettaglioStat(tipo, meseSel) {
     ]);
     const voci = pr.map(p => ({ tipo:'promemoria', ptipo:p.tipo, id:p.id, okKey:p.okKey, icona:p.icona, titolo:p.titolo, testo:p.testo, azione:p.azione, dipId:p.dipId, nome:p.dipId?nomeMap[p.dipId]:'' }));
     // 05/10/2026: quelle segnate "va bene così" non compaiono più
-    const _okAtt = (t, r) => typeof avvOk === 'function' && avvOk('attesa:' + t + ':' + r.id);
+    const _fuoriAtt = await dipFuoriSquadraSet();
+    const _okAtt = (t, r) => _fuoriAtt.has(r.dipendente_id) || (typeof avvOk === 'function' && avvOk('attesa:' + t + ':' + r.id));
     if (acconti) acconti = acconti.filter(r => !_okAtt('acconto', r));
     if (liquid) liquid = liquid.filter(r => !_okAtt('stipendio', r));
     if (documenti) documenti = documenti.filter(r => !_okAtt('documento', r));
@@ -27009,7 +27068,7 @@ async function caricaDocumento() {
   let esistente = null;
   if (isBusta) {
     const { data } = await sb.from('presenze_documenti')
-      .select('id,url,netto_busta,lordo,contributi_dip,tfr_accantonato,nome_file,inviato_dip,inviato_il,versioni').eq('dipendente_id', dipId).eq('categoria','busta_paga')
+      .select('id,url,netto_busta,lordo,contributi_dip,tfr_accantonato,nome_file,inviato_dip,inviato_il,letto_il,versioni').eq('dipendente_id', dipId).eq('categoria','busta_paga')
       .eq('mese', mese).eq('anno', anno).limit(1).maybeSingle();
     esistente = data;
   }
@@ -27025,7 +27084,9 @@ async function caricaDocumento() {
       // riporta in bozza — va inviata di nuovo consapevolmente.
       ...(isBusta ? { inviato_dip: false, inviato_il: null } : {}),
     }).eq('id', esistente.id));
-    if (!error && esistente.url && esistente.url !== path) {
+    // Il file vecchio si cancella solo se era una bozza mai inviata né letta:
+    // una busta già consegnata resta in archivio (prova di cosa ha ricevuto).
+    if (!error && esistente.url && esistente.url !== path && !esistente.letto_il && esistente.inviato_dip === false) {
       await sb.storage.from('presenze-allegati').remove([esistente.url]).catch(()=>{});
     }
   } else {
@@ -27774,7 +27835,7 @@ async function caricaUnGruppoCedolino(g, mese, anno, srcDoc) {
   // rilettura riparte da zero (letto_il azzerato) perché il
   // contenuto è cambiato.
   const { data: esistente } = await sb.from('presenze_documenti')
-    .select('id,url,netto_busta,lordo,contributi_dip,tfr_accantonato,nome_file,inviato_dip,inviato_il,versioni').eq('dipendente_id', g.dipId).eq('categoria','busta_paga')
+    .select('id,url,netto_busta,lordo,contributi_dip,tfr_accantonato,nome_file,inviato_dip,inviato_il,letto_il,versioni').eq('dipendente_id', g.dipId).eq('categoria','busta_paga')
     .eq('mese', mese).eq('anno', anno).limit(1).maybeSingle();
 
   let insErr = null;
@@ -27789,7 +27850,9 @@ async function caricaUnGruppoCedolino(g, mese, anno, srcDoc) {
       inviato_dip: false, inviato_il: null,
     }).eq('id', esistente.id);
     insErr = error;
-    if (!error && esistente.url && esistente.url !== path) {
+    // Il file vecchio si cancella solo se era una bozza mai inviata né letta:
+    // una busta già consegnata resta in archivio (prova di cosa ha ricevuto).
+    if (!error && esistente.url && esistente.url !== path && !esistente.letto_il && esistente.inviato_dip === false) {
       await sb.storage.from('presenze-allegati').remove([esistente.url]).catch(()=>{});
     }
   } else {
@@ -28214,8 +28277,7 @@ async function corrMostraConfermaAdmin(id) {
     const { data: r } = await sb.from('presenze')
       .select('dipendente_id,tipo_timbratura,confermata_dip,richiesta_tipo').eq('id', id).maybeSingle();
     if (!r || r.tipo_timbratura !== 'manuale' || r.confermata_dip || r.richiesta_tipo) return;
-    const { data: p } = await sb.from('presenze_profili').select('attivo,eliminato').eq('id', r.dipendente_id).maybeSingle();
-    if (p && p.attivo && !p.eliminato) return;
+    if (!(await dipFuoriSquadra(r.dipendente_id))) return;
     const foot = $('corr-foot');
     if (!foot || _corrId !== id || foot.querySelector('.corr-conf-admin')) return;
     foot.style.flexWrap = 'wrap';
@@ -29550,6 +29612,7 @@ async function caricaSospesiDip() {
     if (s.assenze.length) voci.push({ icona:'🌴', testo:(s.assenze.length===1?'1 richiesta da confermare':s.assenze.length+' richieste da confermare'), azione:"switchPage('pg-assenze-dip')" });
     if (s.richiesteTimbrature && s.richiesteTimbrature.length) voci.push({ icona:'✍️', testo:(s.richiesteTimbrature.length===1?'1 richiesta admin su una timbratura':s.richiesteTimbrature.length+' richieste admin su timbrature'), azione:'mostraProssimaAzioneInSospesa()' });
     if (s.richiesteAssenze && s.richiesteAssenze.length) voci.push({ icona:'🗑', testo:(s.richiesteAssenze.length===1?'1 richiesta di eliminazione':s.richiesteAssenze.length+' richieste di eliminazione'), azione:'mostraProssimaAzioneInSospesa()' });
+    if (s.richiesteEliminazione && s.richiesteEliminazione.length) voci.push({ icona:'🗑', testo:(s.richiesteEliminazione.length===1?'1 richiesta di eliminazione di un pagamento o documento':s.richiesteEliminazione.length+' richieste di eliminazione di pagamenti o documenti'), azione:'mostraProssimaAzioneInSospesa()' });
     const timDaConfermareDip = s.timbrature.filter(t => t.tipo_timbratura === 'manuale');
     const timInAttesaAdmin   = s.timbrature.filter(t => t.tipo_timbratura === 'manuale_dip');
     if (timDaConfermareDip.length) voci.push({ icona:'✍️', testo:(timDaConfermareDip.length===1?'1 timbratura da confermare':timDaConfermareDip.length+' timbrature da confermare'), azione:"caricaStoricoDip(true)" });
@@ -33447,6 +33510,387 @@ setInterval(() => {
   .afid-esci{background:none;border:0;color:var(--accent);font-size:13px;padding:8px;cursor:pointer}`;
   document.head.appendChild(st);
 })();
+
+/* ══════════════════════════════════════════════════════════════════
+   PRESENZE — 30/10/2026 · REGOLE DI CONFERMA (inoppugnabilità)
+   1. Ciò che il dipendente ha già confermato (pagamento, stipendio,
+      documento letto) non si elimina senza una sua SECONDA conferma,
+      distinta dalla prima e firmata a parte. Se non l'aveva ancora
+      confermato, l'admin elimina subito come prima.
+      Lo stesso vincolo è anche nel database (non solo nell'app).
+   2. Chi non è più in squadra (profilo ELIMINATO, rapporto chiuso) non
+      può più rispondere: nessuna conferma è attesa da lui, le richieste
+      dell'admin si applicano subito (motivo obbligatorio, tutto nel
+      registro) e le sue voci non restano "in attesa" per sempre.
+      "Non attivo" = registrazione incompleta: può ancora rispondere.
+   3. Le risposte del dipendente alle richieste dell'admin (modifica o
+      eliminazione di timbrature e ferie) si firmano con Face ID come
+      tutte le altre conferme, con la frase esatta nel registro.
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ── 2. Chi è fuori squadra (un'unica regola per tutta l'app) ── */
+const _FUORI = { set: new Set(), t: 0 };
+async function dipFuoriSquadraSet(forza) {
+  if (!forza && Date.now() - _FUORI.t < 30000) return _FUORI.set;
+  try {
+    const { data, error } = await sb.from('presenze_profili').select('id').eq('eliminato', true);
+    if (!error) { _FUORI.set = new Set((data || []).map(r => r.id)); _FUORI.t = Date.now(); }
+  } catch (e) {}
+  return _FUORI.set;
+}
+async function dipFuoriSquadra(id) { return !!id && (await dipFuoriSquadraSet()).has(id); }
+const _nomeDip = async id => { try { const { data } = await sb.from('presenze_profili').select('nome,cognome').eq('id', id).maybeSingle(); return data ? data.nome + (data.cognome ? ' ' + data.cognome : '') : 'il dipendente'; } catch (e) { return 'il dipendente'; } };
+async function _aggiornaDopoCambio() {
+  try { closeSheet('sh-correggi'); } catch (e) {}
+  for (const f of ['caricaOggi', 'caricaStorico', 'caricaPresenzeTeam', 'aggiornaStats', 'aggiornaPromemoria']) {
+    try { if (typeof window[f] === 'function') await window[f](); } catch (e) {}
+  }
+}
+
+/* ── finestra "motivo" (niente prompt() nativo: in PWA su iPhone è instabile) ── */
+let _motivoRisolvi = null;
+function _chiediMotivo(titolo, spiegazione, bottone) {
+  return new Promise(res => {
+    _motivoRisolvi = res;
+    const body = _sheetDinamico('sh-motivo', titolo);
+    body.innerHTML = `<div class="note-small" style="margin-bottom:12px;line-height:1.5">${spiegazione}</div>
+      <div class="field-lbl">Motivo (obbligatorio, lo legge anche il dipendente)</div>
+      <input class="field-inp" id="motivo-inp" type="text" maxlength="200" placeholder="es. importo registrato due volte">
+      <div class="msg" id="motivo-msg"></div>
+      <button class="btn-danger" style="width:100%;padding:13px" onclick="_motivoOk()">${esc(bottone || 'Invia la richiesta')}</button>
+      <button class="btn-link" style="margin-top:6px" onclick="_motivoChiudi(null)">Annulla</button>`;
+    openSheet('sh-motivo');
+    setTimeout(() => { const i = $('motivo-inp'); if (i) i.focus(); }, 300);
+  });
+}
+function _motivoOk() {
+  const m = ($('motivo-inp') && $('motivo-inp').value.trim()) || '';
+  if (m.length < 3) { showMsg('motivo-msg', 'Scrivi il motivo', 'err'); return; }
+  _motivoChiudi(m);
+}
+function _motivoChiudi(v) { closeSheet('sh-motivo'); const r = _motivoRisolvi; _motivoRisolvi = null; if (r) r(v); }
+
+/* ── 1. Eliminazione con seconda conferma del dipendente ── */
+const _ELIM = {
+  presenze_acconti:      { cosa: 'il pagamento', confermato: r => !!r.letto_dip,      descr: r => 'il pagamento di € ' + (parseFloat(r.importo) || 0).toFixed(2) + ' del ' + new Date(r.data).toLocaleDateString('it-IT') },
+  presenze_liquidazioni: { cosa: 'lo stipendio', confermato: r => !!r.confermata_dip, descr: r => 'lo stipendio di ' + new Date(r.anno, r.mese - 1, 1).toLocaleDateString('it-IT', { month: 'long', year: 'numeric' }) + ' (€ ' + (parseFloat(r.importo_netto) || 0).toFixed(2) + ')' },
+  presenze_documenti:    { cosa: 'il documento', confermato: r => !!r.letto_il,       descr: r => 'il documento «' + etichettaCategoriaDoc(r.categoria) + (r.mese ? ' ' + new Date(r.anno, r.mese - 1, 1).toLocaleDateString('it-IT', { month: 'long', year: 'numeric' }) : r.anno ? ' ' + r.anno : '') + '»' },
+};
+// true = gestita qui (richiesta inviata, già in attesa o annullata): chi chiama si ferma.
+// false = nessuna conferma serve (non ancora confermato, o fuori squadra): si elimina subito come prima.
+async function eliminazioneConConferma(tabella, id) {
+  const cfg = _ELIM[tabella]; if (!cfg) return false;
+  const { data: r } = await sb.from(tabella).select('*').eq('id', id).maybeSingle();
+  if (!r) return false;
+  if (r.richiesta_elimina) { toast('Eliminazione già chiesta: aspetta la risposta del dipendente'); return true; }
+  if (!cfg.confermato(r) || await dipFuoriSquadra(r.dipendente_id)) return false;
+  const nome = await _nomeDip(r.dipendente_id);
+  const motivo = await _chiediMotivo('Serve la conferma di ' + nome.split(' ')[0],
+    esc(nome) + ' ha già confermato ' + esc(cfg.descr(r)) + '.<br>Per eliminarlo deve <b>confermare anche l’eliminazione</b>: finché non risponde resta tutto com’è, e puoi annullare la richiesta.',
+    'Chiedi conferma a ' + nome.split(' ')[0]);
+  if (!motivo) return true;
+  const { error } = await sb.from(tabella).update({ richiesta_elimina: true, richiesta_elimina_da: ME.id, richiesta_elimina_il: new Date().toISOString(), richiesta_elimina_motivo: motivo }).eq('id', id);
+  if (error) {
+    toast(/richiesta_elimina/.test(error.message || '') ? '⚠️ Database da aggiornare (file SQL del 30/10): eliminazione non inviata' : 'Errore: ' + error.message);
+    return true;
+  }
+  try {
+    await inviaNotificaDipendente(r.dipendente_id, '🗑 <b>Richiesta di eliminazione</b>\n\nL’admin chiede di eliminare ' + cfg.descr(r) + ', che avevi confermato.\nMotivo: <i>' + escTG(motivo) + '</i>\n\nApri l’app per confermare o rifiutare: finché non rispondi non cambia nulla.', '');
+  } catch (e) {}
+  toast('✓ Richiesta inviata: ' + nome.split(' ')[0] + ' deve confermare l’eliminazione');
+  try { if (typeof caricaStipendi === 'function' && _paginaCorrente === 'pg-stipendi') await caricaStipendi(); } catch (e) {}
+  try { if (typeof caricaDocumentiAdmin === 'function' && _paginaCorrente === 'pg-docs-admin') await caricaDocumentiAdmin(); } catch (e) {}
+  try { await aggiornaPromemoria(); } catch (e) {}
+  return true;
+}
+async function annullaRichiestaEliminazione(tabella, id) {
+  const { error } = await sb.from(tabella).update({ richiesta_elimina: false, richiesta_elimina_da: null, richiesta_elimina_il: null, richiesta_elimina_motivo: null }).eq('id', id);
+  if (error) { toast('Errore: ' + error.message); return; }
+  toast('Richiesta annullata — nulla è stato eliminato');
+  for (const s of ['sh-acc-mod', 'sh-liq-mod']) { try { closeSheet(s); } catch (e) {} }
+  try { if (typeof caricaStipendi === 'function' && _paginaCorrente === 'pg-stipendi') await caricaStipendi(); } catch (e) {}
+  try { if (typeof caricaDocumentiAdmin === 'function' && _paginaCorrente === 'pg-docs-admin') await caricaDocumentiAdmin(); } catch (e) {}
+  try { await aggiornaPromemoria(); } catch (e) {}
+}
+
+// Pagamento (🗑 nella card Stipendi e "Elimina" nella scheda di modifica)
+if (typeof eliminaAccontoErrato === 'function') {
+  const _elAcc0 = eliminaAccontoErrato;
+  eliminaAccontoErrato = async function (id, btn) {
+    if (btn && !btn.dataset.arm) return _elAcc0(id, btn); // primo tocco: "❓"
+    if (await eliminazioneConConferma('presenze_acconti', id)) { if (btn) { delete btn.dataset.arm; btn.textContent = '🗑'; } return; }
+    return _elAcc0(id, btn);
+  };
+}
+// Stipendio ("Annulla questa liquidazione")
+if (typeof liqAnnulla === 'function') {
+  const _liqAnn0 = liqAnnulla;
+  liqAnnulla = async function (btn) {
+    if (!btn || !btn.dataset.arm) return _liqAnn0(btn);
+    const l = _liqMod && _liqMod.l;
+    if (l && await eliminazioneConConferma('presenze_liquidazioni', l.id)) { delete btn.dataset.arm; closeSheet('sh-liq-mod'); return; }
+    return _liqAnn0(btn);
+  };
+}
+// Documento: se letto serve la conferma; se il dipendente è fuori squadra
+// si toglie dall'elenco ma il file resta in archivio (prova di cosa aveva letto).
+if (typeof eliminaDocumento === 'function') {
+  const _elDoc0 = eliminaDocumento;
+  eliminaDocumento = async function (id) {
+    const { data: d } = await sb.from('presenze_documenti').select('id,dipendente_id,letto_il,richiesta_elimina').eq('id', id).maybeSingle();
+    if (!d) return _elDoc0(id);
+    if (d.richiesta_elimina || (d.letto_il && !(await dipFuoriSquadra(d.dipendente_id)))) { await eliminazioneConConferma('presenze_documenti', id); return; }
+    if (d.letto_il) {
+      if (!confirm('Il dipendente non è più in squadra: il documento si toglie dall’elenco, il file resta in archivio. Procedere?')) return;
+      const { error } = await sb.from('presenze_documenti').delete().eq('id', id);
+      if (error) { toast('Errore: ' + error.message); return; }
+      toast('Documento tolto dall’elenco (file conservato)');
+      return caricaDocumentiAdmin();
+    }
+    return _elDoc0(id);
+  };
+}
+// Schede di modifica: se c'è una richiesta in corso si vede, si può annullare,
+// e il tasto Elimina sparisce finché il dipendente non risponde.
+function _bannerRichiestaElim(sheetId, tabella, r) {
+  if (!r || !r.richiesta_elimina) return;
+  const sh = document.getElementById(sheetId); if (!sh) return;
+  const del = sh.querySelector('.mod-del'); if (del) del.style.display = 'none';
+  const ref = sh.querySelector('.mod-chi'); if (!ref || sh.querySelector('.rich-elim-box')) return;
+  ref.insertAdjacentHTML('afterend', `<div class="st-avviso giallo rich-elim-box">⏳ Eliminazione chiesta al dipendente il ${new Date(r.richiesta_elimina_il).toLocaleDateString('it-IT')}${r.richiesta_elimina_motivo ? ' · «' + esc(r.richiesta_elimina_motivo) + '»' : ''}: finché non risponde resta tutto com’è.
+    <button class="btn-sm" style="margin-top:8px;display:block" onclick="annullaRichiestaEliminazione('${tabella}','${r.id}')">↩️ Annulla richiesta</button></div>`);
+}
+if (typeof accModifica === 'function') {
+  const _accMod0 = accModifica;
+  accModifica = async function (id) { const r = await _accMod0.apply(this, arguments); try { _bannerRichiestaElim('sh-acc-mod', 'presenze_acconti', _accMod && _accMod.a); } catch (e) {} return r; };
+}
+if (typeof liqModifica === 'function') {
+  const _liqMod0 = liqModifica;
+  liqModifica = async function (id) { const r = await _liqMod0.apply(this, arguments); try { _bannerRichiestaElim('sh-liq-mod', 'presenze_liquidazioni', _liqMod && _liqMod.l); } catch (e) {} return r; };
+}
+// Centro attività: le richieste di eliminazione si aprono nella loro scheda
+if (typeof _promAzione === 'function') {
+  const _promAz0 = _promAzione;
+  _promAzione = function (p) {
+    if (p && p.tipo === 'eliminazione' && p.id) {
+      if (p.tab === 'presenze_acconti') return { lbl: 'Apri il pagamento', js: `accModifica('${p.id}')` };
+      if (p.tab === 'presenze_liquidazioni') return { lbl: 'Apri lo stipendio', js: `liqModifica('${p.id}')` };
+      if (p.tab === 'presenze_documenti') return { lbl: 'Apri Documenti', js: `switchPage('pg-docs-admin')` };
+    }
+    return _promAz0(p);
+  };
+}
+
+/* ── 2. Richieste dell'admin per chi è fuori squadra: si applicano subito ── */
+async function _logCorrezione(presenzaId, dipId, azione, motivo, prima) {
+  try { await DB.safe(() => DB.correzioni.logga({ presenza_id: presenzaId, dipendente_id: dipId, azione, motivo, dati_prima: prima, eseguita_da: ME.id }), null); } catch (e) {}
+}
+if (typeof salvaCorrezioneTimbr === 'function') {
+  const _salvaCorr0 = salvaCorrezioneTimbr;
+  salvaCorrezioneTimbr = async function () {
+    const pres = _corrId ? await DB.safe(() => DB.presenze.byId(_corrId, 'dipendente_id,nome_dipendente'), null) : null;
+    if (!pres || !(await dipFuoriSquadra(pres.dipendente_id))) return _salvaCorr0.apply(this, arguments);
+    const ora = $('corr-ora').value, data = $('corr-data').value, motivo = $('corr-motivo').value.trim();
+    if (!motivo) { showMsg('corr-msg', 'Il motivo è obbligatorio', 'err'); return; }
+    if (!ora || !data) { showMsg('corr-msg', 'Inserisci data e orario', 'err'); return; }
+    const ok = await DB.safe(() => DB.presenze.update(_corrId, { ts_entrata: buildTS(data, ora), data }), 'Errore durante il salvataggio');
+    if (!ok) return;
+    await _logCorrezione(_corrId, pres.dipendente_id, 'modifica', motivo + ' — applicata subito: dipendente non più in squadra', _corrDatiPrima);
+    toast('✓ Corretta subito: ' + (pres.nome_dipendente || 'il dipendente') + ' non è più in squadra');
+    await _aggiornaDopoCambio();
+  };
+}
+if (typeof eliminaTimbratura === 'function') {
+  const _elTim0 = eliminaTimbratura;
+  eliminaTimbratura = async function () {
+    const btn = $('btn-del-timbr');
+    if (!btn || !btn.dataset.arm) return _elTim0.apply(this, arguments); // controllo motivo + primo tocco
+    const pres = _corrId ? await DB.safe(() => DB.presenze.byId(_corrId, 'dipendente_id,nome_dipendente'), null) : null;
+    if (!pres || !(await dipFuoriSquadra(pres.dipendente_id))) return _elTim0.apply(this, arguments);
+    delete btn.dataset.arm; btn.innerHTML = '&#x1F5D1;';
+    const motivo = $('corr-motivo').value.trim();
+    if (!motivo) { showMsg('corr-msg', 'Inserisci il motivo prima di eliminare', 'err'); return; }
+    const { error } = await sb.from('presenze').delete().eq('id', _corrId);
+    if (error) { showMsg('corr-msg', error.message, 'err'); return; }
+    await _logCorrezione(_corrId, pres.dipendente_id, 'eliminazione', motivo + ' — applicata subito: dipendente non più in squadra', _corrDatiPrima);
+    toast('✓ Eliminata subito: ' + (pres.nome_dipendente || 'il dipendente') + ' non è più in squadra');
+    await _aggiornaDopoCambio();
+  };
+}
+// Richiesta già in attesa quando il dipendente è uscito: "Applica ora"
+async function applicaRichiestaTimbrFuori(id) {
+  const { data: p } = await sb.from('presenze').select('*').eq('id', id).maybeSingle();
+  if (!p || !p.richiesta_tipo) { toast('Richiesta non più presente'); return _aggiornaDopoCambio(); }
+  if (!(await dipFuoriSquadra(p.dipendente_id))) { toast('Il dipendente è in squadra: deve rispondere lui'); return; }
+  if (!confirm('Applicare ora la richiesta di ' + (p.richiesta_tipo === 'elimina' ? 'eliminazione' : 'modifica') + '? Il dipendente non è più in squadra e non può rispondere.')) return;
+  const prima = { ts_entrata: p.ts_entrata, data: p.data };
+  let error;
+  if (p.richiesta_tipo === 'elimina') ({ error } = await sb.from('presenze').delete().eq('id', id));
+  else ({ error } = await sb.from('presenze').update({ ts_entrata: p.richiesta_nuovi_dati.ts_entrata, data: p.richiesta_nuovi_dati.data,
+    richiesta_tipo: null, richiesta_nuovi_dati: null, richiesta_motivo: null, richiesta_creata_da: null, richiesta_creata_il: null }).eq('id', id));
+  if (error) { toast('Errore: ' + error.message); return; }
+  await _logCorrezione(id, p.dipendente_id, p.richiesta_tipo === 'elimina' ? 'eliminazione' : 'modifica', (p.richiesta_motivo || 'richiesta admin') + ' — applicata dall’admin: dipendente non più in squadra', prima);
+  toast('✓ Applicata');
+  await _aggiornaDopoCambio();
+}
+if (typeof corrMostraConfermaAdmin === 'function') {
+  const _corrMostra0 = corrMostraConfermaAdmin;
+  corrMostraConfermaAdmin = async function (id) {
+    await _corrMostra0(id);
+    try {
+      const { data: r } = await sb.from('presenze').select('dipendente_id,richiesta_tipo').eq('id', id).maybeSingle();
+      if (!r || !r.richiesta_tipo || !(await dipFuoriSquadra(r.dipendente_id))) return;
+      const foot = $('corr-foot'); if (!foot || _corrId !== id || foot.querySelector('.corr-applica')) return;
+      foot.insertAdjacentHTML('afterbegin', '<div class="note-small" style="width:100%;margin-bottom:8px">Il dipendente non è più in squadra: non potrà rispondere.</div><button class="btn-primary corr-applica" style="width:100%;margin-bottom:8px" onclick="applicaRichiestaTimbrFuori(\'' + id + '\')">✓ Applica ora la richiesta</button>');
+      foot.style.flexWrap = 'wrap';
+    } catch (e) {}
+  };
+}
+if (typeof richiediEliminaAssenza === 'function') {
+  const _richElAss0 = richiediEliminaAssenza;
+  richiediEliminaAssenza = async function (id) {
+    const a = await DB.byIdOrNull('presenze_assenze', id);
+    if (!a || !(await dipFuoriSquadra(a.dipendente_id))) return _richElAss0.apply(this, arguments);
+    return applicaEliminaAssenzaFuori(id);
+  };
+}
+async function applicaEliminaAssenzaFuori(id) {
+  const a = await DB.byIdOrNull('presenze_assenze', id);
+  if (!a) { toast('Non esiste più'); return; }
+  if (!(await dipFuoriSquadra(a.dipendente_id))) { toast('Il dipendente è in squadra: deve rispondere lui'); return; }
+  if (!confirm('Il dipendente non è più in squadra e non può rispondere: eliminare subito questa ' + (a.tipo || 'assenza') + '?')) return;
+  const { error } = await sb.from('presenze_assenze').delete().eq('id', id);
+  if (error) { toast('Errore: ' + error.message); return; }
+  toast('✓ Eliminata: il dipendente non è più in squadra');
+  try { closeSheet('sh-dettaglioAssenza'); } catch (e) {}
+  for (const f of ['caricaAssenzeAdmin', 'caricaPresenzeTeam', 'aggiornaStats', 'aggiornaPromemoria']) { try { if (typeof window[f] === 'function') await window[f](); } catch (e) {} }
+}
+if (typeof openDettaglioAssenza === 'function') {
+  const _detAss0 = openDettaglioAssenza;
+  openDettaglioAssenza = async function (id, isAdmin) {
+    const r = await _detAss0.apply(this, arguments);
+    try {
+      if (!isAdmin) return r;
+      const a = await DB.byIdOrNull('presenze_assenze', id);
+      if (a && a.richiesta_elimina && await dipFuoriSquadra(a.dipendente_id)) {
+        const f = $('sh-det-foot');
+        if (f && !f.querySelector('.ass-applica')) f.insertAdjacentHTML('afterbegin', '<button class="btn-danger ass-applica" style="width:100%;padding:12px;margin-bottom:8px" onclick="applicaEliminaAssenzaFuori(\'' + id + '\')">✓ Applica ora (non è più in squadra)</button>');
+      }
+    } catch (e) {}
+    return r;
+  };
+}
+
+/* ── 1. Lato dipendente: la richiesta di eliminazione da confermare ── */
+if (typeof getSospesiDip === 'function') {
+  const _getSosp0 = getSospesiDip;
+  getSospesiDip = async function () {
+    const s = await _getSosp0.apply(this, arguments);
+    s.richiesteEliminazione = [];
+    try {
+      const sel = (t, campi) => sb.from(t).select(campi).eq('dipendente_id', ME.id).eq('richiesta_elimina', true);
+      const rs = await Promise.all([
+        sel('presenze_acconti', 'id,importo,data,richiesta_elimina_motivo,richiesta_elimina_il'),
+        sel('presenze_liquidazioni', 'id,mese,anno,importo_netto,richiesta_elimina_motivo,richiesta_elimina_il'),
+        sel('presenze_documenti', 'id,categoria,mese,anno,richiesta_elimina_motivo,richiesta_elimina_il'),
+      ]);
+      ['presenze_acconti', 'presenze_liquidazioni', 'presenze_documenti'].forEach((t, i) => (rs[i].data || []).forEach(r => s.richiesteEliminazione.push(Object.assign({ _tab: t }, r))));
+    } catch (e) {}
+    return s;
+  };
+}
+if (typeof mostraProssimaAzioneInSospesa === 'function') {
+  const _prossima0 = mostraProssimaAzioneInSospesa;
+  mostraProssimaAzioneInSospesa = async function () {
+    if (ME && ME.ruolo === 'dipendente') {
+      const s = await getSospesiDip();
+      if (s.richiesteEliminazione && s.richiesteEliminazione.length) return apriRichiestaEliminazioneDip(s.richiesteEliminazione[0]);
+    }
+    return _prossima0.apply(this, arguments);
+  };
+}
+let _reDip = null;
+function _testoRispostaElim(conferma) {
+  const r = _reDip, cfg = _ELIM[r._tab];
+  return (conferma ? 'Confermo che venga eliminato ' : 'Non confermo che venga eliminato ') + cfg.descr(r) + ', che avevo confermato.'
+    + (r.richiesta_elimina_motivo ? ' Motivo indicato dall’admin: ' + r.richiesta_elimina_motivo + '.' : '');
+}
+function apriRichiestaEliminazioneDip(r) {
+  _reDip = r;
+  const cfg = _ELIM[r._tab];
+  const body = _sheetDinamico('sh-rich-elim', 'Richiesta di eliminazione');
+  body.innerHTML = `<div style="text-align:center;font-size:40px;margin:4px 0 8px">🗑</div>
+    <div style="font-size:15px;line-height:1.5;text-align:center;margin-bottom:12px">L’admin chiede di <b>eliminare ${esc(cfg.descr(r))}</b>, che avevi confermato.</div>
+    ${r.richiesta_elimina_motivo ? `<div class="va-box" style="margin-bottom:12px"><b>Motivo:</b> ${esc(r.richiesta_elimina_motivo)}</div>` : ''}
+    <div class="note-small" style="margin-bottom:14px">Se confermi, sparisce dal tuo elenco (resta comunque nel registro). Se non confermi, resta tutto com’è. In entrambi i casi la tua risposta viene firmata e registrata.</div>
+    <div class="msg" id="re-msg"></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn-secondary" style="flex:1;color:var(--red)" onclick="rispondiEliminazioneDip(false)">✕ Non confermo</button>
+      <button class="btn-green-solid" style="flex:1" onclick="rispondiEliminazioneDip(true)">✓ Confermo</button>
+    </div>`;
+  openSheet('sh-rich-elim');
+}
+async function rispondiEliminazioneDip(conferma) {
+  const r = _reDip; if (!r) return;
+  const azione = conferma ? 'conferma_eliminazione' : 'rifiuto_eliminazione';
+  const testo = _testoRispostaElim(conferma);
+  const firma = await firmaPrima(azione, { tabella: r._tab, rif: r.id, testo });
+  if (firma === false) return; // firma annullata: non si invia nulla
+  const { data, error } = await sb.rpc('presenze_rispondi_eliminazione', { p_tabella: r._tab, p_id: r.id, p_conferma: !!conferma });
+  if (error) { showMsg('re-msg', 'Non inviato: ' + error.message, 'err'); return; }
+  if (data && data.ok === false) toast('Questa richiesta è già stata gestita');
+  else {
+    await certifica('dichiarazione', azione, { tabella: r._tab, rif: r.id, testo, firma: firma || undefined });
+    const nomeDip = ME.nome + (ME.cognome ? ' ' + ME.cognome : '');
+    try { inviaNotificaTelegram((conferma ? '✅' : '❌') + ' <b>Ceraldi Presenze</b>\n' + escTG(nomeDip) + (conferma ? ' ha confermato' : ' NON ha confermato') + ' che venga eliminato ' + escTG(_ELIM[r._tab].descr(r)) + '.'); } catch (e) {}
+    toast(conferma ? '✓ Eliminazione confermata' : 'Eliminazione rifiutata — resta tutto com’è');
+  }
+  _reDip = null;
+  closeSheet('sh-rich-elim');
+  try { await caricaSospesiDip(); } catch (e) {}
+  try { await aggiornaNavBadge(); } catch (e) {}
+  mostraProssimaAzioneInSospesa();
+}
+try { _SHEET_CERT['sh-rich-elim'] = () => ({ azione: 'richiesta_eliminazione', tabella: _reDip ? _reDip._tab : null, rif: _reDip ? _reDip.id : null }); } catch (e) {}
+
+/* ── 3. Firma anche sulle risposte alle richieste dell'admin ──
+   Prima: la risposta del dipendente (conferma o rifiuto di una modifica /
+   eliminazione chiesta dall'admin) cambiava i dati ma non era firmata né
+   aveva la frase mostrata nel registro, a differenza di tutte le altre
+   conferme. Ora: firma Face ID prima, dichiarazione nel registro dopo. */
+if (typeof rispondiRichiestaPresenza === 'function') {
+  const _rispPres0 = rispondiRichiestaPresenza;
+  rispondiRichiestaPresenza = async function (conferma) {
+    const id = _rpPresenzaId; if (!id) return;
+    const p = await DB.byIdOrNull('presenze', id);
+    if (!p || !p.richiesta_tipo) return _rispPres0.apply(this, arguments); // già gestita: la funzione di prima lo dice e chiude
+    const dataLbl = new Date(p.data).toLocaleDateString('it-IT', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+    const nuovo = p.richiesta_nuovi_dati && p.richiesta_nuovi_dati.ts_entrata ? ' con entrata alle ' + new Date(p.richiesta_nuovi_dati.ts_entrata).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }) : '';
+    const testo = (conferma ? 'Confermo ' : 'Non confermo ') + (p.richiesta_tipo === 'elimina' ? 'l’eliminazione' : 'la modifica' + nuovo) + ' della mia timbratura di ' + dataLbl + '.' + (p.richiesta_motivo ? ' Motivo indicato dall’admin: ' + p.richiesta_motivo + '.' : '');
+    const azione = (conferma ? 'conferma_' : 'rifiuto_') + (p.richiesta_tipo === 'elimina' ? 'eliminazione_timbratura' : 'modifica_timbratura');
+    const firma = await firmaPrima(azione, { tabella: 'presenze', rif: id, testo });
+    if (firma === false) return;
+    await _rispPres0.apply(this, arguments);
+    const dopo = await DB.byIdOrNull('presenze', id);
+    if (!dopo || !dopo.richiesta_tipo) await certifica('dichiarazione', azione, { tabella: 'presenze', rif: id, testo, firma: firma || undefined });
+  };
+}
+if (typeof rispondiEliminaAssenza === 'function') {
+  const _rispAss0 = rispondiEliminaAssenza;
+  rispondiEliminaAssenza = async function (id, conferma) {
+    const a = await DB.byIdOrNull('presenze_assenze', id);
+    if (!a || !a.richiesta_elimina) return _rispAss0.apply(this, arguments);
+    const periodo = a.data_inizio ? ' dal ' + new Date(a.data_inizio).toLocaleDateString('it-IT') + ' al ' + new Date(a.data_fine).toLocaleDateString('it-IT') : '';
+    const testo = (conferma ? 'Confermo ' : 'Non confermo ') + 'l’eliminazione della mia ' + ({ ferie: 'ferie', malattia: 'malattia' }[a.tipo] || 'assenza') + periodo + '.' + (a.richiesta_elimina_motivo ? ' Motivo indicato dall’admin: ' + a.richiesta_elimina_motivo + '.' : '');
+    const azione = (conferma ? 'conferma_' : 'rifiuto_') + 'eliminazione_assenza';
+    const firma = await firmaPrima(azione, { tabella: 'presenze_assenze', rif: id, testo });
+    if (firma === false) return;
+    await _rispAss0.apply(this, arguments);
+    const dopo = await DB.byIdOrNull('presenze_assenze', id);
+    if (!dopo || !dopo.richiesta_elimina) await certifica('dichiarazione', azione, { tabella: 'presenze_assenze', rif: id, testo, firma: firma || undefined });
+  };
+}
+try { _SHEET_CERT['sh-confRichiestaPres'] = () => ({ azione: 'richiesta_admin_timbratura', tabella: 'presenze', rif: typeof _rpPresenzaId !== 'undefined' ? _rpPresenzaId : null }); } catch (e) {}
 
 </script>
 <style>
