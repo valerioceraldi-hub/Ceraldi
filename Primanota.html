@@ -11662,9 +11662,11 @@ function _generaPdfRegistrazione(f){
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({unit:'mm', format:'a4'});
   const df=f.data?new Date(f.data).toLocaleDateString('it-IT',{day:'2-digit',month:'long',year:'numeric'}):'—';
-  const pag={contanti:'Contanti',bonifico:'Bonifico',assegno:'Assegno'}[f.pagamento]||f.pagamento||'—';
+  const _PAGLAB={contanti:'Contanti',bonifico:'Bonifico',assegno:'Assegno',carta:'Carta',sdd:'Addebito diretto (SDD)',riba:'Ri.Ba.',paypal:'PayPal'};
+  const pag=_PAGLAB[f.pagamento]||f.pagamento||'—';
   const stato={pagata:'Pagata',da_pagare:'Da pagare',parziale:'Parziale'}[f.stato||'pagata']||'—';
   const tipo=f.tipo==='ddt'?'DDT':'Fattura';
+  const _dIt=(d)=>{ if(!d) return ''; const t=new Date(String(d).slice(0,10)); return isNaN(t)?String(d):t.toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'}); };
 
   let y=20;
   doc.setFont('helvetica','bold'); doc.setFontSize(16);
@@ -11675,26 +11677,88 @@ function _generaPdfRegistrazione(f){
 
   doc.setFontSize(11);
   const riga=(label,valore)=>{
-    if(!valore) return;
+    if(valore===undefined || valore===null || valore==='') return;
+    const righe=doc.splitTextToSize(String(valore), 130);
+    if(y + righe.length*5.5 > 272){ doc.addPage(); y=20; }
     doc.setFont('helvetica','bold'); doc.text(label+':', 15, y);
-    doc.setFont('helvetica','normal'); doc.text(String(valore), 60, y);
-    y+=8;
+    doc.setFont('helvetica','normal'); doc.text(righe, 62, y);
+    y+=Math.max(8, righe.length*5.5+2.5);
   };
+  const sezione=(titolo)=>{
+    if(y > 255){ doc.addPage(); y=20; }
+    y+=2; doc.setFont('helvetica','bold'); doc.setFontSize(12); doc.text(titolo, 15, y);
+    doc.setDrawColor(220); doc.line(15,y+1.5,195,y+1.5); y+=8; doc.setFontSize(11);
+  };
+
+  // ── Il documento ──
   riga('Fornitore', f.fornitore||'—');
+  if(f.piva) riga('P.IVA', f.piva);
   riga('N° Documento', f.numero||'—');
   riga('Data', df);
   riga('Importo', fmt(f.importo));
-  riga('Pagamento', pag);
+  if(f.scadenza) riga('Scadenza', _dIt(f.scadenza));
+  if(f.fatturaAllegataName) riga('File XML', f.fatturaAllegataName);
+
+  // ── Il pagamento ──
+  sezione('Pagamento');
+  riga('Metodo', pag);
   riga('Stato', stato);
-  if(f.scadenza) riga('Scadenza', new Date(f.scadenza).toLocaleDateString('it-IT'));
+  if(f.dataPagamento) riga('Pagata il', _dIt(f.dataPagamento));
+  if(f.contoPagamento) riga('Conto / carta', f.contoPagamento);
+  if(f.parzPagato>0 && f.stato!=='pagata') riga('Già pagato', fmt(f.parzPagato));
   if(f.bonIban) riga('IBAN', f.bonIban);
+  if(f.bonData) riga('Data bonifico', _dIt(f.bonData));
+  if(f.bonRif) riga('Riferimento (CRO/TRN)', f.bonRif);
+  if(f.bonCaus) riga('Causale', f.bonCaus);
+  var _movs=(typeof _movimentiPerFattura==='function')?_movimentiPerFattura(f.id):[];
   var _assegniShare=(typeof _assegniPerFattura==='function')?_assegniPerFattura(f.id):[];
   if(_assegniShare.length>1) riga('N° Assegni', _assegniShare.join(', '));
   else if(f.assegno) riga('N° Assegno', f.assegno);
-  if(f.note) riga('Note', f.note);
+  else if(_assegniShare.length===1) riga('N° Assegno', _assegniShare[0]);
+  if(f.assInt) riga('Assegno intestato a', f.assInt);
+  if(f.assBanca) riga('Banca assegno', f.assBanca);
+  var _ORIG={xml:'Indicato nella fattura elettronica',manuale:'Inserito a mano',prima_nota:'Da Prima Nota (contanti)',riconciliazione:'Confermato dal movimento bancario',banca:'Confermato dal movimento bancario',regola:'Regola del fornitore'};
+  if(f.pagamentoOrigine) riga('Metodo registrato', (_ORIG[f.pagamentoOrigine]||f.pagamentoOrigine)+(f.pagamentoImpostatoIl?' ('+_dIt(f.pagamentoImpostatoIl)+')':''));
 
-  doc.setFontSize(9); doc.setTextColor(140);
-  doc.text('Generato da Caffetteria Ceraldi — Gestione Fatture', 15, 285);
+  // ── La prova in banca ──
+  var _riconc=[];
+  if(_movs.length){
+    _movs.forEach(function(m){ _riconc.push({data:m.data, importo:m.importo, banca:m.banca||m.fonte||'', descrizione:m.descrizione, movId:m.id||'', parziale:false}); });
+  } else if(Array.isArray(f.riconciliazioneStorico) && f.riconciliazioneStorico.length){
+    f.riconciliazioneStorico.forEach(function(r){ _riconc.push(r); });
+  } else if(f.riconciliazione){
+    _riconc.push(f.riconciliazione);
+  }
+  if(_riconc.length){
+    sezione(_riconc.length>1 ? 'Movimenti in banca collegati' : 'Movimento in banca collegato');
+    _riconc.forEach(function(r,ix){
+      if(_riconc.length>1) riga('Movimento '+(ix+1), '');
+      riga('Data', _dIt(r.data));
+      if(r.importo!==undefined && r.importo!==null) riga('Importo', fmt(Math.abs(+r.importo||0)));
+      riga('Banca', r.banca);
+      riga('Descrizione', r.descrizione);
+      if(r.movId) riga('ID movimento', r.movId);
+      if(r.parziale) riga('Nota', 'Pagamento parziale');
+    });
+  } else if((f.stato||'pagata')==='pagata' && f.pagamento && f.pagamento!=='contanti'){
+    sezione('Movimento in banca');
+    riga('Stato', 'Nessun movimento bancario ancora collegato a questa fattura');
+  }
+  if(Array.isArray(f.pagamentiManuali) && f.pagamentiManuali.length){
+    sezione('Pagamenti registrati a mano');
+    f.pagamentiManuali.forEach(function(p){
+      riga(_dIt(p.data||p.dataPagamento)||'—', [p.importo!==undefined?fmt(+p.importo||0):'', p.metodo||p.pagamento||'', p.rif||p.riferimento||''].filter(Boolean).join(' · '));
+    });
+  }
+  if(f.note){ sezione('Note'); riga('Note', f.note); }
+
+  // piè di pagina su tutte le pagine di testo
+  const _np=doc.internal.getNumberOfPages();
+  for(let pg=1; pg<=_np; pg++){
+    doc.setPage(pg);
+    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(140);
+    doc.text('Generato da Caffetteria Ceraldi — Gestione Fatture · '+new Date().toLocaleDateString('it-IT')+' · pag. '+pg+'/'+_np, 15, 285);
+  }
 
   if(f.foto){
     try{
