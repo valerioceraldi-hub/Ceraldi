@@ -8821,6 +8821,22 @@ async function importaMassivoXml(input){
         );
         if(candidatiSecondari.length === 1) dup = candidatiSecondari[0];
       }
+      // Una fattura "già presente" solo nella memoria del telefono ma NON sul Cloud
+      // (salvataggio fallito, riga cancellata da un altro dispositivo, cache vecchia)
+      // non è una vera presente: finora faceva scartare per sempre il file. Prima di
+      // dichiarare un doppione si controlla che esista davvero sul Cloud.
+      if(dup){
+        try{
+          const _chk = await sbFetch('fatture?id=eq.'+encodeURIComponent(dup.id)+'&select=id&limit=1');
+          if(Array.isArray(_chk) && _chk.length === 0){
+            console.warn('[Import XML] Doppione fantasma (solo sul telefono, non sul Cloud): scartato dalla memoria locale', dup);
+            const _ig = fatture.findIndex(f=>f.id===dup.id);
+            if(_ig>=0) fatture.splice(_ig,1);
+            risultati.fantasmi = (risultati.fantasmi||0) + 1;
+            dup = null;
+          }
+        }catch(_e){ /* se non riesco a controllare, resta il comportamento di prima */ }
+      }
       if(dup){
         // Diagnostica: logga SEMPRE il dettaglio del conflitto, per capire
         // con certezza quale fattura esistente ha causato il "duplicato"
