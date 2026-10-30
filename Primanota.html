@@ -8642,9 +8642,16 @@ function _fxNumeriCompatibili(a, b){
   if(Math.min(da.length, db.length) < 3) return false;
   return da.slice(-db.length) === db || db.slice(-da.length) === da;
 }
+// Stesso numero ma anni diversi = fatture diverse (GB FOOD, ecc. ripartono da 1 a gennaio).
+// Se di entrambe si conosce la data, devono distare meno di 180 giorni.
+function _fxDateVicine(d1, d2){
+  var a = Date.parse(d1), b = Date.parse(d2);
+  if(isNaN(a) || isNaN(b)) return true;
+  return Math.abs(a - b) <= 180 * 86400000;
+}
 function _fxCercaStessa(lista, x){
   // x = { fornitore, piva, numero, data, importo, tipo }
-  var ok = function(f){ return f && !f.deletedAt && (!x.tipo || !f.tipo || f.tipo === x.tipo || (f.tipo !== 'nota_credito' && x.tipo !== 'nota_credito')); };
+  var ok = function(f){ return f && !f.deletedAt && _fxDateVicine(f.data, x.data) && (!x.tipo || !f.tipo || f.tipo === x.tipo || (f.tipo !== 'nota_credito' && x.tipo !== 'nota_credito')); };
   var stesso = lista.filter(function(f){ return ok(f) && _fxStessoFornitore(f, x.fornitore, x.piva); });
   var imp = function(f){ return Math.abs(Math.abs(+f.importo || 0) - Math.abs(+x.importo || 0)) < 0.02; };
   var l = stesso.filter(function(f){ return x.numero && _fxStessoNumero(f.numero, x.numero) === 2; });
@@ -8789,6 +8796,7 @@ async function importaMassivoXml(input){
       let dup = fatture.find(f =>
         normS(f.numero) === normS(numero) &&
         normS(f.fornitore) === normS(fornitore) &&
+        _fxDateVicine(f.data, data) &&
         numero.length > 0
       );
       // v10.27: anche se a mano il nome o il numero sono scritti diversamente
@@ -36669,7 +36677,7 @@ async function ricvAutoReport(){
     var mot = (g.righe[0].motivi || []); if(mot.length) h += '<div class="rv-perche">' + esc(mot.join(' · ')) + '</div>';
     if(annullato) h += '<div class="rv-auto-st">↩️ Scollegato: non lo ricollego più a questa fattura</div>';
     else if(!ancora) h += '<div class="rv-auto-st">Il collegamento è stato cambiato a mano dopo</div>';
-    else h += '<div class="rv-az"><button class="sk-btn" onclick="ricvAutoCorreggi(' + gi + ',false)">Non è giusto: scollega</button><button class="sk-btn prim" onclick="ricvAutoCorreggi(' + gi + ',true)">Collega a un\'altra</button></div>';
+    else h += '<div class="rv-az"><button class="sk-btn prim" onclick="ricvAutoCorreggi(' + gi + ',true)">Non è giusto: scegli un\'altra fattura</button></div>';
     h += '</div>';
   });
   h += '<label class="rv-ricorda" style="margin-top:14px"><input type="checkbox"' + (ricvAutoAttivo() ? ' checked' : '') + ' onchange="ricvAutoImposta(this.checked)"> Collega da solo i movimenti sicuri</label>';
