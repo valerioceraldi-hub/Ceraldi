@@ -461,7 +461,7 @@ function avvisoCreditoIA(){
 </nav>
 
 <script>
-var APP_VERSION='8.17.1';
+var APP_VERSION='8.17.2';
 var BUILD_VERSION=APP_VERSION, BUILD_NUM=APP_VERSION;
 var APP={key:'ordini',nome:'Ordini',versione:APP_VERSION,authKey:'or_auth_v2',oldAuthKey:'ceraldi_ordini_auth_session',
   markBg:'linear-gradient(145deg,#FFC04D 0%,#FF9F0A 50%,#C2410C 100%)',
@@ -5544,7 +5544,7 @@ function rigaPD(x){ return '<div class="todo-it" style="display:flex;gap:10px"><
 // Scelta dei prodotti da inviare: si spunta prodotto per prodotto (o tutti / tutti quelli di un giorno)
 var PDINV = { f: '', sel: {} };
 function righePDforn(f){ return PD.filter(function(x){ return x.fornitore === f; }); }
-function apriInvioPD(f){ PDINV = { f: f, sel: {} }; try{ libPDF().catch(function(){}); }catch(e){} disegnaInvioPD(); }  // la libreria PDF si prepara mentre scegli
+function apriInvioPD(f){ PDINV = { f: f, sel: {} }; try{ libPDF().catch(function(){}); }catch(e){} disegnaInvioPD(); caricaOriginaliPD(f).then(function(){ if(PDINV.f === f) disegnaInvioPD(); }).catch(function(){}); }  // la libreria PDF si prepara mentre scegli
 function invioPDScegli(modo, k){
   var l = righePDforn(PDINV.f);
   if(modo === 'tutti' || modo === 'nessuno') l.forEach(function(x){ PDINV.sel[x.id] = modo === 'tutti'; });
@@ -5567,7 +5567,19 @@ function disegnaInvioPD(){
       '<button class="lnk-btn" style="display:block;margin:8px auto 0;font-size:12.5px" ' + (ids.length ? '' : 'disabled') + ' onclick="chiudiSheet(\'shPDinv\');mandaContestazione(PDINV.f, idsInvioPD())">Oppure invia solo come messaggio di testo</button>' });
   var nuovo = document.querySelector('#shPDinv .sheet-bd'); if(nuovo) nuovo.scrollTop = sc;
 }
+// Nome della fattura per ogni riga contestata (riga_fattura_id → prezzi_da_fatture.descrizione).
+// Caricato quando si apre il foglio di invio, così il PDF si genera al tocco senza attese (iOS).
+var ORIG_PF = {};
+async function caricaOriginaliPD(f){
+  var ids = righePDforn(f).map(function(x){ return x.riga_fattura_id; }).filter(function(v, i, a){ return v && a.indexOf(v) === i && !(v in ORIG_PF); });
+  for(var i = 0; i < ids.length; i += 80){
+    var r = await api('prezzi_da_fatture?select=id,descrizione&id=in.(' + ids.slice(i, i + 80).join(',') + ')') || [];
+    r.forEach(function(x){ ORIG_PF[x.id] = String(x.descrizione || '').replace(/\s+/g, ' ').trim(); });   // tutto il nome, anche se va a capo in fattura
+  }
+  ids.forEach(function(id){ if(!(id in ORIG_PF)) ORIG_PF[id] = ''; });   // riga non più disponibile: niente nome originale
+}
 // PDF della segnalazione: solo i prodotti scelti, per un fornitore
+// Per ogni prodotto: nome del catalogo (grande) e sotto, più piccolo, il nome scritto in fattura
 function creaPDFContestazione(f, ids){
   var J = window.jspdf && window.jspdf.jsPDF; if(!J) return null;
   var l = PD.filter(function(x){ return x.fornitore === f && ids.indexOf(x.id) >= 0; });
@@ -5588,14 +5600,23 @@ function creaPDFContestazione(f, ids){
     doc.setFont('helvetica', 'normal'); y += 7; }
   testata();
   l.forEach(function(x){
-    doc.setFontSize(9.5); var nome = doc.splitTextToSize(String(x.nome_prodotto) + (x.qta ? '  (q.tà ' + num(x.qta) + ')' : ''), 64), rif = (doc.setFontSize(8.5), doc.splitTextToSize(String(x.fonte || ''), 44)), righe = Math.max(nome.length, rif.length);
-    if(y + righe * 4.5 > 275){ doc.addPage(); y = 20; testata(); }
-    doc.setFontSize(9.5); doc.text(nome, col.p, y); doc.setFontSize(8.5); doc.setTextColor(90); doc.text(rif, col.rif, y); doc.setTextColor(0); doc.setFontSize(9.5);
+    var orig = ORIG_PF[x.riga_fattura_id] || '';
+    var mostraOrig = !!orig && orig.toLowerCase() !== String(x.nome_prodotto).toLowerCase();
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5);
+    var nome = doc.splitTextToSize(String(x.nome_prodotto) + (x.qta ? '  (q.tà ' + num(x.qta) + ')' : ''), 64);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5);
+    var origL = mostraOrig ? doc.splitTextToSize('In fattura: ' + orig, 64) : [];
+    doc.setFontSize(8.5); var rif = doc.splitTextToSize(String(x.fonte || ''), 44);
+    var hNome = nome.length * 4.2, hOrig = origL.length ? origL.length * 3.6 + 1.5 : 0, altezza = Math.max(6, hNome + hOrig + 2, rif.length * 4.2 + 2);
+    if(y + altezza > 275){ doc.addPage(); y = 20; testata(); }
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5); doc.setTextColor(0); doc.text(nome, col.p, y);
+    if(origL.length){ doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(100); doc.text(origL, col.p, y + hNome - 0.5); doc.setTextColor(0); }
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(90); doc.text(rif, col.rif, y); doc.setTextColor(0); doc.setFontSize(9.5);
     var c = x.prezzo_catalogo != null ? Number(x.prezzo_catalogo) : null, nu = Number(x.prezzo_nuovo);
     doc.text(c != null ? n2(c) : 'n/d', col.conc, y, { align: 'right' }); doc.text(n2(nu), col.fatt, y, { align: 'right' });
     doc.text(c != null ? (nu - c >= 0 ? '+' : '') + n2(nu - c) : '—', col.diff, y, { align: 'right' });
     doc.text(c != null && c !== 0 ? (nu - c >= 0 ? '+' : '') + ((nu - c) / c * 100).toFixed(1).replace('.', ',') + '%' : '—', col.pct, y, { align: 'right' });
-    y += Math.max(6, righe * 4.5 + 1.5); doc.setDrawColor(230); doc.line(13, y - 4, 197, y - 4);
+    y += altezza; doc.setDrawColor(230); doc.line(13, y - 4, 197, y - 4);
   });
   doc.setFontSize(8); doc.setTextColor(140); doc.text('Importi in EUR — ' + (az.nome || 'Caffetteria Ceraldi'), 15, 288);
   return doc;
