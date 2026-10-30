@@ -19440,7 +19440,7 @@ async function calcolaPromemoria() {
         titolo: isManualeDip ? 'Timbratura da approvare' : 'Timbratura da confermare',
         testo:(p.nome_dipendente||'Dipendente')+' — '+new Date(p.data).toLocaleDateString('it-IT'),
         azione: isManualeDip ? 'Approva o rifiuta dalla lista timbrature'
-              : dipInattivo ? 'Il dipendente non è più in squadra — non potrà mai confermare'
+              : dipInattivo ? 'Il dipendente non è più in squadra — apri il giorno per confermarla tu'
               : 'In attesa che il dipendente confermi' });
     });
 
@@ -19521,11 +19521,9 @@ function apriPromemoria() {
           <div style="font-size:14px;font-weight:700;color:${colore[p.urgenza]};margin-bottom:2px">${p.titolo}</div>
           <div style="font-size:13px;color:var(--text);margin-bottom:${p.azione?'4px':'0'}">${p.testo}</div>
           ${p.azione?`<div style="font-size:12px;color:var(--muted)">→ ${p.azione}</div>`:''}
-          ${p.tipo==='timbratura' && p.id && p.dipId && p.titolo==='Timbratura da confermare' ? `
+          ${p.tipo==='timbratura' && p.id && p.dipId && p.titolo==='Timbratura da confermare' && !p.dipInattivo ? `
             <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
-              ${p.dipInattivo ? '' : `<button class="btn-sm primary" onclick="reinviaRichiestaConferma('timbratura','${p.id}','${p.dipId}')">🔔 Sollecita</button>`}
-              <button class="btn-sm" style="background:var(--green);color:#fff" onclick="confermaTimbraturaComeAdmin('${p.id}')">✓ Conferma tu</button>
-              <button class="btn-sm" style="color:var(--red)" onclick="eliminaVoceInSospeso('timbratura','${p.id}',this)">🗑 Elimina</button>
+              <button class="btn-sm primary" onclick="reinviaRichiestaConferma('timbratura','${p.id}','${p.dipId}')">🔔 Sollecita</button>
             </div>` : ''}
           ${p.tipo==='timbratura' && p.id && p.titolo==='Timbratura da approvare' ? `
             <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
@@ -19711,18 +19709,16 @@ function renderAttivitaFiltrata() {
         + (it.canResend
             ? '<button class="btn-sm" style="background:var(--accent);color:#fff;border:none" onclick="reinviaRichiestaConferma(\''+it.tipo+'\',\''+it.id+'\',\''+it.dipId+'\')">🔔 Sollecita</button>'
             : '<span style="font-size:11px;color:var(--muted);text-align:center">no Telegram</span>')
-        // FIX: prima, se il dipendente collegato non esisteva più (rimosso
-        // o disattivato) o non aveva Telegram, questa voce restava lì per
-        // sempre — nessuno poteva mai confermarla al posto suo, e non
-        // c'era modo di toglierla di torno. Ora l'admin può eliminarla
-        // direttamente da qui in qualunque caso.
-        + '<button class="btn-sm" style="color:var(--red)" onclick="eliminaVoceInSospeso(\''+it.tipo+'\',\''+it.id+'\',this)">🗑 Elimina</button>'
+        // Il Centro attività non cancella mai niente: si modifica (o si
+        // elimina) dalla sezione propria, con le sue regole. Per togliere
+        // solo l'avviso c'è "Va bene così".
+        + attivitaBtnApri(it)
         + '</div>'
         + '</div>';
     });
   }
-  // Restituzioni registrate — sempre eliminabili, non c'è nulla da
-  // "confermare" qui, solo da rivedere.
+  // Restituzioni registrate — non c'è nulla da "confermare" qui, solo da
+  // rivedere; si correggono dalla loro scheda (✏️ Modifica).
   html += '<div style="font-size:13px;font-weight:700;color:var(--text);margin:18px 0 10px">↩️ Restituzioni registrate ('+restItems.length+')</div>';
   if (!restItems.length) {
     html += '<div style="text-align:center;padding:16px;color:var(--muted);font-size:13px;background:var(--bg);border-radius:12px">Nessuna restituzione nel periodo selezionato</div>';
@@ -19732,7 +19728,7 @@ function renderAttivitaFiltrata() {
         + '<span style="font-size:20px;flex-shrink:0">'+it.icona+'</span>'
         + '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">'+it.titolo+'</div>'
         + '<div style="font-size:11px;color:var(--muted)">'+it.sub+'</div></div>'
-        + '<button class="btn-sm" style="color:var(--red);flex-shrink:0" onclick="eliminaVoceInSospeso(\'restituzione\',\''+it.id+'\',this)">🗑</button></div>';
+        + '<div style="flex-shrink:0">' + attivitaBtnApri(it) + '</div></div>';
     });
   }
   // Confermati di recente
@@ -19752,25 +19748,20 @@ function renderAttivitaFiltrata() {
   wrap.innerHTML = html;
 }
 
-// Elimina una voce "in sospeso" (acconto, stipendio, busta paga) che non
-// potrà mai essere confermata — es. dipendente rimosso/disattivato, o
-// una voce di prova rimasta lì per sempre. Doppio tocco per confermare,
-// niente confirm() nativo (può comportarsi in modo anomalo in PWA su iOS).
-const _TABELLE_ATTIVITA = { acconto:'presenze_acconti', stipendio:'presenze_liquidazioni', documento:'presenze_documenti', timbratura:'presenze', restituzione:'presenze_restituzioni' };
-async function eliminaVoceInSospeso(tipo, id, btn) {
-  const tab = _TABELLE_ATTIVITA[tipo];
-  if (!tab) return;
-  if (btn && !btn.dataset.arm) {
-    btn.dataset.arm = '1';
-    btn.textContent = 'Sicuro?';
-    setTimeout(() => { if (btn.dataset.arm) { delete btn.dataset.arm; btn.textContent = '🗑 Elimina'; } }, 4000);
-    return;
-  }
-  const { error } = await sb.from(tab).delete().eq('id', id);
-  if (error) { toast('Errore: '+error.message); return; }
-  toast('✓ Voce eliminata');
-  await calcolaPromemoria();
-  apriPromemoria();
+// Centro attività → Conferme: ogni voce porta alla sua sezione, dove si
+// modifica o si elimina con le regole di quella sezione (registro, Prima
+// Nota, file in archivio, notifiche). Da qui non si cancella mai nulla:
+// prima il cestino cancellava la riga e basta, lasciando ad esempio la
+// Prima Nota dell'acconto o il file del documento.
+function attivitaBtnApri(it) {
+  const via = "closeSheet('sh-promemoria');";
+  let js = '', lbl = '';
+  if (it.tipo === 'acconto')           { lbl = '✏️ Modifica'; js = via + "accModifica('" + it.id + "')"; }
+  else if (it.tipo === 'restituzione') { lbl = '✏️ Modifica'; js = via + "restModifica('" + it.id + "')"; }
+  else if (it.tipo === 'stipendio')    { lbl = 'Apri in Stipendi'; js = via + "switchPage('pg-stipendi');stApriScheda('" + it.dipId + "')"; }
+  else if (it.tipo === 'documento')    { lbl = 'Apri Documenti'; js = via + "switchPage('pg-docs-admin')"; }
+  if (!js) return '';
+  return '<button class="btn-sm" onclick="' + js + '">' + lbl + '</button>';
 }
 
 // Re-invia la notifica Telegram di una richiesta non ancora confermata
@@ -19782,15 +19773,16 @@ async function eliminaVoceInSospeso(tipo, id, btn) {
 // trasparenza: si vede chiaramente che non è stata una conferma diretta
 // del dipendente, giusto per entrambe le parti in caso di controlli.
 async function confermaTimbraturaComeAdmin(id) {
-  if (!confirm('Confermi questa timbratura al posto del dipendente?\n\nUsalo solo se non può farlo lui (account disattivato) o se non risponde da tempo nonostante i solleciti.')) return;
+  if (!confirm('Confermi questa timbratura al posto del dipendente?\n\nIl dipendente non è più in squadra e non può farlo lui. Resta registrato che l’hai confermata tu.')) return;
   const ora = new Date().toISOString();
   const { error } = await sb.from('presenze').update({
     confermata_dip: true, confermata_il: ora, confermata_da_admin: true
   }).eq('id', id);
   if (error) { toast('Errore: '+error.message); return; }
   toast('✓ Timbratura confermata');
-  await aggiornaPromemoria();
-  apriPromemoria();
+  closeSheet('sh-correggi');
+  await caricaOggi(); await caricaStorico(); await caricaPresenzeTeam();
+  await aggiornaStats(); await aggiornaPromemoria();
 }
 
 async function reinviaRichiestaConferma(tipo, id, dipId) {
@@ -28201,6 +28193,34 @@ function openCorreggi(id, nome, tsEntrata, data, richiestaTipo) {
       + '<button class="btn-primary" style="flex:1" onclick="salvaCorrezioneTimbr()">Salva correzione</button>';
   }
   openSheet('sh-correggi');
+  corrMostraConfermaAdmin(id);
+}
+
+// Dal Centro attività: apre la scheda del giorno di una timbratura
+// (la stessa che si apre toccando il giorno nel calendario Storico).
+async function apriGiornoTimbratura(id) {
+  const { data: r } = await sb.from('presenze')
+    .select('id,nome_dipendente,ts_entrata,data,richiesta_tipo').eq('id', id).maybeSingle();
+  if (!r) { toast('Timbratura non trovata (forse già eliminata)'); await aggiornaPromemoria(); return; }
+  openCorreggi(r.id, r.nome_dipendente || 'Dipendente', r.ts_entrata, r.data, r.richiesta_tipo || '');
+}
+
+// Unico caso in cui l'admin conferma al posto del dipendente: timbratura
+// manuale ancora da confermare di chi non è più in squadra (non potrà mai
+// farlo da solo). Il pulsante compare solo in quel caso, ovunque si apra
+// la scheda del giorno.
+async function corrMostraConfermaAdmin(id) {
+  try {
+    const { data: r } = await sb.from('presenze')
+      .select('dipendente_id,tipo_timbratura,confermata_dip,richiesta_tipo').eq('id', id).maybeSingle();
+    if (!r || r.tipo_timbratura !== 'manuale' || r.confermata_dip || r.richiesta_tipo) return;
+    const { data: p } = await sb.from('presenze_profili').select('attivo,eliminato').eq('id', r.dipendente_id).maybeSingle();
+    if (p && p.attivo && !p.eliminato) return;
+    const foot = $('corr-foot');
+    if (!foot || _corrId !== id || foot.querySelector('.corr-conf-admin')) return;
+    foot.style.flexWrap = 'wrap';
+    foot.insertAdjacentHTML('beforeend', '<button class="btn-secondary corr-conf-admin" style="flex:1 1 100%;margin-top:8px;color:var(--green)" onclick="confermaTimbraturaComeAdmin(\'' + id + '\')">✓ Conferma tu (il dipendente non è più in squadra)</button>');
+  } catch (e) { console.warn('corrMostraConfermaAdmin', e); }
 }
 
 // Un passo avanti, uno indietro: la correzione non si applica subito.
@@ -32572,6 +32592,11 @@ function _promAzione(p) {
   if (p.tipo === 'assenza') return { lbl: 'Apri le richieste', js: `switchPage('pg-assenze-admin')` };
   if (p.tipo === 'recensione') return { lbl: 'Apri recensioni', js: `switchPage('pg-recensioni')` };
   if (p.tipo === 'attestato') return { lbl: 'Apri scadenze', js: `switchPage('pg-attestati')` };
+  // Timbrature: si apre la scheda del giorno (la stessa del calendario
+  // Storico), dove modifica ed eliminazione passano dalla conferma del
+  // dipendente. "Da approvare" (richiesta partita dal dipendente) ha già
+  // Approva/Rifiuta: decide solo l'admin.
+  if (p.tipo === 'timbratura' && p.id && p.titolo !== 'Timbratura da approvare') return { lbl: '📅 Apri il giorno', js: `apriGiornoTimbratura('${p.id}')` };
   if (p.tipo === 'iban' && p.dipId) return { lbl: 'Apri IBAN', js: `ibanApri('${p.dipId}')` };
   if ((p.tipo === 'contratto' || p.tipo === 'prova') && p.dipId) return { lbl: 'Apri la scheda', js: `switchPage('pg-team');setTimeout(()=>openAnagrafica('${p.dipId}'),400)` };
   return null;
