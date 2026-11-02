@@ -450,7 +450,7 @@ select.inp{background-image:none}
   <button class="tab-item" data-tab="altro" onclick="vaiTab('altro')"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></span><span class="tab-lbl">Altro</span></button>
 </nav>
 <script>
-var APP_VERSION='0.5';
+var APP_VERSION='0.6';
 var APP={key:'menu',nome:'Menu',versione:APP_VERSION,authKey:'mn_auth_v1',oldAuthKey:null,
   markBg:'linear-gradient(145deg,#C08A4D 0%,#8B5A2B 55%,#4A2C14 100%)',
   markSvg:'<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3v7a3 3 0 0 0 3 3v8"/><path d="M7 3v6"/><path d="M10 3v7a3 3 0 0 1-3 3"/><path d="M17 21V3c-2 1.5-3 4-3 7v4h3"/></svg>',
@@ -906,7 +906,7 @@ var STATI = { bozza: ['Bozza', 'o'], pubblicato: ['Pubblicato', 'g'], archiviato
 var GIORNI = ['L', 'M', 'M', 'G', 'V', 'S', 'D'], GIORNI_LUNGHI = ['lun', 'mar', 'mer', 'gio', 'ven', 'sab', 'dom'];
 var FOTO_URL = SB_URL + '/storage/v1/object/public/menu-foto/';
 var TEMA_BASE = { caratteri: { titoli: 'Bodoni Moda', testo: 'Jost' }, scala: 1,
-  globale: { sfondo: '#F3EFE8', superficie: '#FBF8F3', testo: '#23170F', 'testo-2': '#5F5045', accento: '#7A5C2C', prezzo: '#6E1A22' }, home: {}, sezioni: {}, categorie: {} };
+  globale: { sfondo: '#F3EFE8', superficie: '#FBF8F3', testo: '#23170F', 'testo-2': '#5F5045', accento: '#7A5C2C', prezzo: '#6E1A22' }, home: {}, sezioni: {}, categorie: {}, pagine: {} };
 
 function bdgStato(s){ var x = STATI[s] || [s, 'n']; return '<span class="bdg ' + x[1] + '">' + x[0] + '</span>'; }
 function prezzo(c){ return eur((c || 0) / 100); }
@@ -928,13 +928,14 @@ function inEvidenza(v){ if(!v.in_evidenza) return false; var o = oggiISO(); retu
 function haGrande(path){ return /-g-320\.(webp|jpg)$/.test(path || ''); }
 function fotoUrl(path, tipo){
   if(!path) return '';
+  if(/^https:\/\//.test(path)) return tipo === 'grande' ? '' : path;  // foto con indirizzo completo (es. file del sito)
   if(tipo === 'grande') return haGrande(path) ? FOTO_URL + path.replace(/-320\.(webp|jpg)$/, '-1200.$1') : '';
   return FOTO_URL + path;
 }
 function verificata(v){ return !!v.allergeni_verificati_il; }
 function nomeTecnico(n){ return /⏳|\d+\s*\/\s*\d+\s*mi[nm]\b|\d+\s*min\b/i.test(n || ''); }
 function config(){ return (D.modulo && D.modulo.configurazione) || {}; }
-function tema(){ var a = config().aspetto; return a && a.globale ? a : JSON.parse(JSON.stringify(TEMA_BASE)); }
+function tema(){ var a = config().aspetto; a = a && a.globale ? a : JSON.parse(JSON.stringify(TEMA_BASE)); ['home', 'sezioni', 'categorie', 'pagine'].forEach(function(k){ if(!a[k]) a[k] = {}; }); return a; }
 function badgeDisponibili(){ return config().badge || ['Novità', 'Consigliato', 'Specialità della casa', 'Di stagione', 'Produzione propria']; }
 function uidUtente(){ return (_authSess && _authSess.user && _authSess.user.id) || null; }
 function fineGiornata(){ var d = new Date(); d.setDate(d.getDate() + 1); d.setHours(5, 0, 0, 0); return d.toISOString(); } // «finito per oggi» = fino alle 5 di domattina
@@ -1603,6 +1604,10 @@ async function eliminaGruppo(tipo, id){
 var FONT_TITOLI = ['Bodoni Moda', 'Playfair Display', 'Cormorant Garamond', 'DM Serif Display', 'Libre Baskerville'];
 var FONT_TESTO = ['Jost', 'Karla', 'Work Sans', 'Nunito Sans', 'Lora'];
 var TOKEN = [['sfondo', 'Sfondo'], ['superficie', 'Schede'], ['testo', 'Testo'], ['testo-2', 'Descrizioni'], ['accento', 'Accento e titoletti'], ['prezzo', 'Prezzi']];
+// Fondi scuri (testata, consiglio del momento, barra, banner, pulsanti): facoltativi. Se non li scegli, il menu li ricava dai colori sopra.
+var TOKEN_SCURI = [['scuro', 'Fondi scuri'], ['su-scuro', 'Testo sui fondi scuri'], ['accento-chiaro', 'Dettagli sui fondi scuri']];
+function mescola(a, b, q){ var x = /^#?([0-9a-f]{6})$/i.exec(a || ''), y = /^#?([0-9a-f]{6})$/i.exec(b || ''); if(!x || !y) return a; var m = parseInt(x[1], 16), n = parseInt(y[1], 16);
+  return '#' + [16, 8, 0].map(function(sh){ var v = Math.round(((m >> sh) & 255) * q + ((n >> sh) & 255) * (1 - q)); return (v < 16 ? '0' : '') + v.toString(16); }).join('').toUpperCase(); }
 var T = null, T_SALVATO = '', T_LIV = 'globale';
 
 function copia(o){ return JSON.parse(JSON.stringify(o)); }
@@ -1620,14 +1625,21 @@ function preset(nome){
 function livObj(l, crea){
   if(l === 'globale') return T.globale;
   if(l === 'home') return T.home;
-  var tipo = l.slice(0, 3), k = l.slice(4), dove = tipo === 'sez' ? T.sezioni : T.categorie;
+  var tipo = l.slice(0, 3), k = l.slice(4), dove = tipo === 'sez' ? T.sezioni : tipo === 'pag' ? T.pagine : T.categorie;
   if(crea && !dove[k]) dove[k] = {};
   return dove[k] || {};
 }
-function valoreEff(l, tok){
+function valoreProprio(l, tok){  // colore scelto a questo livello o ereditato da un livello superiore (null = nessuno)
   var o = livObj(l, false); if(o[tok]) return o[tok];
   if(l.indexOf('cat:') === 0){ var c = catDi(+l.slice(4)); var so = c && T.sezioni[String(c.sezione_id)]; if(so && so[tok]) return so[tok]; }
-  return T.globale[tok] || TEMA_BASE.globale[tok];
+  return T.globale[tok] || null;
+}
+function valoreEff(l, tok){
+  var v = valoreProprio(l, tok); if(v) return v;
+  if(tok === 'scuro') return valoreEff(l, 'testo');
+  if(tok === 'su-scuro') return valoreEff(l, 'sfondo');
+  if(tok === 'accento-chiaro') return mescola(valoreEff(l, 'accento'), '#FFFFFF', 0.55);
+  return TEMA_BASE.globale[tok];
 }
 function luce(hex){
   var m = /^#?([0-9a-f]{6})$/i.exec(hex || ''); if(!m) return 0;
@@ -1645,12 +1657,14 @@ function renderAspetto(){
     D.sezioni.filter(function(s){ return s.stato !== 'archiviato'; }).sort(function(a, b){ return a.ordine - b.ordine; }).map(function(s){
       return '<optgroup label="' + esc(s.nome) + '"><option value="sez:' + s.id + '">Sezione «' + esc(s.nome) + '»</option>' +
         catDiSez(s.id).filter(catAttiva).map(function(c){ return '<option value="cat:' + c.id + '">  · ' + esc(c.nome) + '</option>'; }).join('') + '</optgroup>';
-    }).join('');
+    }).join('') + ((D.pagine || []).filter(function(p){ return p.codice !== 'home'; }).length ? '<optgroup label="Pagine aggiuntive">' + D.pagine.filter(function(p){ return p.codice !== 'home'; }).map(function(p){
+      return '<option value="pag:' + esc(p.codice) + '">Pagina «' + esc(p.titolo || p.codice) + '»</option>'; }).join('') + '</optgroup>' : '');
   box.innerHTML =
     '<div class="ant-fissa"><iframe id="antFrame" title="Anteprima del menu per i clienti" loading="lazy"></iframe></div>' +
     '<div class="sec-title">Stile di partenza</div><div class="chips wrap">' + ['Salotto Liberty', 'Sera bordeaux', 'Marmo chiaro'].map(function(n){ return '<button class="chip" onclick="usaPreset(\'' + n + '\')">' + n + '</button>'; }).join('') + '</div>' +
     '<div class="sec-title">Cosa vuoi personalizzare</div><select class="inp" id="tLiv" onchange="T_LIV=this.value;disegnaColori();antVai()">' + opz + '</select>' +
-    '<div class="hint" style="margin:6px 4px 0">Ogni livello eredita i colori di quello sopra: cambia solo ciò che deve essere diverso.</div>' +
+    '<div class="hint" style="margin:6px 4px 0">Ogni livello eredita i colori di quello sopra: cambia solo ciò che deve essere diverso. I colori di una pagina aggiuntiva valgono anche per il banner che porta a quella pagina.</div>' +
+    '<div class="hint" id="tPagHint" style="margin:6px 4px 0;display:none">L\'anteprima qui sopra mostra il menu principale: i colori delle pagine aggiuntive si vedono nel menu per i clienti dopo averlo rigenerato.</div>' +
     '<div id="tColori"></div>' +
     '<div class="sec-title">Caratteri</div><div class="grp" style="padding:12px 14px">' +
       '<div class="field"><label for="tTit">Titoli</label><select class="inp" id="tTit" onchange="T.caratteri.titoli=this.value;temaToccato()">' + FONT_TITOLI.map(function(f){ return '<option' + (f === T.caratteri.titoli ? ' selected' : '') + '>' + f + '</option>'; }).join('') + '</select></div>' +
@@ -1663,6 +1677,7 @@ function renderAspetto(){
 }
 function disegnaColori(){
   var el = document.getElementById('tColori'); if(!el) return;
+  var ph = document.getElementById('tPagHint'); if(ph) ph.style.display = T_LIV.indexOf('pag:') === 0 ? '' : 'none';
   var o = livObj(T_LIV, false), glob = T_LIV === 'globale';
   var h = '<div class="grp">' + TOKEN.map(function(t){
     var proprio = !!o[t[0]], val = valoreEff(T_LIV, t[0]);
@@ -1670,7 +1685,14 @@ function disegnaColori(){
       '<div class="row-main"><div class="row-t">' + t[1] + '</div><div class="row-s tnum">' + esc(val.toUpperCase()) + (glob ? '' : proprio ? ' · personalizzato' : ' · ereditato') + '</div></div>' +
       (!glob && proprio ? '<button class="btn-sm" onclick="impostaColore(\'' + t[0] + '\',null)">Eredita</button>' : '') + '</div>';
   }).join('') + '</div>';
-  var prove = [['testo', 'sfondo', 'Testo sullo sfondo'], ['testo', 'superficie', 'Testo sulle schede'], ['testo-2', 'superficie', 'Descrizioni sulle schede'], ['prezzo', 'superficie', 'Prezzi sulle schede'], ['accento', 'sfondo', 'Titoletti sullo sfondo']];
+  h += '<div class="sec-title">Fondi scuri (facoltativi)</div><div class="grp">' + TOKEN_SCURI.map(function(t){
+    var proprio = !!o[t[0]], sup = valoreProprio(T_LIV, t[0]), val = valoreEff(T_LIV, t[0]);
+    var stato = proprio ? (glob ? 'scelto da te' : 'personalizzato') : sup ? 'ereditato' : 'automatico';
+    return '<div class="row col-r"><input type="color" value="' + esc(val) + '" aria-label="' + t[1] + '" oninput="impostaColore(\'' + t[0] + '\',this.value)">' +
+      '<div class="row-main"><div class="row-t">' + t[1] + '</div><div class="row-s tnum">' + esc(val.toUpperCase()) + ' · ' + stato + '</div></div>' +
+      (proprio ? '<button class="btn-sm" onclick="impostaColore(\'' + t[0] + '\',null)">' + (glob ? 'Automatico' : 'Eredita') + '</button>' : '') + '</div>';
+  }).join('') + '</div><div class="hint" style="margin:6px 4px 0">Testata, consiglio del momento, barra in alto, banner e pulsanti. «Automatico» li ricava da testo, sfondo e accento.</div>';
+  var prove = [['testo', 'sfondo', 'Testo sullo sfondo'], ['testo', 'superficie', 'Testo sulle schede'], ['testo-2', 'superficie', 'Descrizioni sulle schede'], ['prezzo', 'superficie', 'Prezzi sulle schede'], ['accento', 'sfondo', 'Titoletti sullo sfondo'], ['su-scuro', 'scuro', 'Testo sui fondi scuri'], ['accento-chiaro', 'scuro', 'Dettagli sui fondi scuri']];
   var male = prove.map(function(p){ var r = contrasto(valoreEff(T_LIV, p[0]), valoreEff(T_LIV, p[1])); return [p[2], r]; }).filter(function(x){ return x[1] < 4.5; });
   h += male.length ? '<div class="banner o"><span>⚠️</span><span><b>Poco leggibile</b>: ' + male.map(function(x){ return x[0].toLowerCase() + ' (' + x[1].toFixed(1).replace('.', ',') + ':1)'; }).join(', ') + '. Serve almeno 4,5:1, soprattutto per chi legge al sole o ha la vista stanca.</span></div>'
     : '<div class="banner g"><span>✓</span><span>Contrasto buono: testi leggibili.</span></div>';
@@ -1679,7 +1701,7 @@ function disegnaColori(){
 function impostaColore(tok, val){
   var o = livObj(T_LIV, true);
   if(val) o[tok] = val; else delete o[tok];
-  if(T_LIV !== 'globale' && T_LIV !== 'home' && !Object.keys(o).length){ var k = T_LIV.slice(4); delete (T_LIV.indexOf('sez:') === 0 ? T.sezioni : T.categorie)[k]; }
+  if(T_LIV !== 'globale' && T_LIV !== 'home' && !Object.keys(o).length){ var k = T_LIV.slice(4); delete (T_LIV.indexOf('sez:') === 0 ? T.sezioni : T_LIV.indexOf('pag:') === 0 ? T.pagine : T.categorie)[k]; }
   if(!val) disegnaColori(); else aggiornaColoriDebounce();
   temaToccato();
 }
@@ -1688,11 +1710,12 @@ function usaPreset(n){ T = preset(n); renderAspetto(); temaToccato(); toast('Sti
 function annullaTema(){ T = JSON.parse(T_SALVATO); renderAspetto(); }
 function temaToccato(){ var b = document.getElementById('tSalva'); if(b) b.textContent = temaCambiato() ? 'Salva aspetto •' : 'Salva aspetto'; antTema(); }
 function contrastiDeboli(){
-  var livelli = ['globale', 'home'].concat(Object.keys(T.sezioni).map(function(k){ return 'sez:' + k; }), Object.keys(T.categorie).map(function(k){ return 'cat:' + k; }));
+  var livelli = ['globale', 'home'].concat(Object.keys(T.sezioni).map(function(k){ return 'sez:' + k; }), Object.keys(T.categorie).map(function(k){ return 'cat:' + k; }), Object.keys(T.pagine || {}).map(function(k){ return 'pag:' + k; }));
   var nomi = { globale: 'tutto il menu', home: 'pagina principale' }, out = [];
   livelli.forEach(function(l){
-    var r = Math.min(contrasto(valoreEff(l, 'testo'), valoreEff(l, 'sfondo')), contrasto(valoreEff(l, 'testo'), valoreEff(l, 'superficie')), contrasto(valoreEff(l, 'testo-2'), valoreEff(l, 'superficie')), contrasto(valoreEff(l, 'prezzo'), valoreEff(l, 'superficie')));
-    if(r < 4.5){ var n = nomi[l]; if(!n){ var o = l.indexOf('sez:') === 0 ? sezDi(+l.slice(4)) : catDi(+l.slice(4)); n = o ? '«' + o.nome + '»' : null; } if(n) out.push(n); }
+    var r = Math.min(contrasto(valoreEff(l, 'testo'), valoreEff(l, 'sfondo')), contrasto(valoreEff(l, 'testo'), valoreEff(l, 'superficie')), contrasto(valoreEff(l, 'testo-2'), valoreEff(l, 'superficie')), contrasto(valoreEff(l, 'prezzo'), valoreEff(l, 'superficie')), contrasto(valoreEff(l, 'su-scuro'), valoreEff(l, 'scuro')));
+    if(r < 4.5){ var n = nomi[l]; if(!n && l.indexOf('pag:') === 0){ var pg = (D.pagine || []).find(function(x){ return x.codice === l.slice(4); }); n = pg ? 'pagina «' + (pg.titolo || pg.codice) + '»' : null; }
+      else if(!n){ var o = l.indexOf('sez:') === 0 ? sezDi(+l.slice(4)) : catDi(+l.slice(4)); n = o ? '«' + o.nome + '»' : null; } if(n) out.push(n); }
   });
   return out;
 }
@@ -1915,6 +1938,7 @@ function ctMostra(){
   document.querySelectorAll('#shCt [data-per]').forEach(function(el){
     var p = el.dataset.per, ok = !p || p.split(',').indexOf(val) >= 0;
     if(el.dataset.home === '1' && _ctPag !== 'home') ok = false;
+    if(el.id === 'ctBlProd' && val === 'foto' && (document.getElementById('ct_ruolo') || {}).value) ok = false;  // foto della testata: niente prodotti
     el.style.display = ok ? '' : 'none';
   });
 }
@@ -1925,12 +1949,32 @@ function ctApri(chiave, id, base){
   S.campi.forEach(function(c){ if(c.en) en.push({ k: c.k + '_en', et: c.et, t: c.t, r: c.r, m: c.m, per: c.per }); });
   var extra = '';
   if(chiave === 'momenti') extra = id != null ? '<div class="sec-title">Prodotti da prendere insieme</div><div id="ctVoci"></div>' : '<div class="hint" style="margin:8px 4px">Salva il momento: poi potrai scegliere i prodotti da proporre insieme.</div>';
+  if(chiave === 'blocchi'){
+    var st = (v.stile && typeof v.stile === 'object') ? v.stile : {}, pag = v.pagina || (base || {}).pagina || _ctPag;
+    _ct.voci = (st.voci || []).map(Number).filter(function(x){ return x > 0; });
+    var ruoli = [['', 'Nessuno: è un blocco normale'], ['logo', 'Logo in testata'], ['sfondo', 'Foto di sfondo della testata']].concat(pag === 'home' ? [] : [['motivo', 'Motivo decorativo ripetuto in testata']]);
+    extra = '<div class="field" data-per="foto"><label for="ct_ruolo">Uso della foto</label><select class="inp" id="ct_ruolo" onchange="ctMostra()">' + ruoli.map(function(x){ return '<option value="' + x[0] + '"' + ((st.ruolo || '') === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') + '</select>' +
+      '<div class="hint">Logo, sfondo e motivo compongono la testata della pagina e non compaiono anche come blocco. Il motivo è un disegno che si ripete (per esempio quello di un\'etichetta).</div></div>' +
+      '<div data-per="testo,testo_foto,foto" id="ctBlProd"><div class="sec-title">Prodotti da ordinare in questo blocco</div><div id="ctBlVoci"></div>' +
+      '<div class="hint" style="margin:6px 4px 0">Il cliente li vede con prezzo e pulsante «Aggiungi». Compaiono solo se il prodotto è pubblicato.</div></div>';
+  }
   apriSheet('shCt', { titolo: (id != null ? 'Modifica ' : 'Nuovo ') + S.nome, alto: true,
     corpo: S.campi.map(function(c){ return ctCampo(c, v); }).join('') + extra +
       (en.length ? '<details style="margin:12px 0"><summary style="font-weight:600;cursor:pointer;padding:6px 0">In inglese (facoltativo)</summary>' + en.map(function(c){ return ctCampo(c, v); }).join('') + '</details>' : ''),
     piede: '<div class="btn-row">' + (id != null && !(chiave === 'pagine' && id === 'home') ? '<button class="btn btn-d" onclick="ctElimina()">Elimina</button>' : '') + '<button class="btn btn-s" onclick="chiudiSheet(\'shCt\')">Annulla</button><button class="btn btn-p" id="ctSalva" onclick="ctSalva()">Salva</button></div>' });
-  ctMostra(); if(chiave === 'momenti' && id != null) ctVoci();
+  ctMostra(); if(chiave === 'momenti' && id != null) ctVoci(); if(chiave === 'blocchi') ctBlVoci();
 }
+function ctBlVoci(){
+  var el = document.getElementById('ctBlVoci'); if(!el || !_ct) return; var l = _ct.voci || [];
+  el.innerHTML = (l.length ? '<div class="grp">' + l.map(function(vid, i){ var v = voceDi(vid);
+    return '<div class="row"><div class="row-main"><div class="row-t">' + esc(ctNomeVoce(vid)) + '</div><div class="row-s">' + (v ? prezzo(v.prezzo_cent) + (visibileAlCliente(v) ? '' : ' · <b>non visibile ai clienti</b>') : '') + '</div></div>' +
+      (i > 0 ? '<button class="btn-sm" aria-label="Sposta su" onclick="ctBlSposta(' + i + ',-1)">↑</button>' : '') + (i < l.length - 1 ? '<button class="btn-sm" aria-label="Sposta giù" onclick="ctBlSposta(' + i + ',1)">↓</button>' : '') +
+      '<button class="btn-sm r" onclick="ctBlTogli(' + i + ')">Togli</button></div>'; }).join('') + '</div>' : '<div class="hint">Nessun prodotto</div>') +
+    '<button type="button" class="btn btn-s" style="margin-top:8px" onclick="ctBlAggiungi()">＋ Aggiungi prodotto</button>';
+}
+function ctBlAggiungi(){ var keep = _ct; ctScegliVoce(function(vid){ _ct = keep; if(_ct.voci.indexOf(vid) >= 0){ toast('Già presente'); return; } _ct.voci.push(vid); ctBlVoci(); }, 'Prodotto da ordinare nel blocco'); }
+function ctBlTogli(i){ _ct.voci.splice(i, 1); ctBlVoci(); }
+function ctBlSposta(i, d){ var l = _ct.voci, x = l[i]; l[i] = l[i + d]; l[i + d] = x; ctBlVoci(); }
 async function ctFoto(inp, k){
   var file = inp.files && inp.files[0]; if(!file) return;
   toast('Preparo la foto…');
@@ -1953,8 +1997,16 @@ async function ctSalva(){
     corpo[c.k] = x;
   });
   if(_ct.chiave === 'blocchi'){
+    var vecchio = _ct.id != null ? (D.blocchi.find(function(x){ return String(x.id) === String(_ct.id); }) || {}) : {};
+    var stile = Object.assign({}, (vecchio.stile && typeof vecchio.stile === 'object') ? vecchio.stile : {});
+    var ru = document.getElementById('ct_ruolo'), ruolo = corpo.tipo === 'foto' && ru ? ru.value : '';
+    if(ruolo) stile.ruolo = ruolo; else delete stile.ruolo;
+    var vs = ['testo', 'testo_foto', 'foto'].indexOf(corpo.tipo) >= 0 && !ruolo ? (_ct.voci || []) : [];
+    if(vs.length) stile.voci = vs.slice(); else delete stile.voci;
+    corpo.stile = stile;
+    if(ruolo){ corpo.posizione = 'alto'; if(!corpo.foto_url){ toast('Scegli la foto per la testata'); return; } }
     if(corpo.foto_url && !corpo.foto_alt){ toast('Scrivi la descrizione della foto'); return; }
-    if(!corpo.titolo && !corpo.testo && !corpo.foto_url && !corpo.link_pagina){ toast('Il blocco è vuoto: scrivi qualcosa o scegli una foto'); return; }
+    if(!corpo.titolo && !corpo.testo && !corpo.foto_url && !corpo.link_pagina && !vs.length){ toast('Il blocco è vuoto: scrivi qualcosa, scegli una foto o un prodotto'); return; }
     if(corpo.tipo === 'link_pagina' && !corpo.link_pagina){ toast('Scegli la pagina a cui porta'); return; }
   }
   if(_ct.chiave === 'momenti'){
@@ -2012,8 +2064,9 @@ function apriPagina(cod){
   _ctPag = cod; var home = cod === 'home', p = D.pagine.find(function(x){ return x.codice === cod; }) || {};
   chiudiSheet('shPag', true); chiudiSheet('shCt', true);
   function riga(b, i, n, gr){
-    var t = CT_TIPI.find(function(x){ return x[0] === b.tipo; });
-    return '<div class="row voce" role="button" tabindex="0" onclick="ctApri(\'blocchi\',' + b.id + ')"><div class="row-main"><div class="row-t">' + esc(b.titolo || (b.testo || '').slice(0, 40) || '(senza titolo)') + '</div><div class="row-s">' + esc(t ? t[1] : b.tipo) + '</div></div>' + ctBdg(b.attivo) + ctFreccie('blocchi', b.id, i, n, gr) + '</div>';
+    var t = CT_TIPI.find(function(x){ return x[0] === b.tipo; }), st = b.stile || {}, RU = { logo: 'Logo in testata', sfondo: 'Sfondo della testata', motivo: 'Motivo della testata' };
+    var sotto = st.ruolo && RU[st.ruolo] ? RU[st.ruolo] : (t ? t[1] : b.tipo) + ((st.voci || []).length ? ' · ' + st.voci.length + ((st.voci.length === 1) ? ' prodotto' : ' prodotti') : '');
+    return '<div class="row voce" role="button" tabindex="0" onclick="ctApri(\'blocchi\',' + b.id + ')"><div class="row-main"><div class="row-t">' + esc(b.titolo || (b.testo || '').slice(0, 40) || (st.ruolo ? b.foto_alt : '') || '(senza titolo)') + '</div><div class="row-s">' + esc(sotto) + '</div></div>' + ctBdg(b.attivo) + ctFreccie('blocchi', b.id, i, n, gr) + '</div>';
   }
   var tutti = D.blocchi.filter(function(b){ return b.pagina === cod; }), h = '';
   if(home){

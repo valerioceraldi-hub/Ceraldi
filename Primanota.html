@@ -8642,9 +8642,16 @@ function _fxNumeriCompatibili(a, b){
   if(Math.min(da.length, db.length) < 3) return false;
   return da.slice(-db.length) === db || db.slice(-da.length) === da;
 }
+// Stesso numero ma anni diversi = fatture diverse (GB FOOD, ecc. ripartono da 1 a gennaio).
+// Se di entrambe si conosce la data, devono distare meno di 180 giorni.
+function _fxDateVicine(d1, d2){
+  var a = Date.parse(d1), b = Date.parse(d2);
+  if(isNaN(a) || isNaN(b)) return true;
+  return Math.abs(a - b) <= 180 * 86400000;
+}
 function _fxCercaStessa(lista, x){
   // x = { fornitore, piva, numero, data, importo, tipo }
-  var ok = function(f){ return f && !f.deletedAt && (!x.tipo || !f.tipo || f.tipo === x.tipo || (f.tipo !== 'nota_credito' && x.tipo !== 'nota_credito')); };
+  var ok = function(f){ return f && !f.deletedAt && _fxDateVicine(f.data, x.data) && (!x.tipo || !f.tipo || f.tipo === x.tipo || (f.tipo !== 'nota_credito' && x.tipo !== 'nota_credito')); };
   var stesso = lista.filter(function(f){ return ok(f) && _fxStessoFornitore(f, x.fornitore, x.piva); });
   var imp = function(f){ return Math.abs(Math.abs(+f.importo || 0) - Math.abs(+x.importo || 0)) < 0.02; };
   var l = stesso.filter(function(f){ return x.numero && _fxStessoNumero(f.numero, x.numero) === 2; });
@@ -8789,6 +8796,7 @@ async function importaMassivoXml(input){
       let dup = fatture.find(f =>
         normS(f.numero) === normS(numero) &&
         normS(f.fornitore) === normS(fornitore) &&
+        _fxDateVicine(f.data, data) &&
         numero.length > 0
       );
       // v10.27: anche se a mano il nome o il numero sono scritti diversamente
@@ -8812,6 +8820,22 @@ async function importaMassivoXml(input){
           Math.abs((f.importo||0) - importo) < 0.02
         );
         if(candidatiSecondari.length === 1) dup = candidatiSecondari[0];
+      }
+      // Una fattura "già presente" solo nella memoria del telefono ma NON sul Cloud
+      // (salvataggio fallito, riga cancellata da un altro dispositivo, cache vecchia)
+      // non è una vera presente: finora faceva scartare per sempre il file. Prima di
+      // dichiarare un doppione si controlla che esista davvero sul Cloud.
+      if(dup){
+        try{
+          const _chk = await sbFetch('fatture?id=eq.'+encodeURIComponent(dup.id)+'&select=id&limit=1');
+          if(Array.isArray(_chk) && _chk.length === 0){
+            console.warn('[Import XML] Doppione fantasma (solo sul telefono, non sul Cloud): scartato dalla memoria locale', dup);
+            const _ig = fatture.findIndex(f=>f.id===dup.id);
+            if(_ig>=0) fatture.splice(_ig,1);
+            risultati.fantasmi = (risultati.fantasmi||0) + 1;
+            dup = null;
+          }
+        }catch(_e){ /* se non riesco a controllare, resta il comportamento di prima */ }
       }
       if(dup){
         // Diagnostica: logga SEMPRE il dettaglio del conflitto, per capire
@@ -8917,6 +8941,7 @@ async function importaMassivoXml(input){
       try{
         await dbInsert(nuova);
         risultati.idNuovi.push(nuova.id);
+        (risultati.etichette = risultati.etichette || {})[nuova.id] = { fornitore: nuova.fornitore, numero: nuova.numero, importo: nuova.importo };
         // Righe a Ceraldi Ordini subito all'import (prima partivano solo aprendo l'XML)
         autoEstraiPrezzi(xmlTesto, nuova, {silenzioso:true, stato:(nuova.data && nuova.data >= new Date(Date.now()-30*86400000).toISOString().slice(0,10)) ? 'pending' : 'storico'}).catch(()=>{});
       }catch(e){
@@ -8981,7 +9006,7 @@ async function importaMassivoXml(input){
       }
       const perId = {}; trovate.forEach(r=>{ perId[String(r.id)] = r; });
       ids.forEach(id=>{
-        const f = fatture.find(x=>x.id===id) || {};
+        const f = Object.assign({}, (risultati.etichette||{})[id] || {}, fatture.find(x=>x.id===id) || {});
         const r = perId[String(id)];
         if(!r) mancantiVerifica.push((f.fornitore||'?')+' N°'+(f.numero||'?')+' — non è arrivata sul Cloud');
         else if(!r.fattura_allegata || r.fattura_allegata.length<10) mancantiVerifica.push((f.fornitore||'?')+' N°'+(f.numero||'?')+' — salvata senza XML');
@@ -11637,9 +11662,11 @@ function _generaPdfRegistrazione(f){
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({unit:'mm', format:'a4'});
   const df=f.data?new Date(f.data).toLocaleDateString('it-IT',{day:'2-digit',month:'long',year:'numeric'}):'—';
-  const pag={contanti:'Contanti',bonifico:'Bonifico',assegno:'Assegno'}[f.pagamento]||f.pagamento||'—';
+  const _PAGLAB={contanti:'Contanti',bonifico:'Bonifico',assegno:'Assegno',carta:'Carta',sdd:'Addebito diretto (SDD)',riba:'Ri.Ba.',paypal:'PayPal'};
+  const pag=_PAGLAB[f.pagamento]||f.pagamento||'—';
   const stato={pagata:'Pagata',da_pagare:'Da pagare',parziale:'Parziale'}[f.stato||'pagata']||'—';
   const tipo=f.tipo==='ddt'?'DDT':'Fattura';
+  const _dIt=(d)=>{ if(!d) return ''; const t=new Date(String(d).slice(0,10)); return isNaN(t)?String(d):t.toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'}); };
 
   let y=20;
   doc.setFont('helvetica','bold'); doc.setFontSize(16);
@@ -11650,26 +11677,88 @@ function _generaPdfRegistrazione(f){
 
   doc.setFontSize(11);
   const riga=(label,valore)=>{
-    if(!valore) return;
+    if(valore===undefined || valore===null || valore==='') return;
+    const righe=doc.splitTextToSize(String(valore), 130);
+    if(y + righe.length*5.5 > 272){ doc.addPage(); y=20; }
     doc.setFont('helvetica','bold'); doc.text(label+':', 15, y);
-    doc.setFont('helvetica','normal'); doc.text(String(valore), 60, y);
-    y+=8;
+    doc.setFont('helvetica','normal'); doc.text(righe, 62, y);
+    y+=Math.max(8, righe.length*5.5+2.5);
   };
+  const sezione=(titolo)=>{
+    if(y > 255){ doc.addPage(); y=20; }
+    y+=2; doc.setFont('helvetica','bold'); doc.setFontSize(12); doc.text(titolo, 15, y);
+    doc.setDrawColor(220); doc.line(15,y+1.5,195,y+1.5); y+=8; doc.setFontSize(11);
+  };
+
+  // ── Il documento ──
   riga('Fornitore', f.fornitore||'—');
+  if(f.piva) riga('P.IVA', f.piva);
   riga('N° Documento', f.numero||'—');
   riga('Data', df);
   riga('Importo', fmt(f.importo));
-  riga('Pagamento', pag);
+  if(f.scadenza) riga('Scadenza', _dIt(f.scadenza));
+  if(f.fatturaAllegataName) riga('File XML', f.fatturaAllegataName);
+
+  // ── Il pagamento ──
+  sezione('Pagamento');
+  riga('Metodo', pag);
   riga('Stato', stato);
-  if(f.scadenza) riga('Scadenza', new Date(f.scadenza).toLocaleDateString('it-IT'));
+  if(f.dataPagamento) riga('Pagata il', _dIt(f.dataPagamento));
+  if(f.contoPagamento) riga('Conto / carta', f.contoPagamento);
+  if(f.parzPagato>0 && f.stato!=='pagata') riga('Già pagato', fmt(f.parzPagato));
   if(f.bonIban) riga('IBAN', f.bonIban);
+  if(f.bonData) riga('Data bonifico', _dIt(f.bonData));
+  if(f.bonRif) riga('Riferimento (CRO/TRN)', f.bonRif);
+  if(f.bonCaus) riga('Causale', f.bonCaus);
+  var _movs=(typeof _movimentiPerFattura==='function')?_movimentiPerFattura(f.id):[];
   var _assegniShare=(typeof _assegniPerFattura==='function')?_assegniPerFattura(f.id):[];
   if(_assegniShare.length>1) riga('N° Assegni', _assegniShare.join(', '));
   else if(f.assegno) riga('N° Assegno', f.assegno);
-  if(f.note) riga('Note', f.note);
+  else if(_assegniShare.length===1) riga('N° Assegno', _assegniShare[0]);
+  if(f.assInt) riga('Assegno intestato a', f.assInt);
+  if(f.assBanca) riga('Banca assegno', f.assBanca);
+  var _ORIG={xml:'Indicato nella fattura elettronica',manuale:'Inserito a mano',prima_nota:'Da Prima Nota (contanti)',riconciliazione:'Confermato dal movimento bancario',banca:'Confermato dal movimento bancario',regola:'Regola del fornitore'};
+  if(f.pagamentoOrigine) riga('Metodo registrato', (_ORIG[f.pagamentoOrigine]||f.pagamentoOrigine)+(f.pagamentoImpostatoIl?' ('+_dIt(f.pagamentoImpostatoIl)+')':''));
 
-  doc.setFontSize(9); doc.setTextColor(140);
-  doc.text('Generato da Caffetteria Ceraldi — Gestione Fatture', 15, 285);
+  // ── La prova in banca ──
+  var _riconc=[];
+  if(_movs.length){
+    _movs.forEach(function(m){ _riconc.push({data:m.data, importo:m.importo, banca:m.banca||m.fonte||'', descrizione:m.descrizione, movId:m.id||'', parziale:false}); });
+  } else if(Array.isArray(f.riconciliazioneStorico) && f.riconciliazioneStorico.length){
+    f.riconciliazioneStorico.forEach(function(r){ _riconc.push(r); });
+  } else if(f.riconciliazione){
+    _riconc.push(f.riconciliazione);
+  }
+  if(_riconc.length){
+    sezione(_riconc.length>1 ? 'Movimenti in banca collegati' : 'Movimento in banca collegato');
+    _riconc.forEach(function(r,ix){
+      if(_riconc.length>1) riga('Movimento '+(ix+1), '');
+      riga('Data', _dIt(r.data));
+      if(r.importo!==undefined && r.importo!==null) riga('Importo', fmt(Math.abs(+r.importo||0)));
+      riga('Banca', r.banca);
+      riga('Descrizione', r.descrizione);
+      if(r.movId) riga('ID movimento', r.movId);
+      if(r.parziale) riga('Nota', 'Pagamento parziale');
+    });
+  } else if((f.stato||'pagata')==='pagata' && f.pagamento && f.pagamento!=='contanti'){
+    sezione('Movimento in banca');
+    riga('Stato', 'Nessun movimento bancario ancora collegato a questa fattura');
+  }
+  if(Array.isArray(f.pagamentiManuali) && f.pagamentiManuali.length){
+    sezione('Pagamenti registrati a mano');
+    f.pagamentiManuali.forEach(function(p){
+      riga(_dIt(p.data||p.dataPagamento)||'—', [p.importo!==undefined?fmt(+p.importo||0):'', p.metodo||p.pagamento||'', p.rif||p.riferimento||''].filter(Boolean).join(' · '));
+    });
+  }
+  if(f.note){ sezione('Note'); riga('Note', f.note); }
+
+  // piè di pagina su tutte le pagine di testo
+  const _np=doc.internal.getNumberOfPages();
+  for(let pg=1; pg<=_np; pg++){
+    doc.setPage(pg);
+    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(140);
+    doc.text('Generato da Caffetteria Ceraldi — Gestione Fatture · '+new Date().toLocaleDateString('it-IT')+' · pag. '+pg+'/'+_np, 15, 285);
+  }
 
   if(f.foto){
     try{
@@ -32998,6 +33087,7 @@ body.pn-foglio-aperto #aiAssistBtn,body.pn-foglio-aperto #scriptableBtn,body:has
 .nc-chk input:checked+span{background:var(--blue);border-color:var(--blue)}
 .nc-chk input:checked+span::after{content:'✓';display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:13px;height:100%}
 .nc-m{flex:1;min-width:0;cursor:pointer}.nc-m b{display:block;font-size:14px;font-weight:650}.nc-m small{display:block;font-size:12px;color:var(--ink3);margin-top:1px}
+.nc-testa{background:var(--surface);border:.5px solid var(--ds-hair,var(--sep));border-left:3px solid var(--blue);border-radius:14px;padding:12px 14px;margin-bottom:12px}.nc-testa-t{font-size:10px;font-weight:800;color:var(--blue);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px}.nc-testa b{display:block;font-size:15px;font-weight:700}.nc-testa small{display:block;font-size:12px;color:var(--ink3);margin-top:2px}.nc-testa strong{color:var(--ink);font-weight:700}
 .nc-sugg{font-size:10px;font-weight:800;color:var(--blue);text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px}
 .nc-imp{width:104px;flex-shrink:0;text-align:right}.nc-imp input{width:100%;padding:8px 9px;border:.5px solid var(--ds-hair,var(--sep));border-radius:10px;font:inherit;font-size:15px;font-weight:700;text-align:right;background:var(--surface);color:var(--ink)}
 .nc-imp small{display:block;font-size:10.5px;color:var(--ink3);margin-top:2px}
@@ -33899,7 +33989,11 @@ function apriCollegaNC(ncId, opz){
   scNcUsi(nc).forEach(function(u){ PNC.scelte[String(u.fid)] = u.imp; });
   if(opz.scegli != null && !PNC.scelte[String(opz.scegli)]){ var fx = pnF(opz.scegli); if(fx) PNC.scelte[String(fx.id)] = scR2(Math.min(pncMax(fx), pncLibero())); }
   var mo = pnFoglio('pnCollegaNC', { titolo: 'Usa la nota di credito', sotto: esc(nc.fornitore || '') + ' · n° ' + esc(nc.numero || '—') + ' · ' + fmt(Math.abs(nc.importo || 0)), alto: true, z: 320, piede: true });
-  mo.querySelector('.pn-sh-bd').innerHTML = '<div class="sk-nota" style="margin-top:0">Scegli una o più fatture e quanto credito usare su ognuna. Sulle fatture da pagare il credito scala quanto devi; su quelle già pagate resta un credito da recuperare (rimborso o sconto sul prossimo ordine).</div>' +
+  var _rifM = String(nc.note || '').match(/\[RIF-NC:([^·\]]+)(?:·([^\]]*))?/), _rifN = _rifM ? _rifM[1] : ((window._ncRif && window._ncRif[String(nc.id)]) ? window._ncRif[String(nc.id)].num : ''), _rifD = _rifM && _rifM[2] ? _rifM[2] : '';
+  var _testaNC = '<div class="nc-testa"><div class="nc-testa-t">Nota di credito</div><b>n° ' + esc(nc.numero || '—') + ' · ' + pnGg(nc.data) + '</b><small>' + esc(nc.fornitore || '') + ' · <strong>' + fmt(Math.abs(nc.importo || 0)) + '</strong></small>' +
+    (_rifN ? '<small>Si riferisce alla fattura n° ' + esc(_rifN) + (_rifD ? ' del ' + pnGg(_rifD) : '') + ' (indicata nell\'XML)</small>' : '') +
+    (_haXml(nc) ? '<div style="margin-top:8px">' + _btnXml(nc, 'mini') + '</div>' : '') + '</div>';
+  mo.querySelector('.pn-sh-bd').innerHTML = _testaNC + '<div class="sk-nota" style="margin-top:0">Scegli una o più fatture e quanto credito usare su ognuna. Sulle fatture da pagare il credito scala quanto devi; su quelle già pagate resta un credito da recuperare (rimborso o sconto sul prossimo ordine).</div>' +
     '<div class="pn-cerca"><input type="search" id="pncQ" placeholder="Cerca numero, data o importo" oninput="PNC.q=this.value;pncDisegna()"></div><div id="pncLista"></div>';
   pncDisegna();
 }
@@ -33930,7 +34024,7 @@ function pncDisegna(){
     var k = String(f.id), on = PNC.scelte[k] != null, max = pncMax(f), suggerita = rif && String(f.numero || '').toLowerCase().replace(/[^a-z0-9]/g, '') === rif;
     var stato = f.stato === 'pagata' ? 'già pagata' : 'resta ' + fmt(Math.max(0, Math.abs(f.importo || 0) - (f.parzPagato || 0)));
     return '<div class="nc-it' + (on ? ' on' : '') + '"><label class="nc-chk"><input type="checkbox" ' + (on ? 'checked' : '') + ' onchange="pncSpunta(\'' + k + '\',this.checked)"><span></span></label><div class="nc-m" onclick="pncSpunta(\'' + k + '\',' + (!on) + ')">' +
-      (suggerita ? '<div class="nc-sugg">Indicata nell\'XML della nota</div>' : '') + '<b>n° ' + esc(f.numero || '—') + ' · ' + pnGg(f.data) + '</b><small>' + (pnStessoFornitore(f, nc) ? '' : esc(f.fornitore || '') + ' · ') + fmt(Math.abs(f.importo || 0)) + ' · ' + stato + '</small></div>' +
+      (suggerita ? '<div class="nc-sugg">Indicata nell\'XML della nota</div>' : '') + '<b>n° ' + esc(f.numero || '—') + ' · ' + pnGg(f.data) + '</b><small>' + (pnStessoFornitore(f, nc) ? '' : esc(f.fornitore || '') + ' · ') + fmt(Math.abs(f.importo || 0)) + ' · ' + stato + '</small>' + (_haXml(f) ? '<div style="margin-top:6px">' + _btnXml(f, 'mini') + '</div>' : '') + '</div>' +
       (on ? '<div class="nc-imp"><input inputmode="decimal" value="' + (+PNC.scelte[k]).toFixed(2).replace('.', ',') + '" onchange="pncImporto(\'' + k + '\',this.value)" aria-label="Importo da usare"><small>max ' + fmt(max) + '</small></div>' : '') + '</div>';
   }).join('') : '<div class="sk-nota">Nessuna fattura di questo fornitore. Cerca per numero o importo per vederne altre.</div>';
   var libero = pncLibero(), n = Object.keys(PNC.scelte).length, ft = document.querySelector('#pnCollegaNC .pn-sh-ft');
@@ -36669,7 +36763,7 @@ async function ricvAutoReport(){
     var mot = (g.righe[0].motivi || []); if(mot.length) h += '<div class="rv-perche">' + esc(mot.join(' · ')) + '</div>';
     if(annullato) h += '<div class="rv-auto-st">↩️ Scollegato: non lo ricollego più a questa fattura</div>';
     else if(!ancora) h += '<div class="rv-auto-st">Il collegamento è stato cambiato a mano dopo</div>';
-    else h += '<div class="rv-az"><button class="sk-btn" onclick="ricvAutoCorreggi(' + gi + ',false)">Non è giusto: scollega</button><button class="sk-btn prim" onclick="ricvAutoCorreggi(' + gi + ',true)">Collega a un\'altra</button></div>';
+    else h += '<div class="rv-az"><button class="sk-btn prim" onclick="ricvAutoCorreggi(' + gi + ',true)">Non è giusto: scegli un\'altra fattura</button></div>';
     h += '</div>';
   });
   h += '<label class="rv-ricorda" style="margin-top:14px"><input type="checkbox"' + (ricvAutoAttivo() ? ' checked' : '') + ' onchange="ricvAutoImposta(this.checked)"> Collega da solo i movimenti sicuri</label>';

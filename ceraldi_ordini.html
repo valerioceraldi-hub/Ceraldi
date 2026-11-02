@@ -461,7 +461,7 @@ function avvisoCreditoIA(){
 </nav>
 
 <script>
-var APP_VERSION='8.16.2';
+var APP_VERSION='8.17.2';
 var BUILD_VERSION=APP_VERSION, BUILD_NUM=APP_VERSION;
 var APP={key:'ordini',nome:'Ordini',versione:APP_VERSION,authKey:'or_auth_v2',oldAuthKey:'ceraldi_ordini_auth_session',
   markBg:'linear-gradient(145deg,#FFC04D 0%,#FF9F0A 50%,#C2410C 100%)',
@@ -2346,10 +2346,10 @@ async function secondoParereIA(voci){
    chi ha un account abilitato a Ordini. La vecchia chiave salvata qui si cancella. */
 try{ localStorage.removeItem('ceraldi_apikey'); }catch(e){}
 function chiaveAI(){ return (typeof _authSess !== 'undefined' && _authSess && _authSess.access_token) ? 'server' : ''; }
-async function chiamaClaude(contenuto, maxTok){
+async function chiamaClaude(contenuto, maxTok, messaggi){
   if(!chiaveAI()) throw new Error('Per usare l\'IA accedi con il tuo account');
   try{ await _authPronto(); }catch(e){}
-  var corpo = JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: maxTok || 4000, messages: [{ role: 'user', content: contenuto }] });
+  var corpo = JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: maxTok || 4000, messages: messaggi || [{ role: 'user', content: contenuto }] });
   var invia = function(){ return fetch(SB_URL + '/functions/v1/ia?app=ordini', { method: 'POST',
     headers: { 'Content-Type': 'application/json', apikey: SB_KEY, Authorization: 'Bearer ' + _authToken() }, body: corpo }); };
   var resp = await invia();
@@ -2357,7 +2357,40 @@ async function chiamaClaude(contenuto, maxTok){
   var d = await resp.json().catch(function(){ return {}; });
   if(!resp.ok || d.error) throw new Error((d.error && d.error.message) || ('IA: errore ' + resp.status));
   var tb = (d.content || []).find(function(b){ return b.type === 'text'; });
+  _ultimoStopIA = d.stop_reason || '';
   return tb ? tb.text : '';
+}
+var _ultimoStopIA = '';
+/* Legge un listino anche lungo. Se la risposta dell'IA si interrompe per lunghezza,
+   recupera i prodotti completi già ricevuti e chiede il seguito con un normale messaggio
+   (questo modello non accetta risposte "da proseguire"), poi unisce le parti senza doppioni. */
+function righeDaTestoParziale(t){
+  t = String(t || '').replace(/```json|```/g, '').trim();
+  var i = t.indexOf('['); if(i < 0) return [];
+  t = t.slice(i);
+  var j = t.lastIndexOf('}'); if(j < 0) return [];
+  t = t.slice(0, j + 1);
+  try{ return JSON.parse(t + ']'); }catch(e){}
+  try{ return JSON.parse(t); }catch(e){ return []; }
+}
+async function estraiListinoCompleto(blocchi){
+  var tutte = [], viste = {}, msgs = [{ role: 'user', content: blocchi }];
+  for(var giro = 0; giro < 10; giro++){
+    var t = await chiamaClaude(null, 16000, msgs);
+    var parte = righeDaTestoParziale(t), nuove = 0;
+    parte.forEach(function(x){
+      var k = [x && x.nome, x && x.prezzo, x && x.codice].join('|').toLowerCase();
+      if(x && x.nome && !viste[k]){ viste[k] = 1; tutte.push(x); nuove++; }
+    });
+    if(_ultimoStopIA !== 'max_tokens') return tutte;
+    if(!nuove) break;
+    var ultimo = tutte[tutte.length - 1];
+    msgs = [{ role: 'user', content: blocchi },
+            { role: 'assistant', content: JSON.stringify(tutte) },
+            { role: 'user', content: 'La lista si è interrotta. Continua dal prodotto successivo a "' + ultimo.nome + '" (codice "' + (ultimo.codice || '') + '") fino alla fine del documento. Rispondi SOLO con un array JSON dei prodotti rimanenti, nello stesso formato, senza ripetere quelli già elencati. Se il documento è finito rispondi [].' }];
+  }
+  if(tutte.length) return tutte;
+  throw new Error('Non sono riuscito a leggere il documento. Riprova; se si ripete, usa un file Excel o CSV.');
 }
 function jsonDaTesto(t){
   t = String(t || '').replace(/```json|```/g, '').trim();
@@ -3354,7 +3387,7 @@ function renderProdotti(){
   if(l.length > m.length) h += '<button class="btn btn-s" style="margin-top:6px" onclick="VIEW.limite+=100;renderProdotti()">Mostra altri ' + (l.length - m.length) + '</button>';
   var forse = !l.length && VIEW.q && VIEW.q.length >= 3 && !/^\d{8,14}$/.test(VIEW.q) ? RIC.cerca(VIEW.q, { storia: storiaProdotti() }).cand.filter(function(x){ return x.s >= 35; }).slice(0, 6).map(function(x){ return x.c; }) : [];
   if(forse.length) h = '<div class="sec-title">Nessun prodotto con "' + esc(VIEW.q) + '" · forse cercavi</div>' + forse.map(rigaProdotto).join('') + (!U.lettura ? '<button class="btn btn-s" style="margin-top:10px" onclick="apriNuovoProdotto(VIEW.q)">Non è nessuno di questi: crea "' + esc(maiusc(VIEW.q)) + '"</button>' : '');
-  else if(!l.length) h = '<div class="empty"><div class="ei">🔎</div><b>Nessun prodotto</b><p>' + (VIEW.q ? 'Nel catalogo non c\'è "' + esc(VIEW.q) + '".' : 'Niente in questa sezione.') + '</p>' +
+  else if(!l.length) h = '<div class="empty"><div class="ei">🔎</div><b>Nessun prodotto</b><p>' + (VIEW.q ? 'Nel catalogo non c\'è "' + esc(VIEW.q) + '".' : 'Niente in questa sezione.') + '</p><div id="vuotoListino"></div>' +
     (VIEW.q && !U.lettura ? '<button class="btn btn-s" style="margin-top:14px" onclick="apriNuovoProdotto(VIEW.q)">+ Crea "' + esc(maiusc(VIEW.q)) + '"</button>' : '') + '</div>';
   el.innerHTML = h;
   cercaListini();
@@ -3380,31 +3413,52 @@ function renderAvvisiOrdina(){
   el.innerHTML = h;
 }
 // Ricerca anche nei listini caricati dai fornitori (prodotti non ancora a catalogo)
-var _listTimer = null, _listUltima = '';
+var _listTimer = null, _listUltima = '', _listSeq = 0;
+// Se nel catalogo non c'è nulla ma i listini sì, lo dico subito nel riquadro "Nessun prodotto" (ci si accorge subito che esiste)
+function avvisoVuotoListino(){
+  var v = document.getElementById('vuotoListino'); if(!v) return;
+  var n = (window._listRis || []).length;
+  v.innerHTML = n && window._listQ === VIEW.q ? '<div class="banner b" style="margin:12px 0 0;text-align:left"><span>📚</span><div style="flex:1"><strong>Non è a catalogo, ma è nei listini dei fornitori</strong><br>Lo trovi qui sotto: toccando + lo aggiungi al catalogo.</div></div>' : '';
+}
 function cercaListini(){
   var el = document.getElementById('listini'); if(!el) return;
   var q = VIEW.q;
-  if(!q || q.length < 3 || fornDi(q) || /^\d{8,}$/.test(q)){ el.innerHTML = ''; return; }
   clearTimeout(_listTimer);
+  if(!q || q.length < 3 || fornDi(q) || /^\d{8,}$/.test(q)){ _listSeq++; _listUltima = ''; window._listRis = []; el.innerHTML = ''; return; }
+  if(_listUltima === q){ avvisoVuotoListino(); return; }   // già cercato per questa parola: il riquadro resta com'è
   _listTimer = setTimeout(async function(){
-    if(_listUltima === q) return; _listUltima = q;
-    var parole = norm(q).split(' ').filter(function(w){ return w.length >= 2; }).slice(0, 3);
+    if(_listUltima === q || VIEW.q !== q) return; _listUltima = q;
+    var mio = ++_listSeq;   // se nel frattempo parte un'altra ricerca, questa risposta non conta più
+    window._listRis = [];
+    el.innerHTML = '<div class="hint" style="margin:12px 4px;display:flex;gap:8px;align-items:center"><span class="spinner" style="width:14px;height:14px;border-width:2px"></span>Cerco anche nei listini dei fornitori…</div>';
     try{
       var r = await api('rpc/listini_cerca', { method: 'POST', body: { p_q: q, p_source: null, p_limite: 30 } });
-      if(VIEW.q !== q) return;
+      if(mio !== _listSeq) return;
+      // l'elenco dei listini serve per ignorare i prezzi dei listini superati: senza, meglio dire che non ci sono riuscito che mostrare prezzi vecchi
       if(!LST.riep) await caricaRiepilogoListini();
+      if(mio !== _listSeq) return;
+      if(!LST.riep) throw new Error(LST.err || 'Elenco listini non disponibile');
       r = (r || []).filter(function(x){ return prezziListino(x).length && !CAT.some(function(p){ return norm(p.name) === norm(x.name); }) && !nelCatalogo(x); }).slice(0, 12);
-      window._listRis = r;
-      el.innerHTML = r.length ? '<div class="sec-title">Nei listini dei fornitori <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:500">non ancora a catalogo</span><button class="lnk" onclick="apriListini(VIEW.q)">Vedi tutti ›</button></div><div class="grp">' + r.map(function(x, i){
-        var pr = Object.keys(x.prices || {}).map(function(k){ return { f: k, v: num(x.prices[k]) }; }).filter(function(y){ return y.v; }).sort(function(a, b){ return a.v - b.v; })[0];
-        return '<div class="row"><div class="row-main"><div class="row-t" style="font-size:14px">' + evidenzia(x.name, q) + '</div><div class="row-s">' + esc([x.conf, x.source].filter(Boolean).join(' · ')) + '</div></div><div class="row-r"><b style="color:var(--ink)">' + (pr ? eur(pr.v) : '') + '</b></div>' + (U.lettura ? '' : '<button class="add-b" onclick="daListino(' + i + ')">+</button>') + '</div>';
+      window._listRis = r; window._listQ = q;
+      el.innerHTML = r.length ? '<div class="sec-title">📚 Solo nei listini dei fornitori <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:500">non ancora a catalogo</span><button class="lnk" onclick="apriListini(VIEW.q)">Vedi tutti ›</button></div><div class="grp">' + r.map(function(x, i){
+        var pz = prezziListino(x)[0];   // il più basso tra i prezzi validi (i listini superati non contano)
+        var sub = [x.conf, pz && pz.forn, etichettaListino(x) !== (pz && pz.forn) ? etichettaListino(x) : ''].filter(Boolean);
+        return '<div class="row"><div class="row-main"><div class="row-t" style="font-size:14px">' + evidenzia(x.name, q) + '</div><div class="row-s"><span class="bdg b">📚 Solo listino</span> ' + esc(sub.join(' · ')) + '</div></div><div class="row-r"><b style="color:var(--ink)">' + (pz ? eur(pz.v) : '') + '</b></div>' + (U.lettura ? '' : '<button class="add-b" aria-label="Aggiungi al catalogo" onclick="daListino(' + i + ')">+</button>') + '</div>';
       }).join('') + '</div>' : '';
-    }catch(e){ el.innerHTML = ''; }
+      avvisoVuotoListino();
+    }catch(e){
+      if(mio !== _listSeq) return;
+      _listUltima = '';   // così si può riprovare (prima restava bloccato e il riquadro spariva)
+      window._listRis = [];
+      el.innerHTML = '<div class="banner o" style="margin-top:12px"><span>⚠️</span><div style="flex:1"><b>Non sono riuscito a cercare nei listini</b><br><span style="font-size:12.5px">' + esc(e.message) + '</span></div><button class="btn-sm o" onclick="_listUltima=\'\';cercaListini()">Riprova</button></div>';
+      avvisoVuotoListino();
+    }
   }, 350);
 }
 async function daListino(i){
   var x = (window._listRis || [])[i]; if(!x) return;
-  var prices = {}; Object.keys(x.prices || {}).forEach(function(k){ var f = fornDi(k) || fornDi(x.source); if(f && num(x.prices[k])) prices[f.nome] = num(x.prices[k]); });
+  // stessi prezzi che si vedono nella riga: solo listini non superati e fornitori di Ordini (come nuovoDaListino)
+  var prices = {}; prezziListino(x).forEach(function(y){ if(!y.fuori && fornDi(y.forn) && prices[y.forn] == null) prices[y.forn] = y.v; });
   if(!Object.keys(prices).length && fornDi(x.source)){ var v = Object.keys(x.prices || {}).map(function(k){ return num(x.prices[k]); }).filter(Boolean)[0]; if(v) prices[fornDi(x.source).nome] = v; }
   if(!(await conferma('Aggiungere al catalogo?', '<b>' + esc(x.name) + '</b> verrà creato nel catalogo' + (Object.keys(prices).length ? ' con il prezzo di ' + esc(Object.keys(prices).join(', ')) : '') + ' e messo nel carrello.', 'Crea e aggiungi'))) return;
   try{ var p = await nuovoProdotto({ name: x.name, conf: x.conf || '', cat: maiusc(x.cat || ''), prices: prices, settore: VIEW.settore !== 'Tutti' ? VIEW.settore : 'Bar' }); aggiungi(p.id); _listUltima = ''; renderOrdina(); if(p._esistente) toast('Era già in catalogo come ' + nomeBreve(p.name, 34) + ': messo nel carrello quello'); }
@@ -3446,7 +3500,9 @@ function prezziListino(x, tutti){
     return { forn: f.nome, era: f.era, fuori: f.fuori, v: v, superato: superato };
   }).filter(Boolean).sort(function(a, b){ return a.v - b.v; });
 }
-async function caricaRiepilogoListini(){ try{ LST.riep = await api('rpc/listini_riepilogo', { method: 'POST', body: {} }) || []; }catch(e){ LST.riep = LST.riep || []; LST.err = e.message; } return LST.riep; }
+// Se il caricamento fallisce NON memorizzo una lista vuota (resterebbe così per sempre e i prezzi dei listini superati
+// tornerebbero visibili): lascio null, così al prossimo tentativo riprova; il motivo resta in LST.err.
+async function caricaRiepilogoListini(){ try{ LST.riep = await api('rpc/listini_riepilogo', { method: 'POST', body: {} }) || []; LST.err = ''; }catch(e){ LST.err = e.message; } return LST.riep; }
 async function apriListini(q){
   LST.q = q || ''; LST.src = ''; LST.ultima = '';
   apriSheet('shList', { titolo: 'Listini dei fornitori', alto: true, corpo: '<div id="lstTesta"><div class="loading"><span class="spinner"></span></div></div>' +
@@ -3493,7 +3549,7 @@ function cercaNeiListini(subito){
       LST.ris = (r || []).filter(function(x){ return prezziListino(x).length; });   // righe con soli prezzi superati: non le mostro
       el.innerHTML = LST.ris.length ? '<div class="sec-title">' + LST.ris.length + (LST.ris.length >= 60 ? '+' : '') + ' articoli' + (LST.src ? ' in ' + esc(etichettaListino({ source: LST.src })) : '') + '</div><div class="grp">' + LST.ris.map(rigaListino).join('') + '</div>'
         : '<div class="empty"><div class="ei">🔎</div><b>Niente nei listini</b><p>Prova con meno parole o un altro nome.</p></div>';
-    }catch(e){ el.innerHTML = '<div class="banner r"><span>⚠️</span><div>' + esc(e.message) + '</div></div>'; }
+    }catch(e){ if(LST.ultima !== chiave) return; LST.ultima = ''; el.innerHTML = '<div class="banner o"><span>⚠️</span><div style="flex:1"><b>Ricerca non riuscita</b><br><span style="font-size:12.5px">' + esc(e.message) + '</span></div><button class="btn-sm o" onclick="cercaNeiListini(true)">Riprova</button></div>'; }
   }, subito ? 0 : 300);
 }
 // cosa c'è già nel catalogo per questo articolo del listino
@@ -4466,7 +4522,7 @@ function salvaFatturaOrdine(id, modo){
 }
 async function contestaDifferenze(){
   var l = window._cfDiff || []; if(!l.length) return;
-  try{ await api('prezzi_difformi', { method: 'POST', prefer: 'return=minimal', body: l.map(function(x){ return { fornitore: x.forn, nome_prodotto: x.nome, id_prodotto_catalogo: x.id || null, prezzo_catalogo: x.prima || null, prezzo_nuovo: x.dopo, fonte: 'fattura', qta: x.qta || null, riga_fattura_id: x.riga || null }; }) }); await caricaPD(); aggiornaBadge(); toast(l.length + ' contestazioni aggiunte in Da fare'); window._cfDiff = []; }
+  try{ await salvaDifformi(l.map(function(x){ return { fornitore: x.forn, nome_prodotto: x.nome, id_prodotto_catalogo: x.id || null, prezzo_catalogo: x.prima || null, prezzo_nuovo: x.dopo, fonte: 'fattura', qta: x.qta || null, riga_fattura_id: x.riga || null }; })); await caricaPD(); aggiornaBadge(); toast(l.length + ' contestazioni aggiunte in Da fare'); window._cfDiff = []; }
   catch(e){ toast('⚠️ ' + e.message); }
 }
 
@@ -5239,12 +5295,12 @@ function rigaVariazione(r){
       // prodotto già certo (imparato dalle tue conferme o abbinato a mano): resta da decidere solo il prezzo
       ? '<div style="font-weight:700;font-size:13.5px;margin-top:10px">' + (att != null ? 'Prezzo cambiato: lo aggiorno?' : 'Nuovo prezzo da ' + esc(f) + ': lo uso?') + '</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">' +
         '<button class="btn-sm g" onclick="applicaPF(' + r.id + ')">' + (att != null ? 'Aggiorna a ' : 'Usa ') + eur(nuovo) + '</button>' +
-        '<button class="btn-sm" onclick="ignoraPF(' + r.id + ')">Ignora</button></div>' + '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:8px;font-size:12.5px;line-height:1.35;color:var(--ink2)"><input type="checkbox" style="margin-top:2px;width:auto" ' + (DF.pd[r.id] ? 'checked' : '') + ' onchange="DF.pd[' + r.id + ']=this.checked"><span>Metti anche nei <b>prezzi difformi</b>, da contestare al fornitore (vale con «Aggiorna» o con «Ignora»)</span></label>' +
+        '<button class="btn-sm" onclick="ignoraPF(' + r.id + ')">Ignora</button></div>' + '<div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btn-sm" onclick="contestaPF(' + r.id + ')">⚠️ Contesta al fornitore</button><span class="row-s" style="font-size:12px">Il prezzo in catalogo resta com\'è</span></div>' +
         '<button class="lnk-btn" style="font-size:12px;padding:6px 0 0;color:var(--ink3)" onclick="cambiaProdottoPF(' + r.id + ')">Non è questo prodotto?</button>'
       : '<div style="font-weight:700;font-size:13.5px;margin-top:10px">È lo stesso prodotto?</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">' +
       '<button class="btn-sm g" onclick="applicaPF(' + r.id + ')">Sì, ' + (att != null ? 'aggiorna a ' : 'usa ') + eur(nuovo) + '</button>' +
       '<button class="btn-sm" onclick="cambiaProdottoPF(' + r.id + ')">No, è un altro</button>' +
-      '<button class="btn-sm" onclick="ignoraPF(' + r.id + ')">Ignora</button></div>' + '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:8px;font-size:12.5px;line-height:1.35;color:var(--ink2)"><input type="checkbox" style="margin-top:2px;width:auto" ' + (DF.pd[r.id] ? 'checked' : '') + ' onchange="DF.pd[' + r.id + ']=this.checked"><span>Metti anche nei <b>prezzi difformi</b>, da contestare al fornitore (vale con «Aggiorna» o con «Ignora»)</span></label>')) + '</div>';
+      '<button class="btn-sm" onclick="ignoraPF(' + r.id + ')">Ignora</button></div>' + '<div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btn-sm" onclick="contestaPF(' + r.id + ')">⚠️ Contesta al fornitore</button><span class="row-s" style="font-size:12px">Il prezzo in catalogo resta com\'è</span></div>')) + '</div>';
 }
 async function applicaPF(id, muto){
   var r = PF.find(function(x){ return x.id === id; }); if(!r) return;
@@ -5270,10 +5326,26 @@ async function aggiornaVariazioniPiccole(){
   renderDaFare(); aggiornaBadge(); toast(ok + ' prezzi aggiornati ✓');
 }
 async function ignoraPF(id){ if(DF.pd[id]){ delete DF.pd[id]; return contestaPF(id); } var r0 = PF.find(function(x){ return x.id === id; }), st0 = r0 ? r0.stato : 'review'; try{ await patchPF([id], { stato: 'rejected', resolved_at: new Date().toISOString() }); renderDaFare(); aggiornaBadge(); toast('Ignorato', { azione: 'Annulla', onAzione: function(){ api('prezzi_da_fatture?id=eq.' + id, { method: 'PATCH', body: { stato: st0, resolved_at: null } }).then(caricaPF).then(function(){ renderDaFare(); aggiornaBadge(); }); } }); }catch(e){ toast('⚠️ ' + e.message); } }
+// Prezzi difformi senza doppioni: se per lo stesso fornitore c'è già lo stesso prodotto non ancora inviato,
+// la riga esistente viene aggiornata (prezzo, fonte e data nuovi) invece di aggiungerne un'altra.
+// Il prodotto si riconosce dall'id di catalogo (se c'è), altrimenti dal nome; le righe già inviate/archiviate non contano.
+function chiaveDifforme(x){ return String(x.fornitore || '') + '|' + (x.id_prodotto_catalogo ? 'id' + x.id_prodotto_catalogo : 'n' + String(x.nome_prodotto || '').toLowerCase().replace(/\s+/g, ' ').trim()); }
+async function salvaDifformi(righe){
+  await caricaPD();
+  var esist = {}, ultime = {}, nuove = [];
+  PD.forEach(function(x){ esist[chiaveDifforme(x)] = x; });
+  righe.forEach(function(r){ ultime[chiaveDifforme(r)] = r; });   // nello stesso invio, l'ultima riga vince
+  for(var k in ultime){
+    var r = ultime[k], e = esist[k];
+    if(e) await api('prezzi_difformi?id=eq.' + e.id, { method: 'PATCH', prefer: 'return=minimal', body: { prezzo_catalogo: r.prezzo_catalogo, prezzo_nuovo: r.prezzo_nuovo, fonte: r.fonte, riga_fattura_id: r.riga_fattura_id || null, qta: r.qta || null, data: new Date().toISOString() } });
+    else nuove.push(r);
+  }
+  if(nuove.length) await api('prezzi_difformi', { method: 'POST', prefer: 'return=minimal', body: nuove });
+}
 // Mette la riga tra i prezzi difformi (da contestare), qualunque cosa decidi per il catalogo
 async function aggiungiDifforme(r, p, f, prezzoCat){
   try{
-    await api('prezzi_difformi', { method: 'POST', prefer: 'return=minimal', body: { fornitore: f, nome_prodotto: p ? p.name : descrPulita(r.descrizione), id_prodotto_catalogo: p ? p.id : null, prezzo_catalogo: prezzoCat, prezzo_nuovo: pfPrezzo(r), fonte: 'fattura del ' + dataIt(r.data_fattura), riga_fattura_id: r.id, qta: num(r.qta) || null } });
+    await salvaDifformi([{ fornitore: f, nome_prodotto: p ? p.name : descrPulita(r.descrizione), id_prodotto_catalogo: p ? p.id : null, prezzo_catalogo: prezzoCat, prezzo_nuovo: pfPrezzo(r), fonte: 'fattura del ' + dataIt(r.data_fattura), riga_fattura_id: r.id, qta: num(r.qta) || null }]);
     await caricaPD(); aggiornaBadge(); toast('Messo anche tra i prezzi difformi');
   }catch(e){ toast('⚠️ Prezzi difformi: ' + e.message); }
 }
@@ -5281,7 +5353,7 @@ async function contestaPF(id){
   var r = PF.find(function(x){ return x.id === id; }); if(!r) return;
   var p = CATMAP[r.product_id], f = pfForn(r);
   try{
-    await api('prezzi_difformi', { method: 'POST', prefer: 'return=minimal', body: { fornitore: f, nome_prodotto: p ? p.name : r.descrizione, id_prodotto_catalogo: p ? p.id : null, prezzo_catalogo: p ? prezzoDi(p, f) : null, prezzo_nuovo: pfPrezzo(r), fonte: 'fattura', riga_fattura_id: r.id, qta: num(r.qta) || null } });
+    await salvaDifformi([{ fornitore: f, nome_prodotto: p ? p.name : r.descrizione, id_prodotto_catalogo: p ? p.id : null, prezzo_catalogo: p ? prezzoDi(p, f) : null, prezzo_nuovo: pfPrezzo(r), fonte: 'fattura del ' + dataIt(r.data_fattura), riga_fattura_id: r.id, qta: num(r.qta) || null }]);
     await patchPF([id], { stato: 'rejected', resolved_at: new Date().toISOString(), note: 'Contestato al fornitore' }); if(p) imparaRiga(r, p.id, 2);
     await caricaPD(); renderDaFare(); aggiornaBadge(); toast('Aggiunto alle contestazioni: il prezzo in catalogo resta quello di prima');
   }catch(e){ toast('⚠️ ' + e.message); }
@@ -5469,26 +5541,108 @@ function giorniPD(l){
   return Object.keys(per).sort().reverse().map(function(g){ return { g: g, l: per[g] }; });
 }
 function rigaPD(x){ return '<div class="todo-it" style="display:flex;gap:10px"><div class="row-main">' + esc(x.nome_prodotto) + '<div class="row-s">' + esc(x.fonte || '') + (x.qta ? ' · q.tà ' + num(x.qta) : '') + '</div></div><div style="text-align:right">' + (x.prezzo_catalogo != null ? '<span class="muted" style="font-size:12px">' + eur(x.prezzo_catalogo) + '</span><br>' : '') + '<b class="var-up">' + eur(x.prezzo_nuovo) + '</b></div></div>'; }
-// Scelta della tranche da inviare: tutti, solo l'ultimo giorno, da un giorno in poi, o giorni a scelta
+// Scelta dei prodotti da inviare: si spunta prodotto per prodotto (o tutti / tutti quelli di un giorno)
 var PDINV = { f: '', sel: {} };
-function apriInvioPD(f){ PDINV = { f: f, sel: {} }; giorniPD(PD.filter(function(x){ return x.fornitore === f; })).forEach(function(d){ PDINV.sel[d.g] = true; }); disegnaInvioPD(); }
-function invioPDScegli(modo, g){
-  var gg = giorniPD(PD.filter(function(x){ return x.fornitore === PDINV.f; }));
-  gg.forEach(function(d){ PDINV.sel[d.g] = modo === 'tutti' ? true : modo === 'ultimo' ? d.g === gg[0].g : modo === 'dal' ? d.g >= g : modo === 'solo' ? d.g === g : !!PDINV.sel[d.g]; });
-  if(modo === 'tocca') PDINV.sel[g] = !PDINV.sel[g];
+function righePDforn(f){ return PD.filter(function(x){ return x.fornitore === f; }); }
+function apriInvioPD(f){ PDINV = { f: f, sel: {} }; try{ libPDF().catch(function(){}); }catch(e){} disegnaInvioPD(); caricaOriginaliPD(f).then(function(){ if(PDINV.f === f) disegnaInvioPD(); }).catch(function(){}); }  // la libreria PDF si prepara mentre scegli
+function invioPDScegli(modo, k){
+  var l = righePDforn(PDINV.f);
+  if(modo === 'tutti' || modo === 'nessuno') l.forEach(function(x){ PDINV.sel[x.id] = modo === 'tutti'; });
+  else if(modo === 'giorno'){ var gl = l.filter(function(x){ return _giornoRoma(x.data) === k; }), tutti = gl.every(function(x){ return PDINV.sel[x.id]; }); gl.forEach(function(x){ PDINV.sel[x.id] = !tutti; }); }
+  else if(modo === 'tocca') PDINV.sel[k] = !PDINV.sel[k];
   disegnaInvioPD();
 }
-function idsInvioPD(){ return PD.filter(function(x){ return x.fornitore === PDINV.f && PDINV.sel[_giornoRoma(x.data)]; }).map(function(x){ return x.id; }); }
+function idsInvioPD(){ return righePDforn(PDINV.f).filter(function(x){ return PDINV.sel[x.id]; }).map(function(x){ return x.id; }); }
 function disegnaInvioPD(){
-  var f = PDINV.f, gg = giorniPD(PD.filter(function(x){ return x.fornitore === f; })); if(!gg.length){ chiudiSheet('shPDinv'); return; }
-  var ids = idsInvioPD(), opz = gg.map(function(d){ return '<option value="' + d.g + '">' + esc(dataIt(d.g)) + '</option>'; }).join('');
-  apriSheet('shPDinv', { titolo: 'Prezzi difformi da inviare', sotto: esc(f), alto: true, corpo:
-    '<div class="chips" style="flex-wrap:wrap;margin:0 0 8px"><button class="chip" onclick="invioPDScegli(\'tutti\')">Tutti</button><button class="chip" onclick="invioPDScegli(\'ultimo\')">Solo l\'ultimo giorno (' + esc(dataIt(gg[0].g)) + ')</button></div>' +
-    '<div style="display:flex;gap:8px;align-items:center;margin:0 2px 12px;font-size:13.5px;flex-wrap:wrap"><span>Dal giorno</span><select id="pdDal" class="inp" style="width:auto;padding:6px 8px">' + opz + '</select><span>in poi</span><button class="btn-sm" onclick="invioPDScegli(\'dal\',document.getElementById(\'pdDal\').value)">Scegli</button></div>' +
-    gg.map(function(d){ var on = !!PDINV.sel[d.g];
-      return '<div class="grp" style="margin-bottom:10px;' + (on ? '' : 'opacity:.55') + '"><label class="row" style="cursor:pointer"><input type="checkbox" style="width:auto;margin-right:10px" ' + (on ? 'checked' : '') + ' onchange="invioPDScegli(\'tocca\',\'' + d.g + '\')"><div class="row-main"><div class="row-t" style="font-size:14px">Inseriti il ' + esc(dataIt(d.g)) + '</div><div class="row-s">' + d.l.length + (d.l.length === 1 ? ' prezzo' : ' prezzi') + '</div></div><button class="btn-sm" onclick="event.preventDefault();invioPDScegli(\'solo\',\'' + d.g + '\')">Solo questo</button></label>' +
-        d.l.map(function(x){ return '<div class="row" style="font-size:13px"><div class="row-main">' + esc(x.nome_prodotto) + '<div class="row-s">' + esc(x.fonte || '') + '</div></div><div style="text-align:right;white-space:nowrap">' + (x.prezzo_catalogo != null ? '<span class="muted">' + eur(x.prezzo_catalogo) + '</span> → ' : '') + '<b class="var-up">' + eur(x.prezzo_nuovo) + '</b></div></div>'; }).join('') + '</div>'; }).join(''),
-    piede: '<div class="btn-row"><button class="btn btn-s" ' + (ids.length ? '' : 'disabled') + ' onclick="chiudiSheet(\'shPDinv\');archiviaContestazioni(null, idsInvioPD())">Archivia</button><button class="btn btn-p" ' + (ids.length ? '' : 'disabled') + ' onclick="chiudiSheet(\'shPDinv\');mandaContestazione(PDINV.f, idsInvioPD())">Scrivi a ' + esc(nomeBreve(f, 14)) + ' (' + ids.length + ')</button></div>' });
+  var f = PDINV.f, l = righePDforn(f); if(!l.length){ chiudiSheet('shPDinv'); return; }
+  var gg = giorniPD(l), ids = idsInvioPD(), vecchio = document.querySelector('#shPDinv .sheet-bd'), sc = vecchio ? vecchio.scrollTop : 0;
+  apriSheet('shPDinv', { titolo: 'Prezzi difformi da inviare', sotto: esc(f) + ' · ' + ids.length + ' di ' + l.length + ' scelti', alto: true, corpo:
+    '<div class="chips" style="flex-wrap:wrap;margin:0 0 8px"><button class="chip" onclick="invioPDScegli(\'tutti\')">Seleziona tutti</button><button class="chip" onclick="invioPDScegli(\'nessuno\')">Deseleziona tutti</button></div>' +
+    '<p class="hint" style="font-size:12.5px;margin:0 4px 10px">Spunta i prodotti da contestare: nel PDF finiscono solo quelli spuntati. Gli altri restano qui, pronti per un invio successivo.</p>' +
+    gg.map(function(d){
+      return '<div class="grp" style="margin-bottom:10px"><div class="row" style="cursor:pointer" onclick="invioPDScegli(\'giorno\',\'' + d.g + '\')"><div class="row-main"><div class="row-t" style="font-size:14px">Inseriti il ' + esc(dataIt(d.g)) + '</div><div class="row-s">' + d.l.length + (d.l.length === 1 ? ' prezzo' : ' prezzi') + '</div></div><span class="lnk">Tutti / nessuno</span></div>' +
+        d.l.map(function(x){ var on = !!PDINV.sel[x.id];
+          return '<label class="row" style="font-size:13px;cursor:pointer"><input type="checkbox" style="width:auto;margin-right:10px" ' + (on ? 'checked' : '') + ' onchange="invioPDScegli(\'tocca\',' + x.id + ')"><div class="row-main">' + esc(x.nome_prodotto) + '<div class="row-s">' + esc(x.fonte || '') + (x.qta ? ' · q.tà ' + num(x.qta) : '') + '</div></div><div style="text-align:right;white-space:nowrap">' + (x.prezzo_catalogo != null ? '<span class="muted">' + eur(x.prezzo_catalogo) + '</span> → ' : '') + '<b class="var-up">' + eur(x.prezzo_nuovo) + '</b></div></label>'; }).join('') + '</div>'; }).join(''),
+    piede: '<div class="btn-row"><button class="btn btn-s" ' + (ids.length ? '' : 'disabled') + ' onclick="chiudiSheet(\'shPDinv\');archiviaContestazioni(null, idsInvioPD())">Archivia</button><button class="btn btn-p" ' + (ids.length ? '' : 'disabled') + ' onclick="inviaContestazionePDF(PDINV.f, idsInvioPD())">Crea PDF (' + ids.length + ')</button></div>' +
+      '<button class="lnk-btn" style="display:block;margin:8px auto 0;font-size:12.5px" ' + (ids.length ? '' : 'disabled') + ' onclick="chiudiSheet(\'shPDinv\');mandaContestazione(PDINV.f, idsInvioPD())">Oppure invia solo come messaggio di testo</button>' });
+  var nuovo = document.querySelector('#shPDinv .sheet-bd'); if(nuovo) nuovo.scrollTop = sc;
+}
+// Nome della fattura per ogni riga contestata (riga_fattura_id → prezzi_da_fatture.descrizione).
+// Caricato quando si apre il foglio di invio, così il PDF si genera al tocco senza attese (iOS).
+var ORIG_PF = {};
+async function caricaOriginaliPD(f){
+  var ids = righePDforn(f).map(function(x){ return x.riga_fattura_id; }).filter(function(v, i, a){ return v && a.indexOf(v) === i && !(v in ORIG_PF); });
+  for(var i = 0; i < ids.length; i += 80){
+    var r = await api('prezzi_da_fatture?select=id,descrizione&id=in.(' + ids.slice(i, i + 80).join(',') + ')') || [];
+    r.forEach(function(x){ ORIG_PF[x.id] = String(x.descrizione || '').replace(/\s+/g, ' ').trim(); });   // tutto il nome, anche se va a capo in fattura
+  }
+  ids.forEach(function(id){ if(!(id in ORIG_PF)) ORIG_PF[id] = ''; });   // riga non più disponibile: niente nome originale
+}
+// PDF della segnalazione: solo i prodotti scelti, per un fornitore
+// Per ogni prodotto: nome del catalogo (grande) e sotto, più piccolo, il nome scritto in fattura
+function creaPDFContestazione(f, ids){
+  var J = window.jspdf && window.jspdf.jsPDF; if(!J) return null;
+  var l = PD.filter(function(x){ return x.fornitore === f && ids.indexOf(x.id) >= 0; });
+  l.sort(function(a, b){ return String(a.nome_prodotto).localeCompare(String(b.nome_prodotto), 'it'); });
+  var doc = new J({ unit: 'mm', format: 'a4' }), az = conf().azienda || {}, y = 18;
+  function n2(v){ return Number(v).toFixed(2).replace('.', ','); }
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(17); doc.text(az.nome || 'Caffetteria Ceraldi', 15, y);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(110);
+  var info = [az.indirizzo, az.piva ? 'P.IVA ' + az.piva : '', az.tel, az.email].filter(Boolean).join(' · '); if(info){ y += 5; doc.text(info, 15, y); }
+  doc.setTextColor(0); y += 11; doc.setFontSize(13); doc.setFont('helvetica', 'bold'); doc.text('Prezzi diversi da quelli concordati', 15, y);
+  doc.setFontSize(10); doc.setFont('helvetica', 'normal'); doc.text('Data: ' + new Date().toLocaleDateString('it-IT'), 195, y, { align: 'right' });
+  y += 6; doc.setFontSize(11); doc.setFont('helvetica', 'bold'); doc.text('Fornitore: ' + f, 15, y);
+  y += 7; doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
+  var intro = doc.splitTextToSize('Buongiorno, vi segnaliamo che i prodotti qui sotto ci risultano fatturati a un prezzo diverso da quello concordato. Potete verificare? Grazie.', 180); doc.text(intro, 15, y); y += intro.length * 5 + 5;
+  var col = { p: 15, rif: 86, conc: 136, fatt: 160, diff: 178, pct: 197 };
+  function testata(){ doc.setFillColor(242, 242, 247); doc.rect(13, y - 5, 184, 8, 'F'); doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5);
+    doc.text('PRODOTTO', col.p, y); doc.text('RIF.', col.rif, y); doc.text('CONCORDATO', col.conc, y, { align: 'right' }); doc.text('FATTURATO', col.fatt, y, { align: 'right' }); doc.text('DIFF.', col.diff, y, { align: 'right' }); doc.text('VAR. %', col.pct, y, { align: 'right' });
+    doc.setFont('helvetica', 'normal'); y += 7; }
+  testata();
+  l.forEach(function(x){
+    var orig = ORIG_PF[x.riga_fattura_id] || '';
+    var mostraOrig = !!orig && orig.toLowerCase() !== String(x.nome_prodotto).toLowerCase();
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5);
+    var nome = doc.splitTextToSize(String(x.nome_prodotto) + (x.qta ? '  (q.tà ' + num(x.qta) + ')' : ''), 64);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5);
+    var origL = mostraOrig ? doc.splitTextToSize('In fattura: ' + orig, 64) : [];
+    doc.setFontSize(8.5); var rif = doc.splitTextToSize(String(x.fonte || ''), 44);
+    var hNome = nome.length * 4.2, hOrig = origL.length ? origL.length * 3.6 + 1.5 : 0, altezza = Math.max(6, hNome + hOrig + 2, rif.length * 4.2 + 2);
+    if(y + altezza > 275){ doc.addPage(); y = 20; testata(); }
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5); doc.setTextColor(0); doc.text(nome, col.p, y);
+    if(origL.length){ doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(100); doc.text(origL, col.p, y + hNome - 0.5); doc.setTextColor(0); }
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(90); doc.text(rif, col.rif, y); doc.setTextColor(0); doc.setFontSize(9.5);
+    var c = x.prezzo_catalogo != null ? Number(x.prezzo_catalogo) : null, nu = Number(x.prezzo_nuovo);
+    doc.text(c != null ? n2(c) : 'n/d', col.conc, y, { align: 'right' }); doc.text(n2(nu), col.fatt, y, { align: 'right' });
+    doc.text(c != null ? (nu - c >= 0 ? '+' : '') + n2(nu - c) : '—', col.diff, y, { align: 'right' });
+    doc.text(c != null && c !== 0 ? (nu - c >= 0 ? '+' : '') + ((nu - c) / c * 100).toFixed(1).replace('.', ',') + '%' : '—', col.pct, y, { align: 'right' });
+    y += altezza; doc.setDrawColor(230); doc.line(13, y - 4, 197, y - 4);
+  });
+  doc.setFontSize(8); doc.setTextColor(140); doc.text('Importi in EUR — ' + (az.nome || 'Caffetteria Ceraldi'), 15, 288);
+  return doc;
+}
+// «Il messaggio è partito?» → solo allora le righe passano tra quelle inviate; le altre restano nella lista
+async function segnaInviati(f, ids){
+  if(!(await conferma('Inviato al fornitore?', ids.length + (ids.length === 1 ? ' segnalazione' : ' segnalazioni') + ' di ' + esc(f) + ' passano tra quelle inviate. Le altre restano qui.', 'Sì, inviato'))) return;
+  try{ await api('prezzi_difformi?id=in.(' + ids.join(',') + ')', { method: 'PATCH', prefer: 'return=minimal', body: { stato: 'inviato', data_invio: new Date().toISOString() } }); PD = PD.filter(function(x){ return ids.indexOf(x.id) < 0; }); renderDaFare(); aggiornaBadge(); }catch(e){ toast('⚠️ ' + e.message); }
+}
+// Crea il PDF e lo passa alla condivisione del telefono (WhatsApp, mail…); senza condivisione lo scarica.
+// Tutto sincrono dal tocco: iOS blocca navigator.share se prima c'è un'attesa.
+function inviaContestazionePDF(f, ids){
+  if(!ids || !ids.length){ toast('Spunta almeno un prodotto'); return; }
+  var nome = 'Contestazione_' + f.replace(/[^A-Za-z0-9]+/g, '_') + '_' + oggiISO() + '.pdf', az = conf().azienda || {}, doc = creaPDFContestazione(f, ids);
+  function fine(){ chiudiSheet('shPDinv'); setTimeout(function(){ segnaInviati(f, ids); }, 400); }
+  if(!doc){ // libreria PDF non ancora pronta: condivido almeno il testo
+    var t = testoContestazione(f, ids);
+    if(navigator.share) navigator.share({ title: 'Prezzi diversi da quelli concordati', text: t }).then(fine).catch(function(){});
+    else if(navigator.clipboard){ navigator.clipboard.writeText(t); toast('PDF non pronto: ho copiato il testo'); fine(); }
+    else toast('PDF non pronto: riprova tra un attimo');
+    return;
+  }
+  var blob = doc.output('blob'), file = null;
+  try{ file = new File([blob], nome, { type: 'application/pdf' }); }catch(e){}
+  if(file && navigator.canShare && navigator.canShare({ files: [file] })) navigator.share({ files: [file], title: 'Prezzi diversi da quelli concordati', text: 'Buongiorno ' + f + ', in allegato la segnalazione dei prezzi diversi da quelli concordati. Grazie! — ' + (az.nome || 'Caffetteria Ceraldi') }).then(fine).catch(function(){});
+  else { scaricaFile(nome, blob); toast('PDF scaricato'); fine(); }
 }
 function testoContestazione(f, ids){
   var l = PD.filter(function(x){ return x.fornitore === f && (!ids || ids.indexOf(x.id) >= 0); }), az = conf().azienda || {}, gg = giorniPD(l), righe = [];
@@ -5501,7 +5655,7 @@ function mandaContestazione(f, soloIds){
   if(fo.whatsapp) window.open('https://wa.me/' + telefonoWA(fo.whatsapp) + '?text=' + encodeURIComponent(t), '_blank');
   else if(navigator.share) navigator.share({ text: t }).catch(function(){}); else if(navigator.clipboard){ navigator.clipboard.writeText(t); toast('Testo copiato'); }
   var ids = soloIds || PD.filter(function(x){ return x.fornitore === f; }).map(function(x){ return x.id; });
-  setTimeout(async function(){ if(await conferma('Messaggio inviato?', ids.length + (ids.length === 1 ? ' segnalazione' : ' segnalazioni') + ' di ' + esc(f) + ' passano tra quelle inviate. Le altre restano qui.', 'Sì, inviato')){ try{ await api('prezzi_difformi?id=in.(' + ids.join(',') + ')', { method: 'PATCH', prefer: 'return=minimal', body: { stato: 'inviato', data_invio: new Date().toISOString() } }); PD = PD.filter(function(x){ return ids.indexOf(x.id) < 0; }); renderDaFare(); aggiornaBadge(); }catch(e){ toast('⚠️ ' + e.message); } } }, 600);
+  setTimeout(function(){ segnaInviati(f, ids); }, 600);
 }
 async function archiviaContestazioni(f, soloIds){ // f = fornitore oppure soloIds = elenco
   var ids = soloIds || PD.filter(function(x){ return x.fornitore === f; }).map(function(x){ return x.id; }); if(!ids.length) return;
@@ -6338,24 +6492,68 @@ async function riallineaPrezzi(){
 /* ── Esporta ─────────────────────────────────────────────────────── */
 function apriEsporta(){
   sotto('shEsp', 'Esporta', '<div class="grp">' +
-    '<button class="row" onclick="esportaCatalogo()"><div class="row-ico ic-g">📗</div><div class="row-main"><div class="row-t">Catalogo completo in Excel</div><div class="row-s">Un foglio con tutti i prodotti e i prezzi di ogni fornitore</div></div></button>' +
+    '<button class="row" onclick="apriEsportaCatalogo()"><div class="row-ico ic-g">📗</div><div class="row-main"><div class="row-t">Catalogo in Excel</div><div class="row-s">Scegli settore e fornitori, con i prezzi oppure senza (per un fornitore nuovo)</div></div></button>' +
     '<button class="row" onclick="apriModelloFornitore()"><div class="row-ico ic-b">📝</div><div class="row-main"><div class="row-t">Modello prezzi da mandare a un fornitore</div><div class="row-s">Lui compila solo la colonna prezzi; poi lo reimporti da "Importa listino"</div></div></button>' +
     '<button class="row" onclick="esportaOrdiniCSV()"><div class="row-ico ic-o">🧾</div><div class="row-main"><div class="row-t">Ordini in CSV</div><div class="row-s">Periodo scelto in Analisi</div></div></button>' +
     '<button class="row" onclick="esportaBackup()"><div class="row-ico ic-p">💾</div><div class="row-main"><div class="row-t">Backup completo</div><div class="row-s">Catalogo, fornitori, ordini e impostazioni in un file</div></div></button></div>');
 }
-async function esportaCatalogo(){
+/* Catalogo in Excel. Senza argomenti: tutto il catalogo e tutti i fornitori.
+   lista = prodotti da esportare, fornSel = solo i prezzi di questi fornitori (vuoto = tutti), suffisso = per il nome del file */
+async function esportaCatalogo(lista, fornSel, suffisso){
   try{
-    var X = await libXLSX(), nomi = fornNomi();
-    var righe = CAT.slice().sort(function(a, b){ return settoreDi(a).localeCompare(settoreDi(b)) || catDi(a).localeCompare(catDi(b)) || a.name.localeCompare(b.name); }).map(function(p){
+    var X = await libXLSX(), filtroF = !!(fornSel && fornSel.length), nomi = filtroF ? fornSel : fornNomi();
+    var righe = (lista || CAT).slice().sort(function(a, b){ return settoreDi(a).localeCompare(settoreDi(b)) || catDi(a).localeCompare(catDi(b)) || a.name.localeCompare(b.name); }).map(function(p){
       var r = { ID: p.id, Prodotto: p.name, Confezione: p.conf || '', Categoria: catDi(p), Reparto: repartiDi(p).join(' + '), IVA: p.iva || '' };
       nomi.forEach(function(f){ var v = prezzoDi(p, f); r[f] = v == null ? '' : v; });
-      var m = migliore(p); r['Più conveniente'] = m.forn; r['Prezzo migliore'] = m.forn ? m.prezzo : ''; r.Giacenza = p.giacenza == null ? '' : p.giacenza; r['Scorta minima'] = p.scorta_min == null ? '' : p.scorta_min; r['Codice a barre'] = p.barcode || '';
+      var m = migliore(p);
+      if(filtroF){ m = { forn: '', prezzo: null }; nomi.forEach(function(f){ var v = prezzoDi(p, f); if(v != null && (m.prezzo == null || v < m.prezzo)) m = { forn: f, prezzo: v }; }); }   // il più conveniente solo tra i fornitori scelti
+      r['Più conveniente'] = m.forn; r['Prezzo migliore'] = m.forn ? m.prezzo : ''; r.Giacenza = p.giacenza == null ? '' : p.giacenza; r['Scorta minima'] = p.scorta_min == null ? '' : p.scorta_min; r['Codice a barre'] = p.barcode || '';
       return r;
     });
     var wb = X.utils.book_new(), ws = X.utils.json_to_sheet(righe); ws['!cols'] = [{ wch: 7 }, { wch: 46 }, { wch: 10 }, { wch: 18 }, { wch: 12 }, { wch: 5 }].concat(nomi.map(function(){ return { wch: 11 }; }));
     X.utils.book_append_sheet(wb, ws, 'Catalogo');
-    X.writeFile(wb, 'Catalogo_Ceraldi_' + oggiISO() + '.xlsx');
+    X.writeFile(wb, 'Catalogo_Ceraldi' + (suffisso || '') + '_' + oggiISO() + '.xlsx');
   }catch(e){ toast('⚠️ ' + e.message); }
+}
+/* Scelte per l'export del catalogo: settore, fornitori, con o senza prezzi.
+   «Senza prezzi» = elenco dei prodotti senza fornitori né prezzi, da mandare a un fornitore NUOVO: lui scrive solo «Nuovo prezzo»,
+   poi lo carichi da Importa listino (+ Nuovo fornitore): le righe si abbinano per ID. */
+var EXC = { sett: {}, forn: {}, senza: false };
+function apriEsportaCatalogo(){
+  EXC = { sett: {}, forn: {}, senza: false };
+  apriSheet('shEC', { titolo: 'Esporta catalogo', indietro: 'Esporta', onIndietro: apriEsporta, alto: true, corpo: '<div id="ecBody"></div>', piede: '<button class="btn btn-p" id="ecGo" onclick="scaricaEC()">Scarica Excel</button>' });
+  disegnaEC();
+}
+function selEC(g){ return Object.keys(EXC[g]).filter(function(k){ return EXC[g][k]; }); }
+function listaEC(){
+  var ss = selEC('sett'), ff = EXC.senza ? [] : selEC('forn');
+  return CAT.filter(function(p){
+    if(ss.length && !ss.some(function(s){ return inReparto(p, s); })) return false;
+    if(ff.length && !ff.some(function(f){ return prezzoDi(p, f) != null; })) return false;
+    return true;
+  });
+}
+function disegnaEC(){
+  var el = document.getElementById('ecBody'); if(!el) return;
+  var wrap = 'display:flex;flex-wrap:wrap;gap:6px;overflow:visible';
+  function chip(g, v){ return '<button class="chip' + (EXC[g][v] ? ' active' : '') + '" data-v="' + esc(v) + '" onclick="EXC.' + g + '[this.dataset.v]=!EXC.' + g + '[this.dataset.v];disegnaEC()">' + esc(v) + '</button>'; }
+  el.innerHTML =
+    '<div class="field"><label>Prezzi</label><div class="seg"><button class="seg-b' + (EXC.senza ? '' : ' active') + '" onclick="EXC.senza=false;disegnaEC()">Con i prezzi</button><button class="seg-b' + (EXC.senza ? ' active' : '') + '" onclick="EXC.senza=true;disegnaEC()">Senza prezzi</button></div>' +
+    (EXC.senza
+      ? '<div class="banner b" style="margin:8px 0 0"><span>🔒</span><div style="flex:1"><strong>Sicuro da mandare a un fornitore nuovo</strong><br>Il file ha solo i prodotti: nessun fornitore e nessun prezzo. Lui scrive i suoi prezzi nella colonna «Nuovo prezzo» (le altre sono bloccate). Poi lo carichi da Impostazioni → Importa listino scegliendo «+ Nuovo fornitore…».</div></div>'
+      : '<div class="hint">Per uso tuo: contiene i prezzi dei fornitori scelti. Non mandarlo ai fornitori.</div>') + '</div>' +
+    '<div class="field"><label>Settore · nessuno = tutti</label><div class="chips" style="' + wrap + '">' + settoriPresenti().map(function(s){ return chip('sett', s); }).join('') + '</div></div>' +
+    (EXC.senza ? '' : '<div class="field"><label>Fornitori · nessuno = tutti</label><div class="chips" style="' + wrap + '">' + fornNomi().map(function(f){ return chip('forn', f); }).join('') + '</div><div class="hint">Se ne scegli, nel file ci sono solo i loro prezzi e solo i prodotti che hanno a listino.</div></div>');
+  var n = listaEC().length, b = document.getElementById('ecGo');
+  if(b){ b.textContent = 'Scarica Excel · ' + n + ' prodott' + (n === 1 ? 'o' : 'i'); b.disabled = !n; }
+}
+async function scaricaEC(){
+  var l = listaEC(); if(!l.length){ toast('Nessun prodotto con queste scelte'); return; }
+  var ss = selEC('sett'), suf = ss.length ? '_' + ss.join('-').replace(/[^A-Za-z0-9-]+/g, '_') : '';
+  if(EXC.senza){
+    l = l.slice().sort(function(a, b){ return catDi(a).localeCompare(catDi(b)) || a.name.localeCompare(b.name); });
+    await faiModello('', l, 'Catalogo_senza_prezzi' + suf + '_' + oggiISO() + '.xlsx');
+  } else await esportaCatalogo(l, selEC('forn'), suf);
 }
 function apriModelloFornitore(){
   apriSheet('shMF', { titolo: 'Modello per il fornitore', indietro: 'Esporta', onIndietro: apriEsporta, corpo:
@@ -6366,6 +6564,10 @@ function apriModelloFornitore(){
 async function scaricaModello(){
   var f = document.getElementById('mfF').value, s = document.getElementById('mfS').value;
   var l = CAT.filter(function(p){ if(s === '__forn') return f ? prezzoDi(p, f) != null : true; return !s || inReparto(p, s); }).sort(function(a, b){ return catDi(a).localeCompare(catDi(b)) || a.name.localeCompare(b.name); });
+  await faiModello(f, l);
+}
+// Scrive il file Excel del modello (colonna «Nuovo prezzo» libera, le altre bloccate). f = fornitore ('' = nessuno), l = prodotti, nomeFile = facoltativo
+async function faiModello(f, l, nomeFile){
   if(!l.length){ toast('Nessun prodotto da mettere nel modello'); return; }
   try{
     var X = await libXLSX(), Z = await libZIP();
@@ -6375,7 +6577,7 @@ async function scaricaModello(){
     var wb = X.utils.book_new(); X.utils.book_append_sheet(wb, ws, 'Prezzi');
     var bytes = X.write(wb, { type: 'array', bookType: 'xlsx' });
     var bloccato = await bloccaTranne(Z, bytes, 'F', aoa.length);
-    scaricaFile('Listino_' + (f || 'fornitore').replace(/[^A-Za-z0-9]+/g, '_') + '_' + oggiISO() + '.xlsx', new Blob([bloccato || bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    scaricaFile(nomeFile || ('Listino_' + (f || 'fornitore').replace(/[^A-Za-z0-9]+/g, '_') + '_' + oggiISO() + '.xlsx'), new Blob([bloccato || bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
     toast('Modello scaricato: il fornitore può scrivere solo nella colonna "Nuovo prezzo"');
   }catch(e){ toast('⚠️ ' + e.message); }
 }
@@ -6440,8 +6642,8 @@ async function leggiImport(){
       var b64 = await new Promise(function(ok, ko){ var r = new FileReader(); r.onload = function(){ ok(String(r.result).split(',')[1]); }; r.onerror = ko; r.readAsDataURL(f); });
       var tipo = f.type === 'application/pdf' ? 'document' : 'image', mt = f.type || (tipo === 'document' ? 'application/pdf' : 'image/jpeg');
       st.innerHTML = '<div class="loading"><span class="spinner"></span>L\'intelligenza artificiale sta leggendo il documento… (può volerci un minuto)</div>';
-      var testo = await chiamaClaude([{ type: tipo, source: { type: 'base64', media_type: mt, data: b64 } }, { type: 'text', text: 'Estrai TUTTI i prodotti con prezzo da questo listino/preventivo/fattura del fornitore "' + IMP.forn + '". Rispondi SOLO con un array JSON: [{"nome":"descrizione completa con marca e formato","conf":"confezione o unità (es. CT, BT, PZ, KG) o vuoto","prezzo":12.34,"codice":"codice articolo o vuoto"}]. Prezzo unitario come numero, punto decimale, senza simbolo. Non inventare righe e non saltarne.' }], 16000);
-      var arr = jsonDaTesto(testo); if(!Array.isArray(arr) || !arr.length) throw new Error('Nessun prodotto trovato nel documento');
+      var arr = await estraiListinoCompleto([{ type: tipo, source: { type: 'base64', media_type: mt, data: b64 } }, { type: 'text', text: 'Estrai TUTTI i prodotti con prezzo da questo listino/preventivo/fattura del fornitore "' + IMP.forn + '". Rispondi SOLO con un array JSON: [{"nome":"descrizione completa con marca e formato","conf":"confezione o unità (es. CT, BT, PZ, KG) o vuoto","prezzo":12.34,"codice":"codice articolo o vuoto"}]. Prezzo unitario come numero, punto decimale, senza simbolo. Non inventare righe e non saltarne.' }]);
+      if(!Array.isArray(arr) || !arr.length) throw new Error('Nessun prodotto trovato nel documento');
       IMP.righe = arr.map(function(x){ return { nome: maiusc(x.nome), conf: x.conf || '', prezzo: numIt(x.prezzo), codice: x.codice || '' }; }).filter(function(x){ return x.nome && x.prezzo > 0; });
       if(IMP.modo === 'solo'){ await salvaSoloListino(); return; }
       await confrontaImport();
