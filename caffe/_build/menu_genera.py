@@ -237,6 +237,6 @@ def main():
         print('ok: %s/index.html  lingua=%s sezioni=%d voci=%d pagine=%d momenti=%d' % (cart, cod, len(d['sezioni']), sum(len(c['v']) for s in d['sezioni'] for c in s['c']), len(d['pagine']), len(d['momenti'])))
     if a.tutte_le_lingue:  # lingue disattivate: via la cartella rimasta
         for nome in os.listdir(a.out):
-            if re.fullmatch(r'[a-z]{2,3}(-[A-Za-z]{2,4})?', nome) and nome not in codici and os.path.isdir(os.path.join(a.out, nome)): shutil.rmtree(os.path.join(a.out, nome))
+            if re.fullmatch(r'[a-z]{2,3}(-[A-Za-z]{2,4})?', nome) and nome not in codici and os.path.isfile(os.path.join(a.out, nome, 'index.html')): shutil.rmtree(os.path.join(a.out, nome))
     print('foto copiate=%d' % n)
 if __name__ == '__main__': main()
