@@ -450,7 +450,7 @@ select.inp{background-image:none}
   <button class="tab-item" data-tab="altro" onclick="vaiTab('altro')"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></span><span class="tab-lbl">Altro</span></button>
 </nav>
 <script>
-var APP_VERSION='0.7';
+var APP_VERSION='0.8';
 var APP={key:'menu',nome:'Menu',versione:APP_VERSION,authKey:'mn_auth_v1',oldAuthKey:null,
   markBg:'linear-gradient(145deg,#C08A4D 0%,#8B5A2B 55%,#4A2C14 100%)',
   markSvg:'<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3v7a3 3 0 0 0 3 3v8"/><path d="M7 3v6"/><path d="M10 3v7a3 3 0 0 1-3 3"/><path d="M17 21V3c-2 1.5-3 4-3 7v4h3"/></svg>',
@@ -1243,10 +1243,11 @@ function apriVoce(id, cidNuova){
     '<details class="ed-det"' + (v.evidenza_dal || v.evidenza_al ? ' open' : '') + '><summary>Periodo in evidenza</summary>' +
       '<div class="due"><div class="field"><label for="eEvDal">Dal</label><input class="inp" type="date" id="eEvDal" value="' + esc(v.evidenza_dal || '') + '"></div><div class="field"><label for="eEvAl">Al</label><input class="inp" type="date" id="eEvAl" value="' + esc(v.evidenza_al || '') + '"></div></div>' +
       '<div class="hint">Vale solo se «In evidenza» è acceso. Date vuote = finché non lo spegni.</div></details>' +
-    // Inglese
-    '<details class="ed-det"' + (v.nome_en ? ' open' : '') + '><summary>In inglese</summary>' +
-      '<div class="field"><label for="eNomeEn">Nome in inglese</label><input class="inp" id="eNomeEn" maxlength="120" value="' + esc(v.nome_en || '') + '" placeholder="Se vuoto si usa il nome italiano"></div>' +
-      '<div class="field"><label for="eDescEn">Descrizione in inglese</label><textarea class="inp" id="eDescEn" rows="3" maxlength="600" style="resize:vertical">' + esc(v.descrizione_en || '') + '</textarea></div></details>' +
+    // Traduzioni
+    '<details class="ed-det"' + (v.traduzione && v.traduzione !== 'auto' ? ' open' : '') + '><summary>Lingue straniere</summary>' +
+      '<div class="hint" style="margin:0 0 8px">Il menu viene tradotto da solo. Qui scegli cosa fare per questo prodotto.</div>' +
+      '<div class="seg" id="eTrad">' + segBtn('auto', 'Traduci tutto', (v.traduzione || 'auto') === 'auto') + segBtn('nome_fisso', 'Nome uguale', v.traduzione === 'nome_fisso') + segBtn('tutto_fisso', 'Non tradurre', v.traduzione === 'tutto_fisso') + '</div>' +
+      '<div class="hint">«Nome uguale»: il nome resta in italiano (es. Sfogliatella), la descrizione si traduce. «Non tradurre»: resta tutto in italiano. Per correggere una traduzione: Altro › Traduzioni.</div></details>' +
     // Note interne
     '<details class="ed-det"' + (v.note ? ' open' : '') + '><summary>Note interne</summary><textarea class="inp" id="eNote" rows="2" maxlength="1000" placeholder="Visibili solo qui, mai ai clienti (es. fornitore, ricetta)">' + esc(v.note || '') + '</textarea></details>' +
     // Stato
@@ -1367,7 +1368,7 @@ async function salvaVoce(){
   if(genitori && !(await conferma('Pubblico anche la categoria?', 'Perché la voce sia visibile vanno pubblicate anche la categoria <b>' + esc(c.nome) + '</b>' + (s.stato !== 'pubblicato' ? ' e la sezione <b>' + esc(s.nome) + '</b>' : '') + '. Le altre voci restano com\'erano.', 'Pubblica'))) return;
   var adesso = new Date().toISOString(), badge = Array.prototype.map.call(document.querySelectorAll('#eBadge .chip.active'), function(b){ return b.dataset.badge; });
   var corpo = { categoria_id: cid, nome: nome, descrizione: document.getElementById('eDesc').value.trim() || null, prezzo_cent: Math.round(p * 100), stato: stato,
-    nome_en: document.getElementById('eNomeEn').value.trim() || null, descrizione_en: document.getElementById('eDescEn').value.trim() || null,
+    traduzione: segValore('eTrad') || 'auto',
     note: document.getElementById('eNote').value.trim() || null, foto_alt: haFoto ? alt : null, foto_tipo: segValore('eFotoTipo') || 'reale', badge: badge,
     proposta_giorno: document.getElementById('eProp').checked, proposta_posizione: segValore('ePropPos') || 'home',
     in_evidenza: document.getElementById('eEv').checked, evidenza_dal: document.getElementById('eEvDal').value || null, evidenza_al: document.getElementById('eEvAl').value || null };
@@ -1438,7 +1439,7 @@ async function finitoOggi(id){
 }
 async function duplicaVoce(id){
   var v = voceDi(id); if(!v) return;
-  var campi = ['categoria_id', 'descrizione', 'prezzo_cent', 'nome_en', 'descrizione_en', 'note', 'foto_path', 'foto_alt', 'foto_tipo', 'badge'];
+  var campi = ['categoria_id', 'descrizione', 'prezzo_cent', 'traduzione', 'note', 'foto_path', 'foto_alt', 'foto_tipo', 'badge'];
   var corpo = { nome: v.nome + ' (copia)', stato: 'bozza', ordine: v.ordine + 1 };
   campi.forEach(function(k){ corpo[k] = v[k]; });
   try{
@@ -1552,7 +1553,6 @@ function apriGruppo(tipo, id){
       '<button class="btn btn-s" id="eTogliFoto" onclick="togliFoto()"' + (r.foto_path ? '' : ' style="display:none"') + '>Togli</button></div>' +
     '<div class="field"><label for="eAlt">Descrizione della foto</label><input class="inp" id="eAlt" maxlength="200" value="' + esc(r.foto_alt || '') + '"></div></div>' +
     '<div class="ed-sec"><div class="field"><label for="eNome">Nome *</label><input class="inp" id="eNome" maxlength="80" value="' + esc(r.nome) + '"></div>' +
-    '<div class="field"><label for="eNomeEn">Nome in inglese</label><input class="inp" id="eNomeEn" maxlength="80" value="' + esc(r.nome_en || '') + '"></div>' +
     '<div class="field"><label for="eDesc">Descrizione (facoltativa)</label><textarea class="inp" id="eDesc" rows="2" maxlength="400">' + esc(r.descrizione || '') + '</textarea></div>' +
     (tipo === 'cat' ? '<div class="field"><label for="eSez">Sezione</label><select class="inp" id="eSez">' + D.sezioni.map(function(s){ return '<option value="' + s.id + '"' + (s.id === r.sezione_id ? ' selected' : '') + '>' + esc(s.nome) + (s.stato === 'archiviato' ? ' (archiviata)' : '') + '</option>'; }).join('') + '</select></div>' : '') +
     '<div class="field"><label>Stato</label><div class="seg" id="eStato">' + ['bozza', 'pubblicato', 'archiviato'].map(function(st){ return segBtn(st, STATI[st][0], r.stato === st); }).join('') + '</div>' +
@@ -1579,7 +1579,7 @@ async function salvaGruppo(){
   if(haFoto && !alt){ toast('Scrivi la descrizione della foto'); document.getElementById('eAlt').focus(); return; }
   if(E.disp.some(function(x){ return !x.giorni.length || (x.dal && x.al && x.dal > x.al); })){ toast('Controlla le fasce: almeno un giorno e date in ordine'); return; }
   var stato = segValore('eStato') || r.stato;
-  var corpo = { nome: nome, nome_en: document.getElementById('eNomeEn').value.trim() || null, descrizione: document.getElementById('eDesc').value.trim() || null, stato: stato, foto_alt: haFoto ? alt : null };
+  var corpo = { nome: nome, descrizione: document.getElementById('eDesc').value.trim() || null, stato: stato, foto_alt: haFoto ? alt : null };
   if(tipo === 'cat') corpo.sezione_id = parseInt(document.getElementById('eSez').value, 10);
   if(E.togliFoto && !E.foto) corpo.foto_path = null;
   if(stato === 'archiviato' && r.stato !== 'archiviato' && !(await conferma('Archiviare «' + esc(r.nome) + '»?', 'Sparisce dal menu dei clienti insieme a tutto quello che contiene. Niente viene cancellato: puoi rimetterla quando vuoi.', 'Archivia'))) return;
@@ -1891,6 +1891,7 @@ function renderAltro(){
       '<button class="row" onclick="apriMomenti()"><span class="row-ico">🌅</span><div class="row-main"><div class="row-t">Momenti della giornata</div><div class="row-s">Saluto e consiglio per mattina, pomeriggio, sera…</div></div><span class="chev">›</span></button>' +
       '<button class="row" onclick="apriRacc()"><span class="row-ico">🤝</span><div class="row-main"><div class="row-t">Abbinamenti e consigli</div><div class="row-s">' + (D.racc || []).length + ' impostati</div></div><span class="chev">›</span></button>' +
       '<button class="row" onclick="apriPagine()"><span class="row-ico">🧩</span><div class="row-main"><div class="row-t">Pagine e blocchi</div><div class="row-s">Storia, foto, vetrine e altre pagine</div></div><span class="chev">›</span></button>' +
+      '<button class="row" onclick="apriTraduzioni()"><span class="row-ico">🌍</span><div class="row-main"><div class="row-t">Traduzioni</div><div class="row-s">' + lingueAttive().map(function(g){ return g.bandiera; }).join(' ') + ' Controlla e correggi le lingue</div></div><span class="chev">›</span></button>' +
       '<button class="row" onclick="apriTesti()"><span class="row-ico">✏️</span><div class="row-main"><div class="row-t">Testi dell\'interfaccia</div><div class="row-s">Le piccole scritte fisse del menu</div></div><span class="chev">›</span></button></div>' +
     '<div class="sec-title">Menu</div><div class="grp">' +
       '<button class="row" onclick="apriEtichette()"><span class="row-ico">🏷</span><div class="row-main"><div class="row-t">Etichette</div><div class="row-s">' + esc(badgeDisponibili().join(', ')) + '</div></div><span class="chev">›</span></button>' +
@@ -1916,13 +1917,14 @@ function apriLocale(){
       campo('lNome', 'Nome', l.nome, 'Ceraldi Caffè') + campo('lInd', 'Indirizzo', l.indirizzo, 'Piazza…') +
       campo('lTel', 'Telefono', l.telefono, '', 'tel') + campo('lWa', 'WhatsApp', l.whatsapp, '', 'tel') + campo('lMail', 'Email', l.email, '', 'email') +
       '<div class="field"><label for="lOr">Orari (come li legge il cliente)</label><textarea class="inp" id="lOr" rows="2">' + esc(o.testo || '') + '</textarea></div>' +
-      '<div class="field"><label for="lOrEn">Orari in inglese</label><textarea class="inp" id="lOrEn" rows="2">' + esc(o.testo_en || '') + '</textarea></div>',
+      lingueAttive().map(function(g){ return '<div class="field"><label for="lOr_' + g.codice + '">Orari · ' + g.bandiera + ' ' + esc(g.nome) + ' <span style="font-weight:400;opacity:.7">(vuoto = tradotto in automatico)</span></label><textarea class="inp" id="lOr_' + g.codice + '" rows="2">' + esc(o['testo_' + g.codice] || '') + '</textarea></div>'; }).join(''),
     piede: '<div class="btn-row"><button class="btn btn-s" onclick="chiudiSheet(\'shLoc\')">Annulla</button><button class="btn btn-p" id="lSalva" onclick="salvaLocale()">Salva</button></div>' });
 }
 async function salvaLocale(){
   function v(id){ return document.getElementById(id).value.trim() || null; }
   var mail = v('lMail'); if(mail && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(mail)){ toast('Email non valida'); return; }
-  var orari = Object.assign({}, (D.locale && D.locale.orari) || {}, { testo: v('lOr'), testo_en: v('lOrEn') });
+  var orari = Object.assign({}, (D.locale && D.locale.orari) || {}, { testo: v('lOr') });
+  lingueAttive().forEach(function(g){ orari['testo_' + g.codice] = v('lOr_' + g.codice); });
   var corpo = { nome: v('lNome'), indirizzo: v('lInd'), telefono: v('lTel'), whatsapp: v('lWa'), email: mail, orari: orari };
   try{
     if(D.locale) await api('locale?id=eq.1', { method: 'PATCH', prefer: 'return=minimal', body: corpo });
@@ -1959,6 +1961,7 @@ async function caricaContenuti(){
   var tab = ['menu_pagine?select=*&order=ordine,codice', 'menu_blocchi?select=*&order=ordine,id', 'menu_raccomandazioni?select=*&order=ordine,id', 'menu_momenti?select=*&order=ordine,id', 'menu_momenti_voci?select=*&order=ordine,id'];
   try{
     var r = await Promise.all(tab.map(function(p){ return api(p); }));
+    try{ D.lingue = (await api('menu_lingue?select=*&order=ordine')) || []; }catch(e2){ D.lingue = D.lingue || []; }
     D.pagine = r[0] || []; D.blocchi = r[1] || []; D.racc = r[2] || []; D.momenti = r[3] || []; D.momVoci = r[4] || [];
   }catch(e){ D.pagine = D.pagine || []; D.blocchi = D.blocchi || []; D.racc = D.racc || []; D.momenti = D.momenti || []; D.momVoci = D.momVoci || []; toast('⚠️ ' + e.message); }
 }
@@ -2281,18 +2284,110 @@ function apriTesti(){
   apriSheet('shTes', { titolo: 'Testi dell\'interfaccia', alto: true,
     corpo: '<div class="hint" style="margin:0 4px 10px">Le piccole scritte fisse del menu. Se lasci vuoto, il menu usa la scritta neutra indicata come esempio.</div>' +
       CT_TESTI.map(function(x){ var v = t[x[0]] || {};
-        return '<div class="field"><label>' + x[1] + '</label><input class="inp" id="tes_' + x[0] + '" maxlength="120" placeholder="' + esc(x[2]) + '" value="' + esc(v.it || '') + '"><input class="inp" id="tes_' + x[0] + '_en" maxlength="120" placeholder="In inglese" style="margin-top:6px" value="' + esc(v.en || '') + '"></div>'; }).join(''),
+        return '<div class="field"><label>' + x[1] + '</label><input class="inp" id="tes_' + x[0] + '" maxlength="120" placeholder="' + esc(x[2]) + '" value="' + esc(v.it || '') + '">' + lingueAttive().map(function(g){ return '<input class="inp" id="tes_' + x[0] + '_' + g.codice + '" maxlength="120" placeholder="' + g.bandiera + ' ' + esc(g.nome) + '" style="margin-top:6px" value="' + esc(v[g.codice] || '') + '">'; }).join('') + '</div>'; }).join(''),
     piede: '<div class="btn-row"><button class="btn btn-s" onclick="chiudiSheet(\'shTes\')">Annulla</button><button class="btn btn-p" onclick="ctSalvaTesti()">Salva</button></div>' });
 }
 async function ctSalvaTesti(){
-  var t = {}; CT_TESTI.forEach(function(x){ var it = document.getElementById('tes_' + x[0]).value.trim(), en = document.getElementById('tes_' + x[0] + '_en').value.trim(); if(it || en) t[x[0]] = { it: it, en: en }; });
+  var t = {}; CT_TESTI.forEach(function(x){ var o = { it: document.getElementById('tes_' + x[0]).value.trim() }, any = !!o.it; lingueAttive().forEach(function(g){ o[g.codice] = document.getElementById('tes_' + x[0] + '_' + g.codice).value.trim(); any = any || !!o[g.codice]; }); if(any) t[x[0]] = o; });
   try{ var nuova = Object.assign({}, config(), { testi: t }); await api('moduli?codice=eq.menu', { method: 'PATCH', prefer: 'return=minimal', body: { configurazione: nuova } }); D.modulo.configurazione = nuova; chiudiSheet('shTes'); toast('✓ Testi salvati'); }
   catch(e){ toast('⚠️ ' + e.message); }
 }
 
+/* ── TRADUZIONI (0.8) ───────────────────────────────────────────────────────────────────────────
+   Le traduzioni sono generate in automatico (Google) e salvate nel database. Qui si controllano e si correggono:
+   una correzione a mano non viene mai riscritta dal sistema; se cambia il testo italiano compare «Da rivedere». */
+function lingueAttive(){ return (D.lingue || []).filter(function(g){ return g.attiva; }); }
+var TR_TAB = { menu_voci: ['voci', 'id', 'Prodotto'], menu_categorie: ['categorie', 'id', 'Categoria'], menu_sezioni: ['sezioni', 'id', 'Sezione'], menu_blocchi: ['blocchi', 'id', 'Blocco'], menu_momenti: ['momenti', 'id', 'Momento'], menu_pagine: ['pagine', 'codice', 'Pagina'], menu_raccomandazioni: ['racc', 'id', 'Consiglio'] };
+var _tr = { lingua: null, filtro: 'tutte', q: '', righe: [], rivedere: {} };
+function trRiga(t){
+  var d = TR_TAB[t.tabella], r = d && (D[d[0]] || []).find(function(x){ return String(x[d[1]]) === String(t.riga_id); });
+  return { it: r ? r[t.campo] : null, nome: r ? (r.nome || r.titolo || r.codice || r.saluto || '') : '', tipo: d ? d[2] : t.tabella };
+}
+async function apriTraduzioni(){
+  if(!lingueAttive().length){ toast('Nessuna lingua attiva'); return; }
+  if(!_tr.lingua || !lingueAttive().some(function(g){ return g.codice === _tr.lingua; })) _tr.lingua = lingueAttive()[0].codice;
+  apriSheet('shTr', { titolo: 'Traduzioni', alto: true, corpo: '<div class="hint" style="text-align:center;padding:30px 0">Carico…</div>', piede: '<div class="btn-row"><button class="btn btn-s" onclick="trGlossario()">Termini da non tradurre</button><button class="btn btn-p" onclick="chiudiSheet(\'shTr\')">Chiudi</button></div>' });
+  await trCarica();
+}
+async function trCarica(){
+  try{
+    var r = await Promise.all([api('menu_traduzioni?select=tabella,riga_id,campo,lingua,testo,origine&lingua=eq.' + _tr.lingua + '&order=tabella,riga_id,campo&limit=5000'), api('rpc/menu_traduzioni_da_rivedere', { method: 'POST', body: {} })]);
+    _tr.righe = r[0] || []; _tr.rivedere = {}; (r[1] || []).forEach(function(x){ _tr.rivedere[x.tabella + '|' + x.riga_id + '|' + x.campo + '|' + x.lingua] = 1; });
+  }catch(e){ toast('⚠️ ' + e.message); _tr.righe = []; }
+  trDisegna();
+}
+function trChiave(t){ return t.tabella + '|' + t.riga_id + '|' + t.campo + '|' + t.lingua; }
+function trDisegna(){
+  var box = corpoSheet('shTr'); if(!box) return;
+  var q = _tr.q.toLowerCase(), nRiv = 0, nMan = 0;
+  _tr.righe.forEach(function(t){ if(_tr.rivedere[trChiave(t)]) nRiv++; else if(t.origine === 'manuale') nMan++; });
+  var lista = _tr.righe.filter(function(t){
+    var rv = !!_tr.rivedere[trChiave(t)];
+    if(_tr.filtro === 'rivedere' && !rv) return false;
+    if(_tr.filtro === 'manuali' && t.origine !== 'manuale') return false;
+    if(q){ var x = trRiga(t); if(((x.it || '') + ' ' + x.nome + ' ' + t.testo).toLowerCase().indexOf(q) < 0) return false; }
+    return true; });
+  var tot = lista.length; lista = lista.slice(0, 60);
+  box.innerHTML =
+    '<div class="seg" style="margin-bottom:8px">' + lingueAttive().map(function(g){ return '<button class="seg-b' + (g.codice === _tr.lingua ? ' active' : '') + '" onclick="_tr.lingua=\'' + g.codice + '\';trCarica()">' + g.bandiera + ' ' + esc(g.nome) + '</button>'; }).join('') + '</div>' +
+    '<div class="seg" style="margin-bottom:8px">' + [['tutte', 'Tutte'], ['rivedere', 'Da rivedere' + (nRiv ? ' (' + nRiv + ')' : '')], ['manuali', 'Corrette a mano' + (nMan ? ' (' + nMan + ')' : '')]].map(function(f){ return '<button class="seg-b' + (f[0] === _tr.filtro ? ' active' : '') + '" onclick="_tr.filtro=\'' + f[0] + '\';trDisegna()">' + f[1] + '</button>'; }).join('') + '</div>' +
+    '<input class="inp" id="trQ" placeholder="Cerca…" value="' + esc(_tr.q) + '" style="margin-bottom:10px">' +
+    (nRiv ? '<div class="banner b"><span>⚠️</span><span>' + nRiv + ' correzioni a mano sono da rivedere: il testo italiano è cambiato dopo la correzione.</span></div>' : '') +
+    '<div class="grp">' + (lista.length ? lista.map(function(t){
+      var x = trRiga(t), rv = !!_tr.rivedere[trChiave(t)], i = _tr.righe.indexOf(t);
+      return '<button class="row" onclick="trModifica(' + i + ')"><div class="row-main"><div class="row-t">' + esc(x.it || '—') + '</div><div class="row-s" style="white-space:normal">' + esc(t.testo) + '</div><div class="row-s">' + esc(x.tipo) + (x.nome && x.nome !== x.it ? ' · ' + esc(x.nome) : '') + ' · ' +
+        (rv ? '<span class="bdg n">Da rivedere</span>' : t.origine === 'manuale' ? '<span class="bdg p">Corretta a mano</span>' : 'automatica') + '</div></div><span class="chev">›</span></button>'; }).join('') : '<div class="hint" style="text-align:center;padding:20px">Nessuna traduzione' + (_tr.filtro !== 'tutte' || q ? ' con questo filtro' : '') + '.</div>') + '</div>' +
+    (tot > 60 ? '<div class="hint" style="text-align:center">Mostro le prime 60 di ' + tot + ': usa la ricerca.</div>' : '');
+  var qi = document.getElementById('trQ'); qi.oninput = function(){ _tr.q = qi.value; clearTimeout(trDisegna._t); trDisegna._t = setTimeout(function(){ trDisegna(); var n = document.getElementById('trQ'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 250); };
+}
+var _trE = null;
+function trModifica(i){
+  var t = _tr.righe[i]; if(!t) return; _trE = t;
+  var x = trRiga(t), g = lingueAttive().find(function(l){ return l.codice === t.lingua; }) || {};
+  apriSheet('shTrE', { titolo: x.tipo + (x.nome ? ' · ' + x.nome : ''),
+    corpo: '<div class="field"><label>Italiano</label><div class="hint" style="margin:0;white-space:pre-wrap">' + esc(x.it || '—') + '</div></div>' +
+      '<div class="field"><label for="trT">' + (g.bandiera || '') + ' ' + esc(g.nome || t.lingua) + '</label><textarea class="inp" id="trT" rows="4" maxlength="1500" style="resize:vertical">' + esc(t.testo) + '</textarea></div>' +
+      '<div class="hint">' + (_tr.rivedere[trChiave(t)] ? 'Il testo italiano è cambiato dopo la tua correzione: controlla e salva per confermarla, oppure torna alla traduzione automatica.' : t.origine === 'manuale' ? 'Correzione tua: il sistema non la sovrascrive.' : 'Traduzione automatica. Se la modifichi diventa «corretta a mano» e resta così.') + '</div>',
+    piede: '<div class="btn-row">' + (t.origine === 'manuale' ? '<button class="btn btn-s" onclick="trRipristina()">Torna all\'automatica</button>' : '<button class="btn btn-s" onclick="chiudiSheet(\'shTrE\')">Annulla</button>') + '<button class="btn btn-p" id="trSalva" onclick="trSalva()">Salva</button></div>' });
+}
+async function trSalva(){
+  var t = _trE, nuovo = document.getElementById('trT').value.trim();
+  if(!nuovo){ toast('Il testo non può essere vuoto: usa «Torna all\'automatica»'); return; }
+  if(nuovo === t.testo && t.origine === 'manuale' && !_tr.rivedere[trChiave(t)]){ chiudiSheet('shTrE'); return; }
+  try{
+    await api('rpc/menu_traduzione_manuale', { method: 'POST', body: { p_tabella: t.tabella, p_riga: String(t.riga_id), p_campo: t.campo, p_lingua: t.lingua, p_testo: nuovo } });
+    chiudiSheet('shTrE'); toast('✓ Salvata. Nel menu entra al prossimo aggiornamento'); await trCarica();
+  }catch(e){ toast('⚠️ ' + e.message); }
+}
+async function trRipristina(){
+  var t = _trE;
+  if(!(await conferma('Tornare all\'automatica?', 'La tua correzione viene tolta e il sistema ritradurrà il testo da solo entro mezz\'ora.', 'Ripristina'))) return;
+  try{
+    await api('rpc/menu_traduzione_ripristina', { method: 'POST', body: { p_tabella: t.tabella, p_riga: String(t.riga_id), p_campo: t.campo, p_lingua: t.lingua } });
+    chiudiSheet('shTrE'); toast('✓ Ripristinata'); await trCarica();
+  }catch(e){ toast('⚠️ ' + e.message); }
+}
+/* termini da non tradurre */
+async function trGlossario(){
+  var lista = [];
+  try{ lista = (await api('menu_glossario?select=termine,nota&order=termine')) || []; }catch(e){ toast('⚠️ ' + e.message); return; }
+  function disegna(){
+    corpoSheet('shGl').innerHTML = '<div class="hint" style="margin:0 4px 10px">Parole che restano sempre uguali in tutte le lingue (nomi di dolci, del locale…). Dopo una modifica i testi che le contengono vengono ritradotti da soli.</div><div class="grp">' +
+      lista.map(function(g, i){ return '<div class="row"><div class="row-main"><div class="row-t">' + esc(g.termine) + '</div></div><button class="btn-sm r" data-via="' + i + '">Togli</button></div>'; }).join('') + '</div>' +
+      '<div class="btn-row"><input class="inp" id="glNuovo" maxlength="60" placeholder="Nuovo termine"><button class="btn-sm p" id="glAgg" style="flex:0 0 auto">Aggiungi</button></div>';
+    corpoSheet('shGl').querySelectorAll('[data-via]').forEach(function(b){ b.onclick = async function(){ var g = lista[+b.dataset.via];
+      try{ await api('menu_glossario?termine=eq.' + encodeURIComponent(g.termine), { method: 'DELETE', prefer: 'return=minimal' }); lista.splice(+b.dataset.via, 1); disegna(); }catch(e){ toast('⚠️ ' + e.message); } }; });
+    document.getElementById('glAgg').onclick = async function(){ var tx = document.getElementById('glNuovo').value.trim();
+      if(!tx || lista.some(function(g){ return g.termine.toLowerCase() === tx.toLowerCase(); })) return;
+      try{ await api('menu_glossario', { method: 'POST', prefer: 'return=minimal', body: { termine: tx } }); lista.push({ termine: tx }); lista.sort(function(a, b){ return a.termine.localeCompare(b.termine); }); disegna(); }catch(e){ toast('⚠️ ' + e.message); } };
+  }
+  apriSheet('shGl', { titolo: 'Termini da non tradurre', alto: true, corpo: '', piede: '<div class="btn-row"><button class="btn btn-p" onclick="chiudiSheet(\'shGl\')">Fatto</button></div>' });
+  disegna();
+}
+
 /* storico */
 var NOMI_TAB = { menu_voci: 'Voce', menu_categorie: 'Categoria', menu_sezioni: 'Sezione', menu_varianti: 'Variante', menu_disponibilita: 'Fascia oraria', menu_voci_allergeni: 'Allergene', menu_pagine: 'Pagina', menu_blocchi: 'Blocco', menu_raccomandazioni: 'Abbinamento o consiglio', menu_momenti: 'Momento', menu_momenti_voci: 'Prodotto del momento', moduli: 'Impostazioni', locale: 'Locale' };
-var CAMPI_IT = { nome: 'nome', descrizione: 'descrizione', prezzo_cent: 'prezzo', stato: 'stato', proposta_giorno: 'proposta del giorno', proposta_posizione: 'dove la proposta', foto_path: 'foto', foto_alt: 'descrizione foto', badge: 'etichette', esaurito_fino: 'finito per oggi', allergeni_verificati_il: 'verifica allergeni', in_evidenza: 'in evidenza', ordine: 'ordine', categoria_id: 'categoria', sezione_id: 'sezione', nome_en: 'nome inglese', descrizione_en: 'descrizione inglese', note: 'note', configurazione: 'aspetto/etichette', delta_cent: 'supplemento', giorni: 'giorni', orari: 'orari' };
+var CAMPI_IT = { nome: 'nome', descrizione: 'descrizione', prezzo_cent: 'prezzo', stato: 'stato', proposta_giorno: 'proposta del giorno', proposta_posizione: 'dove la proposta', foto_path: 'foto', foto_alt: 'descrizione foto', badge: 'etichette', esaurito_fino: 'finito per oggi', allergeni_verificati_il: 'verifica allergeni', in_evidenza: 'in evidenza', ordine: 'ordine', categoria_id: 'categoria', sezione_id: 'sezione', nome_en: 'nome inglese', descrizione_en: 'descrizione inglese', traduzione: 'traduzione', note: 'note', configurazione: 'aspetto/etichette', delta_cent: 'supplemento', giorni: 'giorni', orari: 'orari' };
 var SISTEMA = ['aggiornato_il', 'aggiornato_da', 'creato_il', 'verificato_da', 'allergeni_verificati_da'];
 var _stor = [];
 async function apriStorico(){
