@@ -590,7 +590,7 @@ function avvisoCreditoIA(){
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.40.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.40.1</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -3249,7 +3249,12 @@ function _saveCache(rows){
     // Gli XML si scaricano on-demand da Supabase quando si apre la singola fattura
     const json = JSON.stringify(slim);
     const kb = Math.round(json.length/1024);
-    localStorage.setItem(FATTURE_CACHE_KEY, json);
+    try{ localStorage.setItem(FATTURE_CACHE_KEY, json); }
+    catch(eQ){
+      // 02/11/2026: spazio locale esaurito -> si tolgono le copie rigenerabili (XML e IVA già su Supabase) e si riprova
+      _liberaSpazioLocale();
+      localStorage.setItem(FATTURE_CACHE_KEY, json);
+    }
     // maxTs calcolato su TUTTE le righe (non solo quelle salvate), altrimenti il
     // sync incrementale penserebbe che manchino modifiche già viste.
     const maxTs = rows.reduce((m,r)=>Math.max(m, r.ts||0), 0);
@@ -3260,9 +3265,32 @@ function _saveCache(rows){
       if(typeof toast==='function') toast('❌ Cache NON scritta ('+kb+'KB) — localStorage pieno?');
     }
   }catch(e){
-    if(typeof toast==='function') toast('❌ Cache ERRORE: '+(e.message||e));
+    // una sola segnalazione per sessione, con le chiavi più pesanti (serve a capire chi occupa lo spazio)
+    if(!window._cacheErrMostrato){
+      window._cacheErrMostrato = true;
+      if(typeof toast==='function') toast('⚠️ Memoria locale piena. Più pesanti: '+_chiaviPesanti(3));
+    }
   }
 }
+// copie locali che si riscaricano da Supabase: si possono togliere senza perdere nulla
+function _liberaSpazioLocale(){
+  var tolte = 0;
+  try{
+    Object.keys(localStorage).forEach(function(k){
+      if(k.indexOf('cf_xml_') === 0 || k.indexOf('cf_ivabk_') === 0){ try{ localStorage.removeItem(k); tolte++; }catch(e){} }
+    });
+  }catch(e){}
+  return tolte;
+}
+function _chiaviPesanti(n){
+  try{
+    return Object.keys(localStorage).map(function(k){ return [k, (localStorage.getItem(k)||'').length]; })
+      .sort(function(a,b){ return b[1]-a[1]; }).slice(0, n||3)
+      .map(function(x){ return x[0].slice(0,28)+' '+Math.round(x[1]/1024)+'KB'; }).join(' · ');
+  }catch(e){ return '?'; }
+}
+// una volta sola: pulizia delle copie XML accumulate dalle vecchie versioni
+setTimeout(function(){ try{ if(!localStorage.getItem('cf_pulizia_xml_v1040')){ _liberaSpazioLocale(); localStorage.setItem('cf_pulizia_xml_v1040','1'); } }catch(e){} }, 9000);
 
 function _loadCache(){
   try{
@@ -3801,10 +3829,8 @@ async function dbUpdate(f){
     // Aggiorna subito la cache locale con la riga restituita da Supabase
     if(updated && updated[0]){
       _updateCacheRow(updated[0]);
-      // Salva XML nella chiave separata se presente
-      if(updated[0].fattura_allegata && updated[0].fattura_allegata.length > 10){
-        try{ localStorage.setItem('cf_xml_'+f.id, updated[0].fattura_allegata); }catch(e){}
-      }
+      // 02/11/2026: l'XML NON si copia più in localStorage (a ogni modifica riempiva la memoria del browser);
+      // si scarica quando si apre la singola fattura.
     } else {
       // FIX (audit 23/09, punto 8 — caso Cilatte N°397): con 'Prefer: return=representation',
       // se il PATCH tocca 0 righe (RLS/permessi che bloccano la scrittura, oppure id non più
@@ -7321,7 +7347,8 @@ function closeMo(){
 
 // ── HELPERS ──
 function oggi(){return new Date().toISOString().split('T')[0];}
-function fmt(n){return '\u20ac '+(n||0).toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2});}
+var _fmtNF = null;
+function fmt(n){ if(!_fmtNF){ try{ _fmtNF = new Intl.NumberFormat('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2}); }catch(e){ _fmtNF = { format: function(x){ return x.toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2}); } }; } } return '\u20ac '+_fmtNF.format(n||0); }
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 // Estrae il numero assegno dalla descrizione di un movimento bancario tipo
 // "VOSTRO ASSEGNO N. 0208770762" — usata per compilare in automatico il numero
@@ -34671,15 +34698,30 @@ function ricIndice(){
 }
 
 /* ── Chi ha ricevuto il bonifico? (SumUp e BPM lo scrivono) ── */
+var _ricParoleMemo = {}, _ricParoleN = 0;
 function ricParole(s){
+  // 02/11/2026: stesso testo = stesse parole. Prima veniva rifatto per ogni coppia movimento x fattura
+  // (decine di migliaia di volte) e bloccava il Riepilogo quando i dati crescevano.
+  var k = String(s || ''), m = _ricParoleMemo[k];
+  if(m) return m.slice();
+  if(_ricParoleN > 20000){ _ricParoleMemo = {}; _ricParoleN = 0; }
+  m = _ricParoleCalcola(k); _ricParoleMemo[k] = m; _ricParoleN++;
+  return m.slice();
+}
+function _ricParoleCalcola(s){
   return String(s || '').toLowerCase()
     .replace(/\b(s\.?r\.?l\.?s?|s\.?p\.?a\.?|s\.?n\.?c\.?|s\.?a\.?s\.?|soc\.?|societa|società|unipersonale|sede|secondaria|italia|italy|europe|eu|it|branch|cons|coop|di|del|della|e|c|nv|sarl|gmbh|ltd)\b/g, ' ')
     .replace(/[^a-z0-9]+/g, ' ').split(' ').filter(function(w){ return w.length >= 4; });
 }
+var _ricBenMemo = {}, _ricBenN = 0;
 function ricBeneficiario(m){
   if(!m || !m.descrizione) return '';
-  var L = (typeof pnLeggiBanca === 'function') ? pnLeggiBanca(m.descrizione) : { beneficiario: '' };
-  return String(L.beneficiario || '').trim();
+  var d = m.descrizione, r = _ricBenMemo[d];
+  if(r !== undefined) return r;
+  if(_ricBenN > 20000){ _ricBenMemo = {}; _ricBenN = 0; }
+  var L = (typeof pnLeggiBanca === 'function') ? pnLeggiBanca(d) : { beneficiario: '' };
+  r = String(L.beneficiario || '').trim(); _ricBenMemo[d] = r; _ricBenN++;
+  return r;
 }
 // true / false / null (non si può dire)
 function ricBeneficiarioCoerente(m, f){
