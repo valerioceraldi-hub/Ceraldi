@@ -450,7 +450,7 @@ select.inp{background-image:none}
   <button class="tab-item" data-tab="altro" onclick="vaiTab('altro')"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></span><span class="tab-lbl">Altro</span></button>
 </nav>
 <script>
-var APP_VERSION='0.6';
+var APP_VERSION='0.7';
 var APP={key:'menu',nome:'Menu',versione:APP_VERSION,authKey:'mn_auth_v1',oldAuthKey:null,
   markBg:'linear-gradient(145deg,#C08A4D 0%,#8B5A2B 55%,#4A2C14 100%)',
   markSvg:'<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3v7a3 3 0 0 0 3 3v8"/><path d="M7 3v6"/><path d="M10 3v7a3 3 0 0 1-3 3"/><path d="M17 21V3c-2 1.5-3 4-3 7v4h3"/></svg>',
@@ -1664,7 +1664,7 @@ function renderAspetto(){
     '<div class="sec-title">Stile di partenza</div><div class="chips wrap">' + ['Salotto Liberty', 'Sera bordeaux', 'Marmo chiaro'].map(function(n){ return '<button class="chip" onclick="usaPreset(\'' + n + '\')">' + n + '</button>'; }).join('') + '</div>' +
     '<div class="sec-title">Cosa vuoi personalizzare</div><select class="inp" id="tLiv" onchange="T_LIV=this.value;disegnaColori();antVai()">' + opz + '</select>' +
     '<div class="hint" style="margin:6px 4px 0">Ogni livello eredita i colori di quello sopra: cambia solo ciò che deve essere diverso. I colori di una pagina aggiuntiva valgono anche per il banner che porta a quella pagina.</div>' +
-    '<div class="hint" id="tPagHint" style="margin:6px 4px 0;display:none">L\'anteprima qui sopra mostra il menu principale: i colori delle pagine aggiuntive si vedono nel menu per i clienti dopo averlo rigenerato.</div>' +
+    '<div class="hint" id="tPagHint" style="margin:6px 4px 0;display:none">L\'anteprima qui sopra si apre sulla pagina scelta.</div>' +
     '<div id="tColori"></div>' +
     '<div class="sec-title">Caratteri</div><div class="grp" style="padding:12px 14px">' +
       '<div class="field"><label for="tTit">Titoli</label><select class="inp" id="tTit" onchange="T.caratteri.titoli=this.value;temaToccato()">' + FONT_TITOLI.map(function(f){ return '<option' + (f === T.caratteri.titoli ? ' selected' : '') + '>' + f + '</option>'; }).join('') + '</select></div>' +
@@ -1760,13 +1760,119 @@ function datiAnteprima(soloPubblicate, temaUsato){
 }
 function htmlAnteprima(dati){ return ANTEPRIMA_TPL.replace('__DATI__', JSON.stringify(dati).replace(/</g, '\\u003c')); }
 var _antSolo = false;
-function antCarica(){ var fr = document.getElementById('antFrame'); if(fr) fr.srcdoc = htmlAnteprima(datiAnteprima(false, T)); }
-var antTema = debounce(function(){ var fr = document.getElementById('antFrame'); if(fr && fr.contentWindow) fr.contentWindow.postMessage({ tema: T }, '*'); }, 120);
-function antVai(){ var fr = document.getElementById('antFrame'); if(fr && fr.contentWindow) fr.contentWindow.postMessage({ vai: T_LIV }, '*'); }
+/* Anteprima con lo STESSO modello del menu per i clienti (caffe/_build/menu_template.html, letto dal repository pubblico)
+   e gli stessi dati che usa caffe/_build/menu_genera.py: ciò che vedi qui è ciò che vedrà il cliente dopo l'aggiornamento.
+   Se il modello non si scarica (rete), si usa la vecchia anteprima. */
+var MODELLO_URL = 'https://raw.githubusercontent.com/valerioceraldi-hub/Ceraldi/main/caffe/_build/';
+var _modello = null;
+function caricaModello(){
+  if(!_modello) _modello = Promise.all([fetch(MODELLO_URL + 'menu_template.html', { cache: 'no-cache' }).then(function(r){ if(!r.ok) throw new Error('modello ' + r.status); return r.text(); }),
+    fetch(MODELLO_URL + 'menu_testi_base.json', { cache: 'no-cache' }).then(function(r){ if(!r.ok) throw new Error('testi ' + r.status); return r.json(); })])
+    .then(function(x){ if(x[0].indexOf('/*__DATI__*/null') < 0) throw new Error('modello non valido'); return { tpl: x[0], def: x[1] }; })
+    .catch(function(e){ _modello = null; throw e; });
+  return _modello;
+}
+function menuDati(soloPub){
+  var oggi = oggiISO(), pub = function(r){ return soloPub ? r.stato === 'pubblicato' : r.stato !== 'archiviato'; };
+  var ord = function(l){ return l.slice().sort(function(a, b){ return (a.ordine || 0) - (b.ordine || 0) || (a.id || 0) - (b.id || 0); }); };
+  var U = function(p){ return p ? fotoUrl(p) : null; };
+  var nomi = {}; D.allergeni.forEach(function(a){ nomi[a.id] = a; });
+  var varDi = {}; ord(D.varianti).forEach(function(x){ if(x.attiva !== false) (varDi[x.voce_id] = varDi[x.voce_id] || []).push({ g: x.gruppo || '', n: x.nome, d: x.delta_cent || 0 }); });
+  var dv = {}, dc = {};
+  D.disp.forEach(function(x){ var r = {}; [['g', x.giorni], ['dal', x.dal], ['al', x.al], ['da', (x.dalle || '').slice(0, 5)], ['a', (x.alle || '').slice(0, 5)]].forEach(function(k){ if(k[1] && !(Array.isArray(k[1]) && !k[1].length)) r[k[0]] = k[1]; });
+    var dove = x.voce_id ? dv : dc, k = x.voce_id || x.categoria_id; (dove[k] = dove[k] || []).push(r); });
+  var sezioni = [];
+  ord(D.sezioni.filter(pub)).forEach(function(s){
+    var cats = [];
+    ord(D.categorie.filter(function(c){ return pub(c) && c.sezione_id === s.id; })).forEach(function(c){
+      var voci = ord(D.voci.filter(function(v){ return pub(v) && v.categoria_id === c.id; })).map(function(v){
+        var o = { id: v.id, n: v.nome || '', d: v.descrizione || '', p: v.prezzo_cent || 0, f: U(v.foto_path), fg: haGrande(v.foto_path) ? fotoUrl(v.foto_path, 'grande') : null,
+          fa: v.foto_alt || '', ft: v.foto_tipo || '', b: (v.stato !== 'pubblicato' ? ['Bozza'] : []).concat(v.badge || []), es: !!(v.esaurito_fino && String(v.esaurito_fino).slice(0, 10) >= oggi),
+          al: v.allergeni_verificati_il ? allergeniDi(v.id).map(function(l){ return nomi[l.allergene_id]; }).filter(function(a){ return a && a.tipo === 'allergene'; }).map(function(a){ return a.nome; }) : null,
+          'var': varDi[v.id] || [], dp: (dv[v.id] || []).concat(dc[c.id] || []) };
+        if(v.proposta_giorno) o.pr = { pos: v.proposta_posizione || 'home', ord: v.proposta_ordine || 0 };
+        return o;
+      });
+      if(voci.length) cats.push({ id: c.id, n: c.nome || '', d: c.descrizione || '', f: U(c.foto_path), v: voci });
+    });
+    if(cats.length) sezioni.push({ id: s.id, n: s.nome || '', f: U(s.foto_path), c: cats });
+  });
+  var ids = {}; sezioni.forEach(function(s){ s.c.forEach(function(c){ c.v.forEach(function(v){ ids[v.id] = 1; }); }); });
+  var pagine = {};
+  ord(D.pagine || []).forEach(function(p){
+    if(p.attiva === false) return;
+    var bl = ord((D.blocchi || []).filter(function(b){ return b.pagina === p.codice && b.attivo !== false; })).map(function(b){
+      var st = (b.stile && typeof b.stile === 'object') ? b.stile : {};
+      var ruolo = b.tipo === 'foto' && b.posizione === 'alto' && ['logo', 'sfondo', 'motivo'].indexOf(st.ruolo) >= 0 ? st.ruolo : null;
+      return { tipo: b.tipo, pos: b.posizione, ruolo: ruolo, sopra: b.sopratitolo || '', titolo: b.titolo || '', testo: b.testo || '', f: U(b.foto_url), fa: b.foto_alt || '',
+        lt: b.link_testo || '', lu: b.link_url || null, lp: b.link_pagina || null, voci: (st.voci || []).map(Number).filter(function(x){ return ids[x]; }) };
+    });
+    pagine[p.codice] = { titolo: p.titolo || '', blocchi: bl };
+  });
+  Object.keys(pagine).forEach(function(k){ pagine[k].blocchi.forEach(function(x){ if(x.lp && !pagine[x.lp]) x.lp = null; }); });
+  var momenti = ord(D.momenti || []).filter(function(m){ return m.attivo !== false; }).map(function(m){
+    var vs = (D.momVoci || []).slice().sort(function(a, b){ return (a.ordine || 0) - (b.ordine || 0) || a.id - b.id; }).filter(function(x){ return x.momento_id === m.id && ids[x.voce_id]; }).map(function(x){ return x.voce_id; });
+    return { q: m.quando, da: (m.dalle || '').slice(0, 5), a: (m.alle || '').slice(0, 5), saluto: m.saluto || '', intro: m.introduzione || '', sopra: m.sopratitolo || '', titolo: m.titolo || '', testo: m.testo || '',
+      f: U(m.foto_url), fa: m.foto_alt || '', pulsante: m.testo_pulsante || '', voci: vs };
+  });
+  var abb = {}, cons = {};
+  ord(D.racc || []).forEach(function(r){
+    if(r.attivo === false || !ids[r.target_voce_id]) return;
+    if(r.tipo === 'abbinamento' && ids[r.voce_id]) (abb[r.voce_id] = abb[r.voce_id] || []).push(r.target_voce_id);
+    else if(r.tipo === 'consiglio_categoria' && r.categoria_id) (cons[r.categoria_id] = cons[r.categoria_id] || []).push(r.target_voce_id);
+  });
+  var lo = D.locale || {}, ori = lo.orari || {}, testi = {}, ct = config().testi || {};
+  Object.keys(ct).forEach(function(k){ if(ct[k] && ct[k].it) testi[k] = ct[k].it; });
+  return { testi: testi, locale: { nome: lo.nome || '', ind: lo.indirizzo || '', tel: lo.telefono || '', orari: ori.testo || '' }, sezioni: sezioni, pagine: pagine, momenti: momenti, abb: { v: abb, c: {} }, consigli: cons };
+}
+function temaCss(a){
+  a = a || {}; var HEX = /^#[0-9a-fA-F]{3,8}$/, DER = ['scuro', 'su-scuro', 'accento-chiaro'];
+  function bv(o){ return Object.keys(o || {}).filter(function(k){ return /^[a-z0-9-]+$/.test(k) && HEX.test(String(o[k])); }).map(function(k){ return '--' + (DER.indexOf(k) >= 0 ? 'c-' : '') + k + ':' + o[k] + ';'; }).join(''); }
+  var car = a.caratteri || {}, okf = function(n){ return n && /^[A-Za-z0-9 ]+$/.test(n) ? n : null; }, ft = okf(car.titoli), fx = okf(car.testo);
+  var css = ':root{' + bv(a.globale) + (ft ? '--f-display:"' + ft + '",Georgia,serif;' : '') + (fx ? '--f-testo:"' + fx + '",system-ui,sans-serif;' : '') + '}';
+  var sc = parseFloat(a.scala || 1); if(sc !== 1 && sc >= 0.7 && sc <= 1.6) css += 'html{font-size:' + Math.round(1000 * sc) / 10 + '%}';
+  if(bv(a.home)) css += '.vh{' + bv(a.home) + '}';
+  Object.keys(a.sezioni || {}).forEach(function(i){ if(/^\d+$/.test(i) && bv(a.sezioni[i])) css += '.sezv[data-s="' + i + '"]{' + bv(a.sezioni[i]) + '}'; });
+  Object.keys(a.categorie || {}).forEach(function(i){ if(/^\d+$/.test(i) && bv(a.categorie[i])) css += '#c' + i + '{' + bv(a.categorie[i]) + '}'; });
+  Object.keys(a.pagine || {}).forEach(function(i){ if(/^[a-z0-9-]{1,40}$/.test(i) && i !== 'home' && bv(a.pagine[i])) css += '[data-p="' + i + '"]{' + bv(a.pagine[i]) + '}'; });
+  var fam = ft ? [ft.replace(/ /g, '+') + ':wght@400;500'] : []; if(fx && fx !== ft) fam.push(fx.replace(/ /g, '+') + ':wght@400;500;600');
+  var link = fam.length ? '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?' + fam.map(function(f){ return 'family=' + f; }).join('&') + '&display=swap">' : '';
+  return { css: css, link: link };
+}
+function jsonJs(o){ return JSON.stringify(o).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029'); }
+function hashLivello(l){
+  if(!l) return '';
+  if(l.indexOf('pag:') === 0) return '#p-' + l.slice(4);
+  if(l.indexOf('sez:') === 0) return '#s-' + l.slice(4);
+  if(l.indexOf('cat:') === 0){ var c = catDi(+l.slice(4)); return c ? '#s-' + c.sezione_id : ''; }
+  return '';
+}
+function htmlMenu(m, soloPub, temaUsato, livello){
+  var d = menuDati(soloPub), t = temaCss(temaUsato), h = hashLivello(livello), cat = livello && livello.indexOf('cat:') === 0 ? livello.slice(4) : '';
+  var x = m.tpl.split('__LANG__').join('it').split('__TITOLO__').join(esc(d.locale.nome || 'Menu')).split('__FONT_LINK__').join(t.link).split('__TEMA_CSS__').join(t.css)
+    .split('/*__DATI__*/null').join(jsonJs(d)).split('/*__DEF__*/null').join(jsonJs(m.def.it));
+  // posizione iniziale (pagina, sezione, categoria) prima che parta il menu
+  var vai = '<script>try{' + (h ? 'location.hash=' + JSON.stringify(h) + ';' : '') + (cat ? 'addEventListener("load",function(){setTimeout(function(){var e=document.getElementById(' + JSON.stringify('c' + cat) + ');if(e)e.scrollIntoView();},60)});' : '') + '}catch(e){}<\/script>';
+  return x.replace('<div class="app" id="app"></div>', '<div class="app" id="app"></div>' + vai);
+}
+function mostraIn(fr, soloPub, temaUsato, livello, tieniScroll){
+  if(!fr) return;
+  caricaModello().then(function(m){
+    var y = 0; try{ if(tieniScroll && fr.contentWindow) y = fr.contentWindow.scrollY; }catch(e){}
+    if(tieniScroll) fr.onload = function(){ try{ fr.contentWindow.scrollTo(0, y); }catch(e){} };
+    fr.srcdoc = htmlMenu(m, soloPub, temaUsato, livello);
+  }).catch(function(e){
+    console.warn('Anteprima: modello del menu non disponibile, uso la vecchia anteprima', e);
+    fr.srcdoc = htmlAnteprima(datiAnteprima(soloPub, temaUsato));
+  });
+}
+function antCarica(){ mostraIn(document.getElementById('antFrame'), false, T, T_LIV, false); }
+var antTema = debounce(function(){ mostraIn(document.getElementById('antFrame'), false, T, T_LIV, true); }, 250);
+function antVai(){ mostraIn(document.getElementById('antFrame'), false, T, T_LIV, false); }
 function apriAnteprima(){
   var mo = apriSheet('shAnt', { titolo: 'Anteprima del menu', alto: true, sotto: 'Come lo vedrà il cliente. Tocca le sezioni e le voci.',
     corpo: '<div class="seg" id="antSeg">' + segBtn('tutto', 'Bozze comprese', !_antSolo) + segBtn('pub', 'Solo pubblicate', _antSolo) + '</div><iframe id="antGrande" class="ant-grande" title="Anteprima del menu per i clienti"></iframe>' });
-  function carica(){ document.getElementById('antGrande').srcdoc = htmlAnteprima(datiAnteprima(_antSolo, tema())); }
+  function carica(){ mostraIn(document.getElementById('antGrande'), _antSolo, tema(), '', false); }
   mo.querySelectorAll('#antSeg .seg-b').forEach(function(b){ b.addEventListener('click', function(){ _antSolo = b.dataset.v === 'pub'; carica(); }); });
   carica();
 }

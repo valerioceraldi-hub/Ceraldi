@@ -8,19 +8,9 @@ QUI = os.path.dirname(os.path.abspath(__file__))
 RUOLI = ('logo', 'sfondo', 'motivo')  # foto «in alto» che compongono la testata di una pagina
 TAB = ['menu_sezioni','menu_categorie','menu_voci','menu_varianti','menu_voci_allergeni','allergeni','menu_disponibilita',
        'menu_pagine','menu_blocchi','menu_raccomandazioni','menu_momenti','menu_momenti_voci','locale']
-# testi fissi neutri (stessa chiave del pannello: CT_TESTI). Chi non compila nulla ottiene questi.
-DEF_IT = dict(aggiungi='Aggiungi', aggiunto='Aggiunto ✓', abbinamento='Abbinamento', consiglio='Consiglio', proposte='Proposte di oggi',
-  proposta_etichetta='Proposta', scorri='Scorri', ordinazione='Il mio ordine', ordinazione_intro='Vorrei:', mostra_altre='Mostra altre', cerca='Cerca nel menu',
-  allergeni='In caso di allergie o intolleranze chiedi al personale.', menu='Menu', sezione_invito='Scegli una sezione', menu_vuoto='Il menu è in preparazione.',
-  voci='voci', tel='Tel.', nota_prezzi='', finito='Finito', chiudi='Chiudi', allergeni_dichiarati='Allergeni dichiarati:', nessun_allergene='Nessun allergene dichiarato.',
-  foto_illustrativa='Foto illustrativa', infusione='Infusione', prodotto='prodotto', prodotti='prodotti', vedi='Vedi', promemoria="Un promemoria sul tuo telefono: l'ordine non viene inviato.",
-  totale='Totale', mostra_personale='Mostra al personale', ordine_vuoto='Non hai ancora aggiunto nulla.', per_personale='Per il personale', grazie='Grazie!', torna_menu='Torna al menu')
-DEF_EN = dict(aggiungi='Add', aggiunto='Added ✓', abbinamento='Pairs well with', consiglio='Suggestion', proposte="Today's picks", proposta_etichetta='Pick', scorri='Swipe',
-  ordinazione='My order', ordinazione_intro="I'd like:", mostra_altre='Show more', cerca='Search the menu', allergeni='If you have allergies or intolerances, please ask our staff.',
-  menu='Menu', sezione_invito='Choose a section', menu_vuoto='The menu is being prepared.', voci='items', tel='Tel.', nota_prezzi='', finito='Sold out', chiudi='Close',
-  allergeni_dichiarati='Declared allergens:', nessun_allergene='No declared allergens.', foto_illustrativa='Illustrative photo', infusione='Brewing', prodotto='item', prodotti='items',
-  vedi='View', promemoria='A reminder on your phone: the order is not sent.', totale='Total', mostra_personale='Show to staff', ordine_vuoto='You have not added anything yet.',
-  per_personale='For the staff', grazie='Thank you!', torna_menu='Back to menu')
+# testi fissi neutri (stesse chiavi del pannello: CT_TESTI). Chi non compila nulla ottiene questi. Li legge anche il pannello per l'anteprima.
+_BASE = json.load(open(os.path.join(QUI, 'menu_testi_base.json'), encoding='utf-8'))
+DEF_IT, DEF_EN = _BASE['it'], _BASE['en']
 
 def scarica(url, chiave, rpc=False):
     def rich(u, extra=None, dati=None):
