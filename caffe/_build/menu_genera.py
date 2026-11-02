@@ -120,15 +120,16 @@ def costruisci(src, lingua, foto_base, esiste=None, lingue=None):
         momenti.append({'q': m['quando'], 'da': (m.get('dalle') or '')[:5], 'a': (m.get('alle') or '')[:5], 'saluto': L(m, 'saluto', 'menu_momenti'), 'intro': L(m, 'introduzione', 'menu_momenti'),
                         'sopra': L(m, 'sopratitolo', 'menu_momenti'), 'titolo': L(m, 'titolo', 'menu_momenti'), 'testo': L(m, 'testo', 'menu_momenti'), 'f': m.get('foto_url'), 'fa': L(m, 'foto_alt', 'menu_momenti'),
                         'pulsante': L(m, 'testo_pulsante', 'menu_momenti'), 'voci': vs})
-    abb, cons = {}, {}
+    abb, abbc, cons = {}, {}, {}
     for r in ordina(src['menu_raccomandazioni']):
         if r.get('attivo') is False or r['target_voce_id'] not in ids: continue
         if r['tipo'] == 'abbinamento' and r.get('voce_id') in ids: abb.setdefault(r['voce_id'], []).append(r['target_voce_id'])
+        elif r['tipo'] == 'abbinamento' and not r.get('voce_id') and r.get('categoria_id'): abbc.setdefault(r['categoria_id'], []).append(r['target_voce_id'])
         elif r['tipo'] == 'consiglio_categoria' and r.get('categoria_id'): cons.setdefault(r['categoria_id'], []).append(r['target_voce_id'])
     lo = (src.get('locale') or [{}])[0]
     ori = lo.get('orari') or {}
     d = {'testi': testi, 'locale': {'nome': lo.get('nome') or '', 'ind': lo.get('indirizzo') or '', 'tel': lo.get('telefono') or '', 'orari': (ori.get('testo_' + lingua) if lingua != 'it' else None) or ori.get('testo') or ''},
-         'sezioni': sezioni, 'pagine': pagine, 'momenti': momenti, 'abb': {'v': abb, 'c': {}}, 'consigli': cons, 'lingua': lingua, 'lingue': lingue or []}
+         'sezioni': sezioni, 'pagine': pagine, 'momenti': momenti, 'abb': {'v': abb, 'c': abbc}, 'consigli': cons, 'lingua': lingua, 'lingue': lingue or []}
     return d, DEF, cfg
 
 HEX = re.compile(r'^#[0-9a-fA-F]{3,8}$')
