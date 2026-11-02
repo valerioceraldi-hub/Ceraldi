@@ -167,7 +167,11 @@ def copia_foto(d, out):
         if u not in fatte:
             ext = os.path.splitext(urllib.parse.urlparse(u).path)[1] or '.webp'
             n = hashlib.sha1(u.encode()).hexdigest()[:12] + ext
-            with open(os.path.join(cart, n), 'wb') as f: f.write(urllib.request.urlopen(u, timeout=60).read())
+            dest = os.path.join(cart, n)
+            if not os.path.exists(dest):  # già scaricata in un giro precedente: stesso indirizzo = stesso nome (risparmia traffico)
+                dati = urllib.request.urlopen(u, timeout=60).read()
+                with open(dest + '.tmp', 'wb') as f: f.write(dati)
+                os.replace(dest + '.tmp', dest)
             fatte[u] = 'img/' + n
         return fatte[u]
     for s in d['sezioni']:
@@ -178,6 +182,9 @@ def copia_foto(d, out):
     for p in d['pagine'].values():
         for b in p['blocchi']: b['f'] = loc(b['f'])
     for m in d['momenti']: m['f'] = loc(m['f'])
+    usate = {os.path.basename(v) for v in fatte.values()}
+    for f in os.listdir(cart):  # foto non più usate nel menu
+        if f not in usate: os.remove(os.path.join(cart, f))
     return len(fatte)
 
 def json_js(o): return json.dumps(o, ensure_ascii=False, separators=(',', ':')).replace('<', '\\u003c').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029')
@@ -185,7 +192,8 @@ def json_js(o): return json.dumps(o, ensure_ascii=False, separators=(',', ':')).
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', required=True); ap.add_argument('--lingua', default='it', choices=['it', 'en']); ap.add_argument('--json'); ap.add_argument('--esporta-json')
-    ap.add_argument('--copia-foto', action='store_true'); ap.add_argument('--modello', default=os.path.join(QUI, 'menu_template.html'))
+    ap.add_argument('--copia-foto', action='store_true'); ap.add_argument('--noindex', action='store_true', help='pagina di prova: non indicizzata dai motori di ricerca')
+    ap.add_argument('--consenti-vuoto', action='store_true', help='genera anche se nessuna voce è pubblicata (altrimenti si ferma per non svuotare il menu)'); ap.add_argument('--modello', default=os.path.join(QUI, 'menu_template.html'))
     a = ap.parse_args()
     if a.json: src = json.load(open(a.json, encoding='utf-8'))
     else:
@@ -195,6 +203,8 @@ def main():
     if a.esporta_json: json.dump(src, open(a.esporta_json, 'w', encoding='utf-8'), ensure_ascii=False)
     base = (src.get('_url') or os.environ.get('MENU_SB_URL', '')).rstrip('/') + '/storage/v1/object/public/menu-foto/'
     d, DEF, cfg = costruisci(src, a.lingua, base, None if a.json else file_esiste)  # --json = prove senza rete: nessun controllo
+    if not d['sezioni'] and not a.consenti_vuoto:
+        sys.exit('Nessuna voce pubblicata: non genero un menu vuoto (usa --consenti-vuoto se è voluto).')
     n = copia_foto(d, a.out) if a.copia_foto else 0
     css, link = tema_css(cfg)
     t = open(a.modello, encoding='utf-8').read()
@@ -202,6 +212,8 @@ def main():
     for k, v in (('__LANG__', a.lingua), ('__TITOLO__', titolo.replace('<', '')), ('__FONT_LINK__', link), ('__TEMA_CSS__', css), ('__DATI__', json_js(d)), ('__DEF__', json_js(DEF))):
         t = t.replace('/*' + k + '*/null' if k in ('__DATI__', '__DEF__') else k, v)
     os.makedirs(a.out, exist_ok=True)
-    open(os.path.join(a.out, 'index.html'), 'w', encoding='utf-8').write(t)
+    if a.noindex: t = t.replace('<meta charset="utf-8">', '<meta charset="utf-8"><meta name="robots" content="noindex,nofollow">', 1)
+    tmp = os.path.join(a.out, 'index.html.tmp')
+    open(tmp, 'w', encoding='utf-8').write(t); os.replace(tmp, os.path.join(a.out, 'index.html'))
     print('ok: %s/index.html  sezioni=%d voci=%d pagine=%d momenti=%d foto copiate=%d' % (a.out, len(d['sezioni']), sum(len(c['v']) for s in d['sezioni'] for c in s['c']), len(d['pagine']), len(d['momenti']), n))
 if __name__ == '__main__': main()
