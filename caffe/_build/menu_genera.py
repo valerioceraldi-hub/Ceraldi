@@ -5,6 +5,7 @@ Uso:  MENU_SB_URL=https://xxx.supabase.co MENU_SB_KEY=<chiave anon> python3 menu
 Il modello (menu_template.html) non contiene nomi, testi, prodotti o colori di nessuna attività: tutto arriva dai dati."""
 import argparse, json, os, re, sys, time, hashlib, datetime, urllib.request, urllib.error, urllib.parse
 QUI = os.path.dirname(os.path.abspath(__file__))
+RUOLI = ('logo', 'sfondo', 'motivo')  # foto «in alto» che compongono la testata di una pagina
 TAB = ['menu_sezioni','menu_categorie','menu_voci','menu_varianti','menu_voci_allergeni','allergeni','menu_disponibilita',
        'menu_pagine','menu_blocchi','menu_raccomandazioni','menu_momenti','menu_momenti_voci','locale']
 # testi fissi neutri (stessa chiave del pannello: CT_TESTI). Chi non compila nulla ottiene questi.
@@ -59,8 +60,9 @@ def costruisci(src, lingua, foto_base, esiste=None):
     cfg = src.get('config') or {}
     DEF = DEF_EN if en else DEF_IT
     testi = {k: (v.get('en') if en else v.get('it')) for k, v in (cfg.get('testi') or {}).items() if isinstance(v, dict) and (v.get('en') if en else v.get('it'))}
-    def U(p):  # percorso foto del bucket -> indirizzo
-        return foto_base + p if p else None
+    def U(p):  # percorso foto del bucket -> indirizzo (un indirizzo https completo resta com'è)
+        if not p: return None
+        return p if re.match(r'^https://', p) else foto_base + p
     def grande(p):
         u = U(re.sub(r'-320\.(webp|jpg)$', r'-1200.\1', p)) if p and re.search(r'-320\.(webp|jpg)$', p) else None
         return u if u and (esiste is None or esiste(u)) else None  # senza file grande resta la miniatura
@@ -98,8 +100,15 @@ def costruisci(src, lingua, foto_base, esiste=None):
     pagine = {}
     for p in ordina(src['menu_pagine']):
         if p.get('attiva') is False: continue
-        bl = [{'tipo': b['tipo'], 'pos': b['posizione'], 'ruolo': ((b.get('stile') or {}).get('ruolo') if p['codice'] == 'home' and b['posizione'] == 'alto' and (b.get('stile') or {}).get('ruolo') in ('logo', 'sfondo') else None), 'sopra': L(b, 'sopratitolo'), 'titolo': L(b, 'titolo'), 'testo': L(b, 'testo'), 'f': b.get('foto_url'),
-               'fa': L(b, 'foto_alt'), 'lt': L(b, 'link_testo'), 'lu': b.get('link_url'), 'lp': b.get('link_pagina')} for b in ordina(src['menu_blocchi']) if b['pagina'] == p['codice'] and b.get('attivo') is not False]
+        bl = []
+        for b in ordina(src['menu_blocchi']):
+            if b['pagina'] != p['codice'] or b.get('attivo') is False: continue
+            st = b.get('stile') if isinstance(b.get('stile'), dict) else {}
+            ruolo = st.get('ruolo') if b['tipo'] == 'foto' and b['posizione'] == 'alto' and st.get('ruolo') in RUOLI else None
+            # prodotti collegati al blocco (stile.voci = elenco di id): solo quelli pubblicati e visibili, nell'ordine scelto
+            vs = [int(x) for x in (st.get('voci') or []) if str(x).isdigit() and int(x) in ids]
+            bl.append({'tipo': b['tipo'], 'pos': b['posizione'], 'ruolo': ruolo, 'sopra': L(b, 'sopratitolo'), 'titolo': L(b, 'titolo'), 'testo': L(b, 'testo'), 'f': U(b.get('foto_url')),
+                       'fa': L(b, 'foto_alt'), 'lt': L(b, 'link_testo'), 'lu': b.get('link_url'), 'lp': b.get('link_pagina'), 'voci': vs})
         pagine[p['codice']] = {'titolo': L(p, 'titolo'), 'blocchi': bl}
     for b in pagine.values():
         for x in b['blocchi']:
@@ -123,8 +132,9 @@ def costruisci(src, lingua, foto_base, esiste=None):
     return d, DEF, cfg
 
 HEX = re.compile(r'^#[0-9a-fA-F]{3,8}$')
+DERIVATI = ('scuro', 'su-scuro', 'accento-chiaro')  # facoltativi: se mancano il modello li ricava da testo, sfondo e accento
 def blocco_var(o):
-    return ''.join('--%s:%s;' % (k, v) for k, v in (o or {}).items() if re.match(r'^[a-z0-9-]+$', k) and HEX.match(str(v)))
+    return ''.join('--%s%s:%s;' % ('c-' if k in DERIVATI else '', k, v) for k, v in (o or {}).items() if re.match(r'^[a-z0-9-]+$', k) and HEX.match(str(v)))
 def tema_css(cfg):
     a = cfg.get('aspetto') or {}
     car = a.get('caratteri') or {}
@@ -142,6 +152,8 @@ def tema_css(cfg):
         if re.match(r'^\d+$', str(i)) and blocco_var(o): css += '.sezv[data-s="%s"]{%s}' % (i, blocco_var(o))
     for i, o in (a.get('categorie') or {}).items():
         if re.match(r'^\d+$', str(i)) and blocco_var(o): css += '#c%s{%s}' % (i, blocco_var(o))
+    for i, o in (a.get('pagine') or {}).items():  # pagine extra: valgono anche per i banner che portano a quella pagina
+        if re.match(r'^[a-z0-9-]{1,40}$', str(i)) and i != 'home' and blocco_var(o): css += '[data-p="%s"]{%s}' % (i, blocco_var(o))
     fam = ['%s:wght@400;500' % ft.replace(' ', '+')] if ft else []
     if fx and fx != ft: fam.append('%s:wght@400;500;600' % fx.replace(' ', '+'))
     link = '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?%s&display=swap">' % '&'.join('family=' + f for f in fam) if fam else ''

@@ -15,6 +15,9 @@ await pag('out',async p=>{
  ok('proposta home', await p.locator('#pista .pc').count()===1);
  ok('2 sezioni', await p.locator('.tav').count()===2);
  ok('banner link pagina', await p.locator('.blk.b[data-pag=storia]').count()===1);
+ ok('banner con i colori della pagina di destinazione', (await p.evaluate(()=>getComputedStyle(document.querySelector('.blk.b[data-pag=storia]')).backgroundColor))==='rgb(170, 17, 17)');
+ ok('banner con il motivo della pagina', await p.locator('.blk.b[data-pag=storia] .mo').count()===1);
+ ok('colore scuro globale (momento)', (await p.evaluate(()=>getComputedStyle(document.querySelector('.mom')).backgroundColor))==='rgb(51, 68, 85)');
  ok('foto piede', await p.locator('.blk.f img').count()===1);
  ok('piede indirizzo', /Via Esempio 1/.test(await t('.piede')));
  ok('tema sfondo', (await p.evaluate(()=>getComputedStyle(document.querySelector('.vh')).backgroundColor))==='rgb(16, 24, 32)');
@@ -40,6 +43,14 @@ await pag('out',async p=>{
  await p.goto(p.url().split('#')[0]+'#p-storia');await p.waitForTimeout(200);
  ok('pagina storia', /Dal 1900/.test(await t('.pag')));
  ok('a capo preservato (css)', true);
+ const bg=async q=>p.evaluate(q=>getComputedStyle(document.querySelector(q)).backgroundColor,q);
+ ok('pagina: colori propri (barra)', (await bg('.pag[data-p=storia] .bar'))==='rgb(170, 17, 17)');
+ ok('pagina: testata con logo e motivo', await p.locator('.tp .lg img').count()===1 && await p.locator('.tp .mo').count()===1);
+ ok('pagina: i blocchi con ruolo non compaiono due volte', await p.locator('.blk img[src*="logo-storia"], .blk.f').count()===0);
+ ok('prodotti del blocco: solo i pubblicati', await p.locator('.pv').count()===1 && /Spaghetti/.test(await t('.pv')) && !/Bozza non vista/.test(await t('.pag')));
+ ok('righe «voce — testo» come elenco', await p.locator('dl.dl > div').count()===2);
+ ok('confronto con intestazione', await p.locator('table.cmp thead th').count()===3 && await p.locator('table.cmp tbody tr').count()===2);
+ await p.click('.pv [data-aggiungi]'); ok('prodotto del blocco nel mio ordine', await p.locator('#ord').count()===1);
 });
 await pag('out_en',async p=>{ok('EN saluto', /Hello/.test(await p.locator('.cop h1').textContent()));ok('EN testo fisso default', /Put on plate/i.test(await p.locator('.mom .cta .btn').textContent()));});
 await pag('out_vuoto',async p=>{const h=await p.locator('#app').textContent();ok('vuoto: messaggio', /in preparazione/.test(h));ok('vuoto: no tavole', await p.locator('.tav').count()===0);});
