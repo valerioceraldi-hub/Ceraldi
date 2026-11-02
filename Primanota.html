@@ -590,7 +590,7 @@ function avvisoCreditoIA(){
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.39.1</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.40.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -1737,6 +1737,14 @@ html[data-theme="dark"] .reg-import-link{border-color:rgba(255,255,255,.08)}
     <div class="rcard-hd" onclick="utApri()">
       <div class="rcard-hd-left"><span class="rcard-ico ds-g ds-g-orange"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg></span>
         <div><div class="rcard-title">Utenze</div><div class="rcard-sub" id="rsub-utenze">Luce, gas e acqua: costo unitario, consumi, scadenze</div></div>
+      </div><span class="rcard-arr">&#8250;</span>
+    </div>
+  </div>
+  <!-- 02/11/2026: Fatture da Gmail — documenti arrivati in posta e non presenti nel registro -->
+  <div class="rcard" id="rc-fgm">
+    <div class="rcard-hd" onclick="fgApri()">
+      <div class="rcard-hd-left"><span class="rcard-ico ds-g ds-g-blue"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg></span>
+        <div><div class="rcard-title">Fatture da Gmail</div><div class="rcard-sub" id="rsub-fgm">Fatture estere e documenti non presenti nel registro, da confermare</div></div>
       </div><span class="rcard-arr">&#8250;</span>
     </div>
   </div>
@@ -40217,6 +40225,300 @@ async function _utCardRiepilogo(){
   el.innerHTML = UT.forn.length ? (UT.forn.length + (UT.forn.length === 1 ? ' fornitura' : ' forniture') + (n ? ' · <b style="color:' + (alte ? 'var(--red)' : '#a35a00') + '">' + n + (n === 1 ? ' avviso' : ' avvisi') + '</b>' : ' · nessun avviso') + (dc ? ' · ' + dc + ' da confermare' : '')) : 'Luce, gas e acqua: costo unitario, consumi, scadenze';
 }
 setTimeout(function(){ try{ _utCardRiepilogo(); }catch(e){} }, 4000);
+
+/* ══════════════════════════════════════════════════════════════════════════
+   FATTURE DA GMAIL — 02/11/2026
+   Documenti arrivati sulla casella ceraldigroupsrl@gmail.com che NON sono nel
+   cassetto fiscale / nel registro: fatture estere, fatture intestate a Ceraldi
+   Group non presenti, ricevute di abbonamenti. Lo script Gmail li consegna alla
+   tabella fatture_gmail (registro SEPARATO). Nulla entra nel registro fatture
+   finché non lo confermi tu con «Importa nel registro».
+   Per le fatture estere c'è anche la scadenza dell'autofattura / integrazione
+   (TD17, TD18, TD19): il database la calcola da solo (15 del mese dopo la
+   ricezione, spostata al primo giorno lavorativo) e l'app avvisa.
+   ══════════════════════════════════════════════════════════════════════════ */
+var FG = { righe: [], ts: 0, inCarica: null, sel: null, vista: 'da_leggere' };
+var FG_COLS = 'id,ricevuto_il,nome_file,mittente,dominio,oggetto,email_data,pdf_path,stato,categoria,motivo,intestata_ceraldi,fornitore,piva_fornitore,numero,data_doc,importo,valuta,fattura_id,gestita_il,operazione_estera,data_ricezione,scadenza_autofattura,autofattura_inviata_il';
+var FG_CAT = { estera: 'Estera', ceraldi: 'Intestata a Ceraldi Group', altro: 'Da verificare' };
+var FG_OP = {
+  da_definire: 'Da definire',
+  td17: 'TD17 · servizio da fornitore estero (UE o extra-UE)',
+  td18: 'TD18 · acquisto di beni da fornitore UE',
+  td19: 'TD19 · beni da estero già in Italia / extra-UE (art. 17 c.2)',
+  nessuna: 'Nessuna · non serve autofattura'
+};
+var FG_WEBMAIL = ['gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'yahoo.com', 'yahoo.it', 'icloud.com', 'libero.it', 'virgilio.it', 'pec.it', 'legalmail.it'];
+
+function _fgOggi(){ var d = new Date(); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+function _fgGiorni(iso){ if(!iso) return null; var a = new Date(_fgOggi() + 'T00:00:00'), b = new Date(String(iso).slice(0, 10) + 'T00:00:00'); return Math.round((b - a) / 86400000); }
+function _fgNum(v){ if(v === null || v === undefined || v === '') return null; var n = parseFloat(String(v).replace(/\s/g, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.')); return isNaN(n) ? null : n; }
+function _fgEur(n){ return (n === null || n === undefined || n === '') ? '—' : (+n).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+
+async function _fgCarica(forza){
+  if(FG.inCarica) return FG.inCarica;
+  if(!forza && FG.ts && Date.now() - FG.ts < 2 * 60000) return;
+  FG.inCarica = (async function(){
+    FG.righe = (await sbFetchAll('fatture_gmail?select=' + FG_COLS + '&order=ricevuto_il.desc&limit=500')) || [];
+    FG.ts = Date.now();
+  })();
+  try{ await FG.inCarica; } finally { FG.inCarica = null; }
+}
+async function _fgChiama(corpo){
+  if(typeof _authPronto === 'function'){ try{ await _authPronto(); }catch(e){} }
+  var r = await fetch(SB_URL + '/functions/v1/fatture-gmail', { method: 'POST', headers: { 'Content-Type': 'application/json', 'apikey': SB_KEY, 'Authorization': SB_H.Authorization }, body: JSON.stringify(corpo || {}) });
+  var j = {}; try{ j = await r.json(); }catch(e){}
+  if(!r.ok && !j.errore) j.errore = 'Errore del server (' + r.status + ')';
+  return j;
+}
+async function _fgPatch(id, campi){
+  var res = await sbFetch('fatture_gmail?id=eq.' + id, { method: 'PATCH', body: JSON.stringify(campi) });
+  var riga = Array.isArray(res) ? res[0] : res;
+  if(!riga) throw new Error('modifica non consentita');
+  var i = FG.righe.findIndex(function(x){ return x.id === id; });
+  if(i >= 0) FG.righe[i] = Object.assign(FG.righe[i], riga); else FG.righe.unshift(riga);
+  return riga;
+}
+
+// ── avvisi sulla scadenza dell'autofattura (solo fatture estere, non ancora inviate al commercialista) ──
+function _fgAvvisi(){
+  var out = [];
+  (FG.righe || []).forEach(function(r){
+    if(r.categoria !== 'estera' || r.autofattura_inviata_il || r.operazione_estera === 'nessuna') return;
+    if(r.stato !== 'da_leggere' && r.stato !== 'importata') return;
+    if(!r.scadenza_autofattura) return;
+    var g = _fgGiorni(r.scadenza_autofattura);
+    if(g === null || g > 10) return;
+    out.push({ r: r, giorni: g, gravita: g < 0 ? 'alta' : (g <= 3 ? 'alta' : 'media') });
+  });
+  return out.sort(function(a, b){ return a.giorni - b.giorni; });
+}
+function _fgFrase(giorni){ return giorni < 0 ? 'scaduta da ' + (-giorni) + (giorni === -1 ? ' giorno' : ' giorni') : (giorni === 0 ? 'scade OGGI' : (giorni === 1 ? 'scade domani' : 'scade tra ' + giorni + ' giorni')); }
+
+async function _fgCardRiepilogo(forza){
+  var el = document.getElementById('rsub-fgm'); if(!el) return;
+  try{ await _fgCarica(!!forza); }catch(e){ return; }
+  var dl = FG.righe.filter(function(x){ return x.stato === 'da_leggere'; }).length;
+  var av = _fgAvvisi();
+  var testo = dl ? (dl + (dl === 1 ? ' documento da leggere' : ' documenti da leggere')) : 'Nessun documento da leggere';
+  if(av.length){
+    var p = av[0];
+    testo += ' · <b style="color:' + (p.gravita === 'alta' ? 'var(--red)' : '#a35a00') + '">autofattura ' + _fgFrase(p.giorni) + '</b>' + (av.length > 1 ? ' (+' + (av.length - 1) + ')' : '');
+  }
+  el.innerHTML = testo;
+}
+
+// ── elenco ──
+async function fgApri(){
+  var mo = pnFoglio('fgOv', { titolo: 'Fatture da Gmail', sotto: 'documenti arrivati in posta e non presenti nel registro', z: 960 });
+  var bd = mo.querySelector('.pn-sh-bd'); bd.innerHTML = '<div class="ut-vuoto"><b>Un attimo…</b></div>';
+  try{ await _fgCarica(true); }catch(e){ bd.innerHTML = '<div class="ut-ban ross">Non riesco a leggere l\'elenco: ' + esc(e.message || e) + '</div>'; return; }
+  _fgElenco();
+}
+function _fgElenco(){
+  var mo = document.getElementById('fgOv'); if(!mo) return;
+  var bd = mo.querySelector('.pn-sh-bd');
+  var conta = function(s){ return FG.righe.filter(function(x){ return x.stato === s; }).length; };
+  var h = '';
+  var av = _fgAvvisi();
+  if(av.length){
+    h += '<div class="ut-ban ' + (av.some(function(a){ return a.gravita === 'alta'; }) ? 'ross' : 'gia') + '"><b>Autofattura da mandare al commercialista</b><br>' + av.map(function(a){
+      return '<a href="#" onclick="_fgScheda(' + a.r.id + ');return false" style="color:inherit;text-decoration:underline">' + esc(a.r.fornitore || a.r.dominio || 'Fornitore') + (a.r.numero ? ' n. ' + esc(a.r.numero) : '') + '</a> · entro <b>' + _utD(a.r.scadenza_autofattura) + '</b> (' + _fgFrase(a.giorni) + ')';
+    }).join('<br>') + '</div>';
+  }
+  h += '<div style="display:flex;gap:6px;margin:2px 0 10px;flex-wrap:wrap">' + [['da_leggere', 'Da leggere'], ['importata', 'Importate'], ['gia_in_registro', 'Già nel registro'], ['scartata', 'Scartate'], ['ignorata', 'Ignorate']].map(function(v){
+    var on = FG.vista === v[0];
+    return '<button class="ut-btn" style="margin:0;padding:6px 11px;border-radius:99px;background:' + (on ? 'var(--blue)' : 'var(--surface2)') + ';color:' + (on ? '#fff' : 'var(--ink2)') + '" onclick="FG.vista=\'' + v[0] + '\';_fgElenco()">' + v[1] + ' (' + conta(v[0]) + ')</button>';
+  }).join('') + '</div>';
+  var lista = FG.righe.filter(function(x){ return x.stato === FG.vista; });
+  if(!lista.length) h += '<div class="ut-vuoto"><b>Niente qui</b>' + (FG.vista === 'da_leggere' ? 'Lo script legge la posta ogni giorno alle 7:00. Le fatture trovate compaiono qui.' : '') + '</div>';
+  else h += '<div class="ut-box" style="padding:0 12px">' + lista.map(function(r){
+    var g = _fgGiorni(r.scadenza_autofattura);
+    var avviso = (r.categoria === 'estera' && !r.autofattura_inviata_il && r.operazione_estera !== 'nessuna' && r.scadenza_autofattura && (r.stato === 'da_leggere' || r.stato === 'importata'))
+      ? '<span class="ut-pill ' + (g !== null && g <= 3 ? 'no' : '') + '">autofattura entro ' + _utD(r.scadenza_autofattura) + '</span>' : '';
+    return '<div class="ut-riga" style="cursor:pointer;align-items:flex-start" onclick="_fgScheda(' + r.id + ')"><span><b>' + esc(r.fornitore || r.dominio || 'Mittente sconosciuto') + '</b>' +
+      '<small>' + (r.data_doc ? 'Fattura del <b>' + _utD(r.data_doc) + '</b>' : 'Data non letta') + (r.numero ? ' · n. ' + esc(r.numero) : '') + ' · ' + esc(FG_CAT[r.categoria] || r.categoria || '') + '</small>' +
+      '<small>' + esc(r.oggetto || r.nome_file || '') + '</small>' + avviso + '</span>' +
+      '<b style="white-space:nowrap">' + (r.importo !== null && r.importo !== undefined ? _fgEur(r.importo) + ' ' + esc(r.valuta || '') : '—') + '</b></div>';
+  }).join('') + '</div>';
+  h += '<div class="pa-nota">Qui non c\'è niente nel registro fatture: ci entra solo ciò che confermi con «Importa nel registro». L\'importazione controlla che la stessa fattura (stessa P. IVA e stesso numero) non ci sia già.</div>';
+  bd.innerHTML = h;
+}
+
+// ── scheda di una fattura ──
+async function _fgScheda(id){
+  var r = FG.righe.find(function(x){ return x.id === id; }); if(!r) return;
+  FG.sel = id;
+  var mo = pnFoglio('fgSch', { titolo: r.fornitore || r.dominio || 'Documento', sotto: r.data_doc ? 'fattura del ' + _utD(r.data_doc) : 'data non letta', z: 975 });
+  var bd = mo.querySelector('.pn-sh-bd');
+  var aperta = r.stato === 'da_leggere';
+  var dis = aperta ? '' : ' disabled';
+  var inp = 'style="width:100%;padding:10px;border-radius:10px;border:.5px solid var(--ds-hair);background:var(--surface2);font:inherit;font-size:14px;color:var(--ink)"';
+  var campo = function(et, idc, val, tipo, extra){ return '<div style="margin-bottom:9px"><div class="ut-lbl" style="margin:0 2px 3px">' + et + '</div><input id="' + idc + '" type="' + (tipo || 'text') + '" value="' + esc(val === null || val === undefined ? '' : String(val)) + '" ' + inp + dis + (extra || '') + '></div>'; };
+  var h = '';
+  h += '<div style="display:flex;gap:8px;margin-bottom:10px"><button class="btn btn-p" style="padding:12px" onclick="_fgVediPdf(' + id + ')">📄 Vedi PDF</button>' +
+       '<button class="btn" style="padding:12px;background:var(--surface2);color:var(--ink)" onclick="_fgVediMail(' + id + ')">✉️ Dettagli e-mail</button></div>';
+  h += '<div class="ut-ban blu" style="margin-bottom:12px"><b>Data della fattura: ' + (r.data_doc ? _utD(r.data_doc) : 'non letta — controlla il PDF') + '</b><br><span style="color:var(--ink3)">Perché è qui: ' + esc(r.motivo || '—') + '</span></div>';
+  if(!aperta) h += '<div class="ut-ban gia">Stato: <b>' + esc(r.stato.replace(/_/g, ' ')) + '</b>' + (r.gestita_il ? ' il ' + _utD(String(r.gestita_il).slice(0, 10)) : '') + '. I dati non si modificano più da qui.</div>';
+  h += campo('Fornitore', 'fgF', r.fornitore) + campo('P. IVA / identificativo IVA fornitore', 'fgP', r.piva_fornitore) + campo('Numero fattura', 'fgN', r.numero) + campo('Data fattura', 'fgD', r.data_doc ? String(r.data_doc).slice(0, 10) : '', 'date');
+  h += '<div style="display:flex;gap:8px"><div style="flex:1.4">' + campo('Importo totale', 'fgI', r.importo === null || r.importo === undefined ? '' : r.importo, 'text', ' inputmode="decimal"') + '</div><div style="flex:1">' + campo('Valuta', 'fgV', r.valuta || 'EUR') + '</div></div>';
+  if(r.valuta && r.valuta !== 'EUR') h += '<div class="ut-ban gia">Importo in <b>' + esc(r.valuta) + '</b>. Il registro lavora in euro: scrivi qui sopra il controvalore in euro (lo trovi sull\'estratto conto o sul PDF) e imposta la valuta a EUR prima di importare.</div>';
+
+  // autofattura / integrazione: solo per fatture estere
+  if(r.categoria === 'estera' || r.operazione_estera !== 'da_definire'){
+    var g = _fgGiorni(r.scadenza_autofattura);
+    h += '<div class="ut-lbl">Autofattura / integrazione IVA</div><div class="ut-box" style="padding:10px 12px">' +
+      '<div style="font-size:12.5px;color:var(--ink2);line-height:1.45;margin-bottom:8px">Una fattura estera non passa dal SdI: va integrata (o autofatturata) e <b>mandata al commercialista</b> entro il <b>15 del mese successivo</b> alla ricezione (se cade nel weekend o in un festivo, il primo giorno lavorativo dopo). Il tipo dipende da cosa hai comprato: se non sei sicuro, chiedilo al commercialista.</div>' +
+      '<div class="ut-lbl" style="margin:0 2px 3px">Che operazione è?</div><select id="fgOp" ' + inp + dis + ' onchange="_fgSalvaOp(' + id + ')">' + Object.keys(FG_OP).map(function(k){ return '<option value="' + k + '"' + (r.operazione_estera === k ? ' selected' : '') + '>' + esc(FG_OP[k]) + '</option>'; }).join('') + '</select>' +
+      '<div style="margin-top:8px">' + campo('Data di ricezione della fattura', 'fgR', r.data_ricezione ? String(r.data_ricezione).slice(0, 10) : '', 'date', ' onchange="_fgSalvaOp(' + id + ')"') + '</div>' +
+      '<div id="fgScad">' + _fgScadHtml(r) + '</div>' +
+      ((r.autofattura_inviata_il || r.operazione_estera === 'nessuna') ? '' : '<button class="btn" style="margin-top:8px;padding:11px;background:rgba(52,199,89,.14);color:#1f8a3d" onclick="_fgInviata(' + id + ')">✓ L\'ho mandata al commercialista</button>') +
+      (r.autofattura_inviata_il ? '<div class="pa-nota" style="margin-top:6px">Segnata come inviata il ' + _utD(String(r.autofattura_inviata_il).slice(0, 10)) + ' · <a href="#" onclick="_fgInviata(' + id + ',true);return false">annulla</a></div>' : '') +
+      '</div>';
+  }
+
+  if(aperta){
+    h += '<div class="ut-lbl">Se la importi nel registro</div><div class="ut-box" style="padding:10px 12px"><label style="display:flex;gap:8px;align-items:center;font-size:13.5px;margin-bottom:6px"><input type="radio" name="fgPag" value="da_pagare" checked> Da pagare</label><label style="display:flex;gap:8px;align-items:center;font-size:13.5px"><input type="radio" name="fgPag" value="pagata"> Già pagata (carta / PayPal / addebito)</label></div>';
+    h += '<button class="btn btn-p" style="margin-top:6px;padding:14px" onclick="_fgImporta(' + id + ',this)">Importa nel registro fatture</button>' +
+         '<button class="btn" style="margin-top:8px;padding:12px;background:var(--surface2);color:var(--ink)" onclick="_fgSalvaDati(' + id + ',this)">Salva le correzioni (senza importare)</button>' +
+         '<div style="display:flex;gap:8px;margin-top:8px"><button class="btn" style="padding:12px;background:var(--surface2);color:var(--ink)" onclick="_fgScarta(' + id + ')">Non è una fattura</button>' +
+         '<button class="btn" style="padding:12px;background:var(--surface2);color:var(--ink)" onclick="_fgIgnoraMittente(' + id + ')">Ignora questo mittente</button></div>';
+  } else if(r.stato === 'scartata' || r.stato === 'ignorata'){
+    h += '<button class="btn" style="margin-top:10px;padding:12px;background:var(--surface2);color:var(--ink)" onclick="_fgRimetti(' + id + ')">Rimetti tra quelle da leggere</button>';
+  }
+  bd.innerHTML = h;
+}
+function _fgScadHtml(r){
+  if(r.operazione_estera === 'nessuna') return '<div class="pa-nota">Nessuna scadenza: operazione senza autofattura.</div>';
+  if(!r.scadenza_autofattura) return '<div class="pa-nota">Scadenza non calcolabile: manca la data di ricezione.</div>';
+  var g = _fgGiorni(r.scadenza_autofattura);
+  var col = r.autofattura_inviata_il ? '#1f8a3d' : (g < 0 ? 'var(--red)' : (g <= 3 ? 'var(--red)' : (g <= 10 ? '#a35a00' : 'var(--ink)')));
+  return '<div style="margin-top:8px;font-size:14px"><span style="color:var(--ink3)">Da mandare al commercialista entro</span> <b style="color:' + col + '">' + _utD(r.scadenza_autofattura) + '</b>' + (r.autofattura_inviata_il ? ' · inviata ✓' : ' · ' + _fgFrase(g)) + '</div>' +
+    (r.operazione_estera === 'da_definire' ? '<div class="pa-nota" style="margin-top:2px">Tipo ancora da definire: la data è quella prudenziale, il tipo non la cambia.</div>' : '');
+}
+async function _fgSalvaOp(id){
+  var op = (document.getElementById('fgOp') || {}).value, rc = (document.getElementById('fgR') || {}).value || null;
+  try{
+    var riga = await _fgPatch(id, { operazione_estera: op, data_ricezione: rc });
+    var el = document.getElementById('fgScad'); if(el) el.innerHTML = _fgScadHtml(riga);
+    _fgCardRiepilogo(false); if(document.getElementById('fgOv')) _fgElenco();
+  }catch(e){ toast('⚠️ Non salvato: ' + String(e.message || e).slice(0, 80)); }
+}
+async function _fgInviata(id, annulla){
+  try{ await _fgPatch(id, { autofattura_inviata_il: annulla ? null : _fgOggi() }); toast(annulla ? 'Segnata come non inviata' : '✓ Segnata come inviata al commercialista', { forza: true }); _fgScheda(id); _fgCardRiepilogo(false); if(document.getElementById('fgOv')) _fgElenco(); }
+  catch(e){ toast('⚠️ Non salvato: ' + String(e.message || e).slice(0, 80)); }
+}
+function _fgLeggiCampi(){
+  var v = function(i){ return ((document.getElementById(i) || {}).value || '').trim(); };
+  var imp = _fgNum(v('fgI'));
+  return { fornitore: v('fgF') || null, piva_fornitore: v('fgP') || null, numero: v('fgN') || null, data_doc: v('fgD') || null, importo: imp, valuta: (v('fgV') || 'EUR').toUpperCase() };
+}
+async function _fgSalvaDati(id, btn){
+  btn.disabled = true;
+  try{ await _fgPatch(id, _fgLeggiCampi()); toast('✓ Correzioni salvate', { forza: true }); _fgScheda(id); if(document.getElementById('fgOv')) _fgElenco(); }
+  catch(e){ toast('⚠️ Non salvato: ' + String(e.message || e).slice(0, 80)); }
+  btn.disabled = false;
+}
+
+// ── PDF ed e-mail ──
+async function _fgVediPdf(id){
+  var w = null; try{ w = window.open('', '_blank'); }catch(e){}
+  var j = await _fgChiama({ azione: 'pdf_url', id: id });
+  if(j.errore || !j.url){ if(w) w.close(); toast('⚠️ ' + (j.errore || 'PDF non disponibile')); return; }
+  if(w) w.location.href = j.url; else location.href = j.url;
+}
+function _fgVediMail(id){
+  var r = FG.righe.find(function(x){ return x.id === id; }); if(!r) return;
+  var mo = pnFoglio('fgMail', { titolo: 'E-mail ricevuta', sotto: esc(r.dominio || ''), z: 985 });
+  mo.querySelector('.pn-sh-bd').innerHTML = '<div class="ut-box"><div class="ut-riga"><span>Da</span><b style="text-align:right;word-break:break-all">' + esc(r.mittente || '—') + '</b></div><div class="ut-riga"><span>Oggetto</span><b style="text-align:right">' + esc(r.oggetto || '—') + '</b></div><div class="ut-riga"><span>Data e-mail</span><b>' + (r.email_data ? _utD(String(r.email_data).slice(0, 10)) : '—') + '</b></div><div class="ut-riga"><span>File</span><b style="word-break:break-all;text-align:right">' + esc(r.nome_file || '—') + '</b></div><div class="ut-riga"><span>Ricevuta dall\'app</span><b>' + _utD(String(r.ricevuto_il || '').slice(0, 10)) + '</b></div></div>';
+}
+
+// ── scarta / ignora / rimetti ──
+async function _fgScarta(id){
+  if(!confirm('Segnare questo documento come «non è una fattura»? Resta nell\'elenco delle scartate, non viene cancellato.')) return;
+  try{ await _fgPatch(id, { stato: 'scartata', gestita_il: new Date().toISOString() }); pnChiudi('fgSch'); _fgElenco(); _fgCardRiepilogo(false); toast('Scartata', { forza: true }); }
+  catch(e){ toast('⚠️ ' + String(e.message || e).slice(0, 80)); }
+}
+async function _fgRimetti(id){
+  try{ await _fgPatch(id, { stato: 'da_leggere', gestita_il: null }); pnChiudi('fgSch'); FG.vista = 'da_leggere'; _fgElenco(); _fgCardRiepilogo(false); toast('Rimessa tra quelle da leggere', { forza: true }); }
+  catch(e){ toast('⚠️ ' + String(e.message || e).slice(0, 80)); }
+}
+async function _fgIgnoraMittente(id){
+  var r = FG.righe.find(function(x){ return x.id === id; }); if(!r) return;
+  var dom = String(r.dominio || '').toLowerCase();
+  if(!dom){ toast('Mittente non riconosciuto'); return; }
+  if(FG_WEBMAIL.indexOf(dom) >= 0){ toast('«' + dom + '» è una posta personale usata da tante persone: non posso ignorarla tutta. Usa «Non è una fattura» su questo documento.'); return; }
+  if(!confirm('Ignorare tutte le future e-mail da «' + dom + '»? Quelle già arrivate da questo mittente e ancora da leggere vanno tra le ignorate. Si può sempre rimetterle.')) return;
+  try{
+    await sbFetch('fatture_gmail_mittenti', { method: 'POST', headers: { 'Prefer': 'resolution=ignore-duplicates,return=minimal' }, body: JSON.stringify({ dominio: dom, azione: 'ignora' }) });
+    await sbFetch('fatture_gmail?dominio=eq.' + encodeURIComponent(dom) + '&stato=eq.da_leggere', { method: 'PATCH', body: JSON.stringify({ stato: 'ignorata', gestita_il: new Date().toISOString() }) });
+    await _fgCarica(true); pnChiudi('fgSch'); _fgElenco(); _fgCardRiepilogo(false); toast('✓ Ignoro le e-mail da ' + dom, { forza: true });
+  }catch(e){ toast('⚠️ ' + String(e.message || e).slice(0, 80)); }
+}
+
+// ── importazione nel registro (solo dopo il tuo tocco) ──
+function _fgNorm(s){ return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^0+/, ''); }
+function _fgPivaNorm(s){ var t = String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); return t.replace(/^[A-Z]{2}(?=\d)/, ''); }
+function _fgGiaPresente(c){
+  var np = _fgNorm(c.numero), pv = _fgPivaNorm(c.piva_fornitore);
+  if(!np) return null;
+  return (fatture || []).find(function(f){
+    if(f.deletedAt) return false;
+    // stessa chiave dell'indice unico del database (fornitore + numero + data): l'importazione non deve mai sovrascrivere
+    if(f.fornitore === c.fornitore && f.numero === c.numero && String(f.data || '').slice(0, 10) === c.data_doc) return true;
+    var nf = _fgNorm(f.fattNum || f.numero);
+    if(nf !== np) return false;
+    // legame deterministico: stessa P. IVA (con o senza sigla paese) + stesso numero
+    return pv && _fgPivaNorm(f.piva) === pv;
+  }) || null;
+}
+async function _fgPdfDataUrl(id){
+  var j = await _fgChiama({ azione: 'pdf_url', id: id });
+  if(j.errore || !j.url) throw new Error(j.errore || 'PDF non disponibile');
+  var r = await fetch(j.url); if(!r.ok) throw new Error('PDF non scaricabile (' + r.status + ')');
+  var b = await r.blob();
+  return await new Promise(function(ok, ko){ var fr = new FileReader(); fr.onload = function(){ ok(String(fr.result).replace(/^data:[^;,]*/, 'data:application/pdf')); }; fr.onerror = function(){ ko(new Error('lettura PDF fallita')); }; fr.readAsDataURL(b); });
+}
+async function _fgImporta(id, btn){
+  var r = FG.righe.find(function(x){ return x.id === id; }); if(!r || r.stato !== 'da_leggere') return;
+  var c = _fgLeggiCampi();
+  if(!c.fornitore){ toast('Scrivi il nome del fornitore'); return; }
+  if(!c.numero){ toast('Scrivi il numero della fattura (è nel PDF)'); return; }
+  if(!c.data_doc){ toast('Scrivi la data della fattura (è nel PDF)'); return; }
+  if(c.importo === null || !(c.importo > 0)){ toast('Scrivi l\'importo totale in euro'); return; }
+  if(c.valuta !== 'EUR'){ toast('Il registro è in euro: scrivi il controvalore in euro e metti la valuta EUR'); return; }
+  var dup = _fgGiaPresente(c);
+  if(dup){ toast('Già nel registro: ' + (dup.fornitore || '') + ' n. ' + (dup.numero || dup.fattNum) + ' del ' + _utD(dup.data) + '. Non importo due volte.'); return; }
+  if(!confirm('Importo nel registro fatture:\n\n' + c.fornitore + '\nn. ' + c.numero + ' del ' + _utD(c.data_doc) + '\n€ ' + _fgEur(c.importo) + '\n\nConfermi?')) return;
+  btn.disabled = true; var t0 = btn.textContent; btn.textContent = 'Importo…';
+  var nuova = null;
+  try{
+    var pag = (document.querySelector('input[name="fgPag"]:checked') || {}).value || 'da_pagare';
+    await _fgPatch(id, c); // salva le correzioni (e ricalcola la scadenza)
+    var dataUrl = await _fgPdfDataUrl(id);
+    var op = r.operazione_estera && r.operazione_estera !== 'da_definire' && r.operazione_estera !== 'nessuna' ? ' · ' + r.operazione_estera.toUpperCase() + (r.scadenza_autofattura ? ' da inviare entro ' + _utD(r.scadenza_autofattura) : '') : '';
+    nuova = {
+      id: Date.now() + Math.floor(Math.random() * 1000), tipo: 'fattura', fornitore: c.fornitore, numero: c.numero, fattNum: c.numero, numDdt: '',
+      data: c.data_doc, importo: c.importo, pagamento: '', pagamentoOrigine: '', bonIban: '', bonCaus: '', bonData: '', bonRif: '', assegno: '', assInt: '', assBanca: '',
+      note: 'Da Gmail' + (r.oggetto ? ' — ' + String(r.oggetto).slice(0, 90) : '') + op,
+      stato: pag, scadenza: '', foto: null, parzPagato: 0, dataPagamento: '',
+      fatturaAllegata: dataUrl, fatturaAllegataName: (r.nome_file && /\.pdf$/i.test(r.nome_file)) ? r.nome_file : ((r.nome_file || 'fattura') + '.pdf'),
+      xmlGithubPath: '', source: 'gmail', pecId: '', rate: [], ts: Date.now(), incompleta: [], piva: c.piva_fornitore || '',
+      ivaBreakdown: null, totaleImponibile: null, totaleImposta: null
+    };
+    fatture.unshift(nuova);
+    try{ await dbInsert(nuova); }catch(e){ var ix = fatture.findIndex(function(x){ return x.id === nuova.id; }); if(ix >= 0) fatture.splice(ix, 1); throw new Error('salvataggio nel registro non riuscito: ' + String(e.message || e).slice(0, 80)); }
+    await _fgPatch(id, { stato: 'importata', fattura_id: nuova.id, gestita_il: new Date().toISOString() });
+    if(typeof pnChiudi === 'function') pnChiudi('fgSch');
+    _fgElenco(); _fgCardRiepilogo(false);
+    try{ if(typeof renderLista === 'function') renderLista(); if(typeof aggiornaAlertBanner === 'function') aggiornaAlertBanner(); }catch(e){}
+    toast('✓ Importata nel registro: ' + c.fornitore + ' n. ' + c.numero, { forza: true });
+  }catch(e){
+    toast('⚠️ ' + String(e.message || e).slice(0, 120));
+    btn.disabled = false; btn.textContent = t0;
+  }
+}
+
+setTimeout(function(){ try{ _fgCardRiepilogo(false).then(function(){ var av = _fgAvvisi(); if(av.length) toast('📨 Autofattura ' + _fgFrase(av[0].giorni) + ': ' + (av[0].r.fornitore || 'fornitore estero') + (av.length > 1 ? ' (+' + (av.length - 1) + ')' : ''), { forza: true }); }); }catch(e){} }, 5000);
 </script>
 
 </body>
