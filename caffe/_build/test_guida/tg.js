@@ -70,6 +70,22 @@ const MAR = '2026-11-03T09:00:00Z', CARITA = { latitude: 40.844326, longitude: 1
     await p.goto(BASE + '#/r/san-gennaro'); await p.waitForTimeout(300);
     ok('racconto: testo', (await p.locator('.testo p').count()) >= 2);
   });
+  // E3: «Cosa guardare», leggende, accessibilità, fonti
+  await apri(BASE + '#/l/cappella-sansevero', {}, async p => {
+    ok('E3: Sansevero 5 schede «Cosa guardare»', (await p.locator('article.guarda').count()) === 5, await p.locator('article.guarda').count());
+    ok('E3: schede numerate con «dove trovarlo»', /Nella cavea sotterranea/.test(await testo(p, 'article.guarda .dove')));
+    ok('E3: prima scheda «Il Cristo velato»', /Il Cristo velato/.test(await p.locator('article.guarda b').first().textContent()));
+    ok('E3: leggende', /Leggende e curiosità/.test(await testo(p, 'summary')));
+    ok('E3: accessibilità (scala a chiocciola)', /scala a chiocciola/.test(await testo(p, 'details.apri')));
+    ok('E3: fonti comprese quelle delle schede (≥ 7)', parseInt((await testo(p, 'details.fonti summary')).replace(/\D/g, '')) >= 7, await testo(p, 'details.fonti summary'));
+    ok('E3: 390 px', await largo(p));
+  });
+  await apri(BASE + '#/l/santa-chiara', {}, async p => {
+    ok('E3: Santa Chiara 4 schede + storia', (await p.locator('article.guarda').count()) === 4 && /La storia/.test(await testo(p, 'summary')));
+  });
+  await apri(BASE + 'en/#/l/cappella-sansevero', {}, async p => {
+    ok('E3: inglese «What to look at» e schede tradotte', /What to look at/.test(await testo(p, 'h3')) && /Veiled Christ|veiled/i.test(await testo(p, 'article.guarda')), (await testo(p, 'article.guarda b')).slice(0, 80));
+  });
   // 3. Camminare: indicazione, arrivo dal GPS, prosegui, ripresa, fuori percorso, «Sono già qui»
   await apri(BASE + '#/c/il-primo-giro', { pos: CARITA, attesa: 3000 }, async (p, ctx) => {
     ok('cammino: tratto 1 di 6', /Tratto 1 di 6/.test(await testo(p, '#c-tratto')));

@@ -11,12 +11,14 @@ sys.path.insert(0, QUI)
 from menu_genera import blocco_var, json_js  # stessi colori del menu (dal database), stessa serializzazione sicura
 
 COL = {  # solo colonne pubbliche (anon non legge note_interne, aggiornato_da, verificata_da, risposte)
-    'guida_luoghi': 'id,slug,nome,tipo,zona,indirizzo,lat,lon,minuti_a_piedi,metri_a_piedi,durata_visita_min,gratuito,sempre_accessibile,sito_ufficiale,pagina_orari,sommario,racconto,consiglio,accessibilita,accessibilita_verificata_il,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,stato,orari_stato,orari_verificati_il,ordine',
+    'guida_luoghi': 'id,slug,nome,tipo,zona,indirizzo,lat,lon,minuti_a_piedi,metri_a_piedi,durata_visita_min,gratuito,sempre_accessibile,sito_ufficiale,pagina_orari,sommario,racconto,consiglio,accessibilita,accessibilita_verificata_il,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,stato,orari_stato,orari_verificati_il,ordine,leggende,foto_consentite',
     'guida_orari': 'id,luogo_id,giorni,dalle,alle,ultimo_ingresso,dal,al,chiuso,nota,ordine',
     'guida_itinerari': 'id,slug,nome,sottotitolo,descrizione,durata_min,distanza_m,etichette,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,stato,ordine',
     'guida_tappe': 'id,itinerario_id,luogo_id,ordine,minuti_dal_precedente,metri_dal_precedente,sosta_min,nota,alternativa_luogo_id,percorso,svolte',
     'guida_racconti': 'id,slug,titolo,sommario,testo,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,stato,ordine',
     'guida_affermazioni_fonti': 'tabella,riga_id,fonte_titolo,fonte_url',
+    'guida_dettagli': 'id,luogo_id,ordine,titolo,testo,dove,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_permesso,stato',
+    'guida_foto': 'id,luogo_id,ordine,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_permesso,stato',
     'menu_lingue': '*',
     'scioperi_napoli_trasporti': 'data,linea,dettaglio',
 }
@@ -77,6 +79,15 @@ def costruisci(src, lingua, foto_base, anteprima):
     for o in ordina(src.get('guida_orari', [])):
         orari.setdefault(o['luogo_id'], []).append({k: v for k, v in dict(g=o.get('giorni'), da=(o.get('dalle') or '')[:5] or None, a=(o.get('alle') or '')[:5] or None,
             ui=(o.get('ultimo_ingresso') or '')[:5] or None, dal=o.get('dal'), al=o.get('al'), x=bool(o.get('chiuso')), n=L(o, 'nota', 'guida_orari')).items() if v not in (None, '', False)})
+    dettagli, galleria = {}, {}
+    for x in ordina(src.get('guida_dettagli', [])):
+        if x.get('stato') not in visibile: continue
+        f = foto(x, 'guida_dettagli') if x.get('foto_permesso') else None   # mai una foto senza permesso d'uso registrato
+        dettagli.setdefault(x['luogo_id'], []).append({'t': L(x, 'titolo', 'guida_dettagli'), 'x': L(x, 'testo', 'guida_dettagli'), 'd': L(x, 'dove', 'guida_dettagli'), 'foto': f})
+        for v in fonti.get(('guida_dettagli', x['id']), []): fonti.setdefault(('guida_luoghi', x['luogo_id']), []).append(v) if v not in fonti.get(('guida_luoghi', x['luogo_id']), []) else None
+    for x in ordina(src.get('guida_foto', [])):
+        if x.get('stato') not in visibile or not x.get('foto_permesso'): continue
+        galleria.setdefault(x['luogo_id'], []).append(foto(x, 'guida_foto'))
     luoghi = {}
     for l in ordina(src.get('guida_luoghi', [])):
         if l.get('stato') not in visibile: continue
@@ -86,7 +97,8 @@ def costruisci(src, lingua, foto_base, anteprima):
             'sito': l.get('sito_ufficiale') or '', 'po': l.get('pagina_orari') or '', 'som': L(l, 'sommario', 'guida_luoghi'), 'rac': L(l, 'racconto', 'guida_luoghi'),
             'con': L(l, 'consiglio', 'guida_luoghi'), 'acc': L(l, 'accessibilita', 'guida_luoghi'), 'foto': foto(l, 'guida_luoghi'),
             'ov': l.get('orari_stato') == 'verificati', 'ovi': (l.get('orari_verificati_il') or '')[:10] or None, 'or': orari.get(l['id'], []),
-            'fonti': fonti.get(('guida_luoghi', l['id']), []), 'ant': l.get('stato') == 'anteprima'}
+            'fonti': fonti.get(('guida_luoghi', l['id']), []), 'ant': l.get('stato') == 'anteprima',
+            'dett': dettagli.get(l['id'], []), 'gal': galleria.get(l['id'], []), 'leg': L(l, 'leggende', 'guida_luoghi'), 'fc': l.get('foto_consentite')}
     itinerari = []
     for i in ordina(src.get('guida_itinerari', [])):
         if i.get('stato') not in visibile: continue
@@ -127,6 +139,9 @@ def copia_foto(pagine, out):
         f['u'] = pre + 'img/' + nomi[u]
     for d, pre in pagine:
         for x in d['luoghi'] + d['itinerari'] + d['racconti']: loc(x.get('foto'), pre)
+        for x in d['luoghi']:
+            for g in x.get('gal', []): loc(g, pre)
+            for g in x.get('dett', []): loc(g.get('foto'), pre)
     for f in os.listdir(cart):
         if f not in set(nomi.values()): os.remove(os.path.join(cart, f))
     return len(nomi)

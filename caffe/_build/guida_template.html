@@ -79,6 +79,15 @@ details.apri>div{padding-bottom:14px;display:grid;gap:10px}
 details.come summary{cursor:pointer;color:var(--accento);font-weight:500;font-size:.9rem}
 details.come ol{margin:6px 0 0;padding-left:20px}
 details.come li{margin:4px 0}
+.guarda{display:grid;grid-template-columns:32px minmax(0,1fr);gap:12px;background:var(--superficie);border-radius:14px;padding:14px}
+.guarda .mini{width:32px;height:32px;position:relative}
+.guarda.con-foto{grid-template-columns:minmax(0,1fr);padding:0 0 14px;overflow:hidden}
+.guarda.con-foto .mini{width:100%;height:auto;aspect-ratio:16/10;max-width:100%}
+.guarda.con-foto>div:last-child{padding:0 14px}
+.guarda .n{position:absolute;left:0;top:0;width:30px;height:30px;border-radius:50%;background:var(--scuro);color:var(--su-scuro);font-size:.78rem;font-weight:500;display:flex;align-items:center;justify-content:center}
+.guarda b{font-weight:500;font-size:1.02rem}
+.guarda .dove{font-size:.82rem;color:var(--accento);font-weight:500}
+.guarda p{font-size:.95rem}
 .voce{display:grid;grid-template-columns:56px minmax(0,1fr);gap:12px;align-items:center;text-decoration:none;color:inherit;background:var(--superficie);border-radius:14px;padding:10px}
 .voce .mini{width:56px;height:56px;border-radius:10px;overflow:hidden}
 .voce b{font-weight:500;display:block}
@@ -256,7 +265,8 @@ function puntiItinerario(i, k){ var n = 0, visti = {}, out = [];
 function ascolta(l, btn){
   try{
     if(speechSynthesis.speaking){ speechSynthesis.cancel(); if(btn) btn.textContent = '▶ ' + T.ascolta; return; }
-    var u = new SpeechSynthesisUtterance([l.n, l.som, l.rac].filter(Boolean).join('. '));
+    var parti = [l.n, l.som].concat((l.dett || []).map(function(x){ return x.t + '. ' + (x.d ? x.d + '. ' : '') + x.x; }), [l.rac, l.leg]);
+    var u = new SpeechSynthesisUtterance(parti.filter(Boolean).join('. '));
     u.lang = VOCE[D.lingua] || D.lingua; u.onend = function(){ if(btn) btn.textContent = '▶ ' + T.ascolta; };
     speechSynthesis.speak(u); if(btn) btn.textContent = '■ ' + T.ferma;
   }catch(x){}
@@ -429,11 +439,17 @@ V.luogo = function(s){
   var l = LU['s:' + s]; if(!l) return V.home();
   var ora = adesso(), inGiro = G && IT[G.s] && LU[IT[G.s].tappe[G.k].l] === l;
   var h = '<div class="stack vista"><div class="testa"><button class="indietro" onclick="' + (inGiro ? 'vai(\'#/c/' + G.s + '\')' : 'history.length > 1 ? history.back() : vai(\'#/\')') + '">← ' + e(T.indietro) + '</button>' + lingue() + '</div>';
-  h += '<div class="galleria">' + (l.foto ? '<figure><img src="' + e(l.foto.u) + '" alt="' + e(l.foto.alt) + '"><figcaption>' + e(l.foto.aut) + ' · ' + e(l.foto.lic) + '</figcaption></figure>' : '<figure>' + illustrazione(l.tipo, l.n) + '</figure>') + '</div>';
+  var gal = (l.foto ? [l.foto] : []).concat(l.gal || []);
+  h += '<div class="galleria">' + (gal.length ? gal.map(function(g){ return '<figure><img src="' + e(g.u) + '" alt="' + e(g.alt) + '" loading="lazy"><figcaption>' + e(g.aut) + ' · ' + e(g.lic) + '</figcaption></figure>'; }).join('') : '<figure>' + illustrazione(l.tipo, l.n) + '</figure>') + '</div>';
   h += '<div class="stack-s"><span class="etichetta">' + e(l.dv ? T.visita + ' ' + durata(l.dv) : T.luoghi) + '</span><h1>' + e(l.n) + '</h1><span>' + etichetta(stato(l, ora, ora.min)) + '</span></div>';
   if(l.som) h += '<div class="stack-s"><h3>' + e(T.perche_speciale) + '</h3><p style="font-size:1.08rem">' + e(l.som) + '</p></div>';
   if(l.som || l.rac) h += '<button class="btn sec" onclick="ascolta(LU[' + l.id + '], this)">▶ ' + e(T.ascolta) + '</button>';
-  if(l.rac) h += '<details class="apri" open><summary>' + e(T.storia) + '</summary><div class="testo">' + par(l.rac) + '</div></details>';
+  if(l.dett && l.dett.length) h += '<div class="stack-s"><h3>' + e(T.cosa_guardare) + '</h3>' + l.dett.map(function(x, n){
+      return '<article class="guarda' + (x.foto ? ' con-foto' : '') + '"><div class="mini">' + (x.foto ? '<img src="' + e(x.foto.u) + '" alt="' + e(x.foto.alt) + '" loading="lazy" style="width:100%;height:100%;object-fit:cover">' : '') + '<span class="n">' + (n + 1) + '</span></div>' +
+        '<div style="min-width:0;display:grid;gap:4px"><b>' + e(x.t) + '</b>' + (x.d ? '<span class="dove">◉ ' + e(x.d) + '</span>' : '') + '<p>' + e(x.x) + '</p>' +
+        (x.foto ? '<span class="piccolo" style="font-size:.72rem">' + e(x.foto.aut) + ' · ' + e(x.foto.lic) + '</span>' : '') + '</div></article>'; }).join('') + '</div>';
+  if(l.rac) h += '<details class="apri"' + (l.dett && l.dett.length ? '' : ' open') + '><summary>' + e(T.storia) + '</summary><div class="testo">' + par(l.rac) + '</div></details>';
+  if(l.leg) h += '<details class="apri"><summary>' + e(T.leggende) + '</summary><div class="testo">' + par(l.leg) + '</div></details>';
   if(l.con) h += '<details class="apri" open><summary>' + e(T.consiglio) + '</summary><div><p>' + e(l.con) + '</p></div></details>';
   var info = '';
   if(!l.sa && verificati(l, ora) && l.or.length){
@@ -449,6 +465,7 @@ V.luogo = function(s){
   if(l.mp) pr.push(l.mp + ' ' + e(T.min) + ' ' + e(T.a_piedi) + ' ' + e(T.da_ceraldi));
   if(pr.length) info += '<p class="piccolo">' + pr.join(' · ') + '</p>';
   if(l.acc) info += '<p><b style="font-weight:500">' + e(T.accessibilita) + ':</b> ' + e(l.acc) + '</p>';
+  if(l.fc) info += '<p>' + e({si: T.foto_si, no: T.foto_no, senza_flash: T.foto_senza_flash}[l.fc] || '') + '</p>';
   if(l.po || l.sito) info += '<p>' + (l.po ? '<a href="' + e(l.po) + '" target="_blank" rel="noopener">' + e(T.pagina_orari) + '</a>' : '') + (l.po && l.sito ? ' · ' : '') + (l.sito ? '<a href="' + e(l.sito) + '" target="_blank" rel="noopener">' + e(T.sito) + '</a>' : '') + '</p>';
   h += '<details class="apri"' + (verificati(l, ora) ? ' open' : '') + '><summary>' + e(T.info_pratiche) + '</summary><div>' + info + '</div></details>';
   if(l.lat != null){
