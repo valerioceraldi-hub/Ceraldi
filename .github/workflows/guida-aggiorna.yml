@@ -1,0 +1,39 @@
+# Rigenera la Guida di Napoli di prova (cartella guida-nuova/) dai dati del database.
+# - Ogni 2 ore dalle 6 alle 22 (ora italiana, circa) e su richiesta («Run workflow» nella scheda Actions).
+#   «Aperto ora», chiusure di oggi e scioperi si calcolano sul telefono all'ora di Napoli: non serve rigenerare piu' spesso.
+# - Legge solo i dati pubblici (chiave anon, la stessa delle app e del menu), compresi i contenuti in stato «anteprima».
+# - Pagine NON indicizzate (noindex). Scrive un commit solo se qualcosa e' cambiato. Senza contenuti visibili non tocca nulla.
+# Per spegnerlo: scheda Actions › «Aggiorna guida (prova)» › «Disable workflow».
+name: Aggiorna guida (prova)
+on:
+  schedule:
+    - cron: '17 5-21/2 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: guida-aggiorna
+  cancel-in-progress: false
+jobs:
+  genera:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Genera la guida dal database
+        run: |
+          KEY=$(grep -o "SB_KEY = '[^']*'" ceraldi_menu.html | cut -d"'" -f2)
+          test -n "$KEY"
+          set +e
+          MENU_SB_URL=https://qaqqptpprmfjlolordaq.supabase.co MENU_SB_KEY="$KEY" \
+            python3 caffe/_build/guida_genera.py --out guida-nuova --tutte-le-lingue --anteprima --noindex --copia-foto
+          c=$?
+          if [ $c -eq 3 ]; then echo "Nessun contenuto visibile: guida invariata"; exit 0; fi
+          exit $c
+      - name: Pubblica se è cambiata
+        run: |
+          git add -A guida-nuova
+          if git diff --cached --quiet; then echo "Guida invariata"; exit 0; fi
+          git -c user.name="guida-automatica" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "guida-nuova: aggiornata dal database"
+          git pull --rebase -q && git push
