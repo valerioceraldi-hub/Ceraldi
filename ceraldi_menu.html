@@ -441,16 +441,18 @@ select.inp{background-image:none}
     <div id="vociBox"></div>
   </section>
   <section class="view" id="view-aspetto"><div id="aspettoBox"></div></section>
+  <section class="view" id="view-guida"><div id="guidaBox"></div></section>
   <section class="view" id="view-altro"><div id="altroBox"></div></section>
 </main>
 <nav class="tab-bar" id="tabBar">
   <button class="tab-item active" data-tab="home" onclick="vaiTab('home')"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg></span><span class="tab-lbl">Home</span><span class="tab-badge hidden" id="badgeHome"></span></button>
   <button class="tab-item" data-tab="menu" onclick="vaiTab('menu')"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span><span class="tab-lbl">Menu</span></button>
   <button class="tab-item" data-tab="aspetto" onclick="vaiTab('aspetto')"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r="1.5"/><circle cx="17.5" cy="10.5" r="1.5"/><circle cx="8.5" cy="7.5" r="1.5"/><circle cx="6.5" cy="12.5" r="1.5"/><path d="M12 2a10 10 0 1 0 0 20c1 0 1.7-.8 1.7-1.7 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.9.8-1.7 1.7-1.7H17a5 5 0 0 0 5-5C22 6 17.5 2 12 2z"/></svg></span><span class="tab-lbl">Aspetto</span></button>
+  <button class="tab-item" data-tab="guida" onclick="vaiTab('guida')"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg></span><span class="tab-lbl">Guida</span></button>
   <button class="tab-item" data-tab="altro" onclick="vaiTab('altro')"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></span><span class="tab-lbl">Altro</span></button>
 </nav>
 <script>
-var APP_VERSION='0.9';
+var APP_VERSION='1.0';
 var APP={key:'menu',nome:'Menu',versione:APP_VERSION,authKey:'mn_auth_v1',oldAuthKey:null,
   markBg:'linear-gradient(145deg,#C08A4D 0%,#8B5A2B 55%,#4A2C14 100%)',
   markSvg:'<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3v7a3 3 0 0 0 3 3v8"/><path d="M7 3v6"/><path d="M10 3v7a3 3 0 0 1-3 3"/><path d="M17 21V3c-2 1.5-3 4-3 7v4h3"/></svg>',
@@ -979,6 +981,7 @@ function renderTab(t){
   if(t === 'home') renderHome();
   else if(t === 'menu') renderMenu();
   else if(t === 'aspetto') renderAspetto();
+  else if(t === 'guida') renderGuida();
   else if(t === 'altro') renderAltro();
   var n = daFare().totale, b = document.getElementById('badgeHome');
   if(b){ b.textContent = n > 99 ? '99+' : n; b.classList.toggle('hidden', !n); }
@@ -2392,6 +2395,269 @@ async function trGlossario(){
   }
   apriSheet('shGl', { titolo: 'Termini da non tradurre', alto: true, corpo: '', piede: '<div class="btn-row"><button class="btn btn-p" onclick="chiudiSheet(\'shGl\')">Fatto</button></div>' });
   disegna();
+}
+
+/* ── GUIDA DI NAPOLI (1.0) ──────────────────────────────────────────────────────────────────────
+   Luoghi, orari a fasce, fonti ufficiali e fonti del racconto. Il pubblico vede solo i luoghi pubblicati;
+   il database rifiuta la pubblicazione senza coordinate, testo breve, sito ufficiale (se ha orari) e fonti del racconto. */
+var GZONE = { decumano_inferiore: 'Spaccanapoli · decumano inferiore', decumano_maggiore: 'Via dei Tribunali · decumano maggiore', decumano_superiore: 'Musei · decumano superiore', toledo_mare: 'Via Toledo e verso il mare', oltre_mura: 'Oltre le mura', vomero: 'Vomero' };
+var GTIPI = { museo: 'Museo', chiesa: 'Chiesa', sotterraneo: 'Sottosuolo', piazza: 'Piazza', strada: 'Strada', palazzo: 'Palazzo', castello: 'Castello', teatro: 'Teatro', quartiere: 'Quartiere', panorama: 'Panorama', altro: 'Altro' };
+var GGIORNI = ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'];
+var GSTATI = { bozza: ['Bozza', 'n'], pubblicato: ['Pubblicato', 'p'], archiviato: ['Archiviato', 'n'] };
+var G = { caricata: false, luoghi: [], orari: [], fonti: [], aff: [], filtro: 'tutti', q: '' };
+
+async function caricaGuida(){
+  var r = await Promise.all([api('guida_luoghi?select=*&order=ordine,id'), api('guida_orari?select=*&order=ordine,id'),
+    api('guida_fonti_controllo?select=*&order=id'), api('guida_affermazioni_fonti?select=*&tabella=eq.guida_luoghi&order=id')]);
+  G.luoghi = r[0] || []; G.orari = r[1] || []; G.fonti = r[2] || []; G.aff = r[3] || []; G.caricata = true;
+}
+function gDi(id){ return G.luoghi.find(function(l){ return l.id === id; }); }
+function gOrari(id){ return G.orari.filter(function(o){ return o.luogo_id === id; }); }
+function gFonti(id){ return G.fonti.filter(function(f){ return f.luogo_id === id; }); }
+function gAff(id){ return G.aff.filter(function(a){ return a.riga_id === id; }); }
+/* Cosa manca a un luogo: le stesse regole del database, più quelle di qualità */
+function gProblemi(l){
+  var p = [];
+  if(!l.sempre_accessibile){
+    if(l.orari_stato === 'fonte_irraggiungibile') p.push('Fonte ufficiale non raggiungibile');
+    else if(l.orari_stato !== 'verificati') p.push('Orari da verificare');
+    else if(l.orari_verificati_il && (Date.now() - new Date(l.orari_verificati_il)) > 90 * 864e5) p.push('Verifica degli orari più vecchia di 3 mesi');
+    if(!gOrari(l.id).length) p.push('Mancano gli orari');
+    if(!l.sito_ufficiale) p.push('Manca il sito ufficiale');
+    if(!gFonti(l.id).length) p.push('Nessuna pagina da controllare in automatico');
+  }
+  if(!(l.sommario || '').trim()) p.push('Manca il testo breve');
+  if((l.racconto || '').trim() && !gAff(l.id).length) p.push('Mancano le fonti del racconto');
+  if(l.lat == null || l.lon == null) p.push('Mancano le coordinate');
+  return p;
+}
+function gOrariTesto(id){
+  var o = gOrari(id).filter(function(x){ return !x.chiuso && !x.dal && !x.al; });
+  if(!o.length) return '';
+  return o.map(function(x){ return gGiorniTesto(x.giorni) + ' ' + String(x.dalle).slice(0, 5) + '–' + String(x.alle).slice(0, 5); }).join(' · ');
+}
+function gGiorniTesto(g){
+  g = (g || []).slice().sort(); if(g.length === 7) return 'Tutti i giorni';
+  var tutti = [1, 2, 3, 4, 5, 6, 7], fuori = tutti.filter(function(x){ return g.indexOf(x) < 0; });
+  if(fuori.length === 1) return 'Tutti i giorni tranne ' + GGIORNI[fuori[0] - 1].toLowerCase();
+  var cons = g.every(function(x, i){ return !i || x === g[i - 1] + 1; });
+  return cons && g.length > 2 ? GGIORNI[g[0] - 1] + '–' + GGIORNI[g[g.length - 1] - 1] : g.map(function(x){ return GGIORNI[x - 1]; }).join(', ');
+}
+
+async function renderGuida(){
+  var box = document.getElementById('guidaBox'); if(!box) return;
+  if(!G.caricata){
+    box.innerHTML = '<div class="hint" style="text-align:center;padding:40px 0">Carico la guida…</div>';
+    try{ await caricaGuida(); }catch(e){ box.innerHTML = '<div class="banner r"><span>⚠️</span><span>' + esc(e.message) + '</span></div>'; return; }
+  }
+  var L = G.luoghi.filter(function(l){ return l.stato !== 'archiviato' || G.filtro === 'archiviati'; });
+  var nPub = L.filter(function(l){ return l.stato === 'pubblicato'; }).length, nProb = L.filter(function(l){ return gProblemi(l).length; }).length,
+      nVer = L.filter(function(l){ return !l.sempre_accessibile && l.orari_stato !== 'verificati'; }).length;
+  var q = G.q.toLowerCase();
+  var vis = G.luoghi.filter(function(l){
+    if(G.filtro === 'archiviati') return l.stato === 'archiviato';
+    if(l.stato === 'archiviato') return false;
+    if(G.filtro === 'sistemare' && !gProblemi(l).length) return false;
+    if(G.filtro === 'pubblicati' && l.stato !== 'pubblicato') return false;
+    return !q || (l.nome + ' ' + (GTIPI[l.tipo] || '') + ' ' + (l.sommario || '')).toLowerCase().indexOf(q) >= 0;
+  });
+  var h = '<div class="kpi"><div><b class="tnum">' + L.length + '</b><span>Luoghi</span></div><div><b class="tnum">' + nPub + '</b><span>Pubblicati</span></div>' +
+    '<div><b class="tnum">' + nVer + '</b><span>Orari da verificare</span></div><div><b class="tnum">' + nProb + '</b><span>Da sistemare</span></div></div>' +
+    '<div class="seg" style="margin:12px 0 8px">' + [['tutti', 'Tutti'], ['sistemare', 'Da fare'], ['pubblicati', 'Pubblicati'], ['archiviati', 'Archiviati']].map(function(f){
+      return '<button class="seg-b' + (G.filtro === f[0] ? ' active' : '') + '" onclick="G.filtro=\'' + f[0] + '\';renderGuida()">' + f[1] + '</button>'; }).join('') + '</div>' +
+    '<div class="btn-row" style="margin-bottom:10px"><input class="inp" id="gQ" placeholder="Cerca un luogo…" value="' + esc(G.q) + '"><button class="btn-sm p" style="flex:0 0 auto" onclick="apriLuogo(null)">＋ Luogo</button></div>';
+  Object.keys(GZONE).forEach(function(z){
+    var lz = vis.filter(function(l){ return l.zona === z; }); if(!lz.length) return;
+    h += '<div class="sec-title">' + esc(GZONE[z]) + '</div><div class="grp">' + lz.map(function(l){
+      var p = gProblemi(l), st = GSTATI[l.stato] || GSTATI.bozza;
+      return '<button class="row" onclick="apriLuogo(' + l.id + ')"><div class="row-main"><div class="row-t">' + esc(l.nome) + ' <span class="bdg ' + st[1] + '">' + st[0] + '</span></div>' +
+        '<div class="row-s">' + esc(GTIPI[l.tipo] || '') + (l.minuti_a_piedi != null ? ' · ' + l.minuti_a_piedi + ' min a piedi' : '') +
+        (l.sempre_accessibile ? ' · sempre accessibile' : (gOrariTesto(l.id) ? ' · ' + esc(gOrariTesto(l.id)) : '')) + '</div>' +
+        (p.length ? '<div class="row-s" style="color:var(--warn,#b26b00)">⚠︎ ' + esc(p.slice(0, 2).join(' · ')) + (p.length > 2 ? ' · +' + (p.length - 2) : '') + '</div>' :
+          (!l.sempre_accessibile && l.orari_verificati_il ? '<div class="row-s">✓ Orari verificati ' + esc(dataIt(l.orari_verificati_il)) + '</div>' : '')) +
+        '</div><span class="chev">›</span></button>'; }).join('') + '</div>';
+  });
+  if(!vis.length) h += '<div class="hint" style="text-align:center;padding:24px">Nessun luogo' + (G.q || G.filtro !== 'tutti' ? ' con questo filtro' : '') + '.</div>';
+  h += '<div class="hint" style="margin:14px 4px">I luoghi in bozza non sono visibili ai clienti. Per pubblicare servono posizione, testo breve, sito ufficiale (se ha orari) e le fonti di ciò che racconti.</div>';
+  box.innerHTML = h;
+  var qi = document.getElementById('gQ'); qi.oninput = function(){ G.q = qi.value; clearTimeout(renderGuida._t); renderGuida._t = setTimeout(function(){ renderGuida(); var n = document.getElementById('gQ'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 250); };
+}
+
+/* ── Scheda di un luogo ── */
+var GE = null;
+function apriLuogo(id){
+  var l = id ? gDi(id) : { id: null, nome: '', tipo: 'museo', zona: 'decumano_inferiore', stato: 'bozza', sempre_accessibile: false, orari_stato: 'da_verificare' };
+  if(!l) return;
+  GE = { l: l, orari: id ? gOrari(id).map(function(o){ return { id: o.id, giorni: (o.giorni || []).slice(), dalle: tmp5(o.dalle), alle: tmp5(o.alle), ultimo_ingresso: tmp5(o.ultimo_ingresso), dal: o.dal, al: o.al, chiuso: !!o.chiuso, nota: o.nota || '' }; }) : [],
+    fonti: id ? gFonti(id).map(function(f){ return Object.assign({}, f); }) : [], aff: id ? gAff(id).map(function(a){ return Object.assign({}, a); }) : [] };
+  function opz(o, sel){ return Object.keys(o).map(function(k){ return '<option value="' + k + '"' + (k === sel ? ' selected' : '') + '>' + esc(o[k]) + '</option>'; }).join(''); }
+  function area(idc, et, val, max, righe, ph){ return '<div class="field"><label for="' + idc + '">' + et + ' <span class="hint" style="font-weight:400" id="' + idc + 'N"></span></label><textarea class="inp" id="' + idc + '" rows="' + righe + '" maxlength="' + max + '" style="resize:vertical" placeholder="' + esc(ph || '') + '" oninput="gConta(this,' + max + ')">' + esc(val || '') + '</textarea></div>'; }
+  var corpo =
+    '<div class="ed-sec">' +
+      '<div class="field"><label>Stato</label><div class="seg" id="gStato">' + segBtn('bozza', 'Bozza', l.stato === 'bozza') + segBtn('pubblicato', 'Pubblicato', l.stato === 'pubblicato') + segBtn('archiviato', 'Archiviato', l.stato === 'archiviato') + '</div></div>' +
+      '<div class="field"><label for="gNome">Nome *</label><input class="inp" id="gNome" maxlength="120" value="' + esc(l.nome) + '"></div>' +
+      '<div class="due"><div class="field"><label for="gTipo">Tipo</label><select class="inp" id="gTipo">' + opz(GTIPI, l.tipo) + '</select></div><div class="field"><label for="gZona">Zona</label><select class="inp" id="gZona">' + opz(GZONE, l.zona) + '</select></div></div>' +
+      area('gSomm', 'Perché vederlo (testo breve) *', l.sommario, 400, 3, 'Due righe che fanno venire voglia di andarci') +
+    '</div>' +
+    '<details class="ed-det" open><summary>Orari</summary>' +
+      '<div class="row" style="padding:4px 0 10px"><div class="row-main"><div class="row-t">Sempre accessibile</div><div class="row-s">Piazze e strade: nessun orario</div></div><label class="tgl"><input type="checkbox" id="gSempre"' + (l.sempre_accessibile ? ' checked' : '') + ' onchange="gDisegnaOrari()"><span></span></label></div>' +
+      '<div id="gOrariBox"></div></details>' +
+    '<details class="ed-det"' + ((l.sito_ufficiale || GE.fonti.length) ? '' : ' open') + '><summary>Fonti ufficiali</summary>' +
+      '<div class="field"><label for="gSito">Sito ufficiale</label><input class="inp" id="gSito" inputmode="url" value="' + esc(l.sito_ufficiale || '') + '" placeholder="https://…"></div>' +
+      '<div class="field"><label for="gPagOr">Pagina con gli orari</label><input class="inp" id="gPagOr" inputmode="url" value="' + esc(l.pagina_orari || '') + '" placeholder="https://…"></div>' +
+      '<div class="hint" style="margin:0 0 6px">Pagine controllate in automatico ogni 3 giorni: se cambiano ricevi un avviso e il cliente vede «orari in verifica».</div><div id="gFontiBox"></div></details>' +
+    '<details class="ed-det"' + ((l.racconto || l.consiglio) ? ' open' : '') + '><summary>Racconto e consiglio di Ceraldi</summary>' +
+      area('gRacc', 'Racconto', l.racconto, 6000, 6, 'Storia, cosa guardare, curiosità. Niente orari o prezzi: quelli stanno negli orari.') +
+      area('gCons', 'Il consiglio di Ceraldi', l.consiglio, 600, 2, 'Es. «Vai alle 9: alle 11 c’è la fila»') +
+      '<div class="field"><label>Fonti delle affermazioni</label><div class="hint" style="margin:0 0 6px">Ogni fatto del racconto (date, autori, primati) con la sua fonte. Senza fonti il racconto non si pubblica.</div><div id="gAffBox"></div></div></details>' +
+    '<details class="ed-det"><summary>Visita, posizione e accessibilità</summary>' +
+      '<div class="due"><div class="field"><label for="gDur">Durata visita (min)</label><input class="inp" id="gDur" type="number" inputmode="numeric" min="0" max="600" value="' + (l.durata_visita_min != null ? l.durata_visita_min : '') + '"></div>' +
+      '<div class="field"><label>Ingresso</label><div class="seg" id="gGrat">' + segBtn('si', 'Gratis', l.gratuito === true) + segBtn('no', 'A pagamento', l.gratuito === false) + segBtn('', 'Non so', l.gratuito == null) + '</div></div></div>' +
+      '<div class="due"><div class="field"><label for="gMin">Minuti a piedi da Ceraldi</label><input class="inp" id="gMin" type="number" inputmode="numeric" min="0" max="240" value="' + (l.minuti_a_piedi != null ? l.minuti_a_piedi : '') + '"></div>' +
+      '<div class="field"><label for="gMet">Metri</label><input class="inp" id="gMet" type="number" inputmode="numeric" min="0" max="20000" value="' + (l.metri_a_piedi != null ? l.metri_a_piedi : '') + '"></div></div>' +
+      '<div class="due"><div class="field"><label for="gLat">Latitudine</label><input class="inp" id="gLat" inputmode="decimal" value="' + (l.lat != null ? l.lat : '') + '"></div><div class="field"><label for="gLon">Longitudine</label><input class="inp" id="gLon" inputmode="decimal" value="' + (l.lon != null ? l.lon : '') + '"></div></div>' +
+      (l.lat != null ? '<div class="hint" style="margin:-4px 0 10px"><a href="https://www.openstreetmap.org/?mlat=' + l.lat + '&amp;mlon=' + l.lon + '#map=18/' + l.lat + '/' + l.lon + '" target="_blank" rel="noopener">Controlla la posizione sulla mappa ›</a></div>' : '') +
+      '<div class="field"><label for="gInd">Indirizzo</label><input class="inp" id="gInd" maxlength="200" value="' + esc(l.indirizzo || '') + '"></div>' +
+      '<div class="field"><label for="gAcc">Accessibilità (solo ciò che hai verificato)</label><textarea class="inp" id="gAcc" rows="2" maxlength="600">' + esc(l.accessibilita || '') + '</textarea></div></details>' +
+    '<details class="ed-det"' + (l.note_interne ? ' open' : '') + '><summary>Note interne</summary><textarea class="inp" id="gNote" rows="3" maxlength="2000" placeholder="Visibili solo qui">' + esc(l.note_interne || '') + '</textarea></details>';
+  apriSheet('shLg', { titolo: id ? l.nome : 'Nuovo luogo', alto: true, corpo: corpo,
+    piede: '<div class="btn-row"><button class="btn btn-s" onclick="chiudiSheet(\'shLg\')">Annulla</button><button class="btn btn-p" id="gSalva" onclick="salvaLuogo()">Salva</button></div>' });
+  ['gSomm', 'gRacc', 'gCons'].forEach(function(k){ var t = document.getElementById(k); gConta(t, +t.getAttribute('maxlength')); });
+  gDisegnaOrari(); gDisegnaFonti(); gDisegnaAff();
+}
+function tmp5(t){ return t ? String(t).slice(0, 5) : ''; }
+function gConta(t, max){ var n = document.getElementById(t.id + 'N'); if(n) n.textContent = t.value.length + '/' + max; }
+
+/* orari a fasce: giorni + dalle/alle + ultimo ingresso; periodo e chiusure straordinarie */
+function gLeggiOrari(){
+  document.querySelectorAll('#gOrariBox [data-o]').forEach(function(r){
+    var o = GE.orari[+r.dataset.o]; if(!o) return;
+    o.giorni = Array.prototype.map.call(r.querySelectorAll('[data-g].active'), function(b){ return +b.dataset.g; });
+    ['dalle', 'alle', 'ultimo_ingresso', 'dal', 'al', 'nota'].forEach(function(k){ var el = r.querySelector('[data-k="' + k + '"]'); if(el) o[k] = el.value; });
+  });
+}
+function gDisegnaOrari(){
+  var box = document.getElementById('gOrariBox'); if(!box) return;
+  if(document.getElementById('gSempre').checked){ box.innerHTML = '<div class="hint">Nessun orario: il cliente vede «sempre accessibile».</div>'; return; }
+  var l = GE.l, st = l.orari_stato;
+  box.innerHTML = GE.orari.map(function(o, i){
+    var gg = '<div class="chips wrap" style="margin-bottom:6px">' + GGIORNI.map(function(g, j){ var on = o.giorni.indexOf(j + 1) >= 0; return '<button type="button" class="chip' + (on ? ' active' : '') + '" data-g="' + (j + 1) + '" aria-pressed="' + on + '" onclick="premi(this)">' + g + '</button>'; }).join('') + '</div>';
+    if(o.chiuso) return '<div class="grp" style="padding:10px 12px;margin-bottom:8px" data-o="' + i + '"><div class="row-t" style="margin-bottom:6px">🚫 Chiusura straordinaria</div>' + gg +
+      '<div class="due"><div class="field"><label>Dal</label><input class="inp" type="date" data-k="dal" value="' + esc(o.dal || '') + '"></div><div class="field"><label>Al</label><input class="inp" type="date" data-k="al" value="' + esc(o.al || '') + '"></div></div>' +
+      '<input class="inp" data-k="nota" maxlength="200" placeholder="Motivo (es. restauro)" value="' + esc(o.nota) + '"><button class="btn-sm r" style="margin-top:8px" onclick="gLeggiOrari();GE.orari.splice(' + i + ',1);gDisegnaOrari()">Togli</button></div>';
+    return '<div class="grp" style="padding:10px 12px;margin-bottom:8px" data-o="' + i + '">' + gg +
+      '<div class="due"><div class="field"><label>Apre</label><input class="inp" type="time" data-k="dalle" value="' + esc(o.dalle) + '"></div><div class="field"><label>Chiude</label><input class="inp" type="time" data-k="alle" value="' + esc(o.alle) + '"></div></div>' +
+      '<div class="due"><div class="field"><label>Ultimo ingresso</label><input class="inp" type="time" data-k="ultimo_ingresso" value="' + esc(o.ultimo_ingresso) + '"></div><div class="field"><label>Nota</label><input class="inp" data-k="nota" maxlength="200" placeholder="Es. solo chiostro" value="' + esc(o.nota) + '"></div></div>' +
+      '<details style="margin-top:4px"><summary class="hint">Solo in un periodo (es. orario estivo)</summary><div class="due"><div class="field"><label>Dal</label><input class="inp" type="date" data-k="dal" value="' + esc(o.dal || '') + '"></div><div class="field"><label>Al</label><input class="inp" type="date" data-k="al" value="' + esc(o.al || '') + '"></div></div></details>' +
+      '<button class="btn-sm r" style="margin-top:8px" onclick="gLeggiOrari();GE.orari.splice(' + i + ',1);gDisegnaOrari()">Togli fascia</button></div>';
+  }).join('') +
+  '<div class="btn-row" style="margin:4px 0 10px"><button class="btn-sm" onclick="gLeggiOrari();GE.orari.push({id:null,giorni:[1,2,3,4,5,6,7],dalle:\'09:00\',alle:\'18:00\',ultimo_ingresso:\'\',dal:null,al:null,chiuso:false,nota:\'\'});gDisegnaOrari()">＋ Fascia oraria</button>' +
+  '<button class="btn-sm" onclick="gLeggiOrari();GE.orari.push({id:null,giorni:[1,2,3,4,5,6,7],dalle:\'\',alle:\'\',ultimo_ingresso:\'\',dal:null,al:null,chiuso:true,nota:\'\'});gDisegnaOrari()">＋ Chiusura</button></div>' +
+  (l.id ? '<div class="banner ' + (st === 'verificati' ? 'g' : 'b') + '"><span>' + (st === 'verificati' ? '✓' : '⚠️') + '</span><span>' +
+    (st === 'verificati' ? 'Orari verificati ' + esc(dataIt(l.orari_verificati_il)) + '.' : st === 'fonte_irraggiungibile' ? 'La pagina ufficiale non risponde: controlla a mano.' : 'Orari da verificare: il cliente vede «orari in verifica».') +
+    '</span></div><button class="btn-sm p" style="margin-top:8px" onclick="gVerificaOggi()">Ho controllato sul sito ufficiale: orari corretti</button>' : '');
+}
+async function gVerificaOggi(){
+  var l = GE.l; if(!l.id) return;
+  if(!(await conferma('Orari verificati?', 'Confermi di aver controllato <b>oggi</b> gli orari di «' + esc(l.nome) + '» sul sito ufficiale e che quelli scritti qui sono corretti?', 'Confermo'))) return;
+  try{
+    var ora = new Date().toISOString();
+    await api('guida_luoghi?id=eq.' + l.id, { method: 'PATCH', prefer: 'return=minimal', body: { orari_stato: 'verificati', orari_verificati_il: ora } });
+    await api('guida_verifiche', { method: 'POST', prefer: 'return=minimal', body: { luogo_id: l.id, tipo: 'manuale', esito: 'confermata', dettaglio: 'Controllo a mano sul sito ufficiale (Back Office)' } });
+    l.orari_stato = 'verificati'; l.orari_verificati_il = ora; gLeggiOrari(); gDisegnaOrari(); toast('✓ Orari verificati oggi');
+  }catch(e){ toast('⚠️ ' + e.message); }
+}
+
+/* pagine da controllare in automatico */
+function gDisegnaFonti(){
+  var box = document.getElementById('gFontiBox'); if(!box) return;
+  var ES = { nuova: 'mai controllata', uguale: 'invariata', cambiata: '⚠︎ cambiata', errore: '⚠︎ non raggiungibile' };
+  box.innerHTML = '<div class="grp">' + (GE.fonti.length ? GE.fonti.map(function(f, i){
+    return '<div class="row"><div class="row-main"><div class="row-t" style="word-break:break-all;font-size:14px">' + esc(f.url) + '</div><div class="row-s">' + (f.tipo === 'ministero' ? 'Ministero della Cultura · ' : '') +
+      esc(ES[f.ultimo_esito] || 'nuova') + (f.ultimo_controllo ? ' · ' + esc(quando(f.ultimo_controllo)) : '') + '</div></div><button class="btn-sm r" onclick="GE.fonti.splice(' + i + ',1);gDisegnaFonti()">Togli</button></div>'; }).join('') :
+    '<div class="row"><div class="row-main"><div class="row-s">Nessuna pagina: aggiungi la pagina ufficiale con gli orari.</div></div></div>') + '</div>' +
+    '<div class="btn-row" style="margin-top:8px"><input class="inp" id="gNuovaFonte" inputmode="url" placeholder="https://… pagina con gli orari"><button class="btn-sm p" style="flex:0 0 auto" onclick="gAggiungiFonte()">Aggiungi</button></div>';
+}
+function gAggiungiFonte(){
+  var u = document.getElementById('gNuovaFonte').value.trim();
+  if(!/^https:\/\/[^\s]+\.[^\s]+/.test(u)){ toast('Scrivi un indirizzo che inizia con https://'); return; }
+  if(GE.fonti.some(function(f){ return f.url === u; })) return;
+  GE.fonti.push({ id: null, url: u, tipo: /(^|\/\/)cultura\.gov\.it\//.test(u) ? 'ministero' : 'pagina', ultimo_esito: 'nuova' }); gDisegnaFonti();
+}
+
+/* fonti delle affermazioni del racconto */
+function gDisegnaAff(){
+  var box = document.getElementById('gAffBox'); if(!box) return;
+  box.innerHTML = (GE.aff.length ? '<div class="grp">' + GE.aff.map(function(a, i){
+    return '<div class="row"><div class="row-main"><div class="row-t" style="font-size:14px">' + esc(a.affermazione) + '</div><div class="row-s"><a href="' + esc(a.fonte_url) + '" target="_blank" rel="noopener">' + esc(a.fonte_titolo) + '</a> · ' + esc(dataIt(a.verificata_il)) + '</div></div><button class="btn-sm r" onclick="GE.aff.splice(' + i + ',1);gDisegnaAff()">Togli</button></div>'; }).join('') + '</div>' : '') +
+    '<div class="grp" style="padding:10px 12px;margin-top:8px"><input class="inp" id="gAffT" maxlength="600" placeholder="Affermazione (es. «Il Cristo velato è di Giuseppe Sanmartino, 1753»)"><input class="inp" id="gAffF" maxlength="200" placeholder="Titolo della fonte" style="margin-top:6px"><input class="inp" id="gAffU" inputmode="url" placeholder="https://… indirizzo della fonte" style="margin-top:6px"><button class="btn-sm p" style="margin-top:8px" onclick="gAggiungiAff()">＋ Aggiungi fonte</button></div>';
+}
+function gAggiungiAff(){
+  var t = document.getElementById('gAffT').value.trim(), f = document.getElementById('gAffF').value.trim(), u = document.getElementById('gAffU').value.trim();
+  if(t.length < 3 || f.length < 2){ toast('Scrivi l’affermazione e il titolo della fonte'); return; }
+  if(!/^https:\/\/[^\s]+\.[^\s]+/.test(u)){ toast('L’indirizzo della fonte deve iniziare con https://'); return; }
+  GE.aff.push({ id: null, affermazione: t, fonte_titolo: f, fonte_url: u, verificata_il: new Date().toISOString().slice(0, 10) }); gDisegnaAff();
+}
+
+function gSlug(s){ return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[’']/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'luogo'; }
+function gNum(id){ var v = document.getElementById(id).value.trim().replace(',', '.'); return v === '' ? null : Number(v); }
+async function salvaLuogo(){
+  gLeggiOrari();
+  var l = GE.l, nome = document.getElementById('gNome').value.trim(), sempre = document.getElementById('gSempre').checked;
+  function url(id){ var v = document.getElementById(id).value.trim(); return v || null; }
+  if(nome.length < 2){ toast('Scrivi il nome del luogo'); return; }
+  var lat = gNum('gLat'), lon = gNum('gLon');
+  if((lat == null) !== (lon == null) || (lat != null && (isNaN(lat) || isNaN(lon) || lat < 40.7 || lat > 41 || lon < 14.1 || lon > 14.4))){ toast('Coordinate non valide (devono essere a Napoli)'); return; }
+  var s1 = url('gSito'), s2 = url('gPagOr');
+  if((s1 && !/^https:\/\//.test(s1)) || (s2 && !/^https:\/\//.test(s2))){ toast('Gli indirizzi devono iniziare con https://'); return; }
+  var orari = sempre ? [] : GE.orari;
+  for(var i = 0; i < orari.length; i++){ var o = orari[i];
+    if(!o.giorni.length){ toast('Ogni fascia deve avere almeno un giorno'); return; }
+    if(!o.chiuso && (!o.dalle || !o.alle)){ toast('Ogni fascia deve avere apertura e chiusura'); return; }
+    if(o.chiuso && !o.dal){ toast('Una chiusura straordinaria deve avere almeno la data di inizio'); return; }
+    if(o.dal && o.al && o.dal > o.al){ toast('Nel periodo, «dal» deve venire prima di «al»'); return; } }
+  var gr = segValore('gGrat');
+  var corpo = { nome: nome, tipo: document.getElementById('gTipo').value, zona: document.getElementById('gZona').value, stato: segValore('gStato') || 'bozza',
+    sommario: document.getElementById('gSomm').value.trim() || null, racconto: document.getElementById('gRacc').value.trim() || null, consiglio: document.getElementById('gCons').value.trim() || null,
+    sempre_accessibile: sempre, sito_ufficiale: s1, pagina_orari: s2, durata_visita_min: gNum('gDur'), gratuito: gr === 'si' ? true : gr === 'no' ? false : null,
+    minuti_a_piedi: gNum('gMin'), metri_a_piedi: gNum('gMet'), lat: lat, lon: lon, indirizzo: document.getElementById('gInd').value.trim() || null,
+    accessibilita: document.getElementById('gAcc').value.trim() || null, note_interne: document.getElementById('gNote').value.trim() || null };
+  /* se cambiano gli orari, tornano «da verificare» finché qualcuno non conferma sul sito ufficiale */
+  var prima = l.id ? JSON.stringify(gOrari(l.id).map(gChiaveOrario)) : '[]', dopo = JSON.stringify(orari.map(gChiaveOrario));
+  if(l.id && prima !== dopo && l.orari_stato === 'verificati') corpo.orari_stato = 'da_verificare';
+  var vuolePubblicare = corpo.stato === 'pubblicato';
+  if(vuolePubblicare) corpo.stato = l.stato === 'pubblicato' ? 'pubblicato' : 'bozza';   // si pubblica per ultimo, dopo fonti e orari
+  var btn = document.getElementById('gSalva'); btn.disabled = true; btn.textContent = 'Salvo…';
+  var id = l.id, passo = 'luogo';
+  try{
+    if(!id){ corpo.slug = gSlug(nome); corpo.ordine = (G.luoghi.reduce(function(m, x){ return Math.max(m, x.ordine || 0); }, 0)) + 10;
+      var r = await api('guida_luoghi', { method: 'POST', prefer: 'return=representation', body: corpo }); id = r[0].id; GE.l = r[0]; }
+    else await api('guida_luoghi?id=eq.' + id, { method: 'PATCH', prefer: 'return=minimal', body: corpo });
+    passo = 'orari'; await gSincronizza('guida_orari', l.id ? gOrari(l.id) : [], orari.map(function(o, i){ return { id: o.id, luogo_id: id, giorni: o.giorni, dalle: o.chiuso ? null : o.dalle, alle: o.chiuso ? null : o.alle,
+      ultimo_ingresso: o.chiuso ? null : (o.ultimo_ingresso || null), dal: o.dal || null, al: o.al || null, chiuso: !!o.chiuso, nota: (o.nota || '').trim() || null, ordine: (i + 1) * 10 }; }));
+    passo = 'pagine da controllare'; await gSincronizza('guida_fonti_controllo', l.id ? gFonti(l.id) : [], GE.fonti.map(function(f){ return { id: f.id, luogo_id: id, url: f.url, tipo: f.tipo, ultimo_esito: f.ultimo_esito || 'nuova' }; }), ['url']);
+    passo = 'fonti del racconto'; await gSincronizza('guida_affermazioni_fonti', l.id ? gAff(l.id) : [], GE.aff.map(function(a){ return { id: a.id, tabella: 'guida_luoghi', riga_id: id, affermazione: a.affermazione, fonte_titolo: a.fonte_titolo, fonte_url: a.fonte_url, verificata_il: a.verificata_il }; }), []);
+    if(vuolePubblicare && corpo.stato !== 'pubblicato'){ passo = 'pubblicazione'; await api('guida_luoghi?id=eq.' + id, { method: 'PATCH', prefer: 'return=minimal', body: { stato: 'pubblicato' } }); }
+    await caricaGuida(); chiudiSheet('shLg'); toast(vuolePubblicare ? '✓ Pubblicato' : '✓ Salvato'); renderGuida();
+  }catch(e){
+    _registraErrore('salvaLuogo/' + passo, e.message);
+    btn.disabled = false; btn.textContent = 'Riprova';
+    var m = /fonti delle affermazioni/.test(e.message) ? 'Per pubblicare aggiungi le fonti del racconto' : /pubblicabile/.test(e.message) ? 'Per pubblicare servono posizione, testo breve e sito ufficiale (se ha orari)' : e.message;
+    toast('⚠️ ' + (passo === 'luogo' ? '' : 'Salvato in parte («' + passo + '» no): ') + m, { durata: 7000 });
+    if(passo !== 'luogo'){ await caricaGuida(); renderGuida(); }
+  }
+}
+function gChiaveOrario(o){ return [(o.giorni || []).slice().sort().join(','), tmp5(o.dalle), tmp5(o.alle), tmp5(o.ultimo_ingresso), o.dal || '', o.al || '', !!o.chiuso]; }
+/* allinea le righe figlie: elimina le tolte, aggiunge le nuove, modifica le cambiate (campi = quelli confrontati; [] = mai modificate) */
+async function gSincronizza(tab, prima, dopo, campi){
+  var tenuti = dopo.filter(function(x){ return x.id; }).map(function(x){ return x.id; }), via = prima.filter(function(x){ return tenuti.indexOf(x.id) < 0; }).map(function(x){ return x.id; });
+  if(via.length) await api(tab + '?id=in.(' + via.join(',') + ')', { method: 'DELETE', prefer: 'return=minimal' });
+  var nuovi = dopo.filter(function(x){ return !x.id; }).map(function(x){ var c = Object.assign({}, x); delete c.id; return c; });
+  if(nuovi.length) await api(tab, { method: 'POST', prefer: 'return=minimal', body: nuovi });
+  for(var i = 0; i < dopo.length; i++){ var x = dopo[i]; if(!x.id) continue;
+    var p = prima.find(function(y){ return y.id === x.id; }), ks = campi || Object.keys(x).filter(function(k){ return k !== 'id'; }), diff = {};
+    ks.forEach(function(k){ var a = p ? p[k] : null, b = x[k]; if(/^(dalle|alle|ultimo_ingresso)$/.test(k)){ a = tmp5(a); b = tmp5(b); } if(JSON.stringify(a == null ? null : a) !== JSON.stringify(b == null ? null : b)) diff[k] = x[k]; });
+    if(Object.keys(diff).length) await api(tab + '?id=eq.' + x.id, { method: 'PATCH', prefer: 'return=minimal', body: diff }); }
 }
 
 /* storico */
