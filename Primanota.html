@@ -590,7 +590,7 @@ function avvisoCreditoIA(){
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.40.2</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.40.3</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -12610,12 +12610,15 @@ async function recuperaRigheOrdiniUI(){
 // Recupero automatico in background: al massimo ogni 6 ore, 60 fatture per volta
 function avviaRecuperoOrdiniAuto(){
   setTimeout(function(){
-    try{var at=+localStorage.getItem('ceraldi_recupero_ordini_at')||0;if(Date.now()-at<6*3600000)return;}catch(e){}
-    sincronizzaRigheOrdini({max:60}).then(function(e){
+    try{var at=+localStorage.getItem('ceraldi_recupero_ordini_at')||0;if(Date.now()-at<6*3600000)return;
+      // v10.40.3: segno il tentativo SUBITO (prima lo segnavo solo a fine corsa riuscita:
+      // se una riga falliva il lavoro pesante ripartiva a ogni apertura dell'app)
+      localStorage.setItem('ceraldi_recupero_ordini_at',String(Date.now()));}catch(e){}
+    sincronizzaRigheOrdini({max:20}).then(function(e){
       if(e&&(e.inviate+e.storico)>0)console.log('[Ordini] righe recuperate',e);
       if(e&&e.errori&&typeof _registraErrore==='function')_registraErrore('ordini','Recupero righe fatture: '+e.errori+' non riuscite');
     }).catch(function(){});
-  },25000);
+  },90000);
 }
 // Renderizza un XML FatturaPA come card HTML leggibili
 function renderFatturaXML(xmlText, ddt){
@@ -13188,7 +13191,7 @@ async function init(){
   setTimeout(()=>toast(_cacheMsg), 500);
   try{ const c = JSON.parse(localStorage.getItem(KCHIUSURE)||'[]'); if(Array.isArray(c) && c.length) chiusure = c; }catch(e){}
   try{ const c = JSON.parse(localStorage.getItem(KVERSAMENTI)||'[]'); if(Array.isArray(c) && c.length) versamenti = c; }catch(e){}
-  try{ const c = JSON.parse(localStorage.getItem(KINCASSI)||'[]'); if(Array.isArray(c) && c.length) incassi = c; }catch(e){}
+  try{ const c = JSON.parse(localStorage.getItem(KINCASSI)||'[]'); if(Array.isArray(c) && c.length){ const _da=_incDa(); incassi = c.filter(r=>r&&r.data>=_da); } }catch(e){}
   try{ const c = JSON.parse(localStorage.getItem(KBANCA)||'[]'); if(Array.isArray(c) && c.length) _bancaMovimenti = c; }catch(e){}
   try{ const c = JSON.parse(localStorage.getItem(KCARTA)||'[]'); if(Array.isArray(c) && c.length) _cartaMovimenti = c; }catch(e){}
 
@@ -13581,7 +13584,7 @@ function _fNum(n){
 async function caricaIncassi(forceFull){
   // ── CACHE-FIRST: mostra subito i dati locali, poi aggiorna in background ──
   try{ const c = JSON.parse(localStorage.getItem(KCHIUSURE)||'[]'); if(Array.isArray(c) && c.length) chiusure = c; }catch(e){}
-  try{ const c = JSON.parse(localStorage.getItem(KINCASSI)||'[]'); if(Array.isArray(c) && c.length) incassi = c; }catch(e){}
+  try{ const c = JSON.parse(localStorage.getItem(KINCASSI)||'[]'); if(Array.isArray(c) && c.length){ const _da=_incDa(); incassi = c.filter(r=>r&&r.data>=_da); } }catch(e){}
   try{ const c = JSON.parse(localStorage.getItem(KVERSAMENTI)||'[]'); if(Array.isArray(c) && c.length) versamenti = c; }catch(e){}
 
   // Aggiorna UI subito con cache locale (zero attesa)
@@ -13649,7 +13652,7 @@ async function caricaIncassi(forceFull){
     const lastI = _maxUpdatedAt(incassi);
     const url = lastI
       ? 'incassi?select=*&updated_at=gt.'+encodeURIComponent(lastI)
-      : 'incassi?select=*';
+      : 'incassi?select=*&data=gte.'+_incDa();
     const data = await sbFetchAll(url);
     if(Array.isArray(data) && data.length){
       if(!lastI){
@@ -13676,12 +13679,12 @@ async function caricaIncassi(forceFull){
     // versione "leggera" finirebbe per pesare inutilmente nell'arco di una
     // giornata intera con l'app aperta.
     if(forceFull){
-      const idsServer = await sbFetchAll('incassi?select=id');
+      const idsServer = await sbFetchAll('incassi?select=id&data=gte.'+_incDa());
       if(Array.isArray(idsServer)){
         const idsServerSet = new Set(idsServer.map(r=>r.id));
         const idsLocaliSet = new Set(incassi.map(r=>r.id));
         const mancanti = idsServer.map(r=>r.id).filter(id=>!idsLocaliSet.has(id));
-        const senzaFantasmi = incassi.filter(r=>idsServerSet.has(r.id));
+        const _daW=_incDa(); const senzaFantasmi = incassi.filter(r=>r.data<_daW || idsServerSet.has(r.id));
         let cambiato = senzaFantasmi.length !== incassi.length;
         incassi = senzaFantasmi;
         if(mancanti.length){
@@ -13698,7 +13701,19 @@ async function caricaIncassi(forceFull){
   }catch(e){ console.warn('incassi Supabase:', e.message||e); }
 }
 
-function salvaIncassiLocale(){ try{ localStorage.setItem(KINCASSI, JSON.stringify(incassi)); }catch(e){} }
+// v10.40.3: gli incassi sono UNA riga per transazione (oltre 42.000 righe, ~5 MB):
+// scaricarli tutti a ogni avvio e riscriverli in localStorage bloccava il telefono
+// (e riempiva la cache locale). L'app ne tiene in memoria solo gli ultimi giorni;
+// i giorni più vecchi si scaricano solo quando si apre quel giorno.
+var INC_FINESTRA_GG = 45;
+function _incDa(){ var d=new Date(); d.setDate(d.getDate()-INC_FINESTRA_GG); return d.toISOString().slice(0,10); }
+function salvaIncassiLocale(){
+  try{
+    var da=_incDa();
+    incassi = incassi.filter(function(r){ return r && r.data>=da; });
+    localStorage.setItem(KINCASSI, JSON.stringify(incassi));
+  }catch(e){ try{ localStorage.removeItem(KINCASSI); }catch(_){} }
+}
 function salvaChiusureLocale(){ try{ localStorage.setItem(KCHIUSURE, JSON.stringify(chiusure)); }catch(e){} }
 
 // Apertura sezione Incassi: inizializza data oggi
@@ -14151,7 +14166,20 @@ function _renderPosDetails(data){
   const wrap = document.getElementById('chgPosDetails');
   const list = document.getElementById('chgPosList');
   if(!wrap || !list) return;
-  const tx = incassi.filter(i=>i.data===data && i.source==='numia');
+  let tx = incassi.filter(i=>i.data===data && i.source==='numia');
+  if(!tx.length && data < _incDa()){
+    // giorno fuori dalla finestra in memoria: scarico solo quel giorno
+    window._incGiorni = window._incGiorni || {};
+    if(window._incGiorni[data]) tx = window._incGiorni[data];
+    else {
+      wrap.style.display='none';
+      sbFetchAll('incassi?select=*&source=eq.numia&data=eq.'+encodeURIComponent(data)).then(function(r){
+        window._incGiorni[data] = Array.isArray(r)?r:[];
+        if(window._incGiorni[data].length) _renderPosDetails(data);
+      }).catch(function(){});
+      return;
+    }
+  }
   if(!tx.length){ wrap.style.display='none'; return; }
   const ok = tx.filter(t=>t.esito==='ok');
   const storni = tx.filter(t=>t.esito!=='ok');
