@@ -132,9 +132,9 @@ def copia_foto(pagine, out):
     return len(nomi)
 
 def file_mappa(out):
-    """Elenco dei file della mappa e dei caratteri da salvare per l'uso senza rete (relativi alla cartella della guida)."""
+    """Elenco dei file della mappa da salvare per l'uso senza rete (relativi alla cartella della guida). I caratteri sono in caratteri/."""
     r = []
-    for radice, _, files in [x for cart in ('mappa', 'font') for x in os.walk(os.path.join(out, cart))]:
+    for radice, _, files in os.walk(os.path.join(out, 'mappa')):
         for f in files:
             if f.endswith('.md'): continue
             r.append(os.path.relpath(os.path.join(radice, f), out).replace(os.sep, '/'))
