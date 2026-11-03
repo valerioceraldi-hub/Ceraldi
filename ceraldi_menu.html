@@ -450,7 +450,7 @@ select.inp{background-image:none}
   <button class="tab-item" data-tab="altro" onclick="vaiTab('altro')"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></span><span class="tab-lbl">Altro</span></button>
 </nav>
 <script>
-var APP_VERSION='0.8';
+var APP_VERSION='0.9';
 var APP={key:'menu',nome:'Menu',versione:APP_VERSION,authKey:'mn_auth_v1',oldAuthKey:null,
   markBg:'linear-gradient(145deg,#C08A4D 0%,#8B5A2B 55%,#4A2C14 100%)',
   markSvg:'<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3v7a3 3 0 0 0 3 3v8"/><path d="M7 3v6"/><path d="M10 3v7a3 3 0 0 1-3 3"/><path d="M17 21V3c-2 1.5-3 4-3 7v4h3"/></svg>',
@@ -1815,15 +1815,16 @@ function menuDati(soloPub){
     return { q: m.quando, da: (m.dalle || '').slice(0, 5), a: (m.alle || '').slice(0, 5), saluto: m.saluto || '', intro: m.introduzione || '', sopra: m.sopratitolo || '', titolo: m.titolo || '', testo: m.testo || '',
       f: U(m.foto_url), fa: m.foto_alt || '', pulsante: m.testo_pulsante || '', voci: vs };
   });
-  var abb = {}, cons = {};
+  var abb = {}, abbc = {}, cons = {};
   ord(D.racc || []).forEach(function(r){
     if(r.attivo === false || !ids[r.target_voce_id]) return;
     if(r.tipo === 'abbinamento' && ids[r.voce_id]) (abb[r.voce_id] = abb[r.voce_id] || []).push(r.target_voce_id);
+    else if(r.tipo === 'abbinamento' && !r.voce_id && r.categoria_id) (abbc[r.categoria_id] = abbc[r.categoria_id] || []).push(r.target_voce_id);
     else if(r.tipo === 'consiglio_categoria' && r.categoria_id) (cons[r.categoria_id] = cons[r.categoria_id] || []).push(r.target_voce_id);
   });
   var lo = D.locale || {}, ori = lo.orari || {}, testi = {}, ct = config().testi || {};
   Object.keys(ct).forEach(function(k){ if(ct[k] && ct[k].it) testi[k] = ct[k].it; });
-  return { testi: testi, locale: { nome: lo.nome || '', ind: lo.indirizzo || '', tel: lo.telefono || '', orari: ori.testo || '' }, sezioni: sezioni, pagine: pagine, momenti: momenti, abb: { v: abb, c: {} }, consigli: cons };
+  return { testi: testi, locale: { nome: lo.nome || '', ind: lo.indirizzo || '', tel: lo.telefono || '', orari: ori.testo || '', wifi: lo.wifi && lo.wifi.mostra && lo.wifi.rete ? { rete: lo.wifi.rete, pw: lo.wifi.password || '', qr: null } : null }, sezioni: sezioni, pagine: pagine, momenti: momenti, abb: { v: abb, c: abbc }, consigli: cons };
 }
 function temaCss(a){
   a = a || {}; var HEX = /^#[0-9a-fA-F]{3,8}$/, DER = ['scuro', 'su-scuro', 'accento-chiaro'];
@@ -1886,7 +1887,7 @@ function renderAltro(){
     '<div class="kpi"><div><b class="tnum">' + conta('pubblicato') + '</b><span>Pubblicate</span></div><div><b class="tnum">' + conta('bozza') + '</b><span>In bozza</span></div>' +
     '<div><b class="tnum">' + conta('archiviato') + '</b><span>Archiviate</span></div><div><b class="tnum">' + D.voci.filter(function(v){ return v.foto_path; }).length + '</b><span>Con foto</span></div></div>' +
     '<div class="sec-title">Il locale</div><div class="grp">' +
-      '<button class="row" onclick="apriLocale()"><span class="row-ico">📍</span><div class="row-main"><div class="row-t">Indirizzo, contatti e orari</div><div class="row-s">' + esc([loc.indirizzo, loc.orari && loc.orari.testo].filter(Boolean).join(' · ') || 'Da compilare') + '</div></div><span class="chev">›</span></button></div>' +
+      '<button class="row" onclick="apriLocale()"><span class="row-ico">📍</span><div class="row-main"><div class="row-t">Indirizzo, contatti, orari e Wi-Fi</div><div class="row-s">' + esc([loc.indirizzo, loc.orari && loc.orari.testo].filter(Boolean).join(' · ') || 'Da compilare') + '</div></div><span class="chev">›</span></button></div>' +
     '<div class="sec-title">Pagina del menu per i clienti</div><div class="grp">' +
       '<button class="row" onclick="apriMomenti()"><span class="row-ico">🌅</span><div class="row-main"><div class="row-t">Momenti della giornata</div><div class="row-s">Saluto e consiglio per mattina, pomeriggio, sera…</div></div><span class="chev">›</span></button>' +
       '<button class="row" onclick="apriRacc()"><span class="row-ico">🤝</span><div class="row-main"><div class="row-t">Abbinamenti e consigli</div><div class="row-s">' + (D.racc || []).length + ' impostati</div></div><span class="chev">›</span></button>' +
@@ -1910,13 +1911,19 @@ function renderAltro(){
 
 /* locale */
 function apriLocale(){
-  var l = D.locale || {}, o = l.orari || {};
+  var l = D.locale || {}, o = l.orari || {}, w = l.wifi || {};
   function campo(id, et, val, ph, tipo){ return '<div class="field"><label for="' + id + '">' + et + '</label><input class="inp" id="' + id + '"' + (tipo ? ' type="' + tipo + '" inputmode="' + (tipo === 'tel' ? 'tel' : 'email') + '"' : '') + ' value="' + esc(val || '') + '" placeholder="' + esc(ph || '') + '"></div>'; }
   apriSheet('shLoc', { titolo: 'Il locale', alto: true,
-    corpo: '<div class="banner b"><span>ℹ️</span><span>Questi dati sono <b>pubblici</b>: compaiono nel menu dei clienti. Non scrivere qui password (es. Wi-Fi).</span></div>' +
+    corpo: '<div class="banner b"><span>ℹ️</span><span>Questi dati sono <b>pubblici</b>: compaiono nel menu dei clienti. Mai la password della rete del bar (cassa, registratore, personale).</span></div>' +
       campo('lNome', 'Nome', l.nome, 'Ceraldi Caffè') + campo('lInd', 'Indirizzo', l.indirizzo, 'Piazza…') +
       campo('lTel', 'Telefono', l.telefono, '', 'tel') + campo('lWa', 'WhatsApp', l.whatsapp, '', 'tel') + campo('lMail', 'Email', l.email, '', 'email') +
       '<div class="field"><label for="lOr">Orari (come li legge il cliente)</label><textarea class="inp" id="lOr" rows="2">' + esc(o.testo || '') + '</textarea></div>' +
+      '<div class="sec-title" style="margin:18px 4px 6px">📶 Wi-Fi per i clienti</div>' +
+      '<div class="banner b"><span>⚠️</span><span>Solo la <b>rete ospiti</b>, separata da quella del bar. Rete e password diventano pubbliche nel menu.</span></div>' +
+      campo('lWfRete', 'Nome della rete ospiti', w.rete, 'Es. Ceraldi Ospiti') +
+      '<div class="field"><label for="lWfPw">Password</label><input class="inp" id="lWfPw" autocomplete="off" autocapitalize="off" spellcheck="false" value="' + esc(w.password || '') + '" placeholder="Vuota = rete aperta"></div>' +
+      '<div class="row" style="padding:4px 4px 10px"><div class="row-main"><div class="row-t">Mostra nel menu</div><div class="row-s">Pulsante 📶 in alto, con password da copiare e QR da inquadrare</div></div><label class="tgl"><input type="checkbox" id="lWfMostra"' + (w.mostra ? ' checked' : '') + '><span></span></label></div>' +
+      '<div class="sec-title" style="margin:18px 4px 6px">Orari nelle altre lingue</div>' +
       lingueAttive().map(function(g){ return '<div class="field"><label for="lOr_' + g.codice + '">Orari · ' + g.bandiera + ' ' + esc(g.nome) + ' <span style="font-weight:400;opacity:.7">(vuoto = tradotto in automatico)</span></label><textarea class="inp" id="lOr_' + g.codice + '" rows="2">' + esc(o['testo_' + g.codice] || '') + '</textarea></div>'; }).join(''),
     piede: '<div class="btn-row"><button class="btn btn-s" onclick="chiudiSheet(\'shLoc\')">Annulla</button><button class="btn btn-p" id="lSalva" onclick="salvaLocale()">Salva</button></div>' });
 }
@@ -1925,7 +1932,9 @@ async function salvaLocale(){
   var mail = v('lMail'); if(mail && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(mail)){ toast('Email non valida'); return; }
   var orari = Object.assign({}, (D.locale && D.locale.orari) || {}, { testo: v('lOr') });
   lingueAttive().forEach(function(g){ orari['testo_' + g.codice] = v('lOr_' + g.codice); });
-  var corpo = { nome: v('lNome'), indirizzo: v('lInd'), telefono: v('lTel'), whatsapp: v('lWa'), email: mail, orari: orari };
+  var wf = { rete: v('lWfRete'), password: document.getElementById('lWfPw').value.trim() || null, mostra: document.getElementById('lWfMostra').checked };
+  if(wf.mostra && !wf.rete){ toast('Scrivi il nome della rete ospiti, oppure spegni «Mostra nel menu»'); return; }
+  var corpo = { nome: v('lNome'), indirizzo: v('lInd'), telefono: v('lTel'), whatsapp: v('lWa'), email: mail, orari: orari, wifi: (wf.rete || wf.password) ? wf : null };
   try{
     if(D.locale) await api('locale?id=eq.1', { method: 'PATCH', prefer: 'return=minimal', body: corpo });
     else await api('locale', { method: 'POST', prefer: 'return=minimal', body: Object.assign({ id: 1 }, corpo) });

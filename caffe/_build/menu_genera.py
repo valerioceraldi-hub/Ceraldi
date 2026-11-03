@@ -29,6 +29,21 @@ def scarica(url, chiave, rpc=False):
     out['config'] = rich(url + '/rest/v1/rpc/menu_config_pubblica', {'Content-Type': 'application/json'}, b'{}')
     return out
 
+def wifi_dati(lo):
+    """Wi-Fi OSPITI dal locale: solo se acceso e completo. QR standard (WIFI:...) disegnato qui come SVG, se c'è la libreria segno."""
+    w = lo.get('wifi') or {}
+    rete, pw = (w.get('rete') or '').strip(), (w.get('password') or '').strip()
+    if not w.get('mostra') or not rete: return None
+    e = lambda x: re.sub(r'([\\;,:"])', r'\\\1', x)
+    qr = None
+    try:
+        import segno, io
+        b = io.BytesIO(); segno.make('WIFI:T:%s;S:%s;%s;' % ('WPA' if pw else 'nopass', e(rete), ('P:' + e(pw) + ';') if pw else ''), error='m').save(b, kind='svg', scale=1, border=2, xmldecl=False, svgns=True, omitsize=True, dark='#000', light='#fff')
+        qr = b.getvalue().decode('utf-8')
+    except Exception as x:
+        print('QR Wi-Fi non generato:', x)
+    return {'rete': rete, 'pw': pw, 'qr': qr}
+
 def file_esiste(url, cache={}):
     """Vero solo se l'indirizzo risponde 200: la foto grande (-1200) esiste solo per una parte delle voci."""
     if url in cache: return cache[url]
@@ -128,7 +143,7 @@ def costruisci(src, lingua, foto_base, esiste=None, lingue=None):
         elif r['tipo'] == 'consiglio_categoria' and r.get('categoria_id'): cons.setdefault(r['categoria_id'], []).append(r['target_voce_id'])
     lo = (src.get('locale') or [{}])[0]
     ori = lo.get('orari') or {}
-    d = {'testi': testi, 'locale': {'nome': lo.get('nome') or '', 'ind': lo.get('indirizzo') or '', 'tel': lo.get('telefono') or '', 'orari': (ori.get('testo_' + lingua) if lingua != 'it' else None) or ori.get('testo') or ''},
+    d = {'testi': testi, 'locale': {'nome': lo.get('nome') or '', 'ind': lo.get('indirizzo') or '', 'tel': lo.get('telefono') or '', 'wifi': wifi_dati(lo), 'orari': (ori.get('testo_' + lingua) if lingua != 'it' else None) or ori.get('testo') or ''},
          'sezioni': sezioni, 'pagine': pagine, 'momenti': momenti, 'abb': {'v': abb, 'c': abbc}, 'consigli': cons, 'lingua': lingua, 'lingue': lingue or []}
     return d, DEF, cfg
 
