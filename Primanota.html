@@ -10528,7 +10528,7 @@ async function _eseguiEsportazioneAvanzata(){
     const headCh = ['Data','Cassa (fiscale)','Pos fiscale','Pos banca','Pos Numia','Pos SumUp','Totale corrispettivi','Non riscosso'];
     const bodyCh = rowsCh.map(c=>[c.data||'', c.cassa||0, c.pos||0, c.pos_banca||0, c.pos_numia||0, c.pos_sumup||0, c.totale_corrispettivi||c.totaleCorrispettivi||0, c.non_riscosso||0]);
     fogli.push({nome:'Chiusure giornaliere', righe:[headCh, ...bodyCh]});
-    let rowsInc = (incassi||[]).filter(i=>_expInRange(i.data,dal,al));
+    let rowsInc = await _incRigheVere(dal||'', al||'');
     const headInc = ['Data','Importo','Fonte','Tipo'];
     const bodyInc = rowsInc.map(i=>[i.data||'', i.importo||0, i.source||'', i.tipo||'']);
     fogli.push({nome:'Incassi POS', righe:[headInc, ...bodyInc]});
@@ -12610,15 +12610,12 @@ async function recuperaRigheOrdiniUI(){
 // Recupero automatico in background: al massimo ogni 6 ore, 60 fatture per volta
 function avviaRecuperoOrdiniAuto(){
   setTimeout(function(){
-    try{var at=+localStorage.getItem('ceraldi_recupero_ordini_at')||0;if(Date.now()-at<6*3600000)return;
-      // v10.40.3: segno il tentativo SUBITO (prima lo segnavo solo a fine corsa riuscita:
-      // se una riga falliva il lavoro pesante ripartiva a ogni apertura dell'app)
-      localStorage.setItem('ceraldi_recupero_ordini_at',String(Date.now()));}catch(e){}
-    sincronizzaRigheOrdini({max:20}).then(function(e){
+    try{var at=+localStorage.getItem('ceraldi_recupero_ordini_at')||0;if(Date.now()-at<6*3600000)return;}catch(e){}
+    sincronizzaRigheOrdini({max:60}).then(function(e){
       if(e&&(e.inviate+e.storico)>0)console.log('[Ordini] righe recuperate',e);
       if(e&&e.errori&&typeof _registraErrore==='function')_registraErrore('ordini','Recupero righe fatture: '+e.errori+' non riuscite');
     }).catch(function(){});
-  },90000);
+  },25000);
 }
 // Renderizza un XML FatturaPA come card HTML leggibili
 function renderFatturaXML(xmlText, ddt){
@@ -13191,7 +13188,7 @@ async function init(){
   setTimeout(()=>toast(_cacheMsg), 500);
   try{ const c = JSON.parse(localStorage.getItem(KCHIUSURE)||'[]'); if(Array.isArray(c) && c.length) chiusure = c; }catch(e){}
   try{ const c = JSON.parse(localStorage.getItem(KVERSAMENTI)||'[]'); if(Array.isArray(c) && c.length) versamenti = c; }catch(e){}
-  try{ const c = JSON.parse(localStorage.getItem(KINCASSI)||'[]'); if(Array.isArray(c) && c.length){ const _da=_incDa(); incassi = c.filter(r=>r&&r.data>=_da); } }catch(e){}
+  try{ const c = JSON.parse(localStorage.getItem(KINCASSI)||'[]'); if(Array.isArray(c) && c.length && c[0]._agg) incassi = c; else if(c.length) localStorage.removeItem(KINCASSI); }catch(e){}
   try{ const c = JSON.parse(localStorage.getItem(KBANCA)||'[]'); if(Array.isArray(c) && c.length) _bancaMovimenti = c; }catch(e){}
   try{ const c = JSON.parse(localStorage.getItem(KCARTA)||'[]'); if(Array.isArray(c) && c.length) _cartaMovimenti = c; }catch(e){}
 
@@ -13584,7 +13581,7 @@ function _fNum(n){
 async function caricaIncassi(forceFull){
   // ── CACHE-FIRST: mostra subito i dati locali, poi aggiorna in background ──
   try{ const c = JSON.parse(localStorage.getItem(KCHIUSURE)||'[]'); if(Array.isArray(c) && c.length) chiusure = c; }catch(e){}
-  try{ const c = JSON.parse(localStorage.getItem(KINCASSI)||'[]'); if(Array.isArray(c) && c.length){ const _da=_incDa(); incassi = c.filter(r=>r&&r.data>=_da); } }catch(e){}
+  try{ const c = JSON.parse(localStorage.getItem(KINCASSI)||'[]'); if(Array.isArray(c) && c.length && c[0]._agg) incassi = c; else if(c.length) localStorage.removeItem(KINCASSI); }catch(e){}
   try{ const c = JSON.parse(localStorage.getItem(KVERSAMENTI)||'[]'); if(Array.isArray(c) && c.length) versamenti = c; }catch(e){}
 
   // Aggiorna UI subito con cache locale (zero attesa)
@@ -13643,77 +13640,42 @@ async function caricaIncassi(forceFull){
     }
   }catch(e){ console.warn('versamenti Supabase:', e.message||e); }
 
-  // Incassi incrementali — sbFetchAll, non sbFetch: con migliaia di transazioni
-  // Numia (una riga per transazione del terminale) si supera facilmente il limite
-  // di 1000 righe che Supabase applica di default lato server. Con sbFetch semplice,
-  // la maggior parte dei giorni restava silenziosamente invisibile in app (dati
-  // presenti su Supabase ma mai scaricati sul telefono).
+  // v10.40.3 — Incassi: una riga per transazione (oltre 42.000) non va scaricata
+  // a ogni avvio. L'app legge dal database le SOMME per giorno / fonte / esito
+  // (vista incassi_giorno, poche centinaia di righe) e le tratta come righe
+  // 'aggregate': tutti i report sommano gli stessi importi di prima. Le singole
+  // transazioni si scaricano solo quando servono (dettaglio giorno, export, import).
   try{
-    const lastI = _maxUpdatedAt(incassi);
-    const url = lastI
-      ? 'incassi?select=*&updated_at=gt.'+encodeURIComponent(lastI)
-      : 'incassi?select=*&data=gte.'+_incDa();
-    const data = await sbFetchAll(url);
-    if(Array.isArray(data) && data.length){
-      if(!lastI){
-        incassi = data;
-      } else {
-        const map = {}; incassi.forEach(r=>{ map[r.id]=r; });
-        data.forEach(r=>{ map[r.id]=r; });
-        incassi = Object.values(map);
-      }
+    const agg = await sbFetchAll('incassi_giorno?select=data,source,esito,importo,n&order=data');
+    if(Array.isArray(agg)){
+      incassi = _incDaAggregati(agg);
       salvaIncassiLocale();
-    }
-    // Controllo leggero di completezza (23/08, richiesta esplicita di
-    // Valerio: mai più un riscaricamento completo se non serve davvero) —
-    // chiede al server SOLO gli id (poche decine di KB anche con 28.000
-    // righe, non gli 8 MB dell'intera tabella), li confronta con quelli già
-    // in locale:
-    // - un id che il server ha ma il telefono no → è un vero buco (es. il
-    //   primissimo caricamento storico si era interrotto a metà) — richiesto
-    //   APPOSTA, solo quelle righe mancanti, non tutta la tabella;
-    // - un id che il telefono ha ma il server non ha più → dato cancellato
-    //   altrove (reimport, pulizia doppioni) — tolto dalla cache.
-    // Gira solo su forceFull=true (avvio app o "Sincronizza ora" manuale),
-    // MAI sul ping automatico ogni 60 secondi — altrimenti anche questa
-    // versione "leggera" finirebbe per pesare inutilmente nell'arco di una
-    // giornata intera con l'app aperta.
-    if(forceFull){
-      const idsServer = await sbFetchAll('incassi?select=id&data=gte.'+_incDa());
-      if(Array.isArray(idsServer)){
-        const idsServerSet = new Set(idsServer.map(r=>r.id));
-        const idsLocaliSet = new Set(incassi.map(r=>r.id));
-        const mancanti = idsServer.map(r=>r.id).filter(id=>!idsLocaliSet.has(id));
-        const _daW=_incDa(); const senzaFantasmi = incassi.filter(r=>r.data<_daW || idsServerSet.has(r.id));
-        let cambiato = senzaFantasmi.length !== incassi.length;
-        incassi = senzaFantasmi;
-        if(mancanti.length){
-          const CHUNK = 200; // evita URL troppo lunghe con migliaia di id mancanti
-          for(let i=0;i<mancanti.length;i+=CHUNK){
-            const chunk = mancanti.slice(i,i+CHUNK);
-            const righeMancanti = await sbFetchAll('incassi?select=*&id=in.('+chunk.join(',')+')');
-            if(Array.isArray(righeMancanti) && righeMancanti.length){ incassi = incassi.concat(righeMancanti); cambiato = true; }
-          }
-        }
-        if(cambiato) salvaIncassiLocale();
-      }
     }
   }catch(e){ console.warn('incassi Supabase:', e.message||e); }
 }
-
-// v10.40.3: gli incassi sono UNA riga per transazione (oltre 42.000 righe, ~5 MB):
-// scaricarli tutti a ogni avvio e riscriverli in localStorage bloccava il telefono
-// (e riempiva la cache locale). L'app ne tiene in memoria solo gli ultimi giorni;
-// i giorni più vecchi si scaricano solo quando si apre quel giorno.
-var INC_FINESTRA_GG = 45;
-function _incDa(){ var d=new Date(); d.setDate(d.getDate()-INC_FINESTRA_GG); return d.toISOString().slice(0,10); }
-function salvaIncassiLocale(){
-  try{
-    var da=_incDa();
-    incassi = incassi.filter(function(r){ return r && r.data>=da; });
-    localStorage.setItem(KINCASSI, JSON.stringify(incassi));
-  }catch(e){ try{ localStorage.removeItem(KINCASSI); }catch(_){} }
+function _incDaAggregati(agg){
+  return agg.map(function(r){ return {id:'agg|'+r.data+'|'+r.source+'|'+r.esito, data:r.data, source:r.source, esito:r.esito, importo:+r.importo||0, n:+r.n||0, _agg:true}; });
 }
+// Righe vere (singole transazioni) di un periodo: solo quando servono
+window._incPer = window._incPer || {};
+async function _incRigheVere(dal, al){
+  var k=(dal||'')+'|'+(al||'');
+  if(window._incPer[k]) return window._incPer[k];
+  var q='incassi?select=*&order=data';
+  if(dal) q+='&data=gte.'+encodeURIComponent(dal);
+  if(al) q+='&data=lte.'+encodeURIComponent(al);
+  var r=await sbFetchAll(q);
+  window._incPer[k]=Array.isArray(r)?r:[];
+  return window._incPer[k];
+}
+function _incRigheCache(dal, al){ return window._incPer[(dal||'')+'|'+(al||'')] || []; }
+// dopo un import: ricarico le somme dal database e svuoto le cache di dettaglio
+async function _incRicaricaDopoImport(){
+  window._incPer={}; window._incGiorni={};
+  try{ const agg = await sbFetchAll('incassi_giorno?select=data,source,esito,importo,n&order=data'); if(Array.isArray(agg)){ incassi=_incDaAggregati(agg); salvaIncassiLocale(); } }catch(e){ console.warn(e); }
+}
+
+function salvaIncassiLocale(){ try{ localStorage.setItem(KINCASSI, JSON.stringify(incassi.filter(function(r){return r&&r._agg;}))); }catch(e){ try{localStorage.removeItem(KINCASSI);}catch(_){} } }
 function salvaChiusureLocale(){ try{ localStorage.setItem(KCHIUSURE, JSON.stringify(chiusure)); }catch(e){} }
 
 // Apertura sezione Incassi: inizializza data oggi
@@ -14166,20 +14128,16 @@ function _renderPosDetails(data){
   const wrap = document.getElementById('chgPosDetails');
   const list = document.getElementById('chgPosList');
   if(!wrap || !list) return;
-  let tx = incassi.filter(i=>i.data===data && i.source==='numia');
-  if(!tx.length && data < _incDa()){
-    // giorno fuori dalla finestra in memoria: scarico solo quel giorno
-    window._incGiorni = window._incGiorni || {};
-    if(window._incGiorni[data]) tx = window._incGiorni[data];
-    else {
-      wrap.style.display='none';
-      sbFetchAll('incassi?select=*&source=eq.numia&data=eq.'+encodeURIComponent(data)).then(function(r){
-        window._incGiorni[data] = Array.isArray(r)?r:[];
-        if(window._incGiorni[data].length) _renderPosDetails(data);
-      }).catch(function(){});
-      return;
-    }
+  window._incGiorni = window._incGiorni || {};
+  if(!window._incGiorni[data]){
+    wrap.style.display='none';
+    sbFetchAll('incassi?select=*&source=eq.numia&data=eq.'+encodeURIComponent(data)).then(function(r){
+      window._incGiorni[data] = Array.isArray(r)?r:[];
+      if(window._incGiorni[data].length) _renderPosDetails(data);
+    }).catch(function(){});
+    return;
   }
+  const tx = window._incGiorni[data];
   if(!tx.length){ wrap.style.display='none'; return; }
   const ok = tx.filter(t=>t.esito==='ok');
   const storni = tx.filter(t=>t.esito!=='ok');
@@ -14444,12 +14402,14 @@ async function _eseguiSyncSumUp(){
     }).filter(function(r){ return r.data && r.importo>0; });
 
     var esistentiIds = {};
-    incassi.forEach(function(x){ esistentiIds[x.id] = true; });
+    if(nuoviRecord.length){
+      var _dMin = nuoviRecord.reduce(function(m,r){ return !m||r.data<m?r.data:m; }, '');
+      var _srv = await sbFetchAll('incassi?select=id&source=eq.sumup&data=gte.'+encodeURIComponent(_dMin));
+      (_srv||[]).forEach(function(x){ esistentiIds[x.id] = true; });
+    }
     var davveroNuovi = nuoviRecord.filter(function(r){ return !esistentiIds[r.id]; });
 
-    incassi = incassi.concat(davveroNuovi);
-    salvaIncassiLocale();
-    if(davveroNuovi.length) await upsertIncassi(davveroNuovi);
+    if(davveroNuovi.length){ await upsertIncassi(davveroNuovi); await _incRicaricaDopoImport(); }
 
     var totImp = Math.round(davveroNuovi.reduce(function(s,r){return s+r.importo;},0)*100)/100;
     if(esito) esito.innerHTML = '✓ '+items.length+' transazioni lette dal periodo · <b>'+davveroNuovi.length+'</b> nuove salvate ('+fmt(totImp)+')'
@@ -14505,12 +14465,15 @@ async function onCsvNumiaSelected(input){
       toast('⚠️ Formato non supportato');
       return;
     }
-    const primaDiImportare = incassi.length;
+    // controllo doppioni sul database (tutte le date, non solo quelle in memoria)
+    window._incDedupSrv = new Set(((await sbFetchAll('incassi?select=dedup&dedup=not.is.null'))||[]).map(r=>r.dedup));
+    window._incNuoveImport = [];
     const stat = _processaRigheNumia(rows);
-    salvaIncassiLocale();
+    const _daSalvare = window._incNuoveImport; window._incNuoveImport = [];
     if(stat.inseriti > 0){
       toast(`⏳ Salvataggio ${stat.inseriti} transazioni su Supabase...`);
-      await upsertIncassi(incassi.slice(primaDiImportare));
+      await upsertIncassi(_daSalvare);
+      await _incRicaricaDopoImport();
     }
     caricaChiusuraGiorno();
     // FIX 18/09 (richiesta esplicita di Valerio: "non fa capire se è stato
@@ -14725,9 +14688,9 @@ function _processaRigheNumia(rows){
 
     // Dedup
     const chiaveDedup = dataISO+'|'+importo.toFixed(2)+'|'+(idTrans||String(r));
-    if(incassi.some(x=>x._dedup===chiaveDedup)){ _stat.scartateDuplicate++; continue; }
+    if((window._incDedupSrv && window._incDedupSrv.has(chiaveDedup)) || (window._incNuoveImport||[]).some(x=>x._dedup===chiaveDedup)){ _stat.scartateDuplicate++; continue; }
 
-    incassi.push({
+    (window._incNuoveImport = window._incNuoveImport || []).push({
       id: Date.now() + r,
       data: dataISO,
       importo,
@@ -29579,6 +29542,7 @@ function _ecRender(){
   } else {
     o.grezzi=o.grezzi||{banca:true, carta:true, chiusure:true, versamenti:true, incassi:true};
     if(o.grezzi.incassi===undefined) o.grezzi.incassi=true;
+    if(!window._incPer[(o.dal||'')+'|'+(o.al||'')] && !window._incPrepInCorso){ window._incPrepInCorso=true; _incRigheVere(o.dal,o.al).then(function(){ window._incPrepInCorso=false; try{_ecRender();}catch(e){} }).catch(function(){ window._incPrepInCorso=false; }); }
     var n=_ecGrezziDati(o);
     var gcb=function(k,l,num){ return '<label class="ec-cb"><input type="checkbox" '+(o.grezzi[k]?'checked':'')+' onchange="_ecOpz.grezzi[\''+k+'\']=this.checked;_ecRender()"><span><b>'+l+'</b><em>'+num+' righe nel periodo</em></span></label>'; };
     h+='<div class="sf-lbl">Cosa includere</div><div class="ec-cbs">'+gcb('banca','Movimenti di banca',n.banca.length)+gcb('carta','Spese con carta Nexi',n.carta.length)+gcb('chiusure','Chiusure di cassa',n.chiusure.length)+gcb('incassi','Transazioni POS (Numia e SumUp)',n.incassi.length)+gcb('versamenti','Versamenti in banca',n.versamenti.length)+'</div>'+
@@ -29871,7 +29835,7 @@ function _ecGrezziDati(o){
     versamenti:((typeof versamenti!=='undefined'?versamenti:[])||[]).filter(function(v){ return !v.deleted_at && inP(v.data); }).sort(function(a,b){ return String(a.data).localeCompare(String(b.data)); }),
     // 20/09 (Valerio: "il report POS non scarica proprio i dati del POS"):
     // le singole transazioni Numia e SumUp mancavano da qualunque export.
-    incassi:((typeof incassi!=='undefined'?incassi:[])||[]).filter(function(x){ return inP(x.data); }).sort(function(a,b){ return String(a.data).localeCompare(String(b.data)); })
+    incassi:_incRigheCache(o.dal,o.al)
   };
 }
 function _ecGrezziTabelle(o){
@@ -29941,6 +29905,7 @@ async function _ecScarica(tipo, btn){
     // I pagamenti in contanti stanno in Prima Nota: si caricano ora, così
     // ogni export può dire anche COME è uscito il contante.
     await _ecCaricaPn(_ecOpz);
+    if(tipo==='gxlsx'||tipo==='gcsv'){ await _incRigheVere(_ecOpz.dal,_ecOpz.al); }
     await Promise.all([_ecCaricaFiscale(), window._ecCredIni?Promise.resolve():_ecCaricaCredIni()]);
     var G=null, blob, nome=_ecNomeBase();
     if(tipo==='rcsv'){
