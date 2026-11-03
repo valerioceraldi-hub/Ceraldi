@@ -11,14 +11,14 @@ sys.path.insert(0, QUI)
 from menu_genera import blocco_var, json_js  # stessi colori del menu (dal database), stessa serializzazione sicura
 
 COL = {  # solo colonne pubbliche (anon non legge note_interne, aggiornato_da, verificata_da, risposte)
-    'guida_luoghi': 'id,slug,nome,tipo,zona,indirizzo,lat,lon,minuti_a_piedi,metri_a_piedi,durata_visita_min,gratuito,sempre_accessibile,sito_ufficiale,pagina_orari,sommario,racconto,consiglio,accessibilita,accessibilita_verificata_il,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,stato,orari_stato,orari_verificati_il,ordine,leggende,foto_consentite',
+    'guida_luoghi': 'id,slug,nome,tipo,zona,indirizzo,lat,lon,minuti_a_piedi,metri_a_piedi,durata_visita_min,gratuito,sempre_accessibile,sito_ufficiale,pagina_orari,sommario,racconto,consiglio,accessibilita,accessibilita_verificata_il,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_didascalia,stato,orari_stato,orari_verificati_il,ordine,leggende,foto_consentite',
     'guida_orari': 'id,luogo_id,giorni,dalle,alle,ultimo_ingresso,dal,al,chiuso,nota,ordine',
-    'guida_itinerari': 'id,slug,nome,sottotitolo,descrizione,durata_min,distanza_m,etichette,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,stato,ordine',
+    'guida_itinerari': 'id,slug,nome,sottotitolo,descrizione,durata_min,distanza_m,etichette,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_didascalia,stato,ordine',
     'guida_tappe': 'id,itinerario_id,luogo_id,ordine,minuti_dal_precedente,metri_dal_precedente,sosta_min,nota,alternativa_luogo_id,percorso,svolte',
     'guida_racconti': 'id,slug,titolo,sommario,testo,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,stato,ordine',
     'guida_affermazioni_fonti': 'tabella,riga_id,fonte_titolo,fonte_url',
-    'guida_dettagli': 'id,luogo_id,ordine,titolo,testo,dove,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_permesso,stato',
-    'guida_foto': 'id,luogo_id,ordine,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_permesso,stato',
+    'guida_dettagli': 'id,luogo_id,ordine,titolo,testo,dove,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_didascalia,foto_permesso,stato',
+    'guida_foto': 'id,luogo_id,ordine,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_didascalia,foto_permesso,stato',
     'menu_lingue': '*',
     'scioperi_napoli_trasporti': 'data,linea,dettaglio',
 }
@@ -69,7 +69,7 @@ def costruisci(src, lingua, foto_base, anteprima):
         return p if re.match(r'^https://', p) else foto_base + p
     def foto(r, tab):
         if not r.get('foto_path'): return None
-        return {'u': U(r['foto_path']), 'alt': L(r, 'foto_alt', tab), 'aut': r.get('foto_autore') or '', 'lic': r.get('foto_licenza') or '', 'src': r.get('foto_fonte_url') or ''}
+        return {'u': U(r['foto_path']), 'alt': L(r, 'foto_alt', tab), 'aut': r.get('foto_autore') or '', 'lic': r.get('foto_licenza') or '', 'src': r.get('foto_fonte_url') or '', 'dida': L(r, 'foto_didascalia', tab)}
     ordina = lambda l: sorted(l, key=lambda r: (r.get('ordine') or 0, r.get('id') or 0))
     fonti = {}
     for f in src.get('guida_affermazioni_fonti', []):

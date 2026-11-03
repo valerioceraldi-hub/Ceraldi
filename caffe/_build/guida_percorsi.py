@@ -4,7 +4,7 @@ che lo salva in guida_tappe (percorso, svolte, percorso_calcolato_il). Si usa in
 Uso:  MENU_SB_URL=... MENU_SB_KEY=<anon> python3 guida_percorsi.py --itinerario il-primo-giro [--itinerario ...] --sql out.sql
 Servizio: routing.openstreetmap.de/routed-foot (FOSSGIS, dati OSM). Una richiesta ogni 3 secondi, come chiede chi lo gestisce.
 Legge con la chiave anon: vede solo itinerari e luoghi pubblicati o in anteprima."""
-import argparse, json, os, sys, time, urllib.request
+import argparse, json, os, sys, time, urllib.request, urllib.error
 
 SERVIZIO = 'https://routing.openstreetmap.de/routed-foot/route/v1/driving/%s,%s;%s,%s?overview=full&geometries=geojson&steps=true'
 
@@ -14,7 +14,11 @@ def rest(url, k, q):
 
 def tratto(a, b):
     r = urllib.request.Request(SERVIZIO % (a['lon'], a['lat'], b['lon'], b['lat']), headers={'User-Agent': 'CeraldiGuida/1.0 (redazione)'})
-    d = json.load(urllib.request.urlopen(r, timeout=60))
+    for prova in range(6):  # servizio gratuito: se risponde «troppe richieste» o chiude la connessione, si aspetta e si riprova
+        try: d = json.load(urllib.request.urlopen(r, timeout=60)); break
+        except (urllib.error.HTTPError, urllib.error.URLError, ConnectionError) as e:
+            if prova == 5: raise
+            print('  servizio occupato (%s): riprovo tra %d s' % (e, 30 * (prova + 1))); time.sleep(30 * (prova + 1))
     if d.get('code') != 'Ok' or not d.get('routes'): raise SystemExit('percorso non trovato: %s -> %s' % (a['slug'], b['slug']))
     rt = d['routes'][0]
     geo = {'type': 'LineString', 'coordinates': [[round(x, 6), round(y, 6)] for x, y in rt['geometry']['coordinates']]}
@@ -25,6 +29,7 @@ def q(s): return "'" + s.replace("'", "''") + "'"
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument('--itinerario', action='append', required=True); ap.add_argument('--sql', required=True)
+    ap.add_argument('--solo-mancanti', action='store_true', help='calcola solo i tratti senza percorso salvato')
     a = ap.parse_args()
     url, k = os.environ['MENU_SB_URL'].rstrip('/'), os.environ['MENU_SB_KEY']
     luoghi = {l['id']: l for l in rest(url, k, 'guida_luoghi?select=id,slug,lat,lon')}
@@ -32,8 +37,9 @@ def main():
     for slug in a.itinerario:
         it = rest(url, k, 'guida_itinerari?select=id&slug=eq.' + slug)
         if not it: sys.exit('itinerario non visibile: ' + slug)
-        tappe = rest(url, k, 'guida_tappe?select=id,luogo_id,ordine,metri_dal_precedente,minuti_dal_precedente&itinerario_id=eq.%d&order=ordine' % it[0]['id'])
+        tappe = rest(url, k, 'guida_tappe?select=id,luogo_id,ordine,metri_dal_precedente,minuti_dal_precedente,percorso&itinerario_id=eq.%d&order=ordine' % it[0]['id'])
         for prec, t in zip(tappe, tappe[1:]):
+            if a.solo_mancanti and t.get('percorso'): continue
             geo, sv, metri, minuti = tratto(luoghi[prec['luogo_id']], luoghi[t['luogo_id']])
             print('%s tappa %d: %d m (salvati %s), %d min (salvati %s), %d punti, %d svolte' % (slug, t['ordine'], metri, t['metri_dal_precedente'], minuti, t['minuti_dal_precedente'], len(geo['coordinates']), len(sv)))
             righe.append("update guida_tappe set percorso = %s::jsonb, svolte = %s::jsonb, percorso_calcolato_il = now() where id = %d;" % (q(json.dumps(geo, separators=(',', ':'))), q(json.dumps(sv, ensure_ascii=False, separators=(',', ':'))), t['id']))

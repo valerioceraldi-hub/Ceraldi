@@ -29,8 +29,9 @@ const MAR = '2026-11-03T09:00:00Z', CARITA = { latitude: 40.844326, longitude: 1
   await apri(BASE, {}, async p => {
     ok('home: titolo', /Napoli a piedi/.test(await testo(p, 'h1')));
     ok('home: avviso anteprima', /Versione di prova/.test(await testo(p, '.avviso.prova')));
-    ok('home: 2 schede itinerario con disegno del percorso', (await p.locator('article.scheda').count()) === 2 && (await p.locator('article.scheda svg polyline').count()) >= 12);
-    ok('home: miniature delle tappe', (await p.locator('article.scheda .miniature > div').count()) === 10);
+    ok('home: 3 schede itinerario con disegno del percorso (prima della mappa)', (await p.locator('article.scheda').count()) === 3 && (await p.locator('article.scheda svg polyline').count()) >= 16);
+    await p.waitForFunction(() => document.querySelectorAll('.copertina-giro.pronta').length === 3, null, {timeout: 30000}).catch(() => {});
+    ok('home: copertine con la mappa vera, il percorso e le foto delle tappe', (await p.locator('.copertina-giro.pronta img.fondo[src^="data:image/jpeg"]').count()) === 3 && (await p.locator('.copertina-giro .pin img').count()) >= 6 && (await p.locator('.copertina-giro .pin').count()) >= 18);
     ok('home: «Vedrai…»', /Vedrai:.*Gesù Nuovo/.test(await testo(p, 'article.scheda')));
     ok('home: 5 racconti', (await p.locator('a[href^="#/r/"]').count()) === 5);
     ok('home: «Chiusi oggi» Sansevero', /Cappella Sansevero/.test(await testo(p, 'section.oggi')));
