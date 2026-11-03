@@ -132,9 +132,9 @@ def copia_foto(pagine, out):
     return len(nomi)
 
 def file_mappa(out):
-    """Elenco dei file della mappa da salvare per l'uso senza rete (relativi alla cartella della guida)."""
-    base = os.path.join(out, 'mappa'); r = []
-    for radice, _, files in os.walk(base):
+    """Elenco dei file della mappa e dei caratteri da salvare per l'uso senza rete (relativi alla cartella della guida)."""
+    r = []
+    for radice, _, files in [x for cart in ('mappa', 'font') for x in os.walk(os.path.join(out, cart))]:
         for f in files:
             if f.endswith('.md'): continue
             r.append(os.path.relpath(os.path.join(radice, f), out).replace(os.sep, '/'))
@@ -195,7 +195,7 @@ def main():
             if re.fullmatch(r'[a-z]{2,3}', nome) and nome not in codici and os.path.isfile(os.path.join(a.out, nome, 'index.html')): shutil.rmtree(os.path.join(a.out, nome))
     # service worker: salva pagine, foto e mappa per l'uso senza rete. La versione cambia con i contenuti: il telefono scarica solo se serve.
     elenco = nomi_pagine + ['img/' + f for f in sorted(os.listdir(os.path.join(a.out, 'img')))] if os.path.isdir(os.path.join(a.out, 'img')) else list(nomi_pagine)
-    elenco += file_mappa(a.out)
+    elenco += file_mappa(a.out) + ['caratteri/' + f for f in sorted(os.listdir(os.path.join(a.out, 'caratteri'))) if f.endswith(('.css', '.woff2'))] if os.path.isdir(os.path.join(a.out, 'caratteri')) else file_mappa(a.out)
     h = hashlib.sha1()
     for p in elenco:
         f = os.path.join(a.out, p, 'index.html') if p.endswith('/') or p == '' else os.path.join(a.out, p)
