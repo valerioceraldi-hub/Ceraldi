@@ -137,21 +137,47 @@ function stile(){
     return JSON.parse(t.split('"TILES/').join('"' + base + 'tiles/').split('"GLYPHS/').join('"' + base + 'glyphs/').split('"SPRITE"').join('"' + base + 'sprite/light"'));
   });
 }
-function mappa(id, punti, inQuadro){
+var GEO = {};
+function mappa(id, punti, inQuadro, linee){
   var el = document.getElementById(id); if(!el) return;
   Promise.all([caricaMapLibre(), stile()]).then(function(r){
     var m = new maplibregl.Map({container: el, style: r[1], center: [14.2532, 40.8475], zoom: 14, minZoom: 12, maxZoom: 18,
       maxBounds: [[14.15, 40.80], [14.33, 40.90]], attributionControl: {compact: false}, cooperativeGestures: false});
     m.addControl(new maplibregl.NavigationControl({showCompass: false}), 'top-right');
+    /* «tu sei qui»: posizione calcolata solo sul telefono, mai inviata */
+    var g = new maplibregl.GeolocateControl({positionOptions: {enableHighAccuracy: true, timeout: 15000}, trackUserLocation: true, showUserLocation: true, fitBoundsOptions: {maxZoom: 17}});
+    m.addControl(g, 'top-right'); GEO[id] = g; (window.MAPPE = window.MAPPE || {})[id] = m;
+    var msg = document.getElementById(id + '-msg');
+    g.on('error', function(){ if(msg){ msg.textContent = T.pos_negata; msg.hidden = false; } });
+    g.on('outofmaxbounds', function(){ if(msg){ msg.textContent = T.fuori_zona; msg.hidden = false; } });
+    g.on('geolocate', function(){ if(msg) msg.hidden = true; });
+    if(linee && linee.length) m.on('load', function(){
+      m.addSource('percorso', {type: 'geojson', data: {type: 'FeatureCollection', features: linee.map(function(c){ return {type: 'Feature', properties: {}, geometry: {type: 'LineString', coordinates: c}}; })}});
+      m.addLayer({id: 'percorso-bordo', type: 'line', source: 'percorso', layout: {'line-join': 'round', 'line-cap': 'round'}, paint: {'line-color': '#ffffff', 'line-width': 9}});
+      m.addLayer({id: 'percorso', type: 'line', source: 'percorso', layout: {'line-join': 'round', 'line-cap': 'round'}, paint: {'line-color': getComputedStyle(document.documentElement).getPropertyValue('--scuro').trim() || '#2E3A2F', 'line-width': 5}});
+    });
     var b = new maplibregl.LngLatBounds();
+    (linee || []).forEach(function(c){ c.forEach(function(p){ b.extend(p); }); });
     punti.forEach(function(p){
       var d = document.createElement('a'); d.className = 'num' + (p.casa ? ' casa' : ''); d.textContent = p.t; d.href = p.h; d.setAttribute('aria-label', p.n);
       new maplibregl.Marker({element: d}).setLngLat([p.lon, p.lat]).addTo(m); b.extend([p.lon, p.lat]);
     });
-    if(inQuadro && punti.length > 1) m.fitBounds(b, {padding: {top: 40, bottom: 40, left: 40, right: 64}, maxZoom: 16, duration: 0}); /* a destra c'e' lo zoom */
+    if(inQuadro && (punti.length > 1 || (linee && linee.length))) m.fitBounds(b, {padding: {top: 40, bottom: 40, left: 40, right: 64}, maxZoom: 16, duration: 0}); /* a destra c'e' lo zoom */
   }).catch(function(){ el.innerHTML = '<p class="piccolo" style="padding:16px">—</p>'; });
 }
 
+function bloccoMappa(id, alt){
+  return '<div class="mappa" id="' + id + '"' + (alt ? ' style="height:' + alt + '"' : '') + '></div>' +
+    '<button class="bottone" style="width:100%;min-height:46px" onclick="GEO[\'' + id + '\'] && GEO[\'' + id + '\'].trigger()">◎ ' + e(T.dove_sono) + '</button>' +
+    '<p class="avviso prova" id="' + id + '-msg" hidden></p><p class="piccolo" style="margin:6px 0 0">' + e(T.privacy_pos) + '</p>';
+}
+function portami(l){ var ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+  return ios ? 'https://maps.apple.com/?daddr=' + l.lat + ',' + l.lon + '&dirflg=w' : 'https://www.google.com/maps/dir/?api=1&destination=' + l.lat + ',' + l.lon + '&travelmode=walking'; }
+function indicazione(x, arrivo){
+  if(x.k === 'arrivo') return e(T.arrivo) + ' · ' + e(arrivo);
+  var t = x.k === 'parti' ? T.parti : (T[x.m] || T.straight);
+  return e(t) + (x.n ? ' · ' + e(x.n) : '') + (x.d ? ' <span class="piccolo">— ' + x.d + ' m</span>' : '');
+}
 /* ---------- schermate ---------- */
 var V = {};
 V.home = function(){
@@ -195,7 +221,7 @@ V.itinerario = function(s){
   h += '<h2>' + e(i.n) + '</h2>' + (i.sub ? '<p class="piccolo" style="margin:0">' + e(i.sub) + '</p>' : '');
   h += '<div class="meta piccolo" style="display:flex;gap:12px;margin-top:6px"><span>' + e(T.durata) + ' ' + e(durata(i.dur)) + '</span><span>' + e(km(i.dist)) + '</span></div>';
   h += fotoHtml(i.foto);
-  h += '<div class="mappa" id="m-itin"></div><p class="piccolo">' + e(T.nota_mappa) + '</p>';
+  h += bloccoMappa('m-itin') + '<p class="piccolo">' + e(T.nota_mappa) + '</p>';
   if(i.desc) h += '<div class="testo">' + par(i.desc) + '</div>';
   h += '<p class="piccolo"><b>' + e(T.arrivo) + '</b></p>';
   i.tappe.forEach(function(tp, n){
@@ -207,6 +233,9 @@ V.itinerario = function(s){
     h += '<div class="tappa"><div class="n"' + (casa ? ' style="background:var(--accento)"' : '') + '>' + num + '</div><div><a href="#/l/' + e(l.s) + '" style="color:inherit;text-decoration:none"><h3>' + e(l.n) + '</h3></a>' +
          '<div class="piccolo">' + (arrivo < 1440 ? '≈ ' + fmt(arrivo) : '') + (tp.so ? ' · ' + tp.so + ' ' + e(T.min) : '') + '</div>' +
          '<div class="meta" style="margin-top:4px">' + etichetta(sa) + '</div>' + (tp.nota ? '<p style="margin:6px 0 0">' + e(tp.nota) + '</p>' : '');
+    if(tp.sv && tp.sv.length) h += '<details style="margin-top:8px"><summary class="piccolo" style="cursor:pointer;color:var(--accento);font-weight:600">' + e(T.come_arrivarci) + '</summary><ol style="margin:6px 0 0;padding-left:20px">' +
+      tp.sv.map(function(x){ return '<li style="margin:4px 0">' + indicazione(x, l.n) + '</li>'; }).join('') + '</ol>' +
+      (l.lat != null ? '<a class="piccolo" href="' + e(portami(l)) + '" target="_blank" rel="noopener">' + e(T.portami) + ' ↗</a>' : '') + '</details>';
     var chiusoArrivo = (sa.k === 'chiuso_oggi' || sa.k === 'chiuso_ora' || (sa.k === 'apre' && hm(sa.da) - arrivo > 30));
     if(chiusoArrivo){
       h += '<div class="alt"><b>' + e(T.chiuso_arrivo) + '.</b>';
@@ -217,7 +246,8 @@ V.itinerario = function(s){
     t += tp.so;
   });
   h += fontiHtml(i.fonti);
-  setTimeout(function(){ mappa('m-itin', punti, true); });
+  var linee = i.tappe.filter(function(tp){ return tp.geo; }).map(function(tp){ return tp.geo; });
+  setTimeout(function(){ mappa('m-itin', punti, true, linee); });
   return h;
 };
 V.luogo = function(s){
@@ -246,8 +276,8 @@ V.luogo = function(s){
   if(l.con) h += '<section class="scheda"><h3>' + e(T.consiglio) + '</h3><p style="margin:0">' + e(l.con) + '</p></section>';
   if(l.acc) h += '<section class="scheda"><h3>' + e(T.accessibilita) + '</h3><p style="margin:0">' + e(l.acc) + '</p></section>';
   if(l.lat != null){
-    h += '<div class="mappa" id="m-luogo" style="height:240px"></div>';
-    h += '<p><a class="bottone" href="https://www.openstreetmap.org/?mlat=' + l.lat + '&amp;mlon=' + l.lon + '#map=18/' + l.lat + '/' + l.lon + '" rel="noopener">' + e(T.apri_mappa) + '</a></p>';
+    h += bloccoMappa('m-luogo', '240px');
+    h += '<p><a class="bottone pieno" href="' + e(portami(l)) + '" target="_blank" rel="noopener">' + e(T.portami) + ' ↗</a></p>';
     setTimeout(function(){ mappa('m-luogo', [{id: l.id, t: '•', n: l.n, lat: l.lat, lon: l.lon, h: '#/l/' + l.s}], false); });
   }
   h += fontiHtml(l.fonti);
@@ -260,7 +290,7 @@ V.racconto = function(s){
 V.mappa = function(){
   var ora = adesso(), punti = D.luoghi.filter(function(l){ return l.lat != null; }).map(function(l, n){ return {id: l.id, t: l.s === 'piazza-carita' ? '★' : '•', n: l.n, lat: l.lat, lon: l.lon, h: '#/l/' + l.s, casa: l.s === 'piazza-carita'}; });
   setTimeout(function(){ mappa('m-tutti', punti, true); });
-  return indietro() + '<h2>' + e(T.mappa) + '</h2><div class="mappa" id="m-tutti" style="height:60vh"></div>';
+  return indietro() + '<h2>' + e(T.mappa) + '</h2>' + bloccoMappa('m-tutti', '60vh');
 };
 V.piove = function(){
   var ora = adesso(), cop = D.luoghi.filter(function(l){ return D.coperto.indexOf(l.tipo) >= 0 && !l.sa; });

@@ -14,7 +14,7 @@ COL = {  # solo colonne pubbliche (anon non legge note_interne, aggiornato_da, v
     'guida_luoghi': 'id,slug,nome,tipo,zona,indirizzo,lat,lon,minuti_a_piedi,metri_a_piedi,durata_visita_min,gratuito,sempre_accessibile,sito_ufficiale,pagina_orari,sommario,racconto,consiglio,accessibilita,accessibilita_verificata_il,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,stato,orari_stato,orari_verificati_il,ordine',
     'guida_orari': 'id,luogo_id,giorni,dalle,alle,ultimo_ingresso,dal,al,chiuso,nota,ordine',
     'guida_itinerari': 'id,slug,nome,sottotitolo,descrizione,durata_min,distanza_m,etichette,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,stato,ordine',
-    'guida_tappe': 'id,itinerario_id,luogo_id,ordine,minuti_dal_precedente,metri_dal_precedente,sosta_min,nota,alternativa_luogo_id',
+    'guida_tappe': 'id,itinerario_id,luogo_id,ordine,minuti_dal_precedente,metri_dal_precedente,sosta_min,nota,alternativa_luogo_id,percorso,svolte',
     'guida_racconti': 'id,slug,titolo,sommario,testo,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,stato,ordine',
     'guida_affermazioni_fonti': 'tabella,riga_id,fonte_titolo,fonte_url',
     'menu_lingue': '*',
@@ -36,6 +36,24 @@ def scarica(url, chiave):
         out[t] = rich('%s/rest/v1/%s?%s' % (url, t, q))
     out['menu_traduzioni'] = rich(url + '/rest/v1/menu_traduzioni?select=tabella,riga_id,campo,lingua,testo&tabella=like.guida_*')
     out['config'] = rich(url + '/rest/v1/rpc/menu_config_pubblica', {'Content-Type': 'application/json'}, b'{}')
+    return out
+
+def semplifica(svolte):
+    """Svolte grezze OSM -> indicazioni da dare a chi cammina (regole fisse, uguali per tutte le lingue):
+    - «stessa strada» (new name/continue dritto) non si annuncia: i metri si sommano all'indicazione precedente;
+    - una svolta seguita da meno di 20 m prima della successiva si accorpa (i «gradini» di 5 m nei vicoli);
+    - restano: partenza, svolte vere (con direzione e nome della strada), arrivo. a = metri dall'inizio del tratto."""
+    out, pos, sv = [], 0, svolte or []
+    for i, x in enumerate(sv):
+        inizio, pos = pos, pos + (x.get('d') or 0)
+        t, m, n, d = x.get('t'), x.get('m') or '', x.get('n') or '', x.get('d') or 0
+        if t == 'depart': out.append({'k': 'parti', 'n': n, 'd': d, 'a': 0}); continue
+        if t == 'arrive': out.append({'k': 'arrivo', 'a': inizio}); continue
+        dritto = m in ('', 'straight')
+        if (t in ('new name', 'continue') and dritto) or (d < 20 and i < len(sv) - 2):
+            if out: out[-1]['d'] = out[-1].get('d', 0) + d
+            continue
+        out.append({'k': 'gira', 'm': m, 'n': n, 'd': d, 'a': inizio})
     return out
 
 def costruisci(src, lingua, foto_base, anteprima):
@@ -76,8 +94,10 @@ def costruisci(src, lingua, foto_base, anteprima):
         for t in ordina([t for t in src.get('guida_tappe', []) if t['itinerario_id'] == i['id']]):
             if t['luogo_id'] not in luoghi: continue  # tappa su un luogo non visibile: si salta (mai un buco con dati nascosti)
             alt = t.get('alternativa_luogo_id')
+            geo = (t.get('percorso') or {}).get('coordinates')
             tappe.append({'l': t['luogo_id'], 'm': t.get('minuti_dal_precedente') or 0, 'mt': t.get('metri_dal_precedente') or 0, 'so': t.get('sosta_min') or 0,
-                          'nota': L(t, 'nota', 'guida_tappe'), 'alt': alt if alt in luoghi else None})
+                          'nota': L(t, 'nota', 'guida_tappe'), 'alt': alt if alt in luoghi else None,
+                          'geo': [[round(x, 5), round(y, 5)] for x, y in geo] if geo else None, 'sv': semplifica(t.get('svolte')) if t.get('svolte') else None})
         if not tappe: continue
         itinerari.append({'id': i['id'], 's': i['slug'], 'n': L(i, 'nome', 'guida_itinerari'), 'sub': L(i, 'sottotitolo', 'guida_itinerari'), 'desc': L(i, 'descrizione', 'guida_itinerari'),
                           'dur': i.get('durata_min'), 'dist': i.get('distanza_m'), 'et': i.get('etichette') or [], 'foto': foto(i, 'guida_itinerari'), 'tappe': tappe,

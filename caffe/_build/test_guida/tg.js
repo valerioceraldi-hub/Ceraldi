@@ -51,6 +51,37 @@ const BASE = 'http://127.0.0.1:' + (process.argv[3] || '8765') + '/guida_out/';
     ok('racconto: testo', (await p.locator('.testo p').count()) >= 2);
   });
 
+  // E1: percorso sulle strade, indicazioni, «tu sei qui», «Portami qui»
+  async function apriPos(url, pos, fn) {
+    const ctx = await b.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block', geolocation: pos, permissions: ['geolocation'] });
+    const p = await ctx.newPage(); const err = []; p.on('pageerror', e => err.push(e.message));
+    await p.clock.setFixedTime(new Date('2026-11-03T09:00:00Z')); await p.goto(url); await p.waitForTimeout(2500);
+    await fn(p); ok('[E1 ' + url.replace(BASE, '') + '] nessun errore JS', err.length === 0, err.join(' | ')); await ctx.close();
+  }
+  await apriPos(BASE + '#/i/il-primo-giro', { latitude: 40.8466, longitude: 14.2501 }, async p => {
+    const linee = await p.evaluate(() => { const m = window.MAPPE && window.MAPPE['m-itin']; const s = m && m.getSource('percorso'); return s ? s._data.features.length : -1; });
+    ok('E1: 6 tratti del percorso disegnati sulle strade', linee === 6, linee);
+    ok('E1: livello «percorso» sulla mappa', await p.evaluate(() => !!window.MAPPE['m-itin'].getLayer('percorso')));
+    ok('E1: «Come arrivarci» in 6 tappe', (await p.locator('.tappa details').count()) === 6, await p.locator('.tappa details').count());
+    const gesu = await p.locator('.tappa', { hasText: 'Gesù Nuovo' }).first().locator('details li').allTextContents();
+    ok('E1: Carità → Gesù Nuovo in 4 indicazioni (8 svolte grezze)', gesu.length === 4, gesu.join(' / '));
+    ok('E1: «Gira a destra · Via Maddaloni»', gesu.some(x => /Gira a destra · Via Maddaloni/.test(x)), gesu.join(' / '));
+    ok('E1: «Portami qui a piedi» (mappe del telefono, a piedi)', /travelmode=walking|dirflg=w/.test(await p.locator('.tappa details a').first().getAttribute('href')));
+    await p.click('button:has-text("Mostra dove sono")'); await p.waitForTimeout(2500);
+    ok('E1: punto «tu sei qui»', (await p.locator('#m-itin .maplibregl-user-location-dot').count()) === 1);
+    ok('E1: nessun avviso di posizione', await p.locator('#m-itin-msg').isHidden());
+    ok('E1: 390 px', await largo(p));
+  });
+  await apriPos(BASE + '#/mappa', { latitude: 41.9028, longitude: 12.4964 }, async p => {
+    await p.click('button:has-text("Mostra dove sono")'); await p.waitForTimeout(2500);
+    ok('E1: a Roma → «fuori dalla zona della mappa»', /fuori dalla zona/.test(await p.locator('#m-tutti-msg').textContent()));
+  });
+  await apriPos(BASE + 'en/#/i/il-primo-giro', { latitude: 40.8466, longitude: 14.2501 }, async p => {
+    const t = (await p.locator('.tappa details li').allTextContents()).join(' / ');
+    ok('E1: inglese «Turn right · Via Maddaloni»', /Turn right · Via Maddaloni/.test(t), t.slice(0, 120));
+    ok('E1: inglese nome itinerario corretto a mano', /Your first walk/.test(await p.content()));
+  });
+
   // mercoledi' 04/11/2026 ore 10:00: Sansevero aperto, niente alternativa
   await apri(BASE + '#/i/il-primo-giro', '2026-11-04T09:00:00Z', async p => {
     const sans = p.locator('.tappa', { hasText: 'Cappella Sansevero' });
