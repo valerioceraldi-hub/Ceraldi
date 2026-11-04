@@ -452,7 +452,7 @@ select.inp{background-image:none}
   <button class="tab-item" data-tab="altro" onclick="vaiTab('altro')"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></span><span class="tab-lbl">Altro</span></button>
 </nav>
 <script>
-var APP_VERSION='1.1';
+var APP_VERSION='1.2';
 var APP={key:'menu',nome:'Menu',versione:APP_VERSION,authKey:'mn_auth_v1',oldAuthKey:null,
   markBg:'linear-gradient(145deg,#C08A4D 0%,#8B5A2B 55%,#4A2C14 100%)',
   markSvg:'<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3v7a3 3 0 0 0 3 3v8"/><path d="M7 3v6"/><path d="M10 3v7a3 3 0 0 1-3 3"/><path d="M17 21V3c-2 1.5-3 4-3 7v4h3"/></svg>',
@@ -897,7 +897,9 @@ async function _authControllaAccesso(){
   var a = await api('rpc/ceraldi_mio_accesso', { method: 'POST', body: {} });
   ACC = { stato: a.stato, ruolo: a.ruolo, nome: a.nome || '', permessi: a.permessi || {}, livello: 'completo',
     admin: a.ruolo === 'admin' && a.stato === 'attivo', lettura: false, id: a.id || null };
-  ACC.ok = ACC.admin;
+  // Chi ha il permesso «guida» (e non è amministratore) entra solo nella Guida di Napoli: il database lo limita comunque alle tabelle della guida
+  ACC.soloGuida = !ACC.admin && a.stato === 'attivo' && !!(a.permessi || {}).guida;
+  ACC.ok = ACC.admin || ACC.soloGuida;
   lsSet(APP.key + '_acc', ACC);
   return ACC;
 }
@@ -951,11 +953,18 @@ function descDisp(r){
 async function avvia(){
   document.getElementById('appMark').style.background = APP.markBg;
   document.getElementById('appMark').innerHTML = APP.markSvg;
+  if(ACC && ACC.soloGuida){   // permesso «guida»: solo la Guida di Napoli
+    document.querySelectorAll('.tab-item').forEach(function(b){ if(b.dataset.tab !== 'guida') b.style.display = 'none'; });
+    document.querySelectorAll('.hdr-actions .hdr-btn').forEach(function(b){ if(/nuova voce/i.test(b.getAttribute('aria-label') || '')) b.style.display = 'none'; });
+    var hs = document.getElementById('hdrSub'); if(hs) hs.firstChild.textContent = 'Guida di Napoli ';
+    vaiTab('guida'); return;
+  }
   await carica();
   vaiTab(V.tab);
 }
 async function carica(mostra){
   if(mostra) toast('Aggiorno…');
+  if(ACC && ACC.soloGuida){ try{ G.caricata = false; await caricaGuida(); if(mostra) toast('✓ Aggiornato'); }catch(e){ toast('⚠️ ' + e.message); } renderTab(V.tab); return; }
   try{
     var r = await Promise.all([
       api('menu_sezioni?select=*&order=ordine,id'), apiTutte('menu_categorie?select=*&order=ordine,id'), apiTutte('menu_voci?select=*&order=ordine,id'),
@@ -2478,7 +2487,7 @@ async function ctSalvaTesti(){
    Le traduzioni sono generate in automatico (Google) e salvate nel database. Qui si controllano e si correggono:
    una correzione a mano non viene mai riscritta dal sistema; se cambia il testo italiano compare «Da rivedere». */
 function lingueAttive(){ return (D.lingue || []).filter(function(g){ return g.attiva; }); }
-var TR_TAB = { menu_voci: ['voci', 'id', 'Prodotto'], menu_categorie: ['categorie', 'id', 'Categoria'], menu_sezioni: ['sezioni', 'id', 'Sezione'], menu_blocchi: ['blocchi', 'id', 'Blocco'], menu_momenti: ['momenti', 'id', 'Momento'], menu_pagine: ['pagine', 'codice', 'Pagina'], menu_raccomandazioni: ['racc', 'id', 'Consiglio'], contenuti_collegamenti: ['colleg', 'id', 'Collegamento'] };
+var TR_TAB = { menu_voci: ['voci', 'id', 'Prodotto'], menu_categorie: ['categorie', 'id', 'Categoria'], menu_sezioni: ['sezioni', 'id', 'Sezione'], menu_blocchi: ['blocchi', 'id', 'Blocco'], menu_momenti: ['momenti', 'id', 'Momento'], menu_pagine: ['pagine', 'codice', 'Pagina'], menu_raccomandazioni: ['racc', 'id', 'Consiglio'], contenuti_collegamenti: ['colleg', 'id', 'Collegamento'], guida_luoghi: ['gl', 'id', 'Luogo della guida'], guida_itinerari: ['git', 'id', 'Giro'], guida_tappe: ['gtp', 'id', 'Tappa'], guida_racconti: ['grc', 'id', 'Racconto'], guida_dettagli: ['gdt', 'id', 'Cosa guardare'], guida_foto: ['gft', 'id', 'Foto'], guida_orari: ['gor', 'id', 'Orario'] };
 var _tr = { lingua: null, filtro: 'tutte', q: '', righe: [], rivedere: {} };
 function trRiga(t){
   var d = TR_TAB[t.tabella], r = d && (D[d[0]] || []).find(function(x){ return String(x[d[1]]) === String(t.riga_id); });
@@ -2488,6 +2497,7 @@ async function apriTraduzioni(){
   if(!lingueAttive().length){ toast('Nessuna lingua attiva'); return; }
   if(!_tr.lingua || !lingueAttive().some(function(g){ return g.codice === _tr.lingua; })) _tr.lingua = lingueAttive()[0].codice;
   apriSheet('shTr', { titolo: 'Traduzioni', alto: true, corpo: '<div class="hint" style="text-align:center;padding:30px 0">Carico…</div>', piede: '<div class="btn-row"><button class="btn btn-s" onclick="trGlossario()">Termini da non tradurre</button><button class="btn btn-p" onclick="chiudiSheet(\'shTr\')">Chiudi</button></div>' });
+  try{ if(!G.caricata) await caricaGuida(); }catch(e){}
   await trCarica();
 }
 async function trCarica(){
@@ -2572,13 +2582,17 @@ async function trGlossario(){
 var GZONE = { decumano_inferiore: 'Spaccanapoli · decumano inferiore', decumano_maggiore: 'Via dei Tribunali · decumano maggiore', decumano_superiore: 'Musei · decumano superiore', toledo_mare: 'Via Toledo e verso il mare', oltre_mura: 'Oltre le mura', vomero: 'Vomero' };
 var GTIPI = { museo: 'Museo', chiesa: 'Chiesa', sotterraneo: 'Sottosuolo', piazza: 'Piazza', strada: 'Strada', palazzo: 'Palazzo', castello: 'Castello', teatro: 'Teatro', quartiere: 'Quartiere', panorama: 'Panorama', altro: 'Altro' };
 var GGIORNI = ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'];
-var GSTATI = { bozza: ['Bozza', 'n'], pubblicato: ['Pubblicato', 'p'], archiviato: ['Archiviato', 'n'] };
-var G = { caricata: false, luoghi: [], orari: [], fonti: [], aff: [], filtro: 'tutti', q: '' };
+var GSTATI = { bozza: ['Bozza', 'n'], anteprima: ['In anteprima', 'b'], pubblicato: ['Pubblicato', 'p'], archiviato: ['Archiviato', 'n'] };
+var G = { caricata: false, vista: 'luoghi', luoghi: [], orari: [], fonti: [], aff: [], itin: [], tappe: [], rac: [], cap: [], det: [], gal: [], filtro: 'tutti', q: '' };
 
 async function caricaGuida(){
   var r = await Promise.all([api('guida_luoghi?select=*&order=ordine,id'), api('guida_orari?select=*&order=ordine,id'),
-    api('guida_fonti_controllo?select=*&order=id'), api('guida_affermazioni_fonti?select=*&tabella=eq.guida_luoghi&order=id')]);
-  G.luoghi = r[0] || []; G.orari = r[1] || []; G.fonti = r[2] || []; G.aff = r[3] || []; G.caricata = true;
+    api('guida_fonti_controllo?select=*&order=id'), api('guida_affermazioni_fonti?select=*&tabella=eq.guida_luoghi&order=id'),
+    api('guida_itinerari?select=*&order=ordine,id'), api('guida_tappe?select=*&order=itinerario_id,ordine'), api('guida_racconti?select=*&order=ordine,id'),
+    api('guida_capitoli?select=*&order=racconto_id,ordine'), api('guida_dettagli?select=*&order=luogo_id,ordine'), api('guida_foto?select=*&order=luogo_id,ordine')]);
+  G.luoghi = r[0] || []; G.orari = r[1] || []; G.fonti = r[2] || []; G.aff = r[3] || []; G.itin = r[4] || []; G.tappe = r[5] || []; G.rac = r[6] || [];
+  G.cap = r[7] || []; G.det = r[8] || []; G.gal = r[9] || []; G.caricata = true;
+  D.gl = G.luoghi; D.git = G.itin; D.gtp = G.tappe; D.grc = G.rac; D.gdt = G.det; D.gft = G.gal; D.gor = G.orari;   // per la schermata Traduzioni
 }
 function gDi(id){ return G.luoghi.find(function(l){ return l.id === id; }); }
 function gOrari(id){ return G.orari.filter(function(o){ return o.luogo_id === id; }); }
@@ -2619,6 +2633,9 @@ async function renderGuida(){
     box.innerHTML = '<div class="hint" style="text-align:center;padding:40px 0">Carico la guida…</div>';
     try{ await caricaGuida(); }catch(e){ box.innerHTML = '<div class="banner r"><span>⚠️</span><span>' + esc(e.message) + '</span></div>'; return; }
   }
+  if(G.vista === 'giri'){ renderGuidaGiri(box); return; }
+  if(G.vista === 'racconti'){ renderGuidaRacconti(box); return; }
+  if(G.vista === 'passaporto' && typeof renderGuidaPassaporto === 'function'){ renderGuidaPassaporto(box); return; }
   var L = G.luoghi.filter(function(l){ return l.stato !== 'archiviato' || G.filtro === 'archiviati'; });
   var nPub = L.filter(function(l){ return l.stato === 'pubblicato'; }).length, nProb = L.filter(function(l){ return gProblemi(l).length; }).length,
       nVer = L.filter(function(l){ return !l.sempre_accessibile && l.orari_stato !== 'verificati'; }).length;
@@ -2630,7 +2647,7 @@ async function renderGuida(){
     if(G.filtro === 'pubblicati' && l.stato !== 'pubblicato') return false;
     return !q || (l.nome + ' ' + (GTIPI[l.tipo] || '') + ' ' + (l.sommario || '')).toLowerCase().indexOf(q) >= 0;
   });
-  var h = '<div class="kpi"><div><b class="tnum">' + L.length + '</b><span>Luoghi</span></div><div><b class="tnum">' + nPub + '</b><span>Pubblicati</span></div>' +
+  var h = gVistaSeg() + '<div class="kpi"><div><b class="tnum">' + L.length + '</b><span>Luoghi</span></div><div><b class="tnum">' + nPub + '</b><span>Pubblicati</span></div>' +
     '<div><b class="tnum">' + nVer + '</b><span>Orari da verificare</span></div><div><b class="tnum">' + nProb + '</b><span>Da sistemare</span></div></div>' +
     '<div class="seg" style="margin:12px 0 8px">' + [['tutti', 'Tutti'], ['sistemare', 'Da fare'], ['pubblicati', 'Pubblicati'], ['archiviati', 'Archiviati']].map(function(f){
       return '<button class="seg-b' + (G.filtro === f[0] ? ' active' : '') + '" onclick="G.filtro=\'' + f[0] + '\';renderGuida()">' + f[1] + '</button>'; }).join('') + '</div>' +
@@ -2663,7 +2680,7 @@ function apriLuogo(id){
   function area(idc, et, val, max, righe, ph){ return '<div class="field"><label for="' + idc + '">' + et + ' <span class="hint" style="font-weight:400" id="' + idc + 'N"></span></label><textarea class="inp" id="' + idc + '" rows="' + righe + '" maxlength="' + max + '" style="resize:vertical" placeholder="' + esc(ph || '') + '" oninput="gConta(this,' + max + ')">' + esc(val || '') + '</textarea></div>'; }
   var corpo =
     '<div class="ed-sec">' +
-      '<div class="field"><label>Stato</label><div class="seg" id="gStato">' + segBtn('bozza', 'Bozza', l.stato === 'bozza') + segBtn('pubblicato', 'Pubblicato', l.stato === 'pubblicato') + segBtn('archiviato', 'Archiviato', l.stato === 'archiviato') + '</div></div>' +
+      '<div class="field"><label>Stato</label><div class="seg" id="gStato">' + segBtn('bozza', 'Bozza', l.stato === 'bozza') + segBtn('anteprima', 'In anteprima', l.stato === 'anteprima') + segBtn('pubblicato', 'Pubblicato', l.stato === 'pubblicato') + segBtn('archiviato', 'Archiviato', l.stato === 'archiviato') + '</div></div>' +
       '<div class="field"><label for="gNome">Nome *</label><input class="inp" id="gNome" maxlength="120" value="' + esc(l.nome) + '"></div>' +
       '<div class="due"><div class="field"><label for="gTipo">Tipo</label><select class="inp" id="gTipo">' + opz(GTIPI, l.tipo) + '</select></div><div class="field"><label for="gZona">Zona</label><select class="inp" id="gZona">' + opz(GZONE, l.zona) + '</select></div></div>' +
       area('gSomm', 'Perché vederlo (testo breve) *', l.sommario, 400, 3, 'Due righe che fanno venire voglia di andarci') +
@@ -2688,11 +2705,13 @@ function apriLuogo(id){
       (l.lat != null ? '<div class="hint" style="margin:-4px 0 10px"><a href="https://www.openstreetmap.org/?mlat=' + l.lat + '&amp;mlon=' + l.lon + '#map=18/' + l.lat + '/' + l.lon + '" target="_blank" rel="noopener">Controlla la posizione sulla mappa ›</a></div>' : '') +
       '<div class="field"><label for="gInd">Indirizzo</label><input class="inp" id="gInd" maxlength="200" value="' + esc(l.indirizzo || '') + '"></div>' +
       '<div class="field"><label for="gAcc">Accessibilità (solo ciò che hai verificato)</label><textarea class="inp" id="gAcc" rows="2" maxlength="600">' + esc(l.accessibilita || '') + '</textarea></div></details>' +
+    '<details class="ed-det"><summary>Foto principale</summary>' + gFotoHtml('gF', l, 0) + '</details>' +
+    (id ? '<details class="ed-det" open><summary>Cosa guardare e galleria</summary><div class="btn-row"><button class="btn-sm" onclick="apriDettagli(' + id + ')">Cosa guardare (' + gDettagli(id).length + ')</button><button class="btn-sm" onclick="apriGalleria(' + id + ')">Foto della galleria (' + gGalleria(id).length + ')</button></div></details>' : '') +
     '<details class="ed-det"' + (l.note_interne ? ' open' : '') + '><summary>Note interne</summary><textarea class="inp" id="gNote" rows="3" maxlength="2000" placeholder="Visibili solo qui">' + esc(l.note_interne || '') + '</textarea></details>';
   apriSheet('shLg', { titolo: id ? l.nome : 'Nuovo luogo', alto: true, corpo: corpo,
     piede: '<div class="btn-row"><button class="btn btn-s" onclick="chiudiSheet(\'shLg\')">Annulla</button><button class="btn btn-p" id="gSalva" onclick="salvaLuogo()">Salva</button></div>' });
   ['gSomm', 'gRacc', 'gCons'].forEach(function(k){ var t = document.getElementById(k); gConta(t, +t.getAttribute('maxlength')); });
-  gDisegnaOrari(); gDisegnaFonti(); gDisegnaAff();
+  gDisegnaOrari(); gDisegnaFonti(); gDisegnaAff(); gInizializzaFoto('gF');
 }
 function tmp5(t){ return t ? String(t).slice(0, 5) : ''; }
 function gConta(t, max){ var n = document.getElementById(t.id + 'N'); if(n) n.textContent = t.value.length + '/' + max; }
@@ -2733,6 +2752,7 @@ async function gVerificaOggi(){
     var ora = new Date().toISOString();
     await api('guida_luoghi?id=eq.' + l.id, { method: 'PATCH', prefer: 'return=minimal', body: { orari_stato: 'verificati', orari_verificati_il: ora } });
     await api('guida_verifiche', { method: 'POST', prefer: 'return=minimal', body: { luogo_id: l.id, tipo: 'manuale', esito: 'confermata', dettaglio: 'Controllo a mano sul sito ufficiale (Back Office)' } });
+    for(var fi = 0; fi < GE.fonti.length; fi++){ var fo = GE.fonti[fi]; if(fo.id && fo.impronta_ultima) await api('guida_fonti_controllo?id=eq.' + fo.id, { method: 'PATCH', prefer: 'return=minimal', body: { impronta_approvata: fo.impronta_ultima, testo_approvato: fo.testo_ultimo, ultimo_esito: 'uguale', errori_consecutivi: 0 } }); }   // il controllo automatico riparte da questa versione della pagina
     l.orari_stato = 'verificati'; l.orari_verificati_il = ora; gLeggiOrari(); gDisegnaOrari(); toast('✓ Orari verificati oggi');
   }catch(e){ toast('⚠️ ' + e.message); }
 }
@@ -2794,11 +2814,14 @@ async function salvaLuogo(){
   /* se cambiano gli orari, tornano «da verificare» finché qualcuno non conferma sul sito ufficiale */
   var prima = l.id ? JSON.stringify(gOrari(l.id).map(gChiaveOrario)) : '[]', dopo = JSON.stringify(orari.map(gChiaveOrario));
   if(l.id && prima !== dopo && l.orari_stato === 'verificati') corpo.orari_stato = 'da_verificare';
+  var ftL = gFotoLeggi('gF', 0); if(ftL.err){ toast(ftL.err); return; }
+  Object.assign(corpo, ftL.v);
   var vuolePubblicare = corpo.stato === 'pubblicato';
   if(vuolePubblicare) corpo.stato = l.stato === 'pubblicato' ? 'pubblicato' : 'bozza';   // si pubblica per ultimo, dopo fonti e orari
   var btn = document.getElementById('gSalva'); btn.disabled = true; btn.textContent = 'Salvo…';
   var id = l.id, passo = 'luogo';
   try{
+    if(!ftL.vuota) corpo.foto_path = await gFotoCarica('gF', 'luoghi/' + (l.slug || gSlug(nome)));
     if(!id){ corpo.slug = gSlug(nome); corpo.ordine = (G.luoghi.reduce(function(m, x){ return Math.max(m, x.ordine || 0); }, 0)) + 10;
       var r = await api('guida_luoghi', { method: 'POST', prefer: 'return=representation', body: corpo }); id = r[0].id; GE.l = r[0]; }
     else await api('guida_luoghi?id=eq.' + id, { method: 'PATCH', prefer: 'return=minimal', body: corpo });
@@ -2827,6 +2850,306 @@ async function gSincronizza(tab, prima, dopo, campi){
     var p = prima.find(function(y){ return y.id === x.id; }), ks = campi || Object.keys(x).filter(function(k){ return k !== 'id'; }), diff = {};
     ks.forEach(function(k){ var a = p ? p[k] : null, b = x[k]; if(/^(dalle|alle|ultimo_ingresso)$/.test(k)){ a = tmp5(a); b = tmp5(b); } if(JSON.stringify(a == null ? null : a) !== JSON.stringify(b == null ? null : b)) diff[k] = x[k]; });
     if(Object.keys(diff).length) await api(tab + '?id=eq.' + x.id, { method: 'PATCH', prefer: 'return=minimal', body: diff }); }
+}
+
+
+/* ══════════════════════════════════════════════════════════════════
+   GUIDA — giri, racconti, «cosa guardare» e foto (T4, 04/11/2026)
+   Stesse regole dei luoghi: i testi stanno nel database, ogni foto ha autore, licenza e permesso d'uso registrati
+   (il database rifiuta la foto senza), le traduzioni partono da sole dopo il salvataggio.
+   ══════════════════════════════════════════════════════════════════ */
+var GST = { bozza: 'Bozza', anteprima: 'In anteprima', pubblicato: 'Pubblicato', archiviato: 'Archiviato' };
+var GPERM = { proprio: 'Foto scattata da noi', licenza_libera: 'Licenza libera (es. Wikimedia Commons)', concessa: 'Il proprietario ci ha dato il permesso' };
+var GLICENZE = ['CC0', 'Pubblico dominio', 'CC BY 4.0', 'CC BY-SA 4.0', 'CC BY 3.0', 'CC BY-SA 3.0', 'CC BY 2.0', 'CC BY-SA 2.0', 'Foto di Ceraldi Caffè', 'Concessa dall’autore'];
+
+function gOpz(o, sel){ return Object.keys(o).map(function(k){ return '<option value="' + esc(k) + '"' + (String(k) === String(sel) ? ' selected' : '') + '>' + esc(o[k]) + '</option>'; }).join(''); }
+function gStatoSeg(id, val){ return '<div class="field"><label>Stato</label><div class="seg" id="' + id + '">' + Object.keys(GST).map(function(k){ return segBtn(k, GST[k], (val || 'bozza') === k); }).join('') + '</div>' +
+  '<div class="hint" style="margin-top:4px">«In anteprima» si vede solo nella guida di prova; «Pubblicato» anche ai clienti.</div></div>'; }
+function gBdg(s){ var st = GSTATI[s] || [GST[s] || s, s === 'anteprima' ? 'b' : 'n']; return '<span class="bdg ' + st[1] + '">' + esc(GST[s] || st[0]) + '</span>'; }
+function gArea(idc, et, val, max, righe, ph){ return '<div class="field"><label for="' + idc + '">' + et + ' <span class="hint" style="font-weight:400" id="' + idc + 'N"></span></label><textarea class="inp" id="' + idc + '" rows="' + righe + '" maxlength="' + max + '" style="resize:vertical" placeholder="' + esc(ph || '') + '" oninput="gConta(this,' + max + ')">' + esc(val || '') + '</textarea></div>'; }
+function gInp(idc, et, val, max, ph){ return '<div class="field"><label for="' + idc + '">' + et + '</label><input class="inp" id="' + idc + '" maxlength="' + max + '" value="' + esc(val || '') + '" placeholder="' + esc(ph || '') + '"></div>'; }
+function gContaTutti(ids){ ids.forEach(function(k){ var t = document.getElementById(k); if(t) gConta(t, +t.getAttribute('maxlength')); }); }
+function gVistaSeg(){
+  return '<div class="seg" style="margin:0 0 12px">' + [['luoghi', 'Luoghi'], ['giri', 'Giri'], ['racconti', 'Racconti'], ['passaporto', 'Passaporto']].filter(function(v){ return v[0] !== 'passaporto' || typeof renderGuidaPassaporto === 'function'; }).map(function(v){
+    return '<button class="seg-b' + (G.vista === v[0] ? ' active' : '') + '" onclick="G.vista=\'' + v[0] + '\';renderGuida()">' + v[1] + '</button>'; }).join('') + '</div>';
+}
+function gDiL(id){ return G.luoghi.find(function(l){ return l.id === id; }); }
+function gNomeL(id){ var l = gDiL(id); return l ? l.nome : '(luogo eliminato)'; }
+function gErr(passo, e){ _registraErrore('guida/' + passo, e.message); toast('⚠️ ' + e.message, { durata: 7000 }); }
+
+/* ── Foto: scelta nel telefono, riduzione a 1280 px, caricamento in menu-foto/guida/… ── */
+var GFOTO = {};
+function gFotoUrl(p){ return !p ? '' : /^https:\/\//.test(p) ? p : FOTO_URL + p; }
+function gFotoHtml(p, r, modo){   // modo: 0 = solo foto e crediti; 1 = anche permesso d'uso; 2 = anche note sul permesso
+  r = r || {}; GFOTO[p] = { path: r.foto_path || null, blob: null, ext: null };
+  return '<div class="grp" style="padding:12px;margin-bottom:10px"><div id="' + p + 'Anteprima" style="margin-bottom:8px"></div>' +
+    '<div class="btn-row"><label class="btn-sm p" style="flex:0 0 auto;cursor:pointer">Scegli la foto<input type="file" accept="image/*" hidden onchange="gFotoScelta(\'' + p + '\',this)"></label>' +
+    '<button type="button" class="btn-sm r" style="flex:0 0 auto" onclick="gFotoTogli(\'' + p + '\')">Togli la foto</button></div>' +
+    '<div class="hint" style="margin:8px 0">Solo foto scattate da noi, con licenza libera o con permesso scritto del proprietario. Mai foto copiate da altri siti.</div>' +
+    gInp(p + 'Alt', 'Cosa si vede (per chi non vede la foto) *', r.foto_alt, 300, 'Es. La facciata del Gesù Nuovo di sera') +
+    gInp(p + 'Did', 'Didascalia sotto la foto', r.foto_didascalia, 300, 'Una frase che racconta la foto') +
+    '<div class="due"><div class="field"><label for="' + p + 'Aut">Autore *</label><input class="inp" id="' + p + 'Aut" maxlength="150" value="' + esc(r.foto_autore || '') + '"></div>' +
+    '<div class="field"><label for="' + p + 'Lic">Licenza *</label><input class="inp" id="' + p + 'Lic" maxlength="80" list="' + p + 'LicL" value="' + esc(r.foto_licenza || '') + '"><datalist id="' + p + 'LicL">' + GLICENZE.map(function(x){ return '<option value="' + esc(x) + '">'; }).join('') + '</datalist></div></div>' +
+    '<div class="field"><label for="' + p + 'Fonte">Indirizzo della pagina della foto (https://…)</label><input class="inp" id="' + p + 'Fonte" inputmode="url" value="' + esc(r.foto_fonte_url || '') + '" placeholder="Obbligatorio se la licenza è libera"></div>' +
+    (modo ? '<div class="field"><label for="' + p + 'Perm">Permesso d’uso *</label><select class="inp" id="' + p + 'Perm"><option value="">Scegli…</option>' + gOpz(GPERM, r.foto_permesso) + '</select></div>' : '') +
+    (modo === 2 ? gInp(p + 'PNote', 'Note sul permesso', r.permesso_note, 500, 'Es. Wikimedia Commons, licenza verificata il …') : '') + '</div>';
+}
+function gFotoAnteprima(p, url){ var b = document.getElementById(p + 'Anteprima'); if(!b) return; b.innerHTML = url ? '<img src="' + esc(url) + '" alt="" style="width:100%;max-height:220px;object-fit:cover;border-radius:10px">' : '<div class="hint">Nessuna foto</div>'; }
+function gFotoMostra(p){ var s = GFOTO[p] || {}; gFotoAnteprima(p, s.blob ? s.anteprima : gFotoUrl(s.path)); }
+async function gFotoScelta(p, inp){
+  var f = inp.files && inp.files[0]; if(!f) return;
+  try{
+    var x = await preparaFoto(f), b = await _comprimi(x.img, 1280, 0.82);
+    if(!b) throw new Error('Non riesco a preparare la foto');
+    if(b.size > 2.5 * 1024 * 1024) throw new Error('La foto è troppo pesante anche dopo la riduzione');
+    GFOTO[p] = { path: null, blob: b, ext: b.type === 'image/webp' ? 'webp' : 'jpg', anteprima: x.anteprima }; gFotoMostra(p);
+  }catch(e){ toast('⚠️ ' + e.message); }
+  inp.value = '';
+}
+function gFotoTogli(p){ GFOTO[p] = { path: null, blob: null, ext: null }; gFotoMostra(p); }
+/* legge e controlla i campi della foto: restituisce { v: campi da salvare } oppure { err: messaggio } */
+function gFotoLeggi(p, modo){
+  var s = GFOTO[p] || {}, g = function(k){ var e = document.getElementById(p + k); return e ? e.value.trim() : ''; };
+  if(!s.path && !s.blob){ var v0 = { foto_path: null, foto_alt: null, foto_didascalia: null, foto_autore: null, foto_licenza: null, foto_fonte_url: null }; if(modo){ v0.foto_permesso = null; } if(modo === 2){ v0.permesso_note = null; } return { v: v0, vuota: true }; }
+  if(!g('Alt')) return { err: 'Scrivi cosa si vede nella foto' };
+  if(!g('Aut')) return { err: 'Scrivi l’autore della foto' };
+  if(!g('Lic')) return { err: 'Scrivi la licenza della foto' };
+  var fonte = g('Fonte'); if(fonte && !/^https:\/\/[^\s]+\.[^\s]+/.test(fonte)) return { err: 'L’indirizzo della foto deve iniziare con https://' };
+  var perm = modo ? g('Perm') : '';
+  if(modo && !perm) return { err: 'Scegli il permesso d’uso della foto' };
+  if(perm === 'licenza_libera' && !fonte) return { err: 'Con una licenza libera serve l’indirizzo della pagina della foto' };
+  var v = { foto_path: s.path || null, foto_alt: g('Alt'), foto_didascalia: g('Did') || null, foto_autore: g('Aut'), foto_licenza: g('Lic'), foto_fonte_url: fonte || null };
+  if(modo) v.foto_permesso = perm;
+  if(modo === 2) v.permesso_note = g('PNote') || null;
+  return { v: v };
+}
+async function gFotoCarica(p, cartella){
+  var s = GFOTO[p]; if(!s || !s.blob) return s ? s.path : null;
+  await _authPronto();
+  var percorso = 'guida/' + cartella + '/' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) + '.' + s.ext;
+  await _carica(percorso, s.blob); return percorso;
+}
+function gInizializzaFoto(p){ gFotoMostra(p); }
+
+/* ordine delle righe figlie: sposta e rinumera (10, 20, 30…) */
+async function gSposta(tab, lista, i, d, rinfresca){
+  var j = i + d; if(j < 0 || j >= lista.length) return;
+  var nuova = lista.slice(); var t = nuova[i]; nuova[i] = nuova[j]; nuova[j] = t;
+  try{
+    for(var k = 0; k < nuova.length; k++){ if(nuova[k].ordine !== (k + 1) * 10) await api(tab + '?id=eq.' + nuova[k].id, { method: 'PATCH', prefer: 'return=minimal', body: { ordine: (k + 1) * 10 } }); }
+    await caricaGuida(); rinfresca();
+  }catch(e){ gErr('ordine', e); }
+}
+function gFrecce(onUp, onDown, i, n){ return '<span class="ord-b"><button aria-label="Sposta su" onclick="event.stopPropagation();' + onUp + '"' + (i ? '' : ' disabled') + '>↑</button><button aria-label="Sposta giù" onclick="event.stopPropagation();' + onDown + '"' + (i < n - 1 ? '' : ' disabled') + '>↓</button></span>'; }
+
+/* ══ COSA GUARDARE (guida_dettagli) e FOTO DEL LUOGO (guida_foto) ══ */
+function gDettagli(lid){ return G.det.filter(function(x){ return x.luogo_id === lid; }).sort(function(a, b){ return (a.ordine || 0) - (b.ordine || 0) || a.id - b.id; }); }
+function gGalleria(lid){ return G.gal.filter(function(x){ return x.luogo_id === lid; }).sort(function(a, b){ return (a.ordine || 0) - (b.ordine || 0) || a.id - b.id; }); }
+function apriDettagli(lid){
+  var l = gDiL(lid), L = gDettagli(lid);
+  apriSheet('shDt', { titolo: 'Cosa guardare · ' + l.nome, alto: true,
+    corpo: '<div class="hint" style="margin:0 4px 10px">Le cose da non perdere in questo luogo, nell’ordine in cui le vede il cliente.</div>' +
+      (L.length ? '<div class="grp">' + L.map(function(x, i){ return '<div class="row" role="button" tabindex="0" onclick="apriDettaglio(' + lid + ',' + x.id + ')"><div class="row-main"><div class="row-t">' + esc(x.titolo) + ' ' + gBdg(x.stato) + '</div><div class="row-s">' + (x.foto_path ? '📷 con foto' : 'senza foto') + (x.dove ? ' · ' + esc(x.dove) : '') + '</div></div>' +
+        gFrecce('gSposta(\'guida_dettagli\',gDettagli(' + lid + '),' + i + ',-1,function(){apriDettagli(' + lid + ')})', 'gSposta(\'guida_dettagli\',gDettagli(' + lid + '),' + i + ',1,function(){apriDettagli(' + lid + ')})', i, L.length) + '</div>'; }).join('') + '</div>' : '<div class="hint" style="text-align:center;padding:16px">Ancora niente.</div>') +
+      '<button class="btn btn-s" style="margin-top:10px" onclick="apriDettaglio(' + lid + ',null)">＋ Aggiungi</button>' });
+}
+function apriDettaglio(lid, id){
+  var x = id ? G.det.find(function(d){ return d.id === id; }) : { stato: 'bozza' }; if(!x) return;
+  apriSheet('shDtF', { titolo: id ? x.titolo : 'Nuova cosa da guardare', alto: true,
+    corpo: gStatoSeg('dtStato', x.stato) + gInp('dtT', 'Titolo *', x.titolo, 120, 'Es. Il Cristo velato') + gArea('dtX', 'Testo *', x.testo, 1500, 5, 'Che cosa si vede e perché conta') +
+      gInp('dtD', 'Dove si trova', x.dove, 200, 'Es. Al centro della cappella') + '<div class="sec-title">Foto</div>' + gFotoHtml('dtF', x, 1),
+    piede: '<div class="btn-row">' + (id ? '<button class="btn btn-s" style="color:var(--bad,#b3261e)" onclick="eliminaDettaglio(' + lid + ',' + id + ')">Elimina</button>' : '') + '<button class="btn btn-p" id="dtSalva" onclick="salvaDettaglio(' + lid + ',' + (id || 'null') + ')">Salva</button></div>' });
+  gContaTutti(['dtX']); gInizializzaFoto('dtF');
+}
+async function salvaDettaglio(lid, id){
+  var t = document.getElementById('dtT').value.trim(), x = document.getElementById('dtX').value.trim();
+  if(t.length < 2 || x.length < 5){ toast('Scrivi titolo e testo'); return; }
+  var ft = gFotoLeggi('dtF', 1); if(ft.err){ toast(ft.err); return; }
+  var btn = document.getElementById('dtSalva'); btn.disabled = true; btn.textContent = 'Salvo…';
+  try{
+    var l = gDiL(lid), corpo = Object.assign({ titolo: t, testo: x, dove: document.getElementById('dtD').value.trim() || null, stato: segValore('dtStato') || 'bozza' }, ft.v);
+    if(!ft.vuota) corpo.foto_path = await gFotoCarica('dtF', 'luoghi/' + l.slug);
+    if(id) await api('guida_dettagli?id=eq.' + id, { method: 'PATCH', prefer: 'return=minimal', body: corpo });
+    else { corpo.luogo_id = lid; corpo.ordine = gDettagli(lid).reduce(function(m, d){ return Math.max(m, d.ordine || 0); }, 0) + 10; await api('guida_dettagli', { method: 'POST', prefer: 'return=minimal', body: corpo }); }
+    await caricaGuida(); chiudiSheet('shDtF'); toast('✓ Salvato'); apriDettagli(lid);
+  }catch(e){ btn.disabled = false; btn.textContent = 'Riprova'; gErr('dettaglio', e); }
+}
+async function eliminaDettaglio(lid, id){
+  if(!(await conferma('Eliminare?', 'Elimino questa voce da «Cosa guardare». Le traduzioni si cancellano con lei.', 'Elimina', true))) return;
+  try{ await api('guida_dettagli?id=eq.' + id, { method: 'DELETE', prefer: 'return=minimal' }); await caricaGuida(); chiudiSheet('shDtF'); toast('✓ Eliminata'); apriDettagli(lid); }catch(e){ gErr('elimina dettaglio', e); }
+}
+function apriGalleria(lid){
+  var l = gDiL(lid), L = gGalleria(lid);
+  apriSheet('shGf', { titolo: 'Foto · ' + l.nome, alto: true,
+    corpo: '<div class="hint" style="margin:0 4px 10px">La foto principale si cambia nella scheda del luogo. Qui le altre foto della galleria.</div>' +
+      (L.length ? '<div class="grp">' + L.map(function(x, i){ return '<div class="row" role="button" tabindex="0" onclick="apriFotoGalleria(' + lid + ',' + x.id + ')"><img src="' + esc(gFotoUrl(x.foto_path)) + '" alt="" style="width:56px;height:56px;object-fit:cover;border-radius:8px;margin-right:10px"><div class="row-main"><div class="row-t">' + esc(x.foto_didascalia || x.foto_alt || 'Foto') + ' ' + gBdg(x.stato) + '</div><div class="row-s">' + esc(x.foto_autore || '') + ' · ' + esc(x.foto_licenza || '') + '</div></div>' +
+        gFrecce('gSposta(\'guida_foto\',gGalleria(' + lid + '),' + i + ',-1,function(){apriGalleria(' + lid + ')})', 'gSposta(\'guida_foto\',gGalleria(' + lid + '),' + i + ',1,function(){apriGalleria(' + lid + ')})', i, L.length) + '</div>'; }).join('') + '</div>' : '<div class="hint" style="text-align:center;padding:16px">Nessuna foto in galleria.</div>') +
+      '<button class="btn btn-s" style="margin-top:10px" onclick="apriFotoGalleria(' + lid + ',null)">＋ Aggiungi una foto</button>' });
+}
+function apriFotoGalleria(lid, id){
+  var x = id ? G.gal.find(function(d){ return d.id === id; }) : { stato: 'bozza' }; if(!x) return;
+  apriSheet('shGfF', { titolo: id ? 'Foto' : 'Nuova foto', alto: true, corpo: gStatoSeg('gfStato', x.stato) + gFotoHtml('gfF', x, 2),
+    piede: '<div class="btn-row">' + (id ? '<button class="btn btn-s" style="color:var(--bad,#b3261e)" onclick="eliminaFotoGalleria(' + lid + ',' + id + ')">Elimina</button>' : '') + '<button class="btn btn-p" id="gfSalva" onclick="salvaFotoGalleria(' + lid + ',' + (id || 'null') + ')">Salva</button></div>' });
+  gInizializzaFoto('gfF');
+}
+async function salvaFotoGalleria(lid, id){
+  var ft = gFotoLeggi('gfF', 2); if(ft.err){ toast(ft.err); return; } if(ft.vuota){ toast('Scegli la foto'); return; }
+  var btn = document.getElementById('gfSalva'); btn.disabled = true; btn.textContent = 'Salvo…';
+  try{
+    var l = gDiL(lid), corpo = Object.assign({ stato: segValore('gfStato') || 'bozza' }, ft.v); corpo.foto_path = await gFotoCarica('gfF', 'luoghi/' + l.slug);
+    if(id) await api('guida_foto?id=eq.' + id, { method: 'PATCH', prefer: 'return=minimal', body: corpo });
+    else { corpo.luogo_id = lid; corpo.ordine = gGalleria(lid).reduce(function(m, d){ return Math.max(m, d.ordine || 0); }, 0) + 10; await api('guida_foto', { method: 'POST', prefer: 'return=minimal', body: corpo }); }
+    await caricaGuida(); chiudiSheet('shGfF'); toast('✓ Salvata'); apriGalleria(lid);
+  }catch(e){ btn.disabled = false; btn.textContent = 'Riprova'; gErr('foto', e); }
+}
+async function eliminaFotoGalleria(lid, id){
+  if(!(await conferma('Eliminare la foto?', 'La tolgo dalla galleria. Il file resta nell’archivio e si può togliere in seguito.', 'Elimina', true))) return;
+  try{ await api('guida_foto?id=eq.' + id, { method: 'DELETE', prefer: 'return=minimal' }); await caricaGuida(); chiudiSheet('shGfF'); toast('✓ Eliminata'); apriGalleria(lid); }catch(e){ gErr('elimina foto', e); }
+}
+
+/* ══ GIRI (guida_itinerari + guida_tappe) ══ */
+function gTappe(iid){ return G.tappe.filter(function(t){ return t.itinerario_id === iid; }).sort(function(a, b){ return (a.ordine || 0) - (b.ordine || 0) || a.id - b.id; }); }
+function renderGuidaGiri(box){
+  var L = G.itin.filter(function(i){ return i.stato !== 'archiviato' || G.filtro === 'archiviati'; });
+  box.innerHTML = gVistaSeg() + '<div class="btn-row" style="margin-bottom:10px"><div class="hint" style="flex:1;margin:0">I giri sono percorsi a piedi con partenza e ritorno da Ceraldi.</div><button class="btn-sm p" style="flex:0 0 auto" onclick="apriGiro(null)">＋ Giro</button></div>' +
+    '<div class="grp">' + L.map(function(g){ var t = gTappe(g.id), senza = t.filter(function(x){ return x.ordine > (t[0] ? t[0].ordine : 0) && !x.percorso; }).length;
+      return '<button class="row" onclick="apriGiro(' + g.id + ')"><div class="row-main"><div class="row-t">' + esc(g.nome) + ' ' + gBdg(g.stato) + '</div><div class="row-s">' + t.length + ' tappe' + (g.durata_min ? ' · ' + Math.round(g.durata_min / 6) / 10 + ' h' : '') + (g.distanza_m ? ' · ' + (g.distanza_m / 1000).toFixed(1).replace('.', ',') + ' km' : '') + '</div>' +
+        (senza ? '<div class="row-s" style="color:var(--warn,#b26b00)">⚠︎ ' + senza + ' tratti senza percorso a piedi da calcolare</div>' : '') + '</div><span class="chev">›</span></button>'; }).join('') + '</div>' +
+    (L.length ? '' : '<div class="hint" style="text-align:center;padding:24px">Nessun giro.</div>');
+}
+var GI = null;
+function apriGiro(id){
+  var g = id ? G.itin.find(function(x){ return x.id === id; }) : { id: null, stato: 'bozza', etichette: [] }; if(!g) return;
+  var t = id ? gTappe(id) : [], prec = null;
+  GI = { g: g, tappe: t.map(function(x){ var o = { id: x.id, luogo_id: x.luogo_id, sosta_min: x.sosta_min, nota: x.nota || '', alternativa_luogo_id: x.alternativa_luogo_id, prima_da: prec, minuti: x.minuti_dal_precedente, metri: x.metri_dal_precedente }; prec = x.luogo_id; return o; }) };
+  apriSheet('shGi', { titolo: id ? g.nome : 'Nuovo giro', alto: true,
+    corpo: gStatoSeg('giStato', g.stato) + gInp('giN', 'Nome *', g.nome, 120, 'Es. Il primo giro') + gInp('giS', 'Sottotitolo', g.sottotitolo, 200, 'Una riga che dice che giro è') +
+      gArea('giD', 'Descrizione', g.descrizione, 800, 4, 'Che cosa si vede lungo il giro') + gInp('giE', 'Etichette (separate da virgola)', (g.etichette || []).join(', '), 200, 'Es. mezza_giornata, arte') +
+      '<div class="sec-title">Foto di copertina</div>' + gFotoHtml('giF', g, 0) +
+      '<div class="sec-title">Tappe, nell’ordine del giro</div><div class="hint" style="margin:0 4px 8px">Parti e torna da Ceraldi (Piazza Carità). Se cambi una tappa il percorso a piedi di quel tratto viene azzerato e va ricalcolato.</div><div id="giTappe"></div>',
+    piede: '<div class="btn-row">' + (id ? '<button class="btn btn-s" style="color:var(--bad,#b3261e)" onclick="eliminaGiro(' + id + ')">Elimina</button>' : '') + '<button class="btn btn-p" id="giSalva" onclick="salvaGiro()">Salva</button></div>' });
+  gContaTutti(['giD']); gInizializzaFoto('giF'); gDisegnaTappe();
+}
+function gLeggiTappe(){
+  document.querySelectorAll('#giTappe [data-t]').forEach(function(r){ var t = GI.tappe[+r.dataset.t]; if(!t) return;
+    t.luogo_id = +r.querySelector('[data-k="luogo"]').value; t.sosta_min = r.querySelector('[data-k="sosta"]').value === '' ? null : +r.querySelector('[data-k="sosta"]').value;
+    t.nota = r.querySelector('[data-k="nota"]').value; var a = r.querySelector('[data-k="alt"]').value; t.alternativa_luogo_id = a ? +a : null; });
+}
+function gDisegnaTappe(){
+  var box = document.getElementById('giTappe'); if(!box) return;
+  var ls = G.luoghi.filter(function(l){ return l.stato !== 'archiviato'; }), opL = {}; ls.forEach(function(l){ opL[l.id] = l.nome; });
+  box.innerHTML = GI.tappe.map(function(t, i){
+    return '<div class="grp" style="padding:10px 12px;margin-bottom:8px" data-t="' + i + '"><div class="row-t" style="margin-bottom:6px">' + (i + 1) + '.</div>' +
+      '<div class="field"><select class="inp" data-k="luogo">' + gOpz(opL, t.luogo_id) + '</select></div>' +
+      '<div class="due"><div class="field"><label>Sosta (min)</label><input class="inp" type="number" inputmode="numeric" min="0" max="480" data-k="sosta" value="' + (t.sosta_min != null ? t.sosta_min : '') + '"></div>' +
+      '<div class="field"><label>Alternativa</label><select class="inp" data-k="alt"><option value="">Nessuna</option>' + gOpz(opL, t.alternativa_luogo_id) + '</select></div></div>' +
+      '<input class="inp" data-k="nota" maxlength="300" placeholder="Nota per il cliente (facoltativa)" value="' + esc(t.nota) + '">' +
+      '<div class="btn-row" style="margin-top:8px"><button class="btn-sm" ' + (i ? '' : 'disabled') + ' onclick="gMuoviTappa(' + i + ',-1)">↑</button><button class="btn-sm" ' + (i < GI.tappe.length - 1 ? '' : 'disabled') + ' onclick="gMuoviTappa(' + i + ',1)">↓</button><button class="btn-sm r" onclick="gLeggiTappe();GI.tappe.splice(' + i + ',1);gDisegnaTappe()">Togli</button></div></div>'; }).join('') +
+    '<button class="btn btn-s" onclick="gLeggiTappe();GI.tappe.push({id:null,luogo_id:' + (ls[0] ? ls[0].id : 'null') + ',sosta_min:15,nota:\'\',alternativa_luogo_id:null,prima_da:null,minuti:null,metri:null});gDisegnaTappe()">＋ Tappa</button>';
+}
+function gMuoviTappa(i, d){ gLeggiTappe(); var j = i + d; if(j < 0 || j >= GI.tappe.length) return; var t = GI.tappe[i]; GI.tappe[i] = GI.tappe[j]; GI.tappe[j] = t; gDisegnaTappe(); }
+async function salvaGiro(){
+  gLeggiTappe();
+  var g = GI.g, nome = document.getElementById('giN').value.trim();
+  if(nome.length < 2){ toast('Scrivi il nome del giro'); return; }
+  if(GI.tappe.length < 2){ toast('Un giro ha almeno due tappe'); return; }
+  var ft = gFotoLeggi('giF', 0); if(ft.err){ toast(ft.err); return; }
+  var btn = document.getElementById('giSalva'); btn.disabled = true; btn.textContent = 'Salvo…';
+  var id = g.id, passo = 'giro';
+  try{
+    /* un tratto ha ancora il suo percorso solo se partenza e arrivo sono gli stessi di prima */
+    var prec = null, righe = GI.tappe.map(function(t, i){
+      var uguale = t.id && t.prima_da === prec && prec != null && t.minuti != null && GI.g.id && (G.tappe.find(function(x){ return x.id === t.id; }) || {}).luogo_id === t.luogo_id;
+      var r = { id: t.id, luogo_id: t.luogo_id, ordine: (i + 1) * 10, sosta_min: t.sosta_min, nota: (t.nota || '').trim() || null, alternativa_luogo_id: t.alternativa_luogo_id };
+      if(i === 0){ r.percorso = null; r.svolte = null; r.percorso_calcolato_il = null; r.minuti_dal_precedente = null; r.metri_dal_precedente = null; }
+      else if(!uguale){ r.percorso = null; r.svolte = null; r.percorso_calcolato_il = null; r.minuti_dal_precedente = null; r.metri_dal_precedente = null; }
+      prec = t.luogo_id; return r; });
+    var metri = 0, minuti = 0; righe.forEach(function(r, i){ var t = GI.tappe[i]; var ok = r.percorso === undefined; if(ok){ metri += t.metri || 0; minuti += t.minuti || 0; } minuti += r.sosta_min || 0; });
+    var corpo = Object.assign({ nome: nome, sottotitolo: document.getElementById('giS').value.trim() || null, descrizione: document.getElementById('giD').value.trim() || null,
+      etichette: document.getElementById('giE').value.split(',').map(function(x){ return x.trim(); }).filter(Boolean), stato: segValore('giStato') || 'bozza', distanza_m: metri || null, durata_min: minuti || null }, ft.v);
+    if(!ft.vuota) corpo.foto_path = await gFotoCarica('giF', 'giri');
+    if(!id){ corpo.slug = gSlug(nome); corpo.ordine = G.itin.reduce(function(m, x){ return Math.max(m, x.ordine || 0); }, 0) + 10;
+      var r = await api('guida_itinerari', { method: 'POST', prefer: 'return=representation', body: corpo }); id = r[0].id; }
+    else await api('guida_itinerari?id=eq.' + id, { method: 'PATCH', prefer: 'return=minimal', body: corpo });
+    passo = 'tappe';
+    var prima = id && g.id ? gTappe(id) : [];
+    var nuovi = righe.filter(function(r){ return !r.id; }).map(function(r){ var c = Object.assign({}, r); delete c.id; c.itinerario_id = id; c.percorso = null; c.svolte = null; c.percorso_calcolato_il = null; c.minuti_dal_precedente = null; c.metri_dal_precedente = null; return c; });
+    var tenuti = righe.filter(function(r){ return r.id; }).map(function(r){ return r.id; }), via = prima.filter(function(x){ return tenuti.indexOf(x.id) < 0; }).map(function(x){ return x.id; });
+    if(via.length) await api('guida_tappe?id=in.(' + via.join(',') + ')', { method: 'DELETE', prefer: 'return=minimal' });
+    for(var i = 0; i < righe.length; i++){ var r2 = righe[i]; if(!r2.id) continue; var cambi = Object.assign({}, r2); delete cambi.id; await api('guida_tappe?id=eq.' + r2.id, { method: 'PATCH', prefer: 'return=minimal', body: cambi }); }
+    if(nuovi.length) await api('guida_tappe', { method: 'POST', prefer: 'return=minimal', body: nuovi });
+    await caricaGuida(); chiudiSheet('shGi'); toast('✓ Salvato'); renderGuida();
+  }catch(e){ btn.disabled = false; btn.textContent = 'Riprova'; gErr('giro/' + passo, e); if(passo === 'tappe'){ await caricaGuida(); renderGuida(); } }
+}
+async function eliminaGiro(id){
+  if(!(await conferma('Eliminare il giro?', 'Elimino il giro e le sue tappe. I luoghi restano. Se vuoi solo nasconderlo, mettilo in «Archiviato».', 'Elimina', true))) return;
+  try{ await api('guida_tappe?itinerario_id=eq.' + id, { method: 'DELETE', prefer: 'return=minimal' }); await api('guida_itinerari?id=eq.' + id, { method: 'DELETE', prefer: 'return=minimal' }); await caricaGuida(); chiudiSheet('shGi'); toast('✓ Eliminato'); renderGuida(); }catch(e){ gErr('elimina giro', e); }
+}
+
+/* ══ RACCONTI (guida_racconti + guida_capitoli) ══ */
+function gCapitoli(rid){ return G.cap.filter(function(c){ return c.racconto_id === rid; }).sort(function(a, b){ return (a.ordine || 0) - (b.ordine || 0) || a.id - b.id; }); }
+function renderGuidaRacconti(box){
+  var L = G.rac.filter(function(r){ return r.stato !== 'archiviato' || G.filtro === 'archiviati'; });
+  box.innerHTML = gVistaSeg() + '<div class="btn-row" style="margin-bottom:10px"><div class="hint" style="flex:1;margin:0">Le storie della città, a capitoli, collegate ai luoghi.</div><button class="btn-sm p" style="flex:0 0 auto" onclick="apriRacconto(null)">＋ Racconto</button></div>' +
+    '<div class="grp">' + L.map(function(r){ return '<button class="row" onclick="apriRacconto(' + r.id + ')"><div class="row-main"><div class="row-t">' + esc(r.titolo) + ' ' + gBdg(r.stato) + (r.in_apertura ? ' <span class="bdg b">In apertura</span>' : '') + '</div><div class="row-s">' + gCapitoli(r.id).length + ' capitoli' + (r.sottotitolo ? ' · ' + esc(r.sottotitolo) : '') + '</div></div><span class="chev">›</span></button>'; }).join('') + '</div>' +
+    (L.length ? '' : '<div class="hint" style="text-align:center;padding:24px">Nessun racconto.</div>');
+}
+function apriRacconto(id){
+  var r = id ? G.rac.find(function(x){ return x.id === id; }) : { id: null, stato: 'bozza' }; if(!r) return;
+  var C = id ? gCapitoli(id) : [];
+  apriSheet('shRc', { titolo: id ? r.titolo : 'Nuovo racconto', alto: true,
+    corpo: gStatoSeg('rcStato', r.stato) + gInp('rcT', 'Titolo *', r.titolo, 140, 'Es. Caravaggio a Napoli') + gInp('rcS', 'Sottotitolo', r.sottotitolo, 200, '') +
+      gArea('rcM', 'Sommario (in due righe)', r.sommario, 500, 3, '') + gArea('rcX', 'Introduzione', r.testo, 6000, 6, 'Il testo che apre il racconto') +
+      '<div class="row" style="padding:4px 0 10px"><div class="row-main"><div class="row-t">In apertura</div><div class="row-s">Compare per primo nella pagina dei racconti</div></div><label class="tgl"><input type="checkbox" id="rcAp"' + (r.in_apertura ? ' checked' : '') + '><span></span></label></div>' +
+      '<div class="sec-title">Foto di copertina</div>' + gFotoHtml('rcF', r, 0) +
+      '<div class="sec-title">Capitoli</div>' + (id ? (C.length ? '<div class="grp">' + C.map(function(c, i){ return '<div class="row" role="button" tabindex="0" onclick="apriCapitolo(' + id + ',' + c.id + ')"><div class="row-main"><div class="row-t">' + esc((c.periodo ? c.periodo + ' · ' : '') + c.titolo) + ' ' + gBdg(c.stato) + '</div><div class="row-s">' + (c.luogo_id ? esc(gNomeL(c.luogo_id)) : 'nessun luogo collegato') + (c.foto_path ? ' · 📷' : '') + '</div></div>' +
+        gFrecce('gSposta(\'guida_capitoli\',gCapitoli(' + id + '),' + i + ',-1,function(){apriRacconto(' + id + ')})', 'gSposta(\'guida_capitoli\',gCapitoli(' + id + '),' + i + ',1,function(){apriRacconto(' + id + ')})', i, C.length) + '</div>'; }).join('') + '</div>' : '<div class="hint">Nessun capitolo.</div>') +
+        '<button class="btn btn-s" style="margin-top:8px" onclick="apriCapitolo(' + id + ',null)">＋ Capitolo</button>' : '<div class="hint">Salva il racconto per aggiungere i capitoli.</div>'),
+    piede: '<div class="btn-row">' + (id ? '<button class="btn btn-s" style="color:var(--bad,#b3261e)" onclick="eliminaRacconto(' + id + ')">Elimina</button>' : '') + '<button class="btn btn-p" id="rcSalva" onclick="salvaRacconto(' + (id || 'null') + ')">Salva</button></div>' });
+  gContaTutti(['rcM', 'rcX']); gInizializzaFoto('rcF');
+}
+async function salvaRacconto(id){
+  var t = document.getElementById('rcT').value.trim(); if(t.length < 2){ toast('Scrivi il titolo'); return; }
+  var ft = gFotoLeggi('rcF', 0); if(ft.err){ toast(ft.err); return; }
+  var btn = document.getElementById('rcSalva'); btn.disabled = true; btn.textContent = 'Salvo…';
+  try{
+    var corpo = Object.assign({ titolo: t, sottotitolo: document.getElementById('rcS').value.trim() || null, sommario: document.getElementById('rcM').value.trim() || null, testo: document.getElementById('rcX').value.trim() || null,
+      stato: segValore('rcStato') || 'bozza', in_apertura: document.getElementById('rcAp').checked }, ft.v);
+    if(!ft.vuota) corpo.foto_path = await gFotoCarica('rcF', 'racconti');
+    if(id) await api('guida_racconti?id=eq.' + id, { method: 'PATCH', prefer: 'return=minimal', body: corpo });
+    else { corpo.slug = gSlug(t); corpo.ordine = G.rac.reduce(function(m, x){ return Math.max(m, x.ordine || 0); }, 0) + 10; var r = await api('guida_racconti', { method: 'POST', prefer: 'return=representation', body: corpo }); id = r[0].id; }
+    await caricaGuida(); chiudiSheet('shRc'); toast('✓ Salvato'); renderGuida();
+  }catch(e){ btn.disabled = false; btn.textContent = 'Riprova'; gErr('racconto', e); }
+}
+async function eliminaRacconto(id){
+  if(!(await conferma('Eliminare il racconto?', 'Elimino il racconto con i suoi capitoli. Se vuoi solo nasconderlo, mettilo in «Archiviato».', 'Elimina', true))) return;
+  try{ await api('guida_capitoli?racconto_id=eq.' + id, { method: 'DELETE', prefer: 'return=minimal' }); await api('guida_racconti?id=eq.' + id, { method: 'DELETE', prefer: 'return=minimal' }); await caricaGuida(); chiudiSheet('shRc'); toast('✓ Eliminato'); renderGuida(); }catch(e){ gErr('elimina racconto', e); }
+}
+function apriCapitolo(rid, id){
+  var c = id ? G.cap.find(function(x){ return x.id === id; }) : { stato: 'bozza' }; if(!c) return;
+  var opL = { '': 'Nessun luogo' }; G.luoghi.filter(function(l){ return l.stato !== 'archiviato'; }).forEach(function(l){ opL[l.id] = l.nome; });
+  apriSheet('shCp', { titolo: id ? c.titolo : 'Nuovo capitolo', alto: true,
+    corpo: gStatoSeg('cpStato', c.stato) + gInp('cpP', 'Periodo', c.periodo, 60, 'Es. 1606–1607') + gInp('cpT', 'Titolo *', c.titolo, 140, '') + gArea('cpX', 'Testo *', c.testo, 3000, 7, '') +
+      '<div class="field"><label for="cpL">Luogo collegato</label><select class="inp" id="cpL">' + gOpz(opL, c.luogo_id || '') + '</select></div><div class="sec-title">Foto</div>' + gFotoHtml('cpF', c, 1),
+    piede: '<div class="btn-row">' + (id ? '<button class="btn btn-s" style="color:var(--bad,#b3261e)" onclick="eliminaCapitolo(' + rid + ',' + id + ')">Elimina</button>' : '') + '<button class="btn btn-p" id="cpSalva" onclick="salvaCapitolo(' + rid + ',' + (id || 'null') + ')">Salva</button></div>' });
+  gContaTutti(['cpX']); gInizializzaFoto('cpF');
+}
+async function salvaCapitolo(rid, id){
+  var t = document.getElementById('cpT').value.trim(), x = document.getElementById('cpX').value.trim();
+  if(t.length < 2 || x.length < 5){ toast('Scrivi titolo e testo'); return; }
+  var ft = gFotoLeggi('cpF', 1); if(ft.err){ toast(ft.err); return; }
+  var btn = document.getElementById('cpSalva'); btn.disabled = true; btn.textContent = 'Salvo…';
+  try{
+    var lv = document.getElementById('cpL').value, corpo = Object.assign({ periodo: document.getElementById('cpP').value.trim() || null, titolo: t, testo: x, luogo_id: lv ? +lv : null, stato: segValore('cpStato') || 'bozza' }, ft.v);
+    if(!ft.vuota) corpo.foto_path = await gFotoCarica('cpF', 'racconti');
+    if(id) await api('guida_capitoli?id=eq.' + id, { method: 'PATCH', prefer: 'return=minimal', body: corpo });
+    else { corpo.racconto_id = rid; corpo.ordine = gCapitoli(rid).reduce(function(m, d){ return Math.max(m, d.ordine || 0); }, 0) + 10; await api('guida_capitoli', { method: 'POST', prefer: 'return=minimal', body: corpo }); }
+    await caricaGuida(); chiudiSheet('shCp'); chiudiSheet('shRc'); toast('✓ Salvato'); apriRacconto(rid);
+  }catch(e){ btn.disabled = false; btn.textContent = 'Riprova'; gErr('capitolo', e); }
+}
+async function eliminaCapitolo(rid, id){
+  if(!(await conferma('Eliminare il capitolo?', 'Lo tolgo dal racconto.', 'Elimina', true))) return;
+  try{ await api('guida_capitoli?id=eq.' + id, { method: 'DELETE', prefer: 'return=minimal' }); await caricaGuida(); chiudiSheet('shCp'); chiudiSheet('shRc'); toast('✓ Eliminato'); apriRacconto(rid); }catch(e){ gErr('elimina capitolo', e); }
 }
 
 /* storico */
