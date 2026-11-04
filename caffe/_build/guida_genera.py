@@ -142,7 +142,9 @@ def copia_foto(pagine, out):
             n = hashlib.sha1(u.encode()).hexdigest()[:12] + (os.path.splitext(urllib.parse.urlparse(u).path)[1] or '.webp')
             dest = os.path.join(cart, n)
             if not os.path.exists(dest):
-                dati = urllib.request.urlopen(u, timeout=60).read()
+                loc_f = os.path.join(QUI, '..', '..', 'guida-foto', os.path.basename(urllib.parse.urlparse(u).path))
+                if '/guida-foto/' in u and os.path.exists(loc_f): dati = open(loc_f, 'rb').read()  # foto già nel repository: nessuna attesa della pubblicazione
+                else: dati = urllib.request.urlopen(u, timeout=60).read()
                 open(dest + '.tmp', 'wb').write(dati); os.replace(dest + '.tmp', dest)
             nomi[u] = n
         f['u'] = pre + 'img/' + nomi[u]
