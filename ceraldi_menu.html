@@ -2982,13 +2982,13 @@ function apriGalleria(lid){
   var l = gDiL(lid), L = gGalleria(lid);
   apriSheet('shGf', { titolo: 'Foto · ' + l.nome, alto: true,
     corpo: '<div class="hint" style="margin:0 4px 10px">La foto principale si cambia nella scheda del luogo. Qui le altre foto della galleria.</div>' +
-      (L.length ? '<div class="grp">' + L.map(function(x, i){ return '<div class="row" role="button" tabindex="0" onclick="apriFotoGalleria(' + lid + ',' + x.id + ')"><img src="' + esc(gFotoUrl(x.foto_path)) + '" alt="" style="width:56px;height:56px;object-fit:cover;border-radius:8px;margin-right:10px"><div class="row-main"><div class="row-t">' + esc(x.foto_didascalia || x.foto_alt || 'Foto') + ' ' + gBdg(x.stato) + '</div><div class="row-s">' + esc(x.foto_autore || '') + ' · ' + esc(x.foto_licenza || '') + '</div></div>' +
+      (L.length ? '<div class="grp">' + L.map(function(x, i){ return '<div class="row" role="button" tabindex="0" onclick="apriFotoGalleria(' + lid + ',' + x.id + ')"><img src="' + esc(gFotoUrl(x.foto_path)) + '" alt="" style="width:56px;height:56px;object-fit:cover;border-radius:8px;margin-right:10px"><div class="row-main"><div class="row-t">' + esc(x.foto_didascalia || x.foto_alt || 'Foto') + (x.solo_passaporto ? ' <span class="bdg b">Solo Passaporto</span>' : '') + ' ' + gBdg(x.stato) + '</div><div class="row-s">' + esc(x.foto_autore || '') + ' · ' + esc(x.foto_licenza || '') + '</div></div>' +
         gFrecce('gSposta(\'guida_foto\',gGalleria(' + lid + '),' + i + ',-1,function(){apriGalleria(' + lid + ')})', 'gSposta(\'guida_foto\',gGalleria(' + lid + '),' + i + ',1,function(){apriGalleria(' + lid + ')})', i, L.length) + '</div>'; }).join('') + '</div>' : '<div class="hint" style="text-align:center;padding:16px">Nessuna foto in galleria.</div>') +
       '<button class="btn btn-s" style="margin-top:10px" onclick="apriFotoGalleria(' + lid + ',null)">＋ Aggiungi una foto</button>' });
 }
 function apriFotoGalleria(lid, id){
   var x = id ? G.gal.find(function(d){ return d.id === id; }) : { stato: 'bozza' }; if(!x) return;
-  apriSheet('shGfF', { titolo: id ? 'Foto' : 'Nuova foto', alto: true, corpo: gStatoSeg('gfStato', x.stato) + gFotoHtml('gfF', x, 2),
+  apriSheet('shGfF', { titolo: id ? 'Foto' : 'Nuova foto', alto: true, corpo: gStatoSeg('gfStato', x.stato) + gFotoHtml('gfF', x, 2) + '<div class="field"><label><input type="checkbox" id="gfSolo"' + (x.solo_passaporto ? ' checked' : '') + '> Solo per il Passaporto (non in galleria)</label><div class="hint">Serve come indizio nella domanda: il cliente la vede solo nel questionario.</div></div>',
     piede: '<div class="btn-row">' + (id ? '<button class="btn btn-s" style="color:var(--bad,#b3261e)" onclick="eliminaFotoGalleria(' + lid + ',' + id + ')">Elimina</button>' : '') + '<button class="btn btn-p" id="gfSalva" onclick="salvaFotoGalleria(' + lid + ',' + (id || 'null') + ')">Salva</button></div>' });
   gInizializzaFoto('gfF');
 }
@@ -2996,7 +2996,7 @@ async function salvaFotoGalleria(lid, id){
   var ft = gFotoLeggi('gfF', 2); if(ft.err){ toast(ft.err); return; } if(ft.vuota){ toast('Scegli la foto'); return; }
   var btn = document.getElementById('gfSalva'); btn.disabled = true; btn.textContent = 'Salvo…';
   try{
-    var l = gDiL(lid), corpo = Object.assign({ stato: segValore('gfStato') || 'bozza' }, ft.v); corpo.foto_path = await gFotoCarica('gfF', 'luoghi/' + l.slug);
+    var l = gDiL(lid), corpo = Object.assign({ stato: segValore('gfStato') || 'bozza', solo_passaporto: document.getElementById('gfSolo').checked }, ft.v); corpo.foto_path = await gFotoCarica('gfF', 'luoghi/' + l.slug);
     if(id) await api('guida_foto?id=eq.' + id, { method: 'PATCH', prefer: 'return=minimal', body: corpo });
     else { corpo.luogo_id = lid; corpo.ordine = gGalleria(lid).reduce(function(m, d){ return Math.max(m, d.ordine || 0); }, 0) + 10; await api('guida_foto', { method: 'POST', prefer: 'return=minimal', body: corpo }); }
     await caricaGuida(); chiudiSheet('shGfF'); toast('✓ Salvata'); apriGalleria(lid);
@@ -3021,7 +3021,7 @@ var GI = null;
 function apriGiro(id){
   var g = id ? G.itin.find(function(x){ return x.id === id; }) : { id: null, stato: 'bozza', etichette: [] }; if(!g) return;
   var t = id ? gTappe(id) : [], prec = null;
-  GI = { g: g, tappe: t.map(function(x){ var o = { id: x.id, luogo_id: x.luogo_id, sosta_min: x.sosta_min, nota: x.nota || '', alternativa_luogo_id: x.alternativa_luogo_id, prima_da: prec, minuti: x.minuti_dal_precedente, metri: x.metri_dal_precedente, domanda: x.domanda || '', risposte: (x.risposte || []).join(', ') }; prec = x.luogo_id; return o; }) };
+  GI = { g: g, tappe: t.map(function(x){ var o = { id: x.id, luogo_id: x.luogo_id, sosta_min: x.sosta_min, nota: x.nota || '', alternativa_luogo_id: x.alternativa_luogo_id, prima_da: prec, minuti: x.minuti_dal_precedente, metri: x.metri_dal_precedente, domanda: x.domanda || '', risposte: (x.risposte || []).join(', '), domanda_foto_id: x.domanda_foto_id || null, domanda_raggio_m: x.domanda_raggio_m || null }; prec = x.luogo_id; return o; }) };
   apriSheet('shGi', { titolo: id ? g.nome : 'Nuovo giro', alto: true,
     corpo: gStatoSeg('giStato', g.stato) + gInp('giN', 'Nome *', g.nome, 120, 'Es. Il primo giro') + gInp('giS', 'Sottotitolo', g.sottotitolo, 200, 'Una riga che dice che giro è') +
       gArea('giD', 'Descrizione', g.descrizione, 800, 4, 'Che cosa si vede lungo il giro') + gInp('giE', 'Etichette (separate da virgola)', (g.etichette || []).join(', '), 200, 'Es. mezza_giornata, arte') +
@@ -3032,24 +3032,26 @@ function apriGiro(id){
 }
 function gLeggiTappe(){
   document.querySelectorAll('#giTappe [data-t]').forEach(function(r){ var t = GI.tappe[+r.dataset.t]; if(!t) return;
-    t.luogo_id = +r.querySelector('[data-k="luogo"]').value; t.sosta_min = r.querySelector('[data-k="sosta"]').value === '' ? null : +r.querySelector('[data-k="sosta"]').value;
-    t.nota = r.querySelector('[data-k="nota"]').value; t.domanda = r.querySelector('[data-k="dom"]').value; t.risposte = r.querySelector('[data-k="risp"]').value; var a = r.querySelector('[data-k="alt"]').value; t.alternativa_luogo_id = a ? +a : null; });
+    var lv = +r.querySelector('[data-k="luogo"]').value; if(lv !== t.luogo_id) t.domanda_foto_id = null; t.luogo_id = lv; t.sosta_min = r.querySelector('[data-k="sosta"]').value === '' ? null : +r.querySelector('[data-k="sosta"]').value;
+    t.nota = r.querySelector('[data-k="nota"]').value; t.domanda = r.querySelector('[data-k="dom"]').value; t.risposte = r.querySelector('[data-k="risp"]').value; var df = r.querySelector('[data-k="dfoto"]').value, dr = r.querySelector('[data-k="draggio"]').value; t.domanda_foto_id = df ? +df : null; t.domanda_raggio_m = dr === '' ? null : +dr; var a = r.querySelector('[data-k="alt"]').value; t.alternativa_luogo_id = a ? +a : null; });
 }
 function gDisegnaTappe(){
   var box = document.getElementById('giTappe'); if(!box) return;
   var ls = G.luoghi.filter(function(l){ return l.stato !== 'archiviato'; }), opL = {}; ls.forEach(function(l){ opL[l.id] = l.nome; });
   box.innerHTML = GI.tappe.map(function(t, i){
     return '<div class="grp" style="padding:10px 12px;margin-bottom:8px" data-t="' + i + '"><div class="row-t" style="margin-bottom:6px">' + (i + 1) + '.</div>' +
-      '<div class="field"><select class="inp" data-k="luogo">' + gOpz(opL, t.luogo_id) + '</select></div>' +
+      '<div class="field"><select class="inp" data-k="luogo" onchange="gLeggiTappe();gDisegnaTappe()">' + gOpz(opL, t.luogo_id) + '</select></div>' +
       '<div class="due"><div class="field"><label>Sosta (min)</label><input class="inp" type="number" inputmode="numeric" min="0" max="480" data-k="sosta" value="' + (t.sosta_min != null ? t.sosta_min : '') + '"></div>' +
       '<div class="field"><label>Alternativa</label><select class="inp" data-k="alt"><option value="">Nessuna</option>' + gOpz(opL, t.alternativa_luogo_id) + '</select></div></div>' +
       '<input class="inp" data-k="nota" maxlength="300" placeholder="Nota per il cliente (facoltativa)" value="' + esc(t.nota) + '">' +
       '<details style="margin-top:8px"' + (t.domanda ? ' open' : '') + '><summary class="hint" style="cursor:pointer">Domanda del Passaporto (facoltativa)</summary>' +
       '<input class="inp" data-k="dom" maxlength="200" placeholder="Es.: Quante colonne ha la facciata?" value="' + esc(t.domanda) + '" style="margin-top:6px">' +
       '<input class="inp" data-k="risp" maxlength="300" placeholder="Risposte giuste, separate da virgola (es.: due, 2)" value="' + esc(t.risposte) + '" style="margin-top:6px">' +
+      '<div class="field" style="margin-top:6px"><label>Foto-indizio (il particolare da trovare sul posto)</label><select class="inp" data-k="dfoto"><option value="">Nessuna</option>' + gOpz(gGalleria(t.luogo_id).reduce(function(o, f){ o[f.id] = (f.foto_didascalia || f.foto_alt || 'Foto ' + f.id) + (f.solo_passaporto ? ' (solo Passaporto)' : ''); return o; }, {}), t.domanda_foto_id) + '</select><div class="hint">Si sceglie tra le foto del luogo. Per aggiungerne una: Luoghi → galleria, con «Solo per il Passaporto».</div></div>' +
+      '<div class="field"><label>Distanza massima per rispondere (m)</label><input class="inp" type="number" inputmode="numeric" min="10" max="500" data-k="draggio" value="' + (t.domanda_raggio_m || '') + '" placeholder="Vuoto = valore del Passaporto"></div>' +
       '<div class="hint">Maiuscole, accenti e punteggiatura non contano. Scrivi anche le varianti (cifre e lettere, altre lingue).</div></details>' +
       '<div class="btn-row" style="margin-top:8px"><button class="btn-sm" ' + (i ? '' : 'disabled') + ' onclick="gMuoviTappa(' + i + ',-1)">↑</button><button class="btn-sm" ' + (i < GI.tappe.length - 1 ? '' : 'disabled') + ' onclick="gMuoviTappa(' + i + ',1)">↓</button><button class="btn-sm r" onclick="gLeggiTappe();GI.tappe.splice(' + i + ',1);gDisegnaTappe()">Togli</button></div></div>'; }).join('') +
-    '<button class="btn btn-s" onclick="gLeggiTappe();GI.tappe.push({id:null,luogo_id:' + (ls[0] ? ls[0].id : 'null') + ',sosta_min:15,nota:\'\',domanda:\'\',risposte:\'\',alternativa_luogo_id:null,prima_da:null,minuti:null,metri:null});gDisegnaTappe()">＋ Tappa</button>';
+    '<button class="btn btn-s" onclick="gLeggiTappe();GI.tappe.push({id:null,luogo_id:' + (ls[0] ? ls[0].id : 'null') + ',sosta_min:15,nota:\'\',domanda:\'\',risposte:\'\',domanda_foto_id:null,domanda_raggio_m:null,alternativa_luogo_id:null,prima_da:null,minuti:null,metri:null});gDisegnaTappe()">＋ Tappa</button>';
 }
 function gMuoviTappa(i, d){ gLeggiTappe(); var j = i + d; if(j < 0 || j >= GI.tappe.length) return; var t = GI.tappe[i]; GI.tappe[i] = GI.tappe[j]; GI.tappe[j] = t; gDisegnaTappe(); }
 async function salvaGiro(){
@@ -3065,7 +3067,8 @@ async function salvaGiro(){
     var prec = null, righe = GI.tappe.map(function(t, i){
       var uguale = t.id && t.prima_da === prec && prec != null && t.minuti != null && GI.g.id && (G.tappe.find(function(x){ return x.id === t.id; }) || {}).luogo_id === t.luogo_id;
       var r = { id: t.id, luogo_id: t.luogo_id, ordine: (i + 1) * 10, sosta_min: t.sosta_min, nota: (t.nota || '').trim() || null, alternativa_luogo_id: t.alternativa_luogo_id,
-        domanda: (t.domanda || '').trim() || null, risposte: (t.domanda || '').trim() ? String(t.risposte || '').split(',').map(function(x){ return x.trim(); }).filter(Boolean) : [] };
+        domanda: (t.domanda || '').trim() || null, risposte: (t.domanda || '').trim() ? String(t.risposte || '').split(',').map(function(x){ return x.trim(); }).filter(Boolean) : [],
+        domanda_foto_id: (t.domanda || '').trim() ? (t.domanda_foto_id || null) : null, domanda_raggio_m: (t.domanda || '').trim() ? (t.domanda_raggio_m || null) : null };
       if(i === 0){ r.percorso = null; r.svolte = null; r.percorso_calcolato_il = null; r.minuti_dal_precedente = null; r.metri_dal_precedente = null; }
       else if(!uguale){ r.percorso = null; r.svolte = null; r.percorso_calcolato_il = null; r.minuti_dal_precedente = null; r.metri_dal_precedente = null; }
       prec = t.luogo_id; return r; });
@@ -3100,12 +3103,15 @@ function renderGuidaPassaporto(box){
     gInp('psT', 'Titolo', p.titolo, 80, 'Passaporto del centro storico') + gArea('psX', 'Presentazione', p.testo, 300, 3, 'Come funziona, in una frase') +
     gInp('psPT', 'Premio: titolo', p.premio_titolo, 80, 'Da decidere') + gArea('psPX', 'Premio: come ritirarlo', p.premio_testo, 400, 3, 'Cosa vince e dove lo ritira') +
     '<div class="field"><label for="psM">Timbri necessari per il premio</label><input class="inp" id="psM" type="number" inputmode="numeric" min="1" max="60" value="' + (p.minimo || '') + '" placeholder="Vuoto = tutti"></div>' +
+    '<div class="field"><label for="psR">Distanza massima per rispondere (m)</label><input class="inp" id="psR" type="number" inputmode="numeric" min="10" max="500" value="' + (p.raggio_m || 50) + '"><div class="hint">Il cliente può timbrare solo se il telefono lo colloca entro questa distanza dal luogo. Dentro edifici il GPS è meno preciso: si può allargare per singola domanda nei Giri.</div></div>' +
+    '<div class="field"><label for="psG">Minuti minimi tra un timbro e il successivo</label><input class="inp" id="psG" type="number" inputmode="numeric" min="0" max="120" value="' + (p.min_tra_timbri_min != null ? p.min_tra_timbri_min : 5) + '"><div class="hint">0 = nessun limite.</div></div>' +
+    '<div class="field"><label for="psD">Durata minima della visita per il premio (minuti)</label><input class="inp" id="psD" type="number" inputmode="numeric" min="0" max="600" value="' + (p.min_durata_min || 0) + '"><div class="hint">Contati dal primo timbro. 0 = nessun limite. Il cliente mostra al bar la schermata con gli orari dei timbri.</div></div>' +
     '<button class="btn btn-p" id="psSalva" onclick="salvaPassaporto()">Salva</button></div>';
   gContaTutti(['psX', 'psPX']);
 }
 async function salvaPassaporto(){
   var m = document.getElementById('psM').value, corpo = { id: 1, attivo: document.getElementById('psA').checked, titolo: document.getElementById('psT').value.trim() || null, testo: document.getElementById('psX').value.trim() || null,
-    premio_titolo: document.getElementById('psPT').value.trim() || null, premio_testo: document.getElementById('psPX').value.trim() || null, minimo: m === '' ? null : Math.max(1, +m), aggiornato_il: new Date().toISOString() };
+    premio_titolo: document.getElementById('psPT').value.trim() || null, premio_testo: document.getElementById('psPX').value.trim() || null, minimo: m === '' ? null : Math.max(1, +m), raggio_m: Math.min(500, Math.max(10, +document.getElementById('psR').value || 50)), min_tra_timbri_min: Math.min(120, Math.max(0, +document.getElementById('psG').value || 0)), min_durata_min: Math.min(600, Math.max(0, +document.getElementById('psD').value || 0)), aggiornato_il: new Date().toISOString() };
   if(corpo.attivo && !corpo.premio_titolo && !corpo.premio_testo && !(await conferma('Attivare senza premio?', 'I clienti vedranno i timbri ma nessun premio. Puoi aggiungerlo dopo.', 'Attiva', false))) return;
   var b = document.getElementById('psSalva'); b.disabled = true; b.textContent = 'Salvo…';
   try{ await api('guida_passaporto?on_conflict=id', { method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: corpo }); await caricaGuida(); toast('✓ Salvato'); renderGuida(); }

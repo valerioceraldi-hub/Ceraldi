@@ -92,11 +92,14 @@ function ok(c, m){ esiti.push((c ? '✓ ' : '✗ ') + m); }
     await pg.locator('#giTappe [data-t="2"] button', { hasText: '↑' }).click(); await at(200);
     await pg.evaluate(() => document.querySelectorAll('#giTappe details').forEach(d => d.open = true));
     await pg.fill('#giTappe [data-t="0"] [data-k="dom"]', 'Quante colonne ha la facciata?'); await pg.fill('#giTappe [data-t="0"] [data-k="risp"]', 'Due, 2 , ');
+    ok(await pg.locator('#giTappe [data-t="0"] [data-k="dfoto"]').count() === 1, 'Giro: scelta della foto-indizio presente'); await pg.fill('#giTappe [data-t="0"] [data-k="draggio"]', '80');
     n = scritture.length; await pg.click('#giSalva'); await at(700);
     const sg = scritture.slice(n);
     ok(sg.some(w => /PATCH guida_itinerari\?id=eq\.2 /.test(w)), 'Giro: salvato');
     ok(sg.some(w => /PATCH guida_tappe\?id=eq\.11 .*"ordine":20.*"percorso":null/.test(w)) && sg.some(w => /PATCH guida_tappe\?id=eq\.12 .*"ordine":30.*"percorso":null/.test(w)), 'Giro: tratti cambiati, percorso azzerato per ricalcolarlo');
     ok(sg.some(w => /PATCH guida_tappe\?id=eq\.13 /.test(w) && /"domanda":"Quante colonne ha la facciata\?"/.test(w) && /"risposte":\["Due","2"\]/.test(w)), 'Giro: domanda e risposte della tappa salvate (risposte pulite)');
+    ok(sg.some(w => /PATCH guida_tappe\?id=eq\.13 /.test(w) && /"domanda_raggio_m":80/.test(w) && /"domanda_foto_id":null/.test(w)), 'Giro: distanza della domanda salvata');
+    ok(sg.some(w => /PATCH guida_tappe\?id=eq\.11 /.test(w) && /"domanda_raggio_m":null/.test(w)), 'Giro: tappa senza domanda azzera distanza e foto');
     ok(sg.some(w => /PATCH guida_tappe\?id=eq\.11 /.test(w) && /"domanda":null/.test(w) && /"risposte":\[\]/.test(w)), 'Giro: tappa senza domanda salva domanda nulla');
     ok(!sg.some(w => /PATCH guida_tappe\?id=eq\.13 .*"percorso"/.test(w)) || true, 'Giro: la tappa di partenza non ha percorso');
     // nuovo giro: servono almeno due tappe
@@ -114,8 +117,9 @@ function ok(c, m){ esiti.push((c ? '✓ ' : '✗ ') + m); }
     await pg.evaluate(() => { ['shCp', 'shRc'].forEach(i => { try { chiudiSheet(i, true); } catch (e) {} }); }); await at(300);
     await pg.locator('#guidaBox .seg-b', { hasText: 'Passaporto' }).click(); await pg.waitForSelector('#psSalva'); await at(200);
     ok((await pg.locator('#guidaBox').innerText()).includes('Oggi i luoghi con domanda e risposte sono 1'), 'Passaporto: conta i luoghi con domanda');
-    await pg.check('#psA'); await pg.fill('#psPT', 'Un caffè in omaggio'); await pg.fill('#psPX', 'Mostra il Passaporto al banco'); await pg.fill('#psM', '1'); n = scritture.length; await pg.click('#psSalva'); await at(600);
+    await pg.check('#psA'); await pg.fill('#psPT', 'Un caffè in omaggio'); await pg.fill('#psPX', 'Mostra il Passaporto al banco'); await pg.fill('#psM', '1'); await pg.fill('#psR', '70'); await pg.fill('#psG', '7'); await pg.fill('#psD', '25'); n = scritture.length; await pg.click('#psSalva'); await at(600);
     ok(scritture.slice(n).some(w => /POST guida_passaporto\?on_conflict=id /.test(w) && /"attivo":true/.test(w) && /"premio_titolo":"Un caffè in omaggio"/.test(w) && /"minimo":1/.test(w)), 'Passaporto: configurazione e premio salvati');
+    ok(scritture.slice(n).some(w => /POST guida_passaporto/.test(w) && /"raggio_m":70/.test(w) && /"min_tra_timbri_min":7/.test(w) && /"min_durata_min":25/.test(w)), 'Passaporto: distanza, intervallo e durata salvati');
     // foto: senza autore non si salva (regola del database anticipata dal Back Office)
     await pg.evaluate(() => { GFOTO.dtF = { path: 'guida/x.webp', blob: null }; });
     const r = await pg.evaluate(() => { document.body.insertAdjacentHTML('beforeend', '<input id="zAlt" value="x">'); GFOTO.zz = { path: 'guida/x.webp' }; return gFotoLeggi('zz', 1); });

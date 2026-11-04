@@ -556,16 +556,25 @@ function pasConta(){ var t = pasTimbri(), n = 0; (D.passaporto ? D.passaporto.d 
 function pasBlocco(l){
   var d = pasDom(l.id), q = d && pasQuesito(l.id); if(!q) return '';
   if(pasTimbri()[l.id]) return '<p class="piccolo" style="color:var(--su-scuro)">✓ ' + e(T.pass_ok) + '</p>';
-  return '<div style="display:grid;gap:8px"><span class="etichetta" style="color:var(--su-scuro)">' + e(T.pass_etichetta) + '</span><p style="font-weight:500">' + e(q) + '</p>' +
+  return '<div style="display:grid;gap:8px"><span class="etichetta" style="color:var(--su-scuro)">' + e(T.pass_etichetta) + '</span>' +
+    (d.f ? '<figure class="gf"><div class="ft"><img src="' + e(d.f.u) + '" alt="' + e(d.f.alt) + '" loading="lazy"></div><figcaption><span>' + e(T.pass_cerca) + '</span></figcaption></figure>' : '') + '<p style="font-weight:500">' + e(q) + '</p>' +
     '<input id="pas-r" type="text" autocomplete="off" autocapitalize="none" placeholder="' + e(T.pass_risposta) + '" style="width:100%;min-height:48px;border-radius:12px;border:0;padding:0 12px;font-size:1rem">' +
     '<p id="pas-m" class="piccolo" role="status" style="min-height:1.2em"></p><button class="btn chiaro" onclick="pasControlla(' + l.id + ')">' + e(T.pass_timbra) + '</button></div>';
 }
 function pasControlla(id){
   var d = pasDom(id), inp = document.getElementById('pas-r'), m = document.getElementById('pas-m'); if(!d || !inp) return;
   if(!(window.crypto && crypto.subtle && window.TextEncoder)){ m.textContent = T.pass_no; return; }
+  var l = LU[id], P = D.passaporto, tt = pasTimbri(), ora = Date.now();
+  if(l && l.lat != null && l.lon != null){  // devi essere sul posto: la risposta si trova guardando il luogo
+    if(!G || !G.pos){ m.textContent = T.pass_gps; return; }
+    var a = xy([l.lon, l.lat]), b0 = xy(G.pos), dm = Math.hypot(a[0] - b0[0], a[1] - b0[1]);
+    if(dm - Math.min(G.acc || 0, 50) > (d.r || 50)){ m.textContent = f(T.pass_lontano, {n: Math.round(dm)}); return; }
+  }
+  var ult = 0; Object.keys(tt).forEach(function(k){ if(tt[k] > 1 && tt[k] > ult) ult = tt[k]; });
+  if(P && P.gap && ult && ora - ult < P.gap * 60000){ m.textContent = f(T.pass_attendi, {n: Math.ceil((P.gap * 60000 - (ora - ult)) / 60000)}); return; }
   crypto.subtle.digest('SHA-256', new TextEncoder().encode(pasNorm(inp.value))).then(function(b){
     var hex = Array.prototype.map.call(new Uint8Array(b), function(x){ return ('0' + x.toString(16)).slice(-2); }).join('');
-    if(pasNorm(inp.value) && d.h.indexOf(hex) >= 0){ var t = pasTimbri(); t[id] = 1; try{ localStorage.setItem('guida_passaporto', JSON.stringify(t)); }catch(x){} if(G) aggiornaCammino(); else mostra(); }
+    if(pasNorm(inp.value) && d.h.indexOf(hex) >= 0){ var t = pasTimbri(); t[id] = Date.now(); try{ localStorage.setItem('guida_passaporto', JSON.stringify(t)); }catch(x){} if(G) aggiornaCammino(); else mostra(); }
     else m.textContent = T.pass_no_risp;
   });
 }
@@ -573,9 +582,11 @@ V.passaporto = function(){
   var p = D.passaporto; if(!p) return V.home();
   var t = pasTimbri(), n = pasConta(), h = '<div class="stack vista"><div class="testa"><button class="indietro" onclick="vai(\'#/\')">← ' + e(T.indietro) + '</button>' + lingue() + '</div>' +
     '<h1>' + e(p.t || T.pass_titolo) + '</h1>' + (p.x ? '<p>' + e(p.x) + '</p>' : '') + '<p style="font-weight:500">' + e(f(T.pass_timbri, {n: n, m: p.d.length})) + '</p>';
-  if(n >= p.min && (p.pt || p.px)) h += '<section class="arrivo"><span class="etichetta" style="color:var(--su-scuro)">' + e(T.pass_premio) + '</span>' + (p.pt ? '<h2>' + e(p.pt) + '</h2>' : '') + (p.px ? '<p>' + e(p.px) + '</p>' : '') + '</section>';
+  var ts = Object.keys(t).map(function(k){ return t[k]; }).filter(function(v){ return v > 1; }), prima = ts.length ? Math.min.apply(null, ts) : 0, ancora = (p.dur && prima) ? Math.ceil((p.dur * 60000 - (Date.now() - prima)) / 60000) : 0;
+  if(n >= p.min && ancora > 0) h += '<p class="piccolo">' + e(f(T.pass_durata, {n: ancora})) + '</p>';
+  else if(n >= p.min && (p.pt || p.px)) h += '<section class="arrivo"><span class="etichetta" style="color:var(--su-scuro)">' + e(T.pass_premio) + '</span>' + (p.pt ? '<h2>' + e(p.pt) + '</h2>' : '') + (p.px ? '<p>' + e(p.px) + '</p>' : '') + '<p class="piccolo">' + e(T.pass_staff) + '</p></section>';
   else if(n < p.min) h += '<p class="piccolo">' + e(f(T.pass_mancano, {n: p.min - n})) + '</p>';
-  h += '<ul style="list-style:none;padding:0;margin:0;display:grid;gap:8px">' + p.d.map(function(d){ var l = LU[d.l]; if(!l) return ''; return '<li><a class="btn sec" style="justify-content:flex-start" href="#/l/' + e(l.s) + '">' + (t[d.l] ? '✓ ' : '○ ') + e(l.n) + '</a></li>'; }).join('') + '</ul></div>';
+  h += '<ul style="list-style:none;padding:0;margin:0;display:grid;gap:8px">' + p.d.map(function(d){ var l = LU[d.l]; if(!l) return ''; return '<li><a class="btn sec" style="justify-content:flex-start" href="#/l/' + e(l.s) + '">' + (t[d.l] ? '✓ ' : '○ ') + e(l.n) + (t[d.l] > 1 ? ' · ' + new Date(t[d.l]).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '') + '</a></li>'; }).join('') + '</ul></div>';
   return h;
 };
 V.luogo = function(s){

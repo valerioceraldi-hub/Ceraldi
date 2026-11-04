@@ -14,13 +14,13 @@ COL = {  # solo colonne pubbliche (anon non legge note_interne, aggiornato_da, v
     'guida_luoghi': 'id,slug,nome,tipo,zona,indirizzo,lat,lon,minuti_a_piedi,metri_a_piedi,durata_visita_min,gratuito,sempre_accessibile,sito_ufficiale,pagina_orari,sommario,racconto,consiglio,accessibilita,accessibilita_verificata_il,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_didascalia,stato,orari_stato,orari_verificati_il,ordine,leggende,foto_consentite',
     'guida_orari': 'id,luogo_id,giorni,dalle,alle,ultimo_ingresso,dal,al,chiuso,nota,ordine',
     'guida_itinerari': 'id,slug,nome,sottotitolo,descrizione,durata_min,distanza_m,etichette,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_didascalia,stato,ordine',
-    'guida_tappe': 'id,itinerario_id,luogo_id,ordine,minuti_dal_precedente,metri_dal_precedente,sosta_min,nota,domanda,alternativa_luogo_id,percorso,svolte',
-    'guida_passaporto': 'id,attivo,titolo,testo,premio_titolo,premio_testo,minimo',
+    'guida_tappe': 'id,itinerario_id,luogo_id,ordine,minuti_dal_precedente,metri_dal_precedente,sosta_min,nota,domanda,domanda_foto_id,domanda_raggio_m,alternativa_luogo_id,percorso,svolte',
+    'guida_passaporto': 'id,attivo,titolo,testo,premio_titolo,premio_testo,minimo,raggio_m,min_tra_timbri_min,min_durata_min',
     'guida_racconti': 'id,slug,titolo,sottotitolo,sommario,testo,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_didascalia,stato,ordine,in_apertura',
     'guida_capitoli': 'id,racconto_id,ordine,periodo,titolo,testo,luogo_id,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_didascalia,foto_permesso,stato',
     'guida_affermazioni_fonti': 'tabella,riga_id,fonte_titolo,fonte_url',
     'guida_dettagli': 'id,luogo_id,ordine,titolo,testo,dove,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_didascalia,foto_permesso,stato',
-    'guida_foto': 'id,luogo_id,ordine,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_didascalia,foto_permesso,stato',
+    'guida_foto': 'id,luogo_id,ordine,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_didascalia,foto_permesso,stato,solo_passaporto',
     'menu_lingue': '*',
     'contenuti_collegamenti': 'id,da_tabella,da_id,a_tipo,a_id,url,url_en,titolo,testo,posizione,ordine,attivo',
     'menu_voci': 'id,categoria_id,nome,prezzo_cent,foto_path,foto_alt,stato,traduzione',
@@ -101,7 +101,7 @@ def costruisci(src, lingua, foto_base, anteprima):
         dettagli.setdefault(x['luogo_id'], []).append({'t': L(x, 'titolo', 'guida_dettagli'), 'x': L(x, 'testo', 'guida_dettagli'), 'd': L(x, 'dove', 'guida_dettagli'), 'foto': f})
         for v in fonti.get(('guida_dettagli', x['id']), []): fonti.setdefault(('guida_luoghi', x['luogo_id']), []).append(v) if v not in fonti.get(('guida_luoghi', x['luogo_id']), []) else None
     for x in ordina(src.get('guida_foto', [])):
-        if x.get('stato') not in visibile or not x.get('foto_permesso'): continue
+        if x.get('stato') not in visibile or not x.get('foto_permesso') or x.get('solo_passaporto'): continue  # le foto 'solo Passaporto' non entrano in galleria
         galleria.setdefault(x['luogo_id'], []).append(foto(x, 'guida_foto'))
     luoghi = {}
     for l in ordina(src.get('guida_luoghi', [])):
@@ -166,10 +166,17 @@ def costruisci(src, lingua, foto_base, anteprima):
     dp = src.get('passaporto_dati') or {}
     if cfgp and dp.get('domande'):
         vis = {(t['l'], i['id']) for i in itinerari for t in i['tappe']}
-        dom = [{'t': x['t'], 'l': x['l'], 'i': x['i'], 'h': x['h']} for x in dp['domande'] if (x['l'], x['i']) in vis and x['h']]
+        tp = {t['id']: t for t in src.get('guida_tappe', [])}
+        fp = {f['id']: f for f in src.get('guida_foto', []) if f.get('foto_permesso') and f.get('stato') in visibile}
+        def _q(x):
+            t = tp.get(x['t'], {}); fr = fp.get(t.get('domanda_foto_id'))
+            return {'t': x['t'], 'l': x['l'], 'i': x['i'], 'h': x['h'], 'f': foto(fr, 'guida_foto') if fr else None,
+                    'r': t.get('domanda_raggio_m') or cfgp.get('raggio_m') or 50}
+        dom = [_q(x) for x in dp['domande'] if (x['l'], x['i']) in vis and x['h']]
         dom = list({x['l']: x for x in reversed(dom)}.values())[::-1]  # un solo timbro per luogo, anche se compare in più giri
         if dom: pas = {'t': L(cfgp, 'titolo', 'guida_passaporto'), 'x': L(cfgp, 'testo', 'guida_passaporto'), 'pt': L(cfgp, 'premio_titolo', 'guida_passaporto'), 'px': L(cfgp, 'premio_testo', 'guida_passaporto'),
-                      'min': min(cfgp.get('minimo') or len(dom), len(dom)), 'd': dom}
+                      'min': min(cfgp.get('minimo') or len(dom), len(dom)), 'gap': cfgp.get('min_tra_timbri_min') if cfgp.get('min_tra_timbri_min') is not None else 5,
+                      'dur': cfgp.get('min_durata_min') or 0, 'd': dom}
     scioperi = [{'d': s['data'], 'l': s.get('linea') or '', 'x': s.get('dettaglio') or ''} for s in src.get('scioperi_napoli_trasporti', []) if s.get('data')]
     return {'lingua': lingua, 'luoghi': list(luoghi.values()), 'itinerari': itinerari, 'racconti': racconti, 'passaporto': pas, 'scioperi': scioperi, 'coperto': sorted(AL_COPERTO),
             'generata': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%MZ')}
@@ -196,6 +203,7 @@ def copia_foto(pagine, out):
         for x in d['luoghi'] + d['itinerari'] + d['racconti']: loc(x.get('foto'), pre)
         for x in d['racconti']:
             for c in x.get('cap', []): loc(c.get('foto'), pre)
+        for x in ((d.get('passaporto') or {}).get('d') or []): loc(x.get('f'), pre)
         for x in d['luoghi']:
             for g in x.get('gal', []): loc(g, pre)
             for g in x.get('dett', []): loc(g.get('foto'), pre)
