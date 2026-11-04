@@ -47,3 +47,24 @@ Foto da Wikimedia Commons con licenza libera (uso commerciale consentito citando
 | `napoli-sotterranea-cisterna-2.jpg` | Lalupa | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Napoli_sotterranea_s_Gaetano_cisterna_1030796.JPG) |
 | `napoli-sotterranea-cunicolo.jpg` | Lalupa | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Napoli_sotterranea_s_Gaetano_cunicolo_1030806.JPG) |
 | `napoli-sotterranea-guerra.jpg` | Lalupa | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Napoli_sotterranea_s_Gaetano_memorie_di_guerra_1030801.JPG) |
+| `san-domenico-maggiore.jpg` | Lalupa | Pubblico dominio | [Commons](https://commons.wikimedia.org/wiki/File:Napoli_-_piazza_San_Domenico_Maggiore_e_guglia_1030736.JPG) |
+| `san-gregorio-armeno.jpg` | Palickap | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Napoli,_Via_San_Gregorio_Armeno.jpg) |
+| `san-lorenzo-maggiore.jpg` | Berthold Werner | CC BY-SA 3.0 | [Commons](https://commons.wikimedia.org/wiki/File:Napoli_San_Lorenzo_Maggiore_BW_2013-05-16_11-47-11.jpg) |
+| `san-paolo-maggiore.jpg` | IlSistemone | CC BY-SA 3.0 | [Commons](https://commons.wikimedia.org/wiki/File:ColonneDioscuriNapoli.jpg) |
+| `girolamini.jpg` | Luca Aless | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Napoli_-_Chiesa_dei_Girolamini_1.JPG) |
+| `piazza-bellini.jpg` | Baku | CC BY-SA 3.0 | [Commons](https://commons.wikimedia.org/wiki/File:Piazza_Bellini_(Napoli).jpg) |
+| `port-alba.jpg` | IlSistemone | CC BY-SA 3.0 | [Commons](https://commons.wikimedia.org/wiki/File:PortAlbaNaples.jpg) |
+| `mann.jpg` | Phyrexian | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Napoli_-_Museo_archeologico_nazionale_3901.jpg) |
+| `madre.jpg` | Amedeo Benestante | CC BY 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Museo_Madre,.jpg) |
+| `stazione-toledo.jpg` | Arbalete | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Napoli_-_stazione_metropolitana_Toledo_-_banchina_-_01.jpg) |
+| `quartieri-spagnoli.jpg` | Superchilum | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Quartieri_Spagnoli_(Napoli)_04.jpg) |
+| `galleria-umberto.jpg` | Effems | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Galleria_Umberto_I_(Napoli)_02_08_2023_03.jpg) |
+| `teatro-san-carlo.jpg` | Armando Mancini | CC BY-SA 2.0 | [Commons](https://commons.wikimedia.org/wiki/File:Napoli_-_Teatro_San_CarloFacciata.jpg) |
+| `piazza-plebiscito.jpg` | Lucia Montanaro | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:7K5A3060Piazza_del_Plebiscito_Naples_lateral_view_2025.jpg) |
+| `palazzo-reale.jpg` | Evvemoscia | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Facciata_del_Palazzo_Reale,_Napoli.jpg) |
+| `galleria-borbonica.jpg` | Nemo bis | CC BY-SA 3.0 | [Commons](https://commons.wikimedia.org/wiki/File:Galleria_borbonica,_Naples_03.jpg) |
+| `santa-maria-sanita.jpg` | Aisav72 | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Basilica_Santa_Maria_alla_Sanit%C3%A0-Napoli.jpg) |
+| `catacombe-san-gennaro.jpg` | Dominik Matus | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Catacombe_di_San_Gennaro_021.jpg) |
+| `cimitero-fontanelle.jpg` | Dominik Matus | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Cimitero_delle_Fontanelle_-_DM_-_001.jpg) |
+| `certosa-san-martino.jpg` | Tremej | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Il_chiostro_grande_del_Dosio_a_dicembre_Certosa_di_San_Martino_Napoli.jpg) |
+| `castel-sant-elmo.jpg` | Wolfgang Moroder | CC BY-SA 3.0 | [Commons](https://commons.wikimedia.org/wiki/File:Castel_Sant_Elmo_Napoli_lato_ingresso.jpg) |
