@@ -68,3 +68,4 @@ Foto da Wikimedia Commons con licenza libera (uso commerciale consentito citando
 | `cimitero-fontanelle.jpg` | Dominik Matus | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Cimitero_delle_Fontanelle_-_DM_-_001.jpg) |
 | `certosa-san-martino.jpg` | Tremej | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Il_chiostro_grande_del_Dosio_a_dicembre_Certosa_di_San_Martino_Napoli.jpg) |
 | `castel-sant-elmo.jpg` | Wolfgang Moroder | CC BY-SA 3.0 | [Commons](https://commons.wikimedia.org/wiki/File:Castel_Sant_Elmo_Napoli_lato_ingresso.jpg) |
+| `san-biagio-dei-librai.jpg` | Luca Aless | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Napoli_-_Via_San_Biagio_dei_librai_(Spaccanapoli).JPG) |
