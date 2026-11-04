@@ -452,7 +452,7 @@ select.inp{background-image:none}
   <button class="tab-item" data-tab="altro" onclick="vaiTab('altro')"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></span><span class="tab-lbl">Altro</span></button>
 </nav>
 <script>
-var APP_VERSION='1.0';
+var APP_VERSION='1.1';
 var APP={key:'menu',nome:'Menu',versione:APP_VERSION,authKey:'mn_auth_v1',oldAuthKey:null,
   markBg:'linear-gradient(145deg,#C08A4D 0%,#8B5A2B 55%,#4A2C14 100%)',
   markSvg:'<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3v7a3 3 0 0 0 3 3v8"/><path d="M7 3v6"/><path d="M10 3v7a3 3 0 0 1-3 3"/><path d="M17 21V3c-2 1.5-3 4-3 7v4h3"/></svg>',
@@ -1895,6 +1895,7 @@ function renderAltro(){
       '<button class="row" onclick="apriMomenti()"><span class="row-ico">🌅</span><div class="row-main"><div class="row-t">Momenti della giornata</div><div class="row-s">Saluto e consiglio per mattina, pomeriggio, sera…</div></div><span class="chev">›</span></button>' +
       '<button class="row" onclick="apriRacc()"><span class="row-ico">🤝</span><div class="row-main"><div class="row-t">Abbinamenti e consigli</div><div class="row-s">' + (D.racc || []).length + ' impostati</div></div><span class="chev">›</span></button>' +
       '<button class="row" onclick="apriPagine()"><span class="row-ico">🧩</span><div class="row-main"><div class="row-t">Pagine e blocchi</div><div class="row-s">Storia, foto, vetrine e altre pagine</div></div><span class="chev">›</span></button>' +
+      '<button class="row" onclick="apriCollegamenti()"><span class="row-ico">🔗</span><div class="row-main"><div class="row-t">Collegamenti</div><div class="row-s">' + (D.colleg || []).length + ' tra menu, guida e sito</div></div><span class="chev">›</span></button>' +
       '<button class="row" onclick="apriTraduzioni()"><span class="row-ico">🌍</span><div class="row-main"><div class="row-t">Traduzioni</div><div class="row-s">' + lingueAttive().map(function(g){ return g.bandiera; }).join(' ') + ' Controlla e correggi le lingue</div></div><span class="chev">›</span></button>' +
       '<button class="row" onclick="apriTesti()"><span class="row-ico">✏️</span><div class="row-main"><div class="row-t">Testi dell\'interfaccia</div><div class="row-s">Le piccole scritte fisse del menu</div></div><span class="chev">›</span></button></div>' +
     '<div class="sec-title">Menu</div><div class="grp">' +
@@ -1970,12 +1971,12 @@ function apriEtichette(){
 /* ── PAGINA CLIENTE: pagine, blocchi, momenti, abbinamenti, testi (0.5) ─────────────────────────
    Tutto ciò che il cliente legge nel menu, oltre ai prodotti, vive nel database e si modifica da qui. */
 async function caricaContenuti(){
-  var tab = ['menu_pagine?select=*&order=ordine,codice', 'menu_blocchi?select=*&order=ordine,id', 'menu_raccomandazioni?select=*&order=ordine,id', 'menu_momenti?select=*&order=ordine,id', 'menu_momenti_voci?select=*&order=ordine,id'];
+  var tab = ['menu_pagine?select=*&order=ordine,codice', 'menu_blocchi?select=*&order=ordine,id', 'menu_raccomandazioni?select=*&order=ordine,id', 'menu_momenti?select=*&order=ordine,id', 'menu_momenti_voci?select=*&order=ordine,id', 'contenuti_collegamenti?select=*&order=ordine,id'];
   try{
     var r = await Promise.all(tab.map(function(p){ return api(p); }));
     try{ D.lingue = (await api('menu_lingue?select=*&order=ordine')) || []; }catch(e2){ D.lingue = D.lingue || []; }
-    D.pagine = r[0] || []; D.blocchi = r[1] || []; D.racc = r[2] || []; D.momenti = r[3] || []; D.momVoci = r[4] || [];
-  }catch(e){ D.pagine = D.pagine || []; D.blocchi = D.blocchi || []; D.racc = D.racc || []; D.momenti = D.momenti || []; D.momVoci = D.momVoci || []; toast('⚠️ ' + e.message); }
+    D.pagine = r[0] || []; D.blocchi = r[1] || []; D.racc = r[2] || []; D.momenti = r[3] || []; D.momVoci = r[4] || []; D.colleg = r[5] || [];
+  }catch(e){ D.pagine = D.pagine || []; D.blocchi = D.blocchi || []; D.racc = D.racc || []; D.momenti = D.momenti || []; D.momVoci = D.momVoci || []; D.colleg = D.colleg || []; toast('⚠️ ' + e.message); }
 }
 function ctNomeVoce(id){ var v = D.voci.find(function(x){ return x.id === id; }); return v ? v.nome : '(prodotto eliminato)'; }
 function ctNomeCat(id){ var c = D.categorie.find(function(x){ return x.id === id; }); return c ? c.nome : '(categoria eliminata)'; }
@@ -2165,6 +2166,174 @@ function ctScegliVoce(cb, titolo){
   var i = document.getElementById('scQ'); i.oninput = function(){ disegna(i.value); }; disegna(''); setTimeout(function(){ try{ i.focus(); }catch(e){} }, 80);
 }
 
+/* collegamenti tra menu, guida e sito (tabella contenuti_collegamenti) */
+var CL_DA = { menu_voci: 'Prodotti del menu', menu_categorie: 'Categorie del menu', guida_luoghi: 'Luoghi della guida', guida_racconti: 'Racconti della guida', guida_itinerari: 'Giri della guida' };
+var CL_DA_1 = { menu_voci: 'Un prodotto del menu', menu_categorie: 'Una categoria del menu', guida_luoghi: 'Un luogo della guida', guida_racconti: 'Un racconto della guida', guida_itinerari: 'Un giro della guida' };
+var CL_A = { url: 'Una pagina del sito web', menu_voce: 'Un prodotto del menu', guida_luogo: 'Un luogo della guida', guida_racconto: 'Un racconto della guida' };
+var CL_A_TAB = { menu_voce: 'menu_voci', guida_luogo: 'guida_luoghi', guida_racconto: 'guida_racconti' };
+/* destinazioni che il menu e la guida sanno davvero mostrare, per ogni tipo di origine */
+var CL_DEST = { menu_voci: ['url', 'guida_luogo', 'guida_racconto'], menu_categorie: ['url', 'guida_luogo', 'guida_racconto'],
+  guida_luoghi: ['url', 'menu_voce'], guida_racconti: ['url', 'menu_voce'], guida_itinerari: ['menu_voce'] };
+var CL = { luoghi: [], racconti: [], itinerari: [], q: '' }, CF = null;
+async function clCaricaGuida(){
+  try{
+    var r = await Promise.all([api('guida_luoghi?select=id,nome,stato&order=nome'), api('guida_racconti?select=id,titolo,stato&order=id'), api('guida_itinerari?select=id,nome,stato&order=id')]);
+    CL.luoghi = r[0] || []; CL.racconti = r[1] || []; CL.itinerari = r[2] || [];
+  }catch(e){ toast('⚠️ ' + e.message); }
+}
+function clTutti(tab){
+  if(tab === 'menu_voci') return D.voci.map(function(v){ return { id: v.id, nome: v.nome, sub: ctNomeCat(v.categoria_id), stato: v.stato }; });
+  if(tab === 'menu_categorie') return D.categorie.map(function(c){ return { id: c.id, nome: c.nome, sub: (sezDi(c.sezione_id) || {}).nome || '', stato: c.stato }; });
+  if(tab === 'guida_luoghi') return CL.luoghi.map(function(x){ return { id: x.id, nome: x.nome, sub: '', stato: x.stato }; });
+  if(tab === 'guida_racconti') return CL.racconti.map(function(x){ return { id: x.id, nome: x.titolo, sub: '', stato: x.stato }; });
+  if(tab === 'guida_itinerari') return CL.itinerari.map(function(x){ return { id: x.id, nome: x.nome, sub: '', stato: x.stato }; });
+  return [];
+}
+function clNome(tab, id){ var x = clTutti(tab).find(function(y){ return String(y.id) === String(id); }); return x ? x.nome : null; }
+function clStatoTesto(s){ return s === 'bozza' ? 'bozza' : s === 'archiviato' ? 'archiviato' : ''; }
+function clDestTesto(r){
+  if(r.a_tipo === 'url') return (r.titolo ? r.titolo + ' · ' : '') + (r.url || '').replace(/^https:\/\/(www\.)?/, '');
+  var n = clNome(CL_A_TAB[r.a_tipo], r.a_id); return n == null ? '(non esiste più)' : n;
+}
+function clIcona(t){ return t === 'url' ? '🌐' : t === 'menu_voce' ? '☕' : '🗺️'; }
+function clAvvisi(r){
+  var a = [], dt = CL_A_TAB[r.a_tipo];
+  if(clNome(r.da_tabella, r.da_id) == null) a.push('l\'origine non esiste più');
+  if(dt){ var d = clTutti(dt).find(function(y){ return String(y.id) === String(r.a_id); });
+    if(!d) a.push('la destinazione non esiste più');
+    else if(d.stato !== 'pubblicato' && !(d.stato === 'anteprima' && r.a_tipo !== 'menu_voce')) a.push('la destinazione non è pubblicata: per ora il collegamento non compare'); }
+  return a;
+}
+async function apriCollegamenti(){
+  apriSheet('shCl', { titolo: 'Collegamenti', alto: true,
+    corpo: '<div class="hint" style="margin:0 4px 10px">Qui scegli quali prodotti, luoghi della guida e pagine del sito si rimandano a vicenda: per esempio dalla scheda di un dolce all\'articolo che ne racconta la storia. Le modifiche compaiono nel menu entro mezz\'ora e nella guida entro due ore.</div>' +
+      '<div class="field"><input class="inp" id="clQ" placeholder="Cerca (prodotto, luogo, titolo…)" autocomplete="off"></div><div id="clLista"><div class="hint" style="text-align:center;padding:30px 0">Carico…</div></div>',
+    piede: '<div class="btn-row"><button class="btn btn-s" onclick="chiudiSheet(\'shCl\')">Chiudi</button><button class="btn btn-p" onclick="clApri()">＋ Nuovo collegamento</button></div>' });
+  var i = document.getElementById('clQ'); if(i) i.oninput = function(){ CL.q = i.value; clDisegna(); };
+  CL.q = '';
+  await Promise.all([clCaricaGuida(), caricaContenuti()]);
+  clDisegna();
+}
+function clDisegna(){
+  var box = document.getElementById('clLista'); if(!box) return;
+  var q = norm(CL.q), righe = (D.colleg || []).slice().sort(ctOrd).filter(function(r){
+    if(!q) return true;
+    return norm([clNome(r.da_tabella, r.da_id), clDestTesto(r), r.testo].join(' ')).indexOf(q) >= 0; });
+  if(!righe.length){ box.innerHTML = '<div class="empty"><div class="ei">🔗</div><b>' + (q ? 'Nessun collegamento trovato' : 'Ancora nessun collegamento') + '</b></div>'; return; }
+  box.innerHTML = Object.keys(CL_DA).map(function(tab){
+    var l = righe.filter(function(r){ return r.da_tabella === tab; }); if(!l.length) return '';
+    return '<div class="sec-title">' + CL_DA[tab] + ' (' + l.length + ')</div><div class="grp">' + l.map(function(r){
+      var av = clAvvisi(r), dove = r.posizione === 'inizio' ? ' · prima di partire' : r.posizione === 'fine' ? ' · al ritorno' : '';
+      return '<div class="row voce" role="button" tabindex="0" onclick="clApri(' + r.id + ')"><div class="row-main"><div class="row-t">' + esc(clNome(r.da_tabella, r.da_id) || '(eliminato)') + esc(dove) + '</div>' +
+        '<div class="row-s">' + clIcona(r.a_tipo) + ' ' + esc(clDestTesto(r)) + (av.length ? ' · <b>' + esc(av[0]) + '</b>' : '') + '</div></div>' + (r.attivo ? '' : '<span class="bdg n">Nascosto</span>') + '<span class="chev">›</span></div>';
+    }).join('') + '</div>';
+  }).join('');
+}
+function clApri(id){
+  var r = id != null ? (D.colleg || []).find(function(x){ return x.id === id; }) : null;
+  CF = r ? { id: r.id, da_tabella: r.da_tabella, da_id: r.da_id, a_tipo: r.a_tipo, a_id: r.a_id } : { id: null, da_tabella: 'menu_voci', da_id: null, a_tipo: 'url', a_id: null };
+  var v = r || { attivo: true };
+  apriSheet('shClF', { titolo: r ? 'Modifica collegamento' : 'Nuovo collegamento', alto: true,
+    corpo: '<div class="sec-title">1 · Da dove parte</div>' +
+      '<div class="field"><label for="clDa">Il collegamento compare su…</label><select class="inp" id="clDa" onchange="clCambiaDa()">' +
+        Object.keys(CL_DA_1).map(function(k){ return '<option value="' + k + '"' + (k === CF.da_tabella ? ' selected' : '') + '>' + CL_DA_1[k] + '</option>'; }).join('') + '</select></div>' +
+      '<div id="clDaPick"></div>' +
+      '<div class="sec-title">2 · Dove porta</div>' +
+      '<div class="field"><label for="clAt">Porta a…</label><select class="inp" id="clAt" onchange="clCambiaA()"></select></div>' +
+      '<div id="clAPick"></div>' +
+      '<div class="sec-title">3 · Come appare</div>' +
+      '<div class="field" id="clPosBox" style="display:none"><label for="clPos">Dove, nel giro</label><select class="inp" id="clPos">' +
+        '<option value="inizio"' + (v.posizione === 'inizio' ? ' selected' : '') + '>Prima di partire (all\'inizio del giro)</option><option value="fine"' + (v.posizione === 'fine' ? ' selected' : '') + '>Al ritorno, sotto «Bentornato»</option></select></div>' +
+      '<div class="field" id="clTitBox"><label for="clTit">Titolo che vede il cliente</label><input class="inp" id="clTit" maxlength="120" value="' + esc(v.titolo || '') + '" placeholder="Es. La storia della sfogliatella"></div>' +
+      '<div class="field"><label for="clTesto">Frase d\'invito (facoltativa)</label><input class="inp" id="clTesto" maxlength="200" value="' + esc(v.testo || '') + '" placeholder="Es. Prima di partire, un caffè e una sfogliatella">' +
+        '<div class="hint" id="clTestoHint">Se la lasci vuota non compare nulla. La traduzione nelle altre lingue arriva da sola.</div></div>' +
+      '<div class="grp" style="box-shadow:none;border:1px solid var(--sep2);margin:10px 0"><div class="row"><div class="row-main"><div class="row-t">Visibile ai clienti</div></div><label class="tgl"><input type="checkbox" id="clAtt"' + (v.attivo ? ' checked' : '') + '><span></span></label></div></div>',
+    piede: '<div class="btn-row">' + (r ? '<button class="btn btn-d" onclick="clElimina()">Elimina</button>' : '') + '<button class="btn btn-s" onclick="chiudiSheet(\'shClF\')">Annulla</button><button class="btn btn-p" id="clSalva" onclick="clSalva()">Salva</button></div>' });
+  CF.url = r ? r.url : ''; CF.url_en = r ? r.url_en : '';
+  clDisegnaDa(); clDisegnaA();
+}
+function clDisegnaDa(){
+  var b = document.getElementById('clDaPick'); if(!b) return;
+  var n = CF.da_id != null ? clNome(CF.da_tabella, CF.da_id) : null;
+  b.innerHTML = '<div class="field"><label>Quale</label><button type="button" class="btn btn-s" style="width:100%;text-align:left" onclick="clScegliDa()">' + (n ? esc(n) : (CF.da_id != null ? '(non esiste più) · cambia…' : 'Scegli…')) + '</button></div>';
+  var p = document.getElementById('clPosBox'); if(p) p.style.display = CF.da_tabella === 'guida_itinerari' ? '' : 'none';
+}
+function clDisegnaA(){
+  var sel = document.getElementById('clAt'), ok = CL_DEST[CF.da_tabella];
+  if(ok.indexOf(CF.a_tipo) < 0){ CF.a_tipo = ok[0]; CF.a_id = null; }
+  sel.innerHTML = ok.map(function(k){ return '<option value="' + k + '"' + (k === CF.a_tipo ? ' selected' : '') + '>' + CL_A[k] + '</option>'; }).join('');
+  var b = document.getElementById('clAPick');
+  if(CF.a_tipo === 'url'){
+    b.innerHTML = '<div class="field"><label for="clUrl">Indirizzo della pagina</label><input class="inp" id="clUrl" inputmode="url" autocapitalize="none" placeholder="https://www.ceraldicaffe.it/…" value="' + esc(CF.url || '') + '"><div class="hint">Deve iniziare con https://</div></div>' +
+      '<div class="field"><label for="clUrlEn">Indirizzo della versione inglese (facoltativo)</label><input class="inp" id="clUrlEn" inputmode="url" autocapitalize="none" placeholder="https://www.ceraldicaffe.it/en/…" value="' + esc(CF.url_en || '') + '"><div class="hint">Se manca, chi legge in un\'altra lingua vede «Articolo in italiano».</div></div>';
+  }else{
+    var n = CF.a_id != null ? clNome(CL_A_TAB[CF.a_tipo], CF.a_id) : null;
+    b.innerHTML = '<div class="field"><label>Quale</label><button type="button" class="btn btn-s" style="width:100%;text-align:left" onclick="clScegliA()">' + (n ? esc(n) : (CF.a_id != null ? '(non esiste più) · cambia…' : 'Scegli…')) + '</button></div>';
+  }
+  document.getElementById('clTitBox').style.display = CF.a_tipo === 'url' ? '' : 'none';
+  var h = document.getElementById('clTestoHint');
+  if(h) h.textContent = CF.da_tabella === 'guida_itinerari' || CF.a_tipo === 'menu_voce' ? 'Compare sopra i prodotti proposti. Se i prodotti collegati allo stesso punto sono più d\'uno, vale la prima frase scritta. La traduzione arriva da sola.' : 'Se la lasci vuota non compare nulla. La traduzione nelle altre lingue arriva da sola.';
+}
+function clSalvaCampi(){
+  var u = document.getElementById('clUrl'), ue = document.getElementById('clUrlEn');
+  if(u) CF.url = u.value.trim(); if(ue) CF.url_en = ue.value.trim();
+}
+function clCambiaDa(){
+  clSalvaCampi();
+  var nuovo = document.getElementById('clDa').value;
+  if(nuovo !== CF.da_tabella){ CF.da_tabella = nuovo; CF.da_id = null; }
+  clDisegnaDa(); clDisegnaA();
+}
+function clCambiaA(){
+  clSalvaCampi();
+  var nuovo = document.getElementById('clAt').value;
+  if(nuovo !== CF.a_tipo){ CF.a_tipo = nuovo; CF.a_id = null; }
+  clDisegnaA();
+}
+function clScegli(tab, cb, titolo){
+  var tutti = clTutti(tab).filter(function(x){ return x.stato !== 'archiviato'; });
+  function disegna(q){
+    var n = norm(q), l = (n ? tutti.filter(function(x){ return norm(x.nome).indexOf(n) >= 0; }) : tutti), tagliata = l.length > 60; l = l.slice(0, 60);
+    corpoSheet('shSc').querySelector('#scLista').innerHTML = l.length ? '<div class="grp">' + l.map(function(x){ var st = clStatoTesto(x.stato);
+      return '<button class="row" data-id="' + x.id + '"><div class="row-main"><div class="row-t">' + esc(x.nome) + '</div><div class="row-s">' + esc([x.sub, st].filter(Boolean).join(' · ')) + '</div></div></button>'; }).join('') + '</div>' + (tagliata ? '<div class="hint" style="margin:8px 4px">Scrivi nel campo di ricerca per restringere l\'elenco.</div>' : '') : '<div class="hint">Nessun risultato</div>';
+    corpoSheet('shSc').querySelectorAll('[data-id]').forEach(function(b){ b.onclick = function(){ chiudiSheet('shSc'); cb(+b.dataset.id); }; });
+  }
+  apriSheet('shSc', { titolo: titolo, alto: true, corpo: '<div class="field"><input class="inp" id="scQ" placeholder="Cerca per nome" autocomplete="off"></div><div id="scLista"></div>' });
+  var i = document.getElementById('scQ'); i.oninput = function(){ disegna(i.value); }; disegna(''); setTimeout(function(){ try{ i.focus(); }catch(e){} }, 80);
+}
+function clScegliDa(){ clSalvaCampi(); clScegli(CF.da_tabella, function(id){ CF.da_id = id; clDisegnaDa(); }, CL_DA_1[CF.da_tabella]); }
+function clScegliA(){ clSalvaCampi(); clScegli(CL_A_TAB[CF.a_tipo], function(id){ CF.a_id = id; clDisegnaA(); }, CL_A[CF.a_tipo]); }
+async function clSalva(){
+  clSalvaCampi();
+  var titolo = document.getElementById('clTit').value.trim(), testo = document.getElementById('clTesto').value.trim();
+  if(CF.da_id == null || clNome(CF.da_tabella, CF.da_id) == null){ toast('Scegli da dove parte il collegamento'); return; }
+  var corpo = { da_tabella: CF.da_tabella, da_id: CF.da_id, a_tipo: CF.a_tipo, testo: testo || null, attivo: document.getElementById('clAtt').checked,
+    posizione: CF.da_tabella === 'guida_itinerari' ? document.getElementById('clPos').value : null };
+  if(CF.a_tipo === 'url'){
+    if(!/^https:\/\/\S+$/.test(CF.url)){ toast('L\'indirizzo deve iniziare con https://'); return; }
+    if(CF.url_en && !/^https:\/\/\S+$/.test(CF.url_en)){ toast('L\'indirizzo inglese deve iniziare con https://'); return; }
+    if(!titolo){ toast('Scrivi il titolo che vedrà il cliente'); return; }
+    corpo.url = CF.url; corpo.url_en = CF.url_en || null; corpo.titolo = titolo; corpo.a_id = null;
+  }else{
+    if(CF.a_id == null || clNome(CL_A_TAB[CF.a_tipo], CF.a_id) == null){ toast('Scegli dove porta il collegamento'); return; }
+    corpo.a_id = CF.a_id; corpo.url = null; corpo.url_en = null; corpo.titolo = null;
+  }
+  var doppio = (D.colleg || []).some(function(x){ return x.id !== CF.id && x.da_tabella === corpo.da_tabella && x.da_id === corpo.da_id && x.a_tipo === corpo.a_tipo && (x.posizione || null) === corpo.posizione &&
+    (corpo.a_tipo === 'url' ? x.url === corpo.url : x.a_id === corpo.a_id); });
+  if(doppio){ toast('Questo collegamento esiste già'); return; }
+  var nuovo = CF.id == null; if(nuovo) corpo.ordine = ctMax(D.colleg || []) + 10;
+  var b = document.getElementById('clSalva'); if(b) b.disabled = true;
+  try{
+    await api('contenuti_collegamenti' + (nuovo ? '' : '?id=eq.' + CF.id), { method: nuovo ? 'POST' : 'PATCH', prefer: 'return=minimal', body: corpo });
+    await caricaContenuti(); chiudiSheet('shClF'); clDisegna(); toast('✓ Salvato');
+  }catch(e){ if(b) b.disabled = false; toast('⚠️ ' + e.message); }
+}
+async function clElimina(){
+  if(!await conferma('Eliminare questo collegamento?', 'Sparisce dal menu e dalla guida alla prossima pubblicazione. Non si può annullare: se vuoi solo nasconderlo, spegni «Visibile ai clienti».', 'Elimina', true)) return;
+  try{ await api('contenuti_collegamenti?id=eq.' + CF.id, { method: 'DELETE', prefer: 'return=minimal' }); await caricaContenuti(); chiudiSheet('shClF'); clDisegna(); toast('✓ Eliminato'); }
+  catch(e){ toast('⚠️ ' + e.message); }
+}
+
 /* pagine e blocchi */
 function apriPagine(){
   var righe = D.pagine.slice().sort(function(a, b){ return (a.codice === 'home' ? -1 : b.codice === 'home' ? 1 : ctOrd(a, b)); });
@@ -2309,7 +2478,7 @@ async function ctSalvaTesti(){
    Le traduzioni sono generate in automatico (Google) e salvate nel database. Qui si controllano e si correggono:
    una correzione a mano non viene mai riscritta dal sistema; se cambia il testo italiano compare «Da rivedere». */
 function lingueAttive(){ return (D.lingue || []).filter(function(g){ return g.attiva; }); }
-var TR_TAB = { menu_voci: ['voci', 'id', 'Prodotto'], menu_categorie: ['categorie', 'id', 'Categoria'], menu_sezioni: ['sezioni', 'id', 'Sezione'], menu_blocchi: ['blocchi', 'id', 'Blocco'], menu_momenti: ['momenti', 'id', 'Momento'], menu_pagine: ['pagine', 'codice', 'Pagina'], menu_raccomandazioni: ['racc', 'id', 'Consiglio'] };
+var TR_TAB = { menu_voci: ['voci', 'id', 'Prodotto'], menu_categorie: ['categorie', 'id', 'Categoria'], menu_sezioni: ['sezioni', 'id', 'Sezione'], menu_blocchi: ['blocchi', 'id', 'Blocco'], menu_momenti: ['momenti', 'id', 'Momento'], menu_pagine: ['pagine', 'codice', 'Pagina'], menu_raccomandazioni: ['racc', 'id', 'Consiglio'], contenuti_collegamenti: ['colleg', 'id', 'Collegamento'] };
 var _tr = { lingua: null, filtro: 'tutte', q: '', righe: [], rivedere: {} };
 function trRiga(t){
   var d = TR_TAB[t.tabella], r = d && (D[d[0]] || []).find(function(x){ return String(x[d[1]]) === String(t.riga_id); });
@@ -2661,7 +2830,7 @@ async function gSincronizza(tab, prima, dopo, campi){
 }
 
 /* storico */
-var NOMI_TAB = { menu_voci: 'Voce', menu_categorie: 'Categoria', menu_sezioni: 'Sezione', menu_varianti: 'Variante', menu_disponibilita: 'Fascia oraria', menu_voci_allergeni: 'Allergene', menu_pagine: 'Pagina', menu_blocchi: 'Blocco', menu_raccomandazioni: 'Abbinamento o consiglio', menu_momenti: 'Momento', menu_momenti_voci: 'Prodotto del momento', moduli: 'Impostazioni', locale: 'Locale' };
+var NOMI_TAB = { menu_voci: 'Voce', menu_categorie: 'Categoria', menu_sezioni: 'Sezione', menu_varianti: 'Variante', menu_disponibilita: 'Fascia oraria', menu_voci_allergeni: 'Allergene', menu_pagine: 'Pagina', menu_blocchi: 'Blocco', menu_raccomandazioni: 'Abbinamento o consiglio', menu_momenti: 'Momento', menu_momenti_voci: 'Prodotto del momento', contenuti_collegamenti: 'Collegamento', moduli: 'Impostazioni', locale: 'Locale' };
 var CAMPI_IT = { nome: 'nome', descrizione: 'descrizione', prezzo_cent: 'prezzo', stato: 'stato', proposta_giorno: 'proposta del giorno', proposta_posizione: 'dove la proposta', foto_path: 'foto', foto_alt: 'descrizione foto', badge: 'etichette', esaurito_fino: 'finito per oggi', allergeni_verificati_il: 'verifica allergeni', in_evidenza: 'in evidenza', ordine: 'ordine', categoria_id: 'categoria', sezione_id: 'sezione', nome_en: 'nome inglese', descrizione_en: 'descrizione inglese', traduzione: 'traduzione', note: 'note', configurazione: 'aspetto/etichette', delta_cent: 'supplemento', giorni: 'giorni', orari: 'orari' };
 var SISTEMA = ['aggiornato_il', 'aggiornato_da', 'creato_il', 'verificato_da', 'allergeni_verificati_da'];
 var _stor = [];
