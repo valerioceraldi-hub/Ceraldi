@@ -144,6 +144,15 @@ const MAR = '2026-11-03T09:00:00Z', CARITA = { latitude: 40.844326, longitude: 1
     await p.goto(BASE); await p.waitForURL(/\/de\//, { timeout: 3000 }).catch(() => {});
     ok('lingua ricordata (torna in de)', /\/de\/$/.test(p.url()), p.url());
   });
+  // collegamenti con il menu e con il sito (contenuti_collegamenti)
+  await apri(BASE + '#/i/il-primo-giro', {}, async p => {
+    const h = await p.locator('.assaggio a.prod').evaluateAll(a => a.map(x => x.getAttribute('href')));
+    ok('giro: «Prima di partire» con prodotti del menu', h.length >= 1 && h.every(x => /menu-nuovo\/#v-\d+$/.test(x)), h.join(' '));
+  });
+  await apri(BASE + 'en/#/l/piazza-carita', {}, async p => {
+    ok('luogo: articolo del sito collegato', await p.locator('a.leggi[href^="https://"]').count() >= 1);
+    ok('inglese: il menu nella stessa lingua', /menu-nuovo\/en\/$/.test(await p.locator('footer a').first().getAttribute('href')));
+  });
   // senza rete
   await apri(BASE, { sw: true }, async (p, ctx) => {
     await p.evaluate(() => navigator.serviceWorker.ready); await p.waitForFunction(() => document.querySelectorAll('.copertina-giro.pronta').length === 3, null, {timeout: 30000}).catch(() => {}); await p.waitForTimeout(1500);

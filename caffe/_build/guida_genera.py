@@ -21,6 +21,9 @@ COL = {  # solo colonne pubbliche (anon non legge note_interne, aggiornato_da, v
     'guida_dettagli': 'id,luogo_id,ordine,titolo,testo,dove,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_didascalia,foto_permesso,stato',
     'guida_foto': 'id,luogo_id,ordine,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_didascalia,foto_permesso,stato',
     'menu_lingue': '*',
+    'contenuti_collegamenti': 'id,da_tabella,da_id,a_tipo,a_id,url,url_en,titolo,testo,posizione,ordine,attivo',
+    'menu_voci': 'id,categoria_id,nome,prezzo_cent,foto_path,foto_alt,stato,traduzione',
+    'menu_categorie': 'id,sezione_id,stato', 'menu_sezioni': 'id,stato',
     'scioperi_napoli_trasporti': 'data,linea,dettaglio',
 }
 _BASE = json.load(open(os.path.join(QUI, 'guida_testi_base.json'), encoding='utf-8'))
@@ -31,13 +34,21 @@ def scarica(url, chiave):
     def rich(u, extra=None, dati=None):
         h = {'apikey': chiave, 'Authorization': 'Bearer ' + chiave}; h.update(extra or {})
         return json.load(urllib.request.urlopen(urllib.request.Request(u, data=dati, headers=h), timeout=60))
+    def tutte(u):  # il database restituisce al massimo 1000 righe per richiesta: si leggono a pagine
+        righe, da = [], 0
+        while True:
+            r = rich(u, {'Range-Unit': 'items', 'Range': '%d-%d' % (da, da + 999)})
+            righe += r
+            if len(r) < 1000: return righe
+            da += 1000
     out = {}
     ieri = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
     for t, c in COL.items():
         q = 'select=' + c
         if t == 'scioperi_napoli_trasporti': q += '&data=gte.' + ieri
-        out[t] = rich('%s/rest/v1/%s?%s' % (url, t, q))
-    out['menu_traduzioni'] = rich(url + '/rest/v1/menu_traduzioni?select=tabella,riga_id,campo,lingua,testo&tabella=like.guida_*')
+        if t.startswith('menu_') and t != 'menu_lingue': q += '&stato=eq.pubblicato'
+        out[t] = tutte('%s/rest/v1/%s?%s' % (url, t, q))
+    out['menu_traduzioni'] = tutte(url + '/rest/v1/menu_traduzioni?select=tabella,riga_id,campo,lingua,testo&or=(tabella.like.guida_*,tabella.eq.contenuti_collegamenti,and(tabella.eq.menu_voci,campo.eq.nome))&order=tabella,riga_id,campo,lingua')
     out['config'] = rich(url + '/rest/v1/rpc/menu_config_pubblica', {'Content-Type': 'application/json'}, b'{}')
     return out
 
@@ -122,8 +133,29 @@ def costruisci(src, lingua, foto_base, anteprima):
             'l': c.get('luogo_id') if c.get('luogo_id') in luoghi else None, 'foto': foto(c, 'guida_capitoli') if c.get('foto_permesso') else None})
         for v in fonti.get(('guida_capitoli', c['id']), []):
             if v not in fonti.setdefault(('guida_racconti', c['racconto_id']), []): fonti[('guida_racconti', c['racconto_id'])].append(v)
+    # collegamenti verso il menu (prodotti con foto e prezzo) e verso il sito (articoli): dal database, per id
+    sez = {x['id'] for x in src.get('menu_sezioni', []) if x.get('stato') == 'pubblicato'}
+    cat = {x['id'] for x in src.get('menu_categorie', []) if x.get('stato') == 'pubblicato' and x.get('sezione_id') in sez}
+    voci = {v['id']: v for v in src.get('menu_voci', []) if v.get('stato') == 'pubblicato' and v.get('categoria_id') in cat}
+    def prod(v):
+        n = v['nome'] if (v.get('traduzione') or 'auto') in ('nome_fisso', 'tutto_fisso') else L(v, 'nome', 'menu_voci')
+        return {'v': v['id'], 'n': n, 'p': v.get('prezzo_cent') or 0, 'foto': {'u': U(v['foto_path']), 'alt': v.get('foto_alt') or n} if v.get('foto_path') else None}
+    col = {}
+    for r in ordina([r for r in src.get('contenuti_collegamenti', []) if r.get('attivo') is not False]):
+        k = (r['da_tabella'], r['da_id'], r.get('posizione') or '')
+        g = col.setdefault(k, {'x': '', 'v': [], 'l': []})
+        if not g['x']: g['x'] = L(r, 'testo', 'contenuti_collegamenti') if r['a_tipo'] == 'menu_voce' else ''
+        if r['a_tipo'] == 'menu_voce' and r.get('a_id') in voci: g['v'].append(prod(voci[r['a_id']]))
+        elif r['a_tipo'] == 'url' and r.get('url'):
+            en = lingua != 'it' and r.get('url_en')
+            g['l'].append({'u': en or r['url'], 't': L(r, 'titolo', 'contenuti_collegamenti'), 'x': L(r, 'testo', 'contenuti_collegamenti'), 'it': lingua != 'it' and not en})
+    def cl(tab, i, pos=''):
+        g = col.get((tab, i, pos))
+        return g if g and (g['v'] or g['l']) else None
+    for l in luoghi.values(): l['col'] = cl('guida_luoghi', l['id'])
+    for i in itinerari: i['pr'] = cl('guida_itinerari', i['id'], 'inizio'); i['fi'] = cl('guida_itinerari', i['id'], 'fine')
     racconti = [{'id': r['id'], 's': r['slug'], 't': L(r, 'titolo', 'guida_racconti'), 'sub': L(r, 'sottotitolo', 'guida_racconti'), 'som': L(r, 'sommario', 'guida_racconti'), 'txt': L(r, 'testo', 'guida_racconti'),
-                 'foto': foto(r, 'guida_racconti'), 'cap': capitoli.get(r['id'], []), 'ap': bool(r.get('in_apertura')),
+                 'foto': foto(r, 'guida_racconti'), 'cap': capitoli.get(r['id'], []), 'ap': bool(r.get('in_apertura')), 'col': cl('guida_racconti', r['id']),
                  'fonti': fonti.get(('guida_racconti', r['id']), []), 'ant': r.get('stato') == 'anteprima'}
                 for r in ordina(src.get('guida_racconti', [])) if r.get('stato') in visibile]
     scioperi = [{'d': s['data'], 'l': s.get('linea') or '', 'x': s.get('dettaglio') or ''} for s in src.get('scioperi_napoli_trasporti', []) if s.get('data')]
@@ -155,6 +187,9 @@ def copia_foto(pagine, out):
         for x in d['luoghi']:
             for g in x.get('gal', []): loc(g, pre)
             for g in x.get('dett', []): loc(g.get('foto'), pre)
+        for x in d['luoghi'] + d['itinerari'] + d['racconti']:  # foto dei prodotti del menu collegati
+            for k in ('col', 'pr', 'fi'):
+                for v in (x.get(k) or {}).get('v', []): loc(v.get('foto'), pre)
     for f in os.listdir(cart):
         if f not in set(nomi.values()): os.remove(os.path.join(cart, f))
     return len(nomi)
@@ -197,7 +232,7 @@ def main():
         d = costruisci(src, cod, base, a.anteprima)
         d['lingue'] = [dict(info[x], u=vai(cod, x)) for x in codici] if len(codici) > 1 else []
         d['pre'] = '' if radice(cod) else '../'
-        d['menu'] = d['pre'] + a.menu_url
+        d['menu'] = d['pre'] + a.menu_url + ('' if cod == 'it' or not re.search(r'menu', a.menu_url) else cod + '/')  # il menu nella stessa lingua
         pagine.append((cod, d))
     d0 = pagine[0][1]
     if not d0['luoghi'] and not d0['itinerari'] and not d0['racconti']:

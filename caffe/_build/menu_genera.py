@@ -12,6 +12,9 @@ TAB = ['menu_sezioni','menu_categorie','menu_voci','menu_varianti','menu_voci_al
 _BASE = json.load(open(os.path.join(QUI, 'menu_testi_base.json'), encoding='utf-8'))
 DEF_IT, DEF_EN = _BASE['it'], _BASE['en']
 ITALIANO = {'c': 'it', 'n': 'Italiano', 'b': '🇮🇹'}
+# tabelle lette con colonne esplicite (ad anon sono concesse solo queste); facoltative: se mancano, il menu si genera senza collegamenti
+EXTRA = {'contenuti_collegamenti': 'id,da_tabella,da_id,a_tipo,a_id,url,url_en,titolo,testo,posizione,ordine,attivo',
+         'guida_luoghi': 'id,slug,nome,stato', 'guida_racconti': 'id,slug,titolo,stato'}
 
 def scarica(url, chiave, rpc=False):
     def rich(u, extra=None, dati=None):
@@ -26,6 +29,9 @@ def scarica(url, chiave, rpc=False):
             if len(r) < 1000: break
             da += 1000
         out[t] = righe
+    for t, c in EXTRA.items():
+        try: out[t] = rich('%s/rest/v1/%s?select=%s' % (url, t, c))
+        except Exception as x: print('collegamenti: %s non letta (%s): il menu si genera senza' % (t, x)); out[t] = []
     out['config'] = rich(url + '/rest/v1/rpc/menu_config_pubblica', {'Content-Type': 'application/json'}, b'{}')
     return out
 
@@ -59,7 +65,7 @@ def file_esiste(url, cache={}):
         time.sleep(1 + tent)
     sys.exit('Verifica foto non riuscita (%s): %s. Riprova: non genero una pagina con foto scartate per un errore di rete.' % (err, url))
 
-def costruisci(src, lingua, foto_base, esiste=None, lingue=None):
+def costruisci(src, lingua, foto_base, esiste=None, lingue=None, guida=None):
     nuove = 'menu_traduzioni' in src  # tabella delle traduzioni; senza (vecchi export) valgono le colonne *_en
     TR = {(t['tabella'], str(t['riga_id']), t['campo']): t['testo'] for t in src.get('menu_traduzioni', []) if t.get('lingua') == lingua and t.get('testo')}
     def L(r, k, tab=None):  # campo nella lingua scelta, con ripiego sull'italiano (mai vuoto se l'italiano c'è)
@@ -122,8 +128,11 @@ def costruisci(src, lingua, foto_base, esiste=None, lingue=None):
             ruolo = st.get('ruolo') if b['tipo'] == 'foto' and b['posizione'] == 'alto' and st.get('ruolo') in RUOLI else None
             # prodotti collegati al blocco (stile.voci = elenco di id): solo quelli pubblicati e visibili, nell'ordine scelto
             vs = [int(x) for x in (st.get('voci') or []) if str(x).isdigit() and int(x) in ids]
+            lu = b.get('link_url')
+            if lu and '{guida}' in lu:  # segnaposto: la guida nella stessa lingua del menu (senza guida, niente collegamento)
+                lu = lu.replace('{guida}', guida) if guida else None
             bl.append({'tipo': b['tipo'], 'pos': b['posizione'], 'ruolo': ruolo, 'sopra': L(b, 'sopratitolo', 'menu_blocchi'), 'titolo': L(b, 'titolo', 'menu_blocchi'), 'testo': L(b, 'testo', 'menu_blocchi'), 'f': U(b.get('foto_url')),
-                       'fa': L(b, 'foto_alt', 'menu_blocchi'), 'lt': L(b, 'link_testo', 'menu_blocchi'), 'lu': b.get('link_url'), 'lp': b.get('link_pagina'), 'voci': vs})
+                       'fa': L(b, 'foto_alt', 'menu_blocchi'), 'lt': L(b, 'link_testo', 'menu_blocchi'), 'lu': lu, 'lp': b.get('link_pagina'), 'voci': vs})
         pagine[p['codice']] = {'titolo': L(p, 'titolo', 'menu_pagine'), 'blocchi': bl}
     for b in pagine.values():
         for x in b['blocchi']:
@@ -141,10 +150,30 @@ def costruisci(src, lingua, foto_base, esiste=None, lingue=None):
         if r['tipo'] == 'abbinamento' and r.get('voce_id') in ids: abb.setdefault(r['voce_id'], []).append(r['target_voce_id'])
         elif r['tipo'] == 'abbinamento' and not r.get('voce_id') and r.get('categoria_id'): abbc.setdefault(r['categoria_id'], []).append(r['target_voce_id'])
         elif r['tipo'] == 'consiglio_categoria' and r.get('categoria_id'): cons.setdefault(r['categoria_id'], []).append(r['target_voce_id'])
+    # collegamenti di prodotti e categorie verso il sito (url) e la guida (luoghi, racconti): riferimenti per id, nell'ordine scelto
+    gl = {r['id']: r for r in src.get('guida_luoghi', []) if r.get('stato') in ('pubblicato', 'anteprima')}
+    gr = {r['id']: r for r in src.get('guida_racconti', []) if r.get('stato') in ('pubblicato', 'anteprima')}
+    catid = {c['id'] for s in sezioni for c in s['c']}
+    col = {}
+    for r in ordina([r for r in src.get('contenuti_collegamenti', []) if r.get('attivo') is not False]):
+        chi = ('v%s' % r['da_id']) if r['da_tabella'] == 'menu_voci' and r['da_id'] in ids else ('c%s' % r['da_id']) if r['da_tabella'] == 'menu_categorie' and r['da_id'] in catid else None
+        if not chi: continue
+        x = L(r, 'testo', 'contenuti_collegamenti')
+        if r['a_tipo'] == 'url' and r.get('url'):
+            en = lingua != 'it' and r.get('url_en')
+            o = {'k': 's', 'u': en or r['url'], 't': L(r, 'titolo', 'contenuti_collegamenti'), 'it': lingua != 'it' and not en}
+        elif r['a_tipo'] in ('guida_luogo', 'guida_racconto') and guida:
+            g = (gl if r['a_tipo'] == 'guida_luogo' else gr).get(r.get('a_id'))
+            if not g: continue
+            o = {'k': 'g', 'u': guida + ('#/l/' if r['a_tipo'] == 'guida_luogo' else '#/r/') + g['slug'],
+                 't': L(g, 'nome', 'guida_luoghi') if r['a_tipo'] == 'guida_luogo' else L(g, 'titolo', 'guida_racconti')}
+        else: continue
+        if x: o['x'] = x
+        col.setdefault(chi, []).append(o)
     lo = (src.get('locale') or [{}])[0]
     ori = lo.get('orari') or {}
     d = {'testi': testi, 'locale': {'nome': lo.get('nome') or '', 'ind': lo.get('indirizzo') or '', 'tel': lo.get('telefono') or '', 'wifi': wifi_dati(lo), 'orari': (ori.get('testo_' + lingua) if lingua != 'it' else None) or ori.get('testo') or ''},
-         'sezioni': sezioni, 'pagine': pagine, 'momenti': momenti, 'abb': {'v': abb, 'c': abbc}, 'consigli': cons, 'lingua': lingua, 'lingue': lingue or []}
+         'sezioni': sezioni, 'pagine': pagine, 'momenti': momenti, 'abb': {'v': abb, 'c': abbc}, 'consigli': cons, 'lingua': lingua, 'lingue': lingue or [], 'col': col, 'guida': guida or ''}
     return d, DEF, cfg
 
 HEX = re.compile(r'^#[0-9a-fA-F]{3,8}$')
@@ -211,6 +240,7 @@ def main():
     ap.add_argument('--out', required=True); ap.add_argument('--lingua', default='it', help='una sola lingua (it, en, ...)'); ap.add_argument('--json'); ap.add_argument('--esporta-json')
     ap.add_argument('--tutte-le-lingue', action='store_true', help="italiano nella cartella e ogni lingua attiva del database in una sottocartella (en/, fr/, ...)")
     ap.add_argument('--copia-foto', action='store_true'); ap.add_argument('--noindex', action='store_true', help='pagina di prova: non indicizzata dai motori di ricerca')
+    ap.add_argument('--guida-url', default='../guida-nuova/', help="indirizzo della guida visto dalla cartella del menu (vuoto = nessuna guida); per le altre lingue si aggiunge la loro sottocartella")
     ap.add_argument('--consenti-vuoto', action='store_true', help='genera anche se nessuna voce è pubblicata (altrimenti si ferma per non svuotare il menu)'); ap.add_argument('--modello', default=os.path.join(QUI, 'menu_template.html'))
     a = ap.parse_args()
     if a.json: src = json.load(open(a.json, encoding='utf-8'))
@@ -232,7 +262,9 @@ def main():
     pagine = []
     for cod in codici:
         lingue = [dict(info[x], u=vai(cod, x)) for x in codici] if len(codici) > 1 else []
-        d, DEF, cfg = costruisci(src, cod, base, None if a.json else file_esiste, lingue)  # --json = prove senza rete: nessun controllo
+        radice_ = cod == codici[0] and (cod == 'it' or not a.tutte_le_lingue)
+        guida = (('' if radice_ or re.match(r'^(https?:)?/', a.guida_url) else '../') + a.guida_url + ('' if cod == 'it' else cod + '/')) if a.guida_url else None
+        d, DEF, cfg = costruisci(src, cod, base, None if a.json else file_esiste, lingue, guida)  # --json = prove senza rete: nessun controllo
         if cod == codici[0] and not d['sezioni'] and not a.consenti_vuoto:
             sys.exit('Nessuna voce pubblicata: non genero un menu vuoto (usa --consenti-vuoto se è voluto).')
         pagine.append((cod, d, DEF, cfg))
