@@ -426,6 +426,7 @@ V.home = function(){
       (r.cap.length ? '<p class="piccolo">' + e(f(T.capitoli_n, {n: r.cap.length})) + ' · ' + e(f(T.minuti_lettura, {n: lettura(r)})) + '</p>' : '') +
       '<a class="btn" href="#/r/' + e(r.s) + '">' + e(T.leggi_storia) + '</a></div></article>';
   });
+  if(D.passaporto) h += '<a class="btn sec" href="#/p" style="justify-content:space-between"><span>🛂 ' + e(D.passaporto.t || T.pass_titolo) + '</span><span class="piccolo">' + e(f(T.pass_timbri, {n: pasConta(), m: D.passaporto.d.length})) + '</span></a>';
   var sc = D.scioperi.filter(function(s){ return s.d === ora.data; });
   if(sc.length) h += '<div class="avviso ko"><b>' + e(T.sciopero) + '</b>' + sc.map(function(s){ return '<br>' + e([s.l, s.x].filter(Boolean).join(' — ')); }).join('') + '</div>';
   var chiusi = D.luoghi.filter(function(l){ return !l.sa && verificati(l, ora) && stato(l, ora, ora.min).k === 'chiuso_oggi'; });
@@ -524,8 +525,9 @@ function aggiornaCammino(){
   var h = '';
   if(G.arrivato){
     h = '<section class="arrivo"><span class="etichetta" style="color:var(--su-scuro)">' + e(fine ? T.fine_giro : T.sei_arrivato) + '</span><h2>' + e(fine && casa(l) ? T.bentornato : l.n) + '</h2>';
+    if(fine && D.passaporto) h += '<a class="btn sec" href="#/p">' + e(T.pass_apri) + ' · ' + e(f(T.pass_timbri, {n: pasConta(), m: D.passaporto.d.length})) + '</a>';
     if(fine) h += (casa(l) ? '<p>' + e(T.bentornato_testo) + '</p>' + (i.fi && i.fi.v.length ? prodotti(i.fi.v) : '') : '') + '<a class="btn chiaro" href="' + e(D.menu) + '">' + e(T.torna_menu) + '</a><button class="btn sec" onclick="esciGiro()">' + e(T.tutti_giri) + '</button>';
-    else h += (l.som ? '<p>' + e(l.som) + '</p>' : '') + '<a class="btn chiaro" href="#/l/' + e(l.s) + '">' + e(T.apri_scheda) + '</a>' +
+    else h += (l.som ? '<p>' + e(l.som) + '</p>' : '') + pasBlocco(l) + '<a class="btn chiaro" href="#/l/' + e(l.s) + '">' + e(T.apri_scheda) + '</a>' +
       '<button class="btn sec" onclick="ascolta(LU[' + l.id + '], this)">▶ ' + e(T.ascolta) + '</button>' +
       '<button class="btn sec" onclick="prosegui()">' + e(T.prosegui) + ' · ' + e(nomeTappa(i, G.k + 1)) + ' · ' + i.tappe[G.k + 1].m + ' ' + e(T.min) + '</button>';
     h += '</section>';
@@ -545,6 +547,37 @@ function aggiornaCammino(){
 }
 function prosegui(){ var i = IT[G.s]; if(G.k < i.tappe.length - 1){ G.k++; G.arrivato = false; G.vicino = 0; G.lungo = 0; salvaGiro(); marcaIo = null; disegnaCammino(); aggiornaCammino(); window.scrollTo(0, 0); } }
 function esciGiro(){ try{ localStorage.removeItem('guida_giro'); }catch(x){} fermaPosizione(); var s = G && G.s; G = null; vai(s ? '#/i/' + s : '#/'); }
+/* ---------- Passaporto del centro storico: un timbro per luogo, risposta controllata sul telefono (impronta SHA-256, nessuna chiamata di rete) ---------- */
+function pasTimbri(){ try{ return JSON.parse(localStorage.getItem('guida_passaporto') || '{}') || {}; }catch(x){ return {}; } }
+function pasDom(id){ var p = D.passaporto; if(!p) return null; for(var j = 0; j < p.d.length; j++) if(p.d[j].l === id) return p.d[j]; return null; }
+function pasQuesito(id){ var q = ''; D.itinerari.forEach(function(i){ i.tappe.forEach(function(t){ if(!q && t.l === id && t.q) q = t.q; }); }); return q; }
+function pasNorm(s){ return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, ''); }
+function pasConta(){ var t = pasTimbri(), n = 0; (D.passaporto ? D.passaporto.d : []).forEach(function(d){ if(t[d.l]) n++; }); return n; }
+function pasBlocco(l){
+  var d = pasDom(l.id), q = d && pasQuesito(l.id); if(!q) return '';
+  if(pasTimbri()[l.id]) return '<p class="piccolo" style="color:var(--su-scuro)">✓ ' + e(T.pass_ok) + '</p>';
+  return '<div style="display:grid;gap:8px"><span class="etichetta" style="color:var(--su-scuro)">' + e(T.pass_etichetta) + '</span><p style="font-weight:500">' + e(q) + '</p>' +
+    '<input id="pas-r" type="text" autocomplete="off" autocapitalize="none" placeholder="' + e(T.pass_risposta) + '" style="width:100%;min-height:48px;border-radius:12px;border:0;padding:0 12px;font-size:1rem">' +
+    '<p id="pas-m" class="piccolo" role="status" style="min-height:1.2em"></p><button class="btn chiaro" onclick="pasControlla(' + l.id + ')">' + e(T.pass_timbra) + '</button></div>';
+}
+function pasControlla(id){
+  var d = pasDom(id), inp = document.getElementById('pas-r'), m = document.getElementById('pas-m'); if(!d || !inp) return;
+  if(!(window.crypto && crypto.subtle && window.TextEncoder)){ m.textContent = T.pass_no; return; }
+  crypto.subtle.digest('SHA-256', new TextEncoder().encode(pasNorm(inp.value))).then(function(b){
+    var hex = Array.prototype.map.call(new Uint8Array(b), function(x){ return ('0' + x.toString(16)).slice(-2); }).join('');
+    if(pasNorm(inp.value) && d.h.indexOf(hex) >= 0){ var t = pasTimbri(); t[id] = 1; try{ localStorage.setItem('guida_passaporto', JSON.stringify(t)); }catch(x){} if(G) aggiornaCammino(); else mostra(); }
+    else m.textContent = T.pass_no_risp;
+  });
+}
+V.passaporto = function(){
+  var p = D.passaporto; if(!p) return V.home();
+  var t = pasTimbri(), n = pasConta(), h = '<div class="stack vista"><div class="testa"><button class="indietro" onclick="vai(\'#/\')">← ' + e(T.indietro) + '</button>' + lingue() + '</div>' +
+    '<h1>' + e(p.t || T.pass_titolo) + '</h1>' + (p.x ? '<p>' + e(p.x) + '</p>' : '') + '<p style="font-weight:500">' + e(f(T.pass_timbri, {n: n, m: p.d.length})) + '</p>';
+  if(n >= p.min && (p.pt || p.px)) h += '<section class="arrivo"><span class="etichetta" style="color:var(--su-scuro)">' + e(T.pass_premio) + '</span>' + (p.pt ? '<h2>' + e(p.pt) + '</h2>' : '') + (p.px ? '<p>' + e(p.px) + '</p>' : '') + '</section>';
+  else if(n < p.min) h += '<p class="piccolo">' + e(f(T.pass_mancano, {n: p.min - n})) + '</p>';
+  h += '<ul style="list-style:none;padding:0;margin:0;display:grid;gap:8px">' + p.d.map(function(d){ var l = LU[d.l]; if(!l) return ''; return '<li><a class="btn sec" style="justify-content:flex-start" href="#/l/' + e(l.s) + '">' + (t[d.l] ? '✓ ' : '○ ') + e(l.n) + '</a></li>'; }).join('') + '</ul></div>';
+  return h;
+};
 V.luogo = function(s){
   var l = LU['s:' + s]; if(!l) return V.home();
   var ora = adesso(), inGiro = G && IT[G.s] && LU[IT[G.s].tappe[G.k].l] === l;
@@ -617,7 +650,7 @@ function mostra(){
   if(p[0] !== 'c' && watchId != null && !(p[0] === 'l')) fermaPosizione();
   try{ speechSynthesis.cancel(); }catch(x){}
   if(p[0] === 'i') h = V.itinerario(a); else if(p[0] === 'c') h = V.cammino(a); else if(p[0] === 'l') h = V.luogo(a); else if(p[0] === 'r') h = V.racconto(a);
-  else if(p[0] === 'mappa') h = V.mappa(); else if(p[0] === 'piove') h = V.piove(); else h = V.home();
+  else if(p[0] === 'mappa') h = V.mappa(); else if(p[0] === 'piove') h = V.piove(); else if(p[0] === 'p') h = V.passaporto(); else h = V.home();
   var ant = D.luoghi.concat(D.itinerari, D.racconti).some(function(x){ return x.ant; });
   app.innerHTML = (ant ? '<p class="avviso prova" style="margin-top:12px">' + e(T.anteprima) + '</p>' : '') + h +
     '<footer><a href="' + e(D.menu) + '">' + e(T.torna_menu) + '</a><span>' + e(T.editoriale) + '</span><span>' + e(T.senza_rete) + '</span></footer>';

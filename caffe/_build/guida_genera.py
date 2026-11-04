@@ -14,7 +14,8 @@ COL = {  # solo colonne pubbliche (anon non legge note_interne, aggiornato_da, v
     'guida_luoghi': 'id,slug,nome,tipo,zona,indirizzo,lat,lon,minuti_a_piedi,metri_a_piedi,durata_visita_min,gratuito,sempre_accessibile,sito_ufficiale,pagina_orari,sommario,racconto,consiglio,accessibilita,accessibilita_verificata_il,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_didascalia,stato,orari_stato,orari_verificati_il,ordine,leggende,foto_consentite',
     'guida_orari': 'id,luogo_id,giorni,dalle,alle,ultimo_ingresso,dal,al,chiuso,nota,ordine',
     'guida_itinerari': 'id,slug,nome,sottotitolo,descrizione,durata_min,distanza_m,etichette,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_didascalia,stato,ordine',
-    'guida_tappe': 'id,itinerario_id,luogo_id,ordine,minuti_dal_precedente,metri_dal_precedente,sosta_min,nota,alternativa_luogo_id,percorso,svolte',
+    'guida_tappe': 'id,itinerario_id,luogo_id,ordine,minuti_dal_precedente,metri_dal_precedente,sosta_min,nota,domanda,alternativa_luogo_id,percorso,svolte',
+    'guida_passaporto': 'id,attivo,titolo,testo,premio_titolo,premio_testo,minimo',
     'guida_racconti': 'id,slug,titolo,sottotitolo,sommario,testo,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_didascalia,stato,ordine,in_apertura',
     'guida_capitoli': 'id,racconto_id,ordine,periodo,titolo,testo,luogo_id,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_didascalia,foto_permesso,stato',
     'guida_affermazioni_fonti': 'tabella,riga_id,fonte_titolo,fonte_url',
@@ -49,6 +50,8 @@ def scarica(url, chiave):
         if t.startswith('menu_') and t != 'menu_lingue': q += '&stato=eq.pubblicato'
         out[t] = tutte('%s/rest/v1/%s?%s' % (url, t, q))
     out['menu_traduzioni'] = tutte(url + '/rest/v1/menu_traduzioni?select=tabella,riga_id,campo,lingua,testo&or=(tabella.like.guida_*,tabella.eq.contenuti_collegamenti,and(tabella.eq.menu_voci,campo.eq.nome))&order=tabella,riga_id,campo,lingua')
+    try: out['passaporto_dati'] = rich(url + '/rest/v1/rpc/guida_passaporto_dati', {'Content-Type': 'application/json'}, b'{}')
+    except Exception: out['passaporto_dati'] = None  # funzione non ancora creata: nessun passaporto
     out['config'] = rich(url + '/rest/v1/rpc/menu_config_pubblica', {'Content-Type': 'application/json'}, b'{}')
     return out
 
@@ -120,7 +123,7 @@ def costruisci(src, lingua, foto_base, anteprima):
             alt = t.get('alternativa_luogo_id')
             geo = (t.get('percorso') or {}).get('coordinates')
             tappe.append({'l': t['luogo_id'], 'm': t.get('minuti_dal_precedente') or 0, 'mt': t.get('metri_dal_precedente') or 0, 'so': t.get('sosta_min') or 0,
-                          'nota': L(t, 'nota', 'guida_tappe'), 'alt': alt if alt in luoghi else None,
+                          'nota': L(t, 'nota', 'guida_tappe'), 'q': L(t, 'domanda', 'guida_tappe') or None, 'alt': alt if alt in luoghi else None,
                           'geo': [[round(x, 5), round(y, 5)] for x, y in geo] if geo else None, 'sv': semplifica(t.get('svolte')) if t.get('svolte') else None})
         if not tappe: continue
         itinerari.append({'id': i['id'], 's': i['slug'], 'n': L(i, 'nome', 'guida_itinerari'), 'sub': L(i, 'sottotitolo', 'guida_itinerari'), 'desc': L(i, 'descrizione', 'guida_itinerari'),
@@ -158,8 +161,17 @@ def costruisci(src, lingua, foto_base, anteprima):
                  'foto': foto(r, 'guida_racconti'), 'cap': capitoli.get(r['id'], []), 'ap': bool(r.get('in_apertura')), 'col': cl('guida_racconti', r['id']),
                  'fonti': fonti.get(('guida_racconti', r['id']), []), 'ant': r.get('stato') == 'anteprima'}
                 for r in ordina(src.get('guida_racconti', [])) if r.get('stato') in visibile]
+    pas = None  # Passaporto: solo se attivo dal Back Office e con almeno una domanda; le risposte arrivano come impronte (mai in chiaro)
+    cfgp = next((r for r in src.get('guida_passaporto', []) if r.get('attivo')), None)
+    dp = src.get('passaporto_dati') or {}
+    if cfgp and dp.get('domande'):
+        vis = {(t['l'], i['id']) for i in itinerari for t in i['tappe']}
+        dom = [{'t': x['t'], 'l': x['l'], 'i': x['i'], 'h': x['h']} for x in dp['domande'] if (x['l'], x['i']) in vis and x['h']]
+        dom = list({x['l']: x for x in reversed(dom)}.values())[::-1]  # un solo timbro per luogo, anche se compare in più giri
+        if dom: pas = {'t': L(cfgp, 'titolo', 'guida_passaporto'), 'x': L(cfgp, 'testo', 'guida_passaporto'), 'pt': L(cfgp, 'premio_titolo', 'guida_passaporto'), 'px': L(cfgp, 'premio_testo', 'guida_passaporto'),
+                      'min': min(cfgp.get('minimo') or len(dom), len(dom)), 'd': dom}
     scioperi = [{'d': s['data'], 'l': s.get('linea') or '', 'x': s.get('dettaglio') or ''} for s in src.get('scioperi_napoli_trasporti', []) if s.get('data')]
-    return {'lingua': lingua, 'luoghi': list(luoghi.values()), 'itinerari': itinerari, 'racconti': racconti, 'scioperi': scioperi, 'coperto': sorted(AL_COPERTO),
+    return {'lingua': lingua, 'luoghi': list(luoghi.values()), 'itinerari': itinerari, 'racconti': racconti, 'passaporto': pas, 'scioperi': scioperi, 'coperto': sorted(AL_COPERTO),
             'generata': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%MZ')}
 
 def tema_css(cfg):  # colori del menu; caratteri di sistema (nessuna richiesta a Google Fonts)

@@ -29,9 +29,9 @@ const MAR = '2026-11-03T09:00:00Z', CARITA = { latitude: 40.844326, longitude: 1
   await apri(BASE, {}, async p => {
     ok('home: titolo', /Napoli a piedi/.test(await testo(p, 'h1')));
     ok('home: avviso anteprima', /Versione di prova/.test(await testo(p, '.avviso.prova')));
-    ok('home: 3 schede itinerario con disegno del percorso (prima della mappa)', (await p.locator('article.scheda:not(.apertura)').count()) === 3 && (await p.locator('article.scheda svg polyline').count()) >= 16);
-    await p.waitForFunction(() => document.querySelectorAll('.copertina-giro.pronta').length === 3, null, {timeout: 30000}).catch(() => {});
-    ok('home: copertine con la mappa vera, il percorso e le foto delle tappe', (await p.locator('.copertina-giro.pronta img.fondo[src^="data:image/jpeg"]').count()) === 3 && (await p.locator('.copertina-giro .pin img').count()) >= 6 && (await p.locator('.copertina-giro .pin').count()) >= 18);
+    ok('home: 4 schede itinerario con disegno del percorso (prima della mappa)', (await p.locator('article.scheda:not(.apertura)').count()) === 4 && (await p.locator('article.scheda svg polyline').count()) >= 16);
+    await p.waitForFunction(() => document.querySelectorAll('.copertina-giro.pronta').length === 4, null, {timeout: 30000}).catch(() => {});
+    ok('home: copertine con la mappa vera, il percorso e le foto delle tappe', (await p.locator('.copertina-giro.pronta img.fondo[src^="data:image/jpeg"]').count()) === 4 && (await p.locator('.copertina-giro .pin img').count()) >= 6 && (await p.locator('.copertina-giro .pin').count()) >= 18);
     ok('home: «Vedrai…»', /Vedrai:.*Gesù Nuovo/.test(await testo(p, 'article.scheda')));
     ok('home: storia di Napoli in apertura', (await p.locator('article.apertura a[href="#/r/storia-di-napoli"]').count()) >= 1);
     ok('home: altri 6 racconti', (await p.locator('a.voce[href^="#/r/"]').count()) === 6);
