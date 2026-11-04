@@ -29,11 +29,12 @@ const MAR = '2026-11-03T09:00:00Z', CARITA = { latitude: 40.844326, longitude: 1
   await apri(BASE, {}, async p => {
     ok('home: titolo', /Napoli a piedi/.test(await testo(p, 'h1')));
     ok('home: avviso anteprima', /Versione di prova/.test(await testo(p, '.avviso.prova')));
-    ok('home: 3 schede itinerario con disegno del percorso (prima della mappa)', (await p.locator('article.scheda').count()) === 3 && (await p.locator('article.scheda svg polyline').count()) >= 16);
+    ok('home: 3 schede itinerario con disegno del percorso (prima della mappa)', (await p.locator('article.scheda:not(.apertura)').count()) === 3 && (await p.locator('article.scheda svg polyline').count()) >= 16);
     await p.waitForFunction(() => document.querySelectorAll('.copertina-giro.pronta').length === 3, null, {timeout: 30000}).catch(() => {});
     ok('home: copertine con la mappa vera, il percorso e le foto delle tappe', (await p.locator('.copertina-giro.pronta img.fondo[src^="data:image/jpeg"]').count()) === 3 && (await p.locator('.copertina-giro .pin img').count()) >= 6 && (await p.locator('.copertina-giro .pin').count()) >= 18);
     ok('home: «Vedrai…»', /Vedrai:.*Gesù Nuovo/.test(await testo(p, 'article.scheda')));
-    ok('home: 5 racconti', (await p.locator('a[href^="#/r/"]').count()) === 5);
+    ok('home: storia di Napoli in apertura', (await p.locator('article.apertura a[href="#/r/storia-di-napoli"]').count()) >= 1);
+    ok('home: altri 6 racconti', (await p.locator('a.voce[href^="#/r/"]').count()) === 6);
     ok('home: «Chiusi oggi» Sansevero', /Cappella Sansevero/.test(await testo(p, 'section.oggi')));
     ok('home: nessuna colonna riservata', !/note_interne|aggiornato_da|risposte/.test(await p.content()));
     ok('home: 390 px', await largo(p));
@@ -75,7 +76,7 @@ const MAR = '2026-11-03T09:00:00Z', CARITA = { latitude: 40.844326, longitude: 1
   await apri(BASE + '#/l/cappella-sansevero', {}, async p => {
     ok('E3: Sansevero 5 schede «Cosa guardare»', (await p.locator('article.guarda').count()) === 5, await p.locator('article.guarda').count());
     ok('E3: schede numerate con «dove trovarlo»', /Nella cavea sotterranea/.test(await testo(p, 'article.guarda .dove')));
-    ok('E3: prima scheda «Il Cristo velato»', /Il Cristo velato/.test(await p.locator('article.guarda b').first().textContent()));
+    ok('E3: prima scheda «Il Cristo velato»', /Il Cristo velato/.test(await p.locator('article.guarda .tit b').first().textContent()));
     ok('E3: leggende', /Leggende e curiosità/.test(await testo(p, 'summary')));
     ok('E3: accessibilità (scala a chiocciola)', /scala a chiocciola/.test(await testo(p, 'details.apri')));
     ok('E3: fonti comprese quelle delle schede (≥ 7)', parseInt((await testo(p, 'details.fonti summary')).replace(/\D/g, '')) >= 7, await testo(p, 'details.fonti summary'));
@@ -145,7 +146,7 @@ const MAR = '2026-11-03T09:00:00Z', CARITA = { latitude: 40.844326, longitude: 1
   });
   // senza rete
   await apri(BASE, { sw: true }, async (p, ctx) => {
-    await p.evaluate(() => navigator.serviceWorker.ready); await p.waitForTimeout(2500);
+    await p.evaluate(() => navigator.serviceWorker.ready); await p.waitForFunction(() => document.querySelectorAll('.copertina-giro.pronta').length === 3, null, {timeout: 30000}).catch(() => {}); await p.waitForTimeout(1500);
     await ctx.setOffline(true); await p.reload(); await p.waitForTimeout(600);
     ok('senza rete: la guida si apre', /Napoli a piedi/.test(await testo(p, 'h1')));
     ok('senza rete: caratteri del menu caricati', await p.evaluate(() => document.fonts.check('16px Jost')));

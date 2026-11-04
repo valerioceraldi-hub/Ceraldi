@@ -15,7 +15,8 @@ COL = {  # solo colonne pubbliche (anon non legge note_interne, aggiornato_da, v
     'guida_orari': 'id,luogo_id,giorni,dalle,alle,ultimo_ingresso,dal,al,chiuso,nota,ordine',
     'guida_itinerari': 'id,slug,nome,sottotitolo,descrizione,durata_min,distanza_m,etichette,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_didascalia,stato,ordine',
     'guida_tappe': 'id,itinerario_id,luogo_id,ordine,minuti_dal_precedente,metri_dal_precedente,sosta_min,nota,alternativa_luogo_id,percorso,svolte',
-    'guida_racconti': 'id,slug,titolo,sommario,testo,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,stato,ordine',
+    'guida_racconti': 'id,slug,titolo,sottotitolo,sommario,testo,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_didascalia,stato,ordine,in_apertura',
+    'guida_capitoli': 'id,racconto_id,ordine,periodo,titolo,testo,luogo_id,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_didascalia,foto_permesso,stato',
     'guida_affermazioni_fonti': 'tabella,riga_id,fonte_titolo,fonte_url',
     'guida_dettagli': 'id,luogo_id,ordine,titolo,testo,dove,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_didascalia,foto_permesso,stato',
     'guida_foto': 'id,luogo_id,ordine,foto_path,foto_alt,foto_autore,foto_licenza,foto_fonte_url,foto_didascalia,foto_permesso,stato',
@@ -114,8 +115,16 @@ def costruisci(src, lingua, foto_base, anteprima):
         itinerari.append({'id': i['id'], 's': i['slug'], 'n': L(i, 'nome', 'guida_itinerari'), 'sub': L(i, 'sottotitolo', 'guida_itinerari'), 'desc': L(i, 'descrizione', 'guida_itinerari'),
                           'dur': i.get('durata_min'), 'dist': i.get('distanza_m'), 'et': i.get('etichette') or [], 'foto': foto(i, 'guida_itinerari'), 'tappe': tappe,
                           'fonti': fonti.get(('guida_itinerari', i['id']), []), 'ant': i.get('stato') == 'anteprima'})
-    racconti = [{'id': r['id'], 's': r['slug'], 't': L(r, 'titolo', 'guida_racconti'), 'som': L(r, 'sommario', 'guida_racconti'), 'txt': L(r, 'testo', 'guida_racconti'),
-                 'foto': foto(r, 'guida_racconti'), 'fonti': fonti.get(('guida_racconti', r['id']), []), 'ant': r.get('stato') == 'anteprima'}
+    capitoli = {}
+    for c in ordina(src.get('guida_capitoli', [])):
+        if c.get('stato') not in visibile: continue
+        capitoli.setdefault(c['racconto_id'], []).append({'p': L(c, 'periodo', 'guida_capitoli'), 't': L(c, 'titolo', 'guida_capitoli'), 'x': L(c, 'testo', 'guida_capitoli'),
+            'l': c.get('luogo_id') if c.get('luogo_id') in luoghi else None, 'foto': foto(c, 'guida_capitoli') if c.get('foto_permesso') else None})
+        for v in fonti.get(('guida_capitoli', c['id']), []):
+            if v not in fonti.setdefault(('guida_racconti', c['racconto_id']), []): fonti[('guida_racconti', c['racconto_id'])].append(v)
+    racconti = [{'id': r['id'], 's': r['slug'], 't': L(r, 'titolo', 'guida_racconti'), 'sub': L(r, 'sottotitolo', 'guida_racconti'), 'som': L(r, 'sommario', 'guida_racconti'), 'txt': L(r, 'testo', 'guida_racconti'),
+                 'foto': foto(r, 'guida_racconti'), 'cap': capitoli.get(r['id'], []), 'ap': bool(r.get('in_apertura')),
+                 'fonti': fonti.get(('guida_racconti', r['id']), []), 'ant': r.get('stato') == 'anteprima'}
                 for r in ordina(src.get('guida_racconti', [])) if r.get('stato') in visibile]
     scioperi = [{'d': s['data'], 'l': s.get('linea') or '', 'x': s.get('dettaglio') or ''} for s in src.get('scioperi_napoli_trasporti', []) if s.get('data')]
     return {'lingua': lingua, 'luoghi': list(luoghi.values()), 'itinerari': itinerari, 'racconti': racconti, 'scioperi': scioperi, 'coperto': sorted(AL_COPERTO),
@@ -139,6 +148,8 @@ def copia_foto(pagine, out):
         f['u'] = pre + 'img/' + nomi[u]
     for d, pre in pagine:
         for x in d['luoghi'] + d['itinerari'] + d['racconti']: loc(x.get('foto'), pre)
+        for x in d['racconti']:
+            for c in x.get('cap', []): loc(c.get('foto'), pre)
         for x in d['luoghi']:
             for g in x.get('gal', []): loc(g, pre)
             for g in x.get('dett', []): loc(g.get('foto'), pre)
