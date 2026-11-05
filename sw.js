@@ -1,5 +1,5 @@
 /* ══════════════════════════════════════════════════════════════════
-   Service worker delle app Ceraldi — 20/09/2026 (aggiornato 05/10 e 07/10/2026)
+   Service worker delle app Ceraldi — 20/09/2026 (aggiornato 05/10, 07/10 e 05/11/2026)
    Serve SOLO alle notifiche push: non mette niente in cache, così
    l'app aggiornata su GitHub arriva sempre fresca senza sorprese.
    Vive nella cartella del sito, quindi vale per tutte e quattro le app.
@@ -12,14 +12,23 @@ self.addEventListener('push', function (e) {
   try { d = e.data ? e.data.json() : {}; } catch (err) { d = { titolo: 'Ceraldi', testo: e.data ? e.data.text() : '' }; }
   var titolo = d.titolo || 'Ceraldi';
   var app = d.app || 'fatture';
-  e.waitUntil(self.registration.showNotification(titolo, {
+  // 05/11/2026: la conferma al server parte SUBITO, insieme alla notifica, e
+  // non più dopo. Con tanti avvisi di fila il telefono a volte chiudeva il
+  // service worker prima che la conferma partisse: il server credeva la push
+  // non arrivata e mandava anche Telegram (doppio avviso). Si conferma solo
+  // se il telefono ha il permesso di mostrare notifiche.
+  var permesso = 'granted';
+  try { if (self.Notification && self.Notification.permission) permesso = self.Notification.permission; } catch (err) {}
+  var conferma = permesso === 'granted' ? confermaMostrata(d.ack) : Promise.resolve();
+  var mostra = self.registration.showNotification(titolo, {
     body: d.testo || '',
     icon: 'icon-' + app + '-192.png',
     badge: 'icon-' + app + '-192.png',
     tag: d.tag || ('ceraldi-' + app + '-' + (d.id || Date.now())),
     renotify: false,
     data: { link: d.link || '', app: app, id: d.id || null, ack: d.ack || null }
-  }).then(function () { return confermaMostrata(d.ack); }));
+  });
+  e.waitUntil(Promise.all([mostra.catch(function () {}), conferma]));
 });
 
 // 07/10/2026: appena la notifica è sul telefono lo dice al server, così il
