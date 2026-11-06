@@ -21427,18 +21427,18 @@ function esportaLiquidazioneCompleta() {
     // (iPhone) non apre nulla o apre una pagina vuota senza Stampa/Condividi funzionanti.
     // Ora resta DENTRO l'app: anteprima + Stampa + Condividi (PDF vero) sempre disponibili.
     const htmlDoc = _wrapModello('Prospetto di fine rapporto — ' + c.nome, corpo);
-    _mostraDocStampabile('Prospetto di fine rapporto', htmlDoc, 'prospetto_fine_rapporto_' + c.nome.replace(/\s+/g, '_'));
+    _mostraDocStampabile('Prospetto di fine rapporto', htmlDoc, 'prospetto_fine_rapporto_' + c.nome.replace(/\s+/g, '_'), () => _pdfProspettoFineRapporto(c));
   } catch (e) { toast('Errore: ' + e.message); }
 }
 
 // Anteprima di un documento HTML dentro l'app, con Stampa e Condividi (PDF) che funzionano anche da PWA.
 let _docStampDati = null;
-function _mostraDocStampabile(titolo, htmlDoc, nomeBase) {
+function _mostraDocStampabile(titolo, htmlDoc, nomeBase, pdfFn) {
   _chiudiDocStampabile();
   // la barra "Stampa/Chiudi" interna al documento non serve: qui c'è quella dell'app
   const css = '<style>.topbar{display:none!important}body{padding-top:20px!important}</style>';
   const doc = htmlDoc.replace('</head>', css + '</head>');
-  _docStampDati = { titolo, doc, nomeBase };
+  _docStampDati = { titolo, doc, nomeBase, pdfFn };
   const ov = document.createElement('div');
   ov.id = 'doc-stamp-ov';
   ov.style.cssText = 'position:fixed;inset:0;z-index:100000;background:var(--bg,#fff);display:flex;flex-direction:column';
@@ -21457,34 +21457,94 @@ function _stampaDocStampabile() {
   try { fr.contentWindow.focus(); fr.contentWindow.print(); }
   catch (e) { toast('Stampa non disponibile qui: usa Condividi e stampa il PDF'); }
 }
-function _caricaScript(src) {
-  return new Promise((ok, ko) => { const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => ko(new Error('Libreria PDF non raggiungibile')); document.head.appendChild(s); });
-}
 async function _condividiDocStampabile() {
-  const D = _docStampDati; if (!D) return;
+  const D = _docStampDati; if (!D || !D.pdfFn) return;
   const btn = $('doc-stamp-share'); if (btn) { btn.disabled = true; btn.textContent = 'Preparo…'; }
   try {
-    if (typeof html2pdf === 'undefined') await _caricaScript('https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.1/dist/html2pdf.bundle.min.js');
-    // pagina A4 "virtuale" fuori schermo: il PDF esce impaginato bene anche da telefono
-    const h = document.createElement('iframe'); h.id = 'doc-stamp-hid';
-    h.style.cssText = 'position:fixed;left:-10000px;top:0;width:794px;height:1123px;border:0;background:#fff';
-    document.body.appendChild(h);
-    await new Promise(r => { h.onload = r; h.srcdoc = D.doc; });
-    await new Promise(r => setTimeout(r, 300));
-    const blob = await html2pdf().set({
-      margin: [10, 10, 10, 10], filename: D.nomeBase + '.pdf', image: { type: 'jpeg', quality: .95 },
-      html2canvas: { scale: 2, useCORS: true, windowWidth: 794 }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-      pagebreak: { mode: ['css', 'legacy'], avoid: ['tr', 'h2'] }
-    }).from(h.contentDocument.body).outputPdf('blob');
-    h.remove();
+    const blob = await D.pdfFn();
     const file = new File([blob], D.nomeBase + '.pdf', { type: 'application/pdf' });
     if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: D.titolo }); }
     else { const url = URL.createObjectURL(blob), a = document.createElement('a'); a.href = url; a.download = file.name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000); toast('✓ PDF salvato'); }
   } catch (e) {
     if (!(e && e.name === 'AbortError')) toast('Non riesco a creare il PDF: ' + (e && e.message ? e.message : 'riprova') + ' — usa Stampa');
   }
-  const h2 = $('doc-stamp-hid'); if (h2) h2.remove();
   if (btn) { btn.disabled = false; btn.textContent = '📤 Condividi'; }
+}
+
+// PDF nativo (pdf-lib) del prospetto di fine rapporto: testo vero, A4, margini fissi, tabelle a colonne, più pagine se serve.
+async function _pdfProspettoFineRapporto(c) {
+  const { PDFDocument, StandardFonts, rgb } = PDFLib;
+  const doc = await PDFDocument.create();
+  const F = await doc.embedFont(StandardFonts.Helvetica), B = await doc.embedFont(StandardFonts.HelveticaBold), I = await doc.embedFont(StandardFonts.HelveticaOblique);
+  const PW = 595.28, PH = 841.89, M = 44, W = PW - 2 * M, BLU = rgb(0.12, 0.22, 0.39), GR = rgb(0.4, 0.4, 0.43), NERO = rgb(0.08, 0.08, 0.1);
+  let pag, y;
+  const nuova = () => { pag = doc.addPage([PW, PH]); y = PH - M; };
+  const serve = h => { if (y - h < M + 20) nuova(); };
+  const t = x => _pdfTxt(x);
+  const scrivi = (txt, o) => { o = o || {}; const f = o.b ? B : (o.i ? I : F), sz = o.s || 10, col = o.col || NERO, x0 = o.x == null ? M : o.x, w = o.w || W;
+    _pdfWrap(txt, f, sz, w).forEach(r => { serve(sz + 4); const xx = o.c ? x0 + (w - f.widthOfTextAtSize(r, sz)) / 2 : x0; pag.drawText(r, { x: xx, y: y - sz, size: sz, font: f, color: col }); y -= sz + 4; }); y -= (o.dopo || 0); };
+  const titolo = txt => { serve(34); y -= 8; pag.drawText(t(txt), { x: M, y: y - 12, size: 12, font: B, color: BLU }); y -= 18; pag.drawLine({ start: { x: M, y: y }, end: { x: PW - M, y: y }, thickness: .6, color: rgb(.8, .82, .88) }); y -= 8; };
+  const tabella = (head, rows, w, opz) => {
+    opz = opz || {}; const sz = 8.5, pad = 4, tot = w.reduce((a, b) => a + b, 0), cw = w.map(x => x / tot * W), allineaDx = opz.dx || [];
+    const riga = (celle, o) => {
+      o = o || {}; const f = o.b ? B : F;
+      const wr = celle.map((x, i) => _pdfWrap(t(x), f, sz, cw[i] - 2 * pad)), nr = Math.max(...wr.map(a => a.length)), h = nr * (sz + 3) + 2 * pad;
+      serve(h); let x = M;
+      if (o.fill) pag.drawRectangle({ x: M, y: y - h, width: W, height: h, color: o.fill });
+      wr.forEach((righe, i) => { righe.forEach((r, k) => { const tw = f.widthOfTextAtSize(r, sz), xx = allineaDx[i] ? x + cw[i] - pad - tw : x + pad; pag.drawText(r, { x: xx, y: y - pad - sz - k * (sz + 3) + 1, size: sz, font: f, color: o.col || NERO }); }); x += cw[i]; });
+      pag.drawLine({ start: { x: M, y: y - h }, end: { x: PW - M, y: y - h }, thickness: .4, color: rgb(.8, .82, .86) });
+      y -= h;
+    };
+    riga(head, { b: true, fill: rgb(.9, .92, .97), col: BLU });
+    rows.forEach(r => riga(r.celle || r, { b: r.b, fill: r.b ? rgb(.96, .96, .98) : null }));
+    y -= 6;
+  };
+  const e = _lq_e2, d = c.d, T = c.tfr;
+  nuova();
+  scrivi(t(APP_CONFIG.azienda || 'Ceraldi Group S.r.l.'), { b: true, s: 11, col: GR });
+  scrivi('Piazza Carita 14, Napoli'.replace('Carita', 'Carità'), { s: 9, col: GR, dopo: 10 });
+  scrivi('PROSPETTO DI FINE RAPPORTO', { b: true, s: 17, col: BLU, dopo: 6 });
+  pag.drawLine({ start: { x: M, y: y + 2 }, end: { x: PW - M, y: y + 2 }, thickness: 1.5, color: BLU }); y -= 8;
+  scrivi('Lavoratore: ' + c.nome + (d.codice_fiscale ? ' - C.F. ' + d.codice_fiscale : ''), { b: true, s: 10.5 });
+  if (d.mansione) scrivi('Mansione: ' + d.mansione + (d.livello_ccnl ? ' - livello ' + d.livello_ccnl : ''), { s: 10 });
+  scrivi('Data di assunzione: ' + _lq_dIt(d.data_assunzione) + '     Ultimo giorno: ' + _lq_dIt(c.fineISO) + (d.data_assunzione ? '     Anzianità: ' + _lq_anzianita(d.data_assunzione, c.fineISO).txt : ''), { s: 10 });
+  if (d.motivo_fine_rapporto) scrivi('Motivo: ' + d.motivo_fine_rapporto, { s: 10 });
+  scrivi('Paga giornaliera alla data: ' + e(c.pagaFine), { s: 10, dopo: 4 });
+
+  titolo('1. Stipendio non ancora pagato');
+  if (c.mesiStip.length) tabella(['Mese', 'Giorni', 'Paga', 'Spettante', 'Già pagato', 'Da pagare'],
+    c.mesiStip.map(r => [r.label + (r.futuri ? ' (' + r.futuri + ' gg stimati)' : ''), String(r.giorni + r.futuri + r.festNonLav), e(r.paga), e(r.lordo), e(r.acc - r.rest), e(r.netto)])
+      .concat([{ celle: ['Totale', '', '', '', '', e(c.stipendioTot)], b: true }]), [2.2, 1, 1.3, 1.5, 1.5, 1.5], { dx: [0, 1, 1, 1, 1, 1] });
+  else scrivi('Nessun mese da pagare.', { s: 10, dopo: 4 });
+
+  titolo('2. Mensilità aggiuntive (importi netti)');
+  const m13 = (l, M2) => [l, M2.ratei + ' ratei', e(M2.importo), e(M2.importo - M2.residuo), e(M2.residuo)];
+  tabella(['Voce', 'Maturato', 'Importo', 'Già pagato', 'Da pagare'], [m13('13ª mensilità', c.mat13), m13('14ª mensilità', c.mat14)], [2, 1.3, 1.5, 1.5, 1.5], { dx: [0, 1, 1, 1, 1] });
+
+  titolo('3. Ferie non godute');
+  tabella(['Maturate', 'Godute', 'Residue', 'Paga', 'Da pagare'], [[String(c.ferieCalc.maturate).replace('.', ','), String(c.ferieCalc.godute).replace('.', ','), String(c.ferieCalc.residue).replace('.', ','), e(c.pagaFine), e(c.ferieValore)]], [1, 1, 1, 1.4, 1.5], { dx: [1, 1, 1, 1, 1] });
+
+  if (T) {
+    titolo('4. Trattamento di fine rapporto (TFR)');
+    tabella(['Anno', 'Mesi', 'Retribuzione utile', 'Quota TFR', 'Rivalutazione', 'Fondo a fine anno'],
+      T.righeAnni.map(A => [String(A.anno) + (A.stimati ? ' *' : ''), String(A.mesi), e(A.imponibile), e(A.quota), e(A.rival), e(A.fondoFine)]), [1, .8, 1.9, 1.5, 1.5, 1.8], { dx: [0, 1, 1, 1, 1, 1] });
+    const rr = [['TFR lordo (quote + rivalutazioni)', e(T.lordo)], ['Imposta sostitutiva 17% sulle rivalutazioni', e(-T.impostaRival)],
+      ['IRPEF tassazione separata - aliquota media ' + (T.aliquota * 100).toFixed(2).replace('.', ',') + '% (reddito di riferimento ' + e(T.redditoRif) + ')', e(-T.irpef)], { celle: ['TFR netto', e(T.netto)], b: true }];
+    if (T.anticipi > 0.005) rr.push(['Anticipi TFR già corrisposti', e(-T.anticipi)], { celle: ['TFR netto da pagare', e(T.daPagare)], b: true });
+    tabella(['', 'Importo'], rr, [5, 1.6], { dx: [0, 1] });
+    scrivi('Quota annua = retribuzione utile ÷ 13,5 meno 0,50% (contributo aggiuntivo, art. 3 L. 297/1982). Retribuzione utile = giorni × paga in vigore nel periodo + ratei di 13ª e 14ª. Rivalutazione del fondo con 1,5% + 75% dell\'aumento ISTAT, al netto dell\'imposta del 17%.' + (T.stimati ? ' * Anni con mesi precedenti alla registrazione delle presenze in app: stimati a 26 giorni al mese.' : ''), { s: 8, col: GR, dopo: 6 });
+  }
+  serve(40); y -= 4;
+  pag.drawRectangle({ x: M, y: y - 28, width: W, height: 28, color: rgb(.93, .96, .94) });
+  pag.drawText('TOTALE DA CORRISPONDERE', { x: M + 10, y: y - 18, size: 11, font: B, color: NERO });
+  const tt = t(e(c.totale)); pag.drawText(tt, { x: PW - M - 10 - B.widthOfTextAtSize(tt, 13), y: y - 19, size: 13, font: B, color: NERO }); y -= 40;
+  serve(170);
+  scrivi('Prospetto indicativo calcolato il ' + _lq_dIt(c.oggiISO) + ' dai dati registrati in app (presenze, paga concordata, acconti e liquidazioni). Gli importi definitivi sono quelli della busta paga di fine rapporto elaborata dal consulente del lavoro; eventuali differenze verranno regolate in quella sede.', { s: 8.5, i: true, col: GR, dopo: 10 });
+  serve(80); y -= 24;
+  const half = (W - 30) / 2;
+  [['Il datore di lavoro', M], ['Il lavoratore, per presa visione', M + half + 30]].forEach(([l, x]) => { pag.drawLine({ start: { x, y }, end: { x: x + half, y }, thickness: .6, color: NERO }); pag.drawText(t(l), { x, y: y - 12, size: 9, font: F, color: NERO }); });
+  y -= 36; scrivi('Napoli, ' + _lq_dIt(c.oggiISO), { s: 9.5 });
+  return new Blob([await doc.save()], { type: 'application/pdf' });
 }
 
 // Export storico completo del dipendente (Excel, un foglio per tipo di
