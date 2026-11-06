@@ -21423,16 +21423,68 @@ function esportaLiquidazioneCompleta() {
     + '<div class="firme"><div class="firma-box">Il datore di lavoro<br><br></div><div class="firma-box">Il lavoratore, per presa visione<br><br></div></div>'
     + '<p style="font-size:10pt;margin-top:20pt">Napoli, ' + _lq_dIt(c.oggiISO) + '</p>';
   try {
+    // FIX 06/11/2026: prima il prospetto si apriva con window.open('')+document.write, che nella PWA
+    // (iPhone) non apre nulla o apre una pagina vuota senza Stampa/Condividi funzionanti.
+    // Ora resta DENTRO l'app: anteprima + Stampa + Condividi (PDF vero) sempre disponibili.
     const htmlDoc = _wrapModello('Prospetto di fine rapporto — ' + c.nome, corpo);
-    const w = window.open('', '_blank');
-    if (w) { w.document.write(htmlDoc); w.document.close(); toast('✓ Prospetto aperto — usa Stampa per salvarlo in PDF o condividerlo'); }
-    else {
-      const blob = new Blob([htmlDoc], { type: 'text/html;charset=utf-8' }), url = URL.createObjectURL(blob), a = document.createElement('a');
-      a.href = url; a.download = 'prospetto_fine_rapporto_' + c.nome.replace(/\s+/g, '_') + '.html';
-      document.body.appendChild(a); a.click(); document.body.removeChild(a); setTimeout(() => URL.revokeObjectURL(url), 3000);
-      toast('✓ File salvato — aprilo con Safari');
-    }
+    _mostraDocStampabile('Prospetto di fine rapporto', htmlDoc, 'prospetto_fine_rapporto_' + c.nome.replace(/\s+/g, '_'));
   } catch (e) { toast('Errore: ' + e.message); }
+}
+
+// Anteprima di un documento HTML dentro l'app, con Stampa e Condividi (PDF) che funzionano anche da PWA.
+let _docStampDati = null;
+function _mostraDocStampabile(titolo, htmlDoc, nomeBase) {
+  _chiudiDocStampabile();
+  // la barra "Stampa/Chiudi" interna al documento non serve: qui c'è quella dell'app
+  const css = '<style>.topbar{display:none!important}body{padding-top:20px!important}</style>';
+  const doc = htmlDoc.replace('</head>', css + '</head>');
+  _docStampDati = { titolo, doc, nomeBase };
+  const ov = document.createElement('div');
+  ov.id = 'doc-stamp-ov';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:100000;background:var(--bg,#fff);display:flex;flex-direction:column';
+  ov.innerHTML = '<div style="display:flex;gap:8px;align-items:center;padding:calc(env(safe-area-inset-top,0px) + 10px) 12px 10px;border-bottom:1px solid var(--border,#ddd);background:var(--surface,#fff)">'
+    + '<button class="btn-sm" onclick="_chiudiDocStampabile()">✕ Chiudi</button>'
+    + '<div style="flex:1;font-weight:800;font-size:14px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(titolo) + '</div>'
+    + '<button class="btn-sm" onclick="_stampaDocStampabile()">🖨 Stampa</button>'
+    + '<button class="btn-sm" id="doc-stamp-share" onclick="_condividiDocStampabile()">📤 Condividi</button></div>'
+    + '<iframe id="doc-stamp-fr" style="flex:1;width:100%;border:0;background:#fff"></iframe>';
+  document.body.appendChild(ov);
+  $('doc-stamp-fr').srcdoc = doc;
+}
+function _chiudiDocStampabile() { const o = $('doc-stamp-ov'); if (o) o.remove(); const h = $('doc-stamp-hid'); if (h) h.remove(); }
+function _stampaDocStampabile() {
+  const fr = $('doc-stamp-fr');
+  try { fr.contentWindow.focus(); fr.contentWindow.print(); }
+  catch (e) { toast('Stampa non disponibile qui: usa Condividi e stampa il PDF'); }
+}
+function _caricaScript(src) {
+  return new Promise((ok, ko) => { const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => ko(new Error('Libreria PDF non raggiungibile')); document.head.appendChild(s); });
+}
+async function _condividiDocStampabile() {
+  const D = _docStampDati; if (!D) return;
+  const btn = $('doc-stamp-share'); if (btn) { btn.disabled = true; btn.textContent = 'Preparo…'; }
+  try {
+    if (typeof html2pdf === 'undefined') await _caricaScript('https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.1/dist/html2pdf.bundle.min.js');
+    // pagina A4 "virtuale" fuori schermo: il PDF esce impaginato bene anche da telefono
+    const h = document.createElement('iframe'); h.id = 'doc-stamp-hid';
+    h.style.cssText = 'position:fixed;left:-10000px;top:0;width:794px;height:1123px;border:0;background:#fff';
+    document.body.appendChild(h);
+    await new Promise(r => { h.onload = r; h.srcdoc = D.doc; });
+    await new Promise(r => setTimeout(r, 300));
+    const blob = await html2pdf().set({
+      margin: [10, 10, 10, 10], filename: D.nomeBase + '.pdf', image: { type: 'jpeg', quality: .95 },
+      html2canvas: { scale: 2, useCORS: true, windowWidth: 794 }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+      pagebreak: { mode: ['css', 'legacy'], avoid: ['tr', 'h2'] }
+    }).from(h.contentDocument.body).outputPdf('blob');
+    h.remove();
+    const file = new File([blob], D.nomeBase + '.pdf', { type: 'application/pdf' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: D.titolo }); }
+    else { const url = URL.createObjectURL(blob), a = document.createElement('a'); a.href = url; a.download = file.name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000); toast('✓ PDF salvato'); }
+  } catch (e) {
+    if (!(e && e.name === 'AbortError')) toast('Non riesco a creare il PDF: ' + (e && e.message ? e.message : 'riprova') + ' — usa Stampa');
+  }
+  const h2 = $('doc-stamp-hid'); if (h2) h2.remove();
+  if (btn) { btn.disabled = false; btn.textContent = '📤 Condividi'; }
 }
 
 // Export storico completo del dipendente (Excel, un foglio per tipo di
