@@ -590,7 +590,7 @@ function avvisoCreditoIA(){
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.42.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.43.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -34992,7 +34992,7 @@ function ricContiFattura(f, idx){
       R.anomalie.push({ liv: 'warn', cod: 'metodo_diverso', movId: p0.movId, verso: trovato, t: 'In registro «' + NOMI[m2] + '», in banca è un ' + NOMI[trovato], s: 'Il pagamento collegato del ' + ricGg(p0.data) + ' (' + ricEur(p0.importo) + ') è un ' + NOMI[trovato] + '. Se il collegamento è giusto, correggi il metodo.' });
   })();
   var _ix = /\[IMPORTO-XML:([\d.]+)\]/.exec(f.note || '');
-  if(_ix && Math.abs(lordo - (+_ix[1])) >= 0.02) R.anomalie.push({ liv: 'warn', cod: 'importo_xml_diverso', t: 'Importo registrato ' + ricEur(lordo) + ', nell\'XML ' + ricEur(+_ix[1]), s: 'La fattura era stata registrata a mano con un importo diverso da quello della fattura elettronica. Controlla e correggi con Modifica.' });
+  if(_ix && Math.abs(lordo - (+_ix[1])) >= 0.02) R.anomalie.push({ liv: 'warn', cod: 'importo_xml_diverso', xmlTot: +_ix[1], t: 'Importo registrato ' + ricEur(lordo) + ', nell\'XML ' + ricEur(+_ix[1]), s: 'La fattura era stata registrata a mano con un importo diverso da quello della fattura elettronica. Controlla e correggi con Modifica.' });
   if(R.prove.some(function(p){ return p.dedotta; })) R.anomalie.push({ liv: 'info', cod: 'cumulativo', t: 'Pagata con un pagamento cumulativo', s: 'I movimenti del gruppo coprono esattamente le sue fatture: le quote sono state ricostruite dall\'app.' });
   if(R.arrot) R.anomalie.push({ liv: 'info', cod: 'arrotondamento', t: 'Differenza di ' + ricEur(Math.abs(R.arrot)) + ' considerata arrotondamento', s: 'Sotto ' + ricEur(A) + ' non si tiene aperto nulla.' });
 
@@ -35324,8 +35324,10 @@ function ricControlloDisegna(){
       var mJs = x.a.movId != null ? esc(JSON.stringify(String(x.a.movId))).replace(/"/g, '&quot;') : '';
       if(x.a.cod === 'nc_su_uscita' && x.a.verso) az = '<button class="sk-btn sm" onclick="ricSpostaSuFattura(' + pnIdJs(x.f.id) + ',' + mJs + ',' + pnIdJs(x.a.verso) + ')">Sposta sulla fattura</button>';
       else if(x.a.cod === 'movimento_avanza' && mJs) az = '<button class="sk-btn sm" onclick="ricApriMovimento(' + mJs + ',true)">Collega le altre</button>';
+      else if(x.a.cod === 'importo_xml_diverso' && x.a.xmlTot > 0) az = '<button class="sk-btn sm prim" onclick="_xmlTagUsa(' + pnIdJs(x.f.id) + ',' + x.a.xmlTot + ')">Usa l\'importo dell\'XML (' + esc(ricEur(x.a.xmlTot)) + ')</button><button class="sk-btn sm" onclick="_xmlTagTieni(' + pnIdJs(x.f.id) + ')">Tieni il mio</button>';
       else if((x.a.cod === 'beneficiario_diverso' || x.a.cod === 'collegato_in_piu') && mJs) az = '<button class="sk-btn sm" onclick="ricApriMovimento(' + mJs + ')">Apri il movimento</button>';
       else if(x.a.cod === 'metodo_diverso' && x.a.verso) az = '<button class="sk-btn sm prim" onclick="ricCorreggiMetodo(' + pnIdJs(x.f.id) + ',\'' + x.a.verso + '\')">Segna pagata con ' + esc(RICV_TIPO_NOME[x.a.verso] || x.a.verso) + '</button>' + (mJs ? '<button class="sk-btn sm" onclick="ricApriMovimento(' + mJs + ')">Apri il movimento</button>' : '');
+      if(!az && mJs) az = '<button class="sk-btn sm" onclick="ricApriMovimento(' + mJs + ')">Apri il movimento</button>';
       return '<div class="sk-riga ric-an ' + x.a.liv + '"><button class="sk-riga-m tap" onclick="apriScheda(' + pnIdJs(x.f.id) + ')"><b>' + esc(x.f.fornitore || '—') + ' · ' + esc(pnTipo(x.f).toLowerCase()) + ' n° ' + esc(x.f.numero || '—') + '</b><small>' + esc(x.a.t) + '</small><small class="sk-dim">' + esc(x.a.s) + '</small></button>' + az + '</div>';
     }).join('');
     h += pnSez('Da controllare', c3);
@@ -37834,6 +37836,22 @@ async function _xmlStacca(fid){
   _XMLC.lista = (_XMLC.lista || []).filter(function(x){ return String(x.id) !== String(fid); });
   toast('✓ XML staccato');
   try{ ricDatiCambiati(); await _anAggiornaHome(true); _anRenderFoglio(); }catch(e){}
+}
+async function _xmlTagTieni(fid, tot){
+  var f = (fatture || []).find(function(y){ return String(y.id) === String(fid); }); if(!f) return;
+  var nota = String(f.note || '').replace(/\s*\[IMPORTO-XML:[\d.]+\]/g, '').trim();
+  var campi = { note: nota };
+  if(tot > 0) campi.importo = (+f.importo < 0 ? -tot : tot);
+  var ok = await dbUpdatePartial(f.id, campi);
+  if(!ok){ toast('❌ Non riuscito'); return; }
+  f.note = nota; if(campi.importo != null) f.importo = campi.importo;
+  toast(tot > 0 ? '✓ Importo aggiornato' : '✓ Ok, tengo il tuo importo');
+  try{ ricDatiCambiati(); await _anAggiornaHome(true); _anRenderFoglio(); }catch(e){}
+}
+async function _xmlTagUsa(fid, tot){
+  var f = (fatture || []).find(function(y){ return String(y.id) === String(fid); }); if(!f || !(tot > 0)) return;
+  if(!confirm('Cambio l\'importo di ' + (f.fornitore || '') + ' n° ' + (f.numero || '') + ' da ' + fmt(Math.abs(+f.importo || 0)) + ' a ' + fmt(tot) + ' (importo dell\'XML)?\n\nSi può correggere di nuovo con Modifica.')) return;
+  await _xmlTagTieni(fid, tot);
 }
 async function _xmlUsaImporto(fid, tot){
   var f = (fatture || []).find(function(y){ return String(y.id) === String(fid); }); if(!f || !(tot > 0)) return;
