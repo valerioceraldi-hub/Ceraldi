@@ -223,6 +223,22 @@ def file_mappa(out):
             r.append(os.path.relpath(os.path.join(radice, f), out).replace(os.sep, '/'))
     return sorted(r)
 
+def controlla_foto(src, anteprima):
+    """Regola della guida: ogni contenuto che spiega qualcosa deve avere la sua foto (con permesso d'uso dove serve).
+    Non blocca la generazione: elenca nel registro ciò che manca, così il controllo resta nel tempo."""
+    vis = {'pubblicato', 'anteprima'} if anteprima else {'pubblicato'}
+    regole = [('guida_luoghi', 'nome', False), ('guida_dettagli', 'titolo', True), ('guida_capitoli', 'titolo', True),
+              ('guida_racconti', 'titolo', False), ('guida_itinerari', 'nome', False)]
+    mancano = []
+    for tab, campo, perm in regole:
+        for r in src.get(tab, []):
+            if r.get('stato') not in vis: continue
+            if not r.get('foto_path'): mancano.append('%s #%s «%s»: manca la foto' % (tab, r.get('id'), r.get(campo) or ''))
+            elif perm and not r.get('foto_permesso'): mancano.append('%s #%s «%s»: foto senza permesso d\'uso registrato (non viene mostrata)' % (tab, r.get('id'), r.get(campo) or ''))
+    print('controllo foto: %d contenuti senza foto mostrabile' % len(mancano))
+    for m in mancano: print('  FOTO MANCANTE ' + m)
+    return mancano
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', required=True); ap.add_argument('--json'); ap.add_argument('--esporta-json')
@@ -258,6 +274,7 @@ def main():
     if not d0['luoghi'] and not d0['itinerari'] and not d0['racconti']:
         print('Nessun contenuto visibile: non genero una guida vuota (le pagine esistenti restano).'); sys.exit(3)
     n = copia_foto([(d, d['pre']) for _, d in pagine], a.out) if a.copia_foto else 0
+    controlla_foto(src, a.anteprima)
     t0 = open(a.modello, encoding='utf-8').read()
     css = tema_css(src.get('config') or {})
     os.makedirs(a.out, exist_ok=True)

@@ -2599,8 +2599,13 @@ function gOrari(id){ return G.orari.filter(function(o){ return o.luogo_id === id
 function gFonti(id){ return G.fonti.filter(function(f){ return f.luogo_id === id; }); }
 function gAff(id){ return G.aff.filter(function(a){ return a.riga_id === id; }); }
 /* Cosa manca a un luogo: le stesse regole del database, più quelle di qualità */
+/* Regola della guida: ogni contenuto che spiega qualcosa deve avere la sua foto. Vale per luoghi, schede, capitoli, racconti e giri. */
+function gSenzaFoto(x){ return !!x && x.stato !== 'archiviato' && !x.foto_path; }
+var G_NOFOTO = '<span class="bdg r">Manca la foto</span>';
 function gProblemi(l){
   var p = [];
+  if(gSenzaFoto(l)) p.push('Manca la foto del luogo');
+  var nf = gDettagli(l.id).filter(gSenzaFoto).length; if(nf) p.push(nf === 1 ? '1 cosa da guardare senza foto' : nf + ' cose da guardare senza foto');
   if(!l.sempre_accessibile){
     if(l.orari_stato === 'fonte_irraggiungibile') p.push('Fonte ufficiale non raggiungibile');
     else if(l.orari_stato !== 'verificati') p.push('Orari da verificare');
@@ -2949,7 +2954,7 @@ function apriDettagli(lid){
   var l = gDiL(lid), L = gDettagli(lid);
   apriSheet('shDt', { titolo: 'Cosa guardare · ' + l.nome, alto: true,
     corpo: '<div class="hint" style="margin:0 4px 10px">Le cose da non perdere in questo luogo, nell’ordine in cui le vede il cliente.</div>' +
-      (L.length ? '<div class="grp">' + L.map(function(x, i){ return '<div class="row" role="button" tabindex="0" onclick="apriDettaglio(' + lid + ',' + x.id + ')"><div class="row-main"><div class="row-t">' + esc(x.titolo) + ' ' + gBdg(x.stato) + '</div><div class="row-s">' + (x.foto_path ? '📷 con foto' : 'senza foto') + (x.dove ? ' · ' + esc(x.dove) : '') + '</div></div>' +
+      (L.length ? '<div class="grp">' + L.map(function(x, i){ return '<div class="row" role="button" tabindex="0" onclick="apriDettaglio(' + lid + ',' + x.id + ')"><div class="row-main"><div class="row-t">' + esc(x.titolo) + ' ' + gBdg(x.stato) + (gSenzaFoto(x) ? G_NOFOTO : '') + '</div><div class="row-s">' + (x.foto_path ? '📷 con foto' : '<span style="color:var(--red)">⚠︎ senza foto</span>') + (x.dove ? ' · ' + esc(x.dove) : '') + '</div></div>' +
         gFrecce('gSposta(\'guida_dettagli\',gDettagli(' + lid + '),' + i + ',-1,function(){apriDettagli(' + lid + ')})', 'gSposta(\'guida_dettagli\',gDettagli(' + lid + '),' + i + ',1,function(){apriDettagli(' + lid + ')})', i, L.length) + '</div>'; }).join('') + '</div>' : '<div class="hint" style="text-align:center;padding:16px">Ancora niente.</div>') +
       '<button class="btn btn-s" style="margin-top:10px" onclick="apriDettaglio(' + lid + ',null)">＋ Aggiungi</button>' });
 }
@@ -3013,7 +3018,7 @@ function renderGuidaGiri(box){
   var L = G.itin.filter(function(i){ return i.stato !== 'archiviato' || G.filtro === 'archiviati'; });
   box.innerHTML = gVistaSeg() + '<div class="btn-row" style="margin-bottom:10px"><div class="hint" style="flex:1;margin:0">I giri sono percorsi a piedi con partenza e ritorno da Ceraldi.</div><button class="btn-sm p" style="flex:0 0 auto" onclick="apriGiro(null)">＋ Giro</button></div>' +
     '<div class="grp">' + L.map(function(g){ var t = gTappe(g.id), senza = t.filter(function(x){ return x.ordine > (t[0] ? t[0].ordine : 0) && !x.percorso; }).length;
-      return '<button class="row" onclick="apriGiro(' + g.id + ')"><div class="row-main"><div class="row-t">' + esc(g.nome) + ' ' + gBdg(g.stato) + '</div><div class="row-s">' + t.length + ' tappe' + (g.durata_min ? ' · ' + Math.round(g.durata_min / 6) / 10 + ' h' : '') + (g.distanza_m ? ' · ' + (g.distanza_m / 1000).toFixed(1).replace('.', ',') + ' km' : '') + '</div>' +
+      return '<button class="row" onclick="apriGiro(' + g.id + ')"><div class="row-main"><div class="row-t">' + esc(g.nome) + ' ' + gBdg(g.stato) + (gSenzaFoto(g) ? G_NOFOTO : '') + '</div><div class="row-s">' + t.length + ' tappe' + (g.durata_min ? ' · ' + Math.round(g.durata_min / 6) / 10 + ' h' : '') + (g.distanza_m ? ' · ' + (g.distanza_m / 1000).toFixed(1).replace('.', ',') + ' km' : '') + '</div>' +
         (senza ? '<div class="row-s" style="color:var(--warn,#b26b00)">⚠︎ ' + senza + ' tratti senza percorso a piedi da calcolare</div>' : '') + '</div><span class="chev">›</span></button>'; }).join('') + '</div>' +
     (L.length ? '' : '<div class="hint" style="text-align:center;padding:24px">Nessun giro.</div>');
 }
@@ -3123,7 +3128,7 @@ function gCapitoli(rid){ return G.cap.filter(function(c){ return c.racconto_id =
 function renderGuidaRacconti(box){
   var L = G.rac.filter(function(r){ return r.stato !== 'archiviato' || G.filtro === 'archiviati'; });
   box.innerHTML = gVistaSeg() + '<div class="btn-row" style="margin-bottom:10px"><div class="hint" style="flex:1;margin:0">Le storie della città, a capitoli, collegate ai luoghi.</div><button class="btn-sm p" style="flex:0 0 auto" onclick="apriRacconto(null)">＋ Racconto</button></div>' +
-    '<div class="grp">' + L.map(function(r){ return '<button class="row" onclick="apriRacconto(' + r.id + ')"><div class="row-main"><div class="row-t">' + esc(r.titolo) + ' ' + gBdg(r.stato) + (r.in_apertura ? ' <span class="bdg b">In apertura</span>' : '') + '</div><div class="row-s">' + gCapitoli(r.id).length + ' capitoli' + (r.sottotitolo ? ' · ' + esc(r.sottotitolo) : '') + '</div></div><span class="chev">›</span></button>'; }).join('') + '</div>' +
+    '<div class="grp">' + L.map(function(r){ return '<button class="row" onclick="apriRacconto(' + r.id + ')"><div class="row-main"><div class="row-t">' + esc(r.titolo) + ' ' + gBdg(r.stato) + (r.in_apertura ? ' <span class="bdg b">In apertura</span>' : '') + (gSenzaFoto(r) ? G_NOFOTO : '') + '</div><div class="row-s">' + gCapitoli(r.id).length + ' capitoli' + (function(n){ return n ? ' · <span style="color:var(--red)">' + n + ' senza foto</span>' : ''; })(gCapitoli(r.id).filter(gSenzaFoto).length) + (r.sottotitolo ? ' · ' + esc(r.sottotitolo) : '') + '</div></div><span class="chev">›</span></button>'; }).join('') + '</div>' +
     (L.length ? '' : '<div class="hint" style="text-align:center;padding:24px">Nessun racconto.</div>');
 }
 function apriRacconto(id){
@@ -3134,7 +3139,7 @@ function apriRacconto(id){
       gArea('rcM', 'Sommario (in due righe)', r.sommario, 500, 3, '') + gArea('rcX', 'Introduzione', r.testo, 6000, 6, 'Il testo che apre il racconto') +
       '<div class="row" style="padding:4px 0 10px"><div class="row-main"><div class="row-t">In apertura</div><div class="row-s">Compare per primo nella pagina dei racconti</div></div><label class="tgl"><input type="checkbox" id="rcAp"' + (r.in_apertura ? ' checked' : '') + '><span></span></label></div>' +
       '<div class="sec-title">Foto di copertina</div>' + gFotoHtml('rcF', r, 0) +
-      '<div class="sec-title">Capitoli</div>' + (id ? (C.length ? '<div class="grp">' + C.map(function(c, i){ return '<div class="row" role="button" tabindex="0" onclick="apriCapitolo(' + id + ',' + c.id + ')"><div class="row-main"><div class="row-t">' + esc((c.periodo ? c.periodo + ' · ' : '') + c.titolo) + ' ' + gBdg(c.stato) + '</div><div class="row-s">' + (c.luogo_id ? esc(gNomeL(c.luogo_id)) : 'nessun luogo collegato') + (c.foto_path ? ' · 📷' : '') + '</div></div>' +
+      '<div class="sec-title">Capitoli</div>' + (id ? (C.length ? '<div class="grp">' + C.map(function(c, i){ return '<div class="row" role="button" tabindex="0" onclick="apriCapitolo(' + id + ',' + c.id + ')"><div class="row-main"><div class="row-t">' + esc((c.periodo ? c.periodo + ' · ' : '') + c.titolo) + ' ' + gBdg(c.stato) + (gSenzaFoto(c) ? G_NOFOTO : '') + '</div><div class="row-s">' + (c.luogo_id ? esc(gNomeL(c.luogo_id)) : 'nessun luogo collegato') + (c.foto_path ? ' · 📷' : '') + '</div></div>' +
         gFrecce('gSposta(\'guida_capitoli\',gCapitoli(' + id + '),' + i + ',-1,function(){apriRacconto(' + id + ')})', 'gSposta(\'guida_capitoli\',gCapitoli(' + id + '),' + i + ',1,function(){apriRacconto(' + id + ')})', i, C.length) + '</div>'; }).join('') + '</div>' : '<div class="hint">Nessun capitolo.</div>') +
         '<button class="btn btn-s" style="margin-top:8px" onclick="apriCapitolo(' + id + ',null)">＋ Capitolo</button>' : '<div class="hint">Salva il racconto per aggiungere i capitoli.</div>'),
     piede: '<div class="btn-row">' + (id ? '<button class="btn btn-s" style="color:var(--bad,#b3261e)" onclick="eliminaRacconto(' + id + ')">Elimina</button>' : '') + '<button class="btn btn-p" id="rcSalva" onclick="salvaRacconto(' + (id || 'null') + ')">Salva</button></div>' });
