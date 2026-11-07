@@ -3426,7 +3426,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     <button class="hdr-btn" id="tb-back" style="display:none" aria-label="Indietro"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
     <div class="tb-titles">
       <h1 id="tb-title">Presenze</h1>
-      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v77</span></p>
+      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v78</span></p>
     </div>
     <span class="topbar-badge" id="role-badge"></span>
     <div class="hdr-actions">
@@ -13640,6 +13640,22 @@ const _ibanB28 = s => _ibanNorm(s).replace(/(.{4})(?=.)/g, '$1 ');
 function ricFinestra(m, a) { const f = _rsbFinestraMese(m, a); return f; }
 
 /* ── CARICAMENTO: una sola lettura per tutte le viste ── */
+// FIX 07/11/2026: il server consegna al massimo 1.000 righe per richiesta e
+// le eccedenti spariscono SENZA errore. Per le letture che possono superarle
+// (periodi lunghi, export, storico) si legge a blocchi da 1.000 finché non
+// arrivano tutte. Accetta una query già costruita e restituisce { data, error }
+// come un normale await, così si usa al posto della query stessa.
+async function _tuttePagineQ(q) {
+  q = q.order('id');
+  const out = [];
+  for (let da = 0; da < 50000; da += 1000) {
+    const { data, error } = await q.range(da, da + 999);
+    if (error) return { data: out.length ? out : null, error };
+    out.push(...(data || []));
+    if (!data || data.length < 1000) break;
+  }
+  return { data: out, error: null };
+}
 async function _ricTutte(mk) { const out = []; for (let da = 0; da < 20000; da += 1000) { const { data, error } = await mk().range(da, da + 999); if (error) throw error; out.push(...(data || [])); if (!data || data.length < 1000) break; } return out; }
 async function ricCarica() {
   const [prof, ced, bon, port, ecc, acc, rnote] = await Promise.all([
@@ -20289,7 +20305,7 @@ async function caricaStorico() {
   let q = sb.from('presenze').select('*').gte('data',dal).lte('data',al)
     .order('data',{ascending:true}).order('ts_entrata',{ascending:true});
   if (dipId) q = q.eq('dipendente_id', dipId);
-  const { data } = await q;
+  const { data } = await _tuttePagineQ(q);
   _storicoData = data || [];
   if ($('s-cerca')) $('s-cerca').value = '';
   renderStorico(_storicoData);
@@ -20668,7 +20684,7 @@ function caricaAvvisoRestituzione(dipId, nomeCompleto, dati) {
   const nomeEsc = (nomeCompleto||'').replace(/'/g,"\\'");
   wrap.innerHTML = '<div style="background:rgba(217,48,37,.08);border:1px solid rgba(217,48,37,.25);border-radius:10px;padding:10px 12px;margin-bottom:10px">'
     + '<div style="font-size:12px;color:var(--red);font-weight:700;margin-bottom:2px">⚠ Deve restituire € '+Math.abs(dati.netto).toFixed(2)+'</div>'
-    + '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">Il netto da pagare risulta negativo: gli acconti dati (compresi quelli dei mesi precedenti non ancora liquidati) superano quanto ha maturato finora.</div>'
+    + '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">Per questo mese ha ricevuto (acconti, contanti e bonifico del cedolino) più di quanto ha maturato con le presenze.</div>'
     + '<button class="btn-sm" style="width:100%;background:var(--red);color:#fff;border:none" onclick="openRestituzione(\''+dipId+'\',\''+nomeEsc+'\')">↩ Registra restituzione ricevuta</button>'
     + '</div>';
 }
@@ -24273,7 +24289,8 @@ async function caricaStipendi() {
     // il problema era che la riga non arrivava nemmeno fino a lì. Ora si
     // recupera la storia completa, come già per la 13a/14a — niente più
     // limite di data.
-    sb.from('presenze_acconti').select('id,dipendente_id,importo,data,note,letto_dip,causale,saldato,mese_riferimento,anno_riferimento,periodo_anno_inizio,saldo_periodo,documento_id,modalita'),
+    // Stesso limite delle 1.000 righe: lettura a blocchi, così la storia completa degli acconti arriva sempre tutta.
+    _ricTutte(() => sb.from('presenze_acconti').select('id,dipendente_id,importo,data,note,letto_dip,causale,saldato,mese_riferimento,anno_riferimento,periodo_anno_inizio,saldo_periodo,documento_id,modalita').order('id')).then(data => ({ data }), () => ({ data: null })),
     // FIX (acconto "sdoppiato" tra mesi): un acconto non liquidato viene
     // riportato avanti nei mesi successivi (vedi acconti sotto), ma la
     // relativa restituzione veniva presa SOLO se caduta nel mese in corso
@@ -24306,9 +24323,14 @@ async function caricaStipendi() {
     // periodo di ferie (anche nei giorni successivi, se la ferie è a fine
     // mese) — calcolaArretratoMesi filtra comunque sempre solo su mesi <
     // dal, quindi queste righe in più non lo alterano.
-    sb.from('presenze').select('dipendente_id,data')
+    // FIX 07/11/2026: 13 mesi di presenze superano le 1.000 righe che il
+    // server consegna per ogni richiesta (a novembre 2026 erano 1.188): le
+    // eccedenti sparivano senza errore, falsando arretrato e ferie/riposi.
+    // Ora si leggono a blocchi da 1.000 finché non arrivano tutte.
+    _ricTutte(() => sb.from('presenze').select('dipendente_id,data')
       .lt('data', new Date(new Date(al+'T00:00:00').getTime()+14*86400000).toISOString().split('T')[0])
-      .gte('data', new Date(parseInt(y), parseInt(m)-13, 1).toISOString().split('T')[0]),
+      .gte('data', new Date(parseInt(y), parseInt(m)-13, 1).toISOString().split('T')[0])
+      .order('data').order('dipendente_id')).then(data => ({ data }), () => ({ data: null })),
     // Cedolini (buste paga) già caricati per questo mese/anno — servono
     // per il pulsante "Da cedolino" (precompila il bonifico in Liquida con
     // l'importo reale della busta paga). Presi TUTTI, anche quelli senza
@@ -25415,7 +25437,7 @@ async function generaExcelPresenzeSintetico(dipIdFiltro, periodo) {
   let qPresenze = sb.from('presenze').select('dipendente_id,data').gte('data',dalDati).lte('data',alDati).order('data');
   let qAssenze  = sb.from('presenze_assenze').select('dipendente_id,tipo,data_inizio,data_fine,note,rientro_il,rettifica_il,rettifica_protocollo').in('stato',['approvata','confermata']).or(`and(data_inizio.lte.${alDati},data_fine.gte.${dalDati})`);
   if (dipIdFiltro) { qProfili = qProfili.in('id', [].concat(dipIdFiltro)); qPresenze = qPresenze.in('dipendente_id', [].concat(dipIdFiltro)); qAssenze = qAssenze.in('dipendente_id', [].concat(dipIdFiltro)); }
-  const [{ data: dipendenti }, { data: presenze }, { data: assenze }] = await Promise.all([qProfili, qPresenze, qAssenze]);
+  const [{ data: dipendenti }, { data: presenze }, { data: assenze }] = await Promise.all([qProfili, _tuttePagineQ(qPresenze), qAssenze]);
 
   let fest = {};
   for (let a2 = parseInt(dalDati.slice(0,4)); a2 <= parseInt(alDati.slice(0,4)); a2++) Object.assign(fest, festivitaItaliane(a2));
@@ -25562,7 +25584,7 @@ async function generaExcelConsulente(sceltePag, dipIdFiltro, periodo) {
     qAcconti1314 = qAcconti1314.in('dipendente_id', [].concat(dipIdFiltro));
   }
   const [{ data: dipendenti }, { data: presenze }, { data: accontiGrezzi }, { data: restituzioniXls }, { data: assenze }, { data: acconti1314Tutti }, { data: liquidazioniGrezze }, { data: bonificiStipXls }, { data: portafoglioXls }] = await Promise.all([
-    qProfili, qPresenze, qAcconti,
+    qProfili, _tuttePagineQ(qPresenze), _tuttePagineQ(qAcconti),
     DB.safe(() => {
       let q = sb.from('presenze_restituzioni').select('*').gte('data',dal).lte('data',al);
       if (dipIdFiltro) q = q.in('dipendente_id', [].concat(dipIdFiltro));
@@ -26076,8 +26098,8 @@ async function esportaStipendi() {
 
   const [{ data: dipendenti }, { data: presenze }, { data: accontiGrezzi }] = await Promise.all([
     sb.from('presenze_profili').select('*').eq('attivo',true).or('ruolo.eq.dipendente,percepisce_stipendio.eq.true').order('nome'),
-    sb.from('presenze').select('*').gte('data',dal).lte('data',al).order('data'),
-    sb.from('presenze_acconti').select('*').lte('data',al),
+    _tuttePagineQ(sb.from('presenze').select('*').gte('data',dal).lte('data',al).order('data')),
+    _tuttePagineQ(sb.from('presenze_acconti').select('*').lte('data',al)),
   ]);
   // Stesso criterio della card Stipendi: un acconto con mese_riferimento
   // esplicito appartiene a QUEL mese, non a quello della data reale.
@@ -28134,7 +28156,7 @@ async function esportaXLS() {
     .order('nome_dipendente',{ascending:true})
     .order('data',{ascending:true});
   if (dipId) q = q.eq('dipendente_id', dipId);
-  const { data } = await q;
+  const { data } = await _tuttePagineQ(q);
   if (!data || !data.length) { toast('Nessun dato da esportare'); return; }
 
   const dalLbl = new Date(dal).toLocaleDateString('it-IT',{day:'2-digit',month:'long',year:'numeric'});
@@ -28571,17 +28593,36 @@ async function openLiquidazione(dipId, nome, mese, anno, giorni, paga, acconti, 
   const meseLbl = new Date(anno, mese-1, 1).toLocaleDateString('it-IT',{month:'long',year:'numeric'});
   let riconciliazioneHtml = '';
   if (bustaDoc && bustaDoc.netto_busta != null) {
-    // FIX 06/11/2026: il bonifico del cedolino ("Salda cedolino") è già tra gli acconti, quindi già tolto da `netto`.
-    // Confrontarlo di nuovo col cedolino lo sottraeva due volte (es. 413 − 937 = −524, errore finto).
-    // Si confronta il dovuto TOTALE (netto + già versato per il cedolino) col netto della busta.
-    const diff = (netto + giaVersatoCedolino) - parseFloat(bustaDoc.netto_busta);
+    // FIX 07/11/2026 (sostituisce quello del 06/11): il cedolino va confrontato
+    // con lo STIPENDIO DEL MESE (totaleLordo), mai con il residuo dopo gli
+    // acconti. Il fix del 06/11 sommava solo il bonifico del cedolino e reggeva
+    // quando l'unico acconto era il cedolino stesso (caso Lesina); con un
+    // anticipo in contanti in più (caso Capezzuto ottobre: 620 € + domeniche)
+    // diceva "il cedolino supera il dovuto" anche se il cedolino era PIÙ BASSO.
+    // Ora il riquadro scompone: spettante = in busta + fuori busta; quanto è già
+    // stato dato fuori busta; una sola conclusione presa da `netto`, che è lo
+    // stesso numero del "Da pagare" e della card Stipendi (unica fonte).
+    const r2 = v => Math.round(v * 100) / 100, eur = v => '€ ' + r2(v).toFixed(2);
+    const ced = r2(parseFloat(bustaDoc.netto_busta));
+    const cedDaPagare = r2(Math.max(0, ced - giaVersatoCedolino));
+    const fuoriBusta = r2(totaleLordo - ced);
+    const datoFuori = r2(acconti - giaVersatoCedolino - restituzioni); // acconti stipendio non legati al cedolino, al netto delle restituzioni
+    const riga = (l, v, st) => '<div style="display:flex;justify-content:space-between;margin-top:3px'+(st||'')+'"><span>'+l+'</span><span style="font-weight:700">'+v+'</span></div>';
+    const statoCed = giaVersatoCedolino <= 0.01 ? 'da pagare' : (cedDaPagare <= 0.01 ? '✓ pagato' : 'pagati ' + eur(giaVersatoCedolino) + ', mancano ' + eur(cedDaPagare));
+    let conclusione;
+    if (Math.abs(netto) <= 0.01) conclusione = '<div style="margin-top:6px;color:var(--green);font-weight:700">✓ Mese pagato per intero</div>';
+    else if (netto > 0) conclusione = '<div style="margin-top:6px;color:var(--green);font-weight:700">Resta da pagare ' + eur(netto)
+      + (cedDaPagare > 0.01 ? ' — di cui ' + eur(Math.min(cedDaPagare, netto)) + ' col bonifico del cedolino' + (netto - cedDaPagare > 0.01 ? ' e ' + eur(netto - cedDaPagare) + ' fuori busta' : '') : ' fuori busta') + '</div>';
+    else conclusione = '<div style="margin-top:6px;color:var(--red);font-weight:700">Ha ricevuto ' + eur(-netto) + ' in più: deve restituirli</div>';
     riconciliazioneHtml = '<div style="background:rgba(43,74,203,.05);border:1px solid rgba(43,74,203,.18);border-radius:10px;padding:10px 12px;margin-top:10px;font-size:12px">'
-      + '<div style="display:flex;justify-content:space-between"><span>Netto da busta paga caricata</span><span style="font-weight:700">€ '+parseFloat(bustaDoc.netto_busta).toFixed(2)+'</span></div>'
-      + '<div style="display:flex;justify-content:space-between;margin-top:2px"><span>Ancora da pagare (presenze meno acconti)</span><span style="font-weight:700">€ '+netto.toFixed(2)+'</span></div>'
-      + (giaVersatoCedolino > 0.01 ? '<div style="display:flex;justify-content:space-between;margin-top:2px;color:var(--accent)"><span>🔗 Già versato in bonifico (Salda cedolino)</span><span style="font-weight:700">€ '+giaVersatoCedolino.toFixed(2)+'</span></div>' : '')
-      + (Math.abs(diff)<=0.01 ? '<div style="margin-top:4px;color:var(--green)">✓ Corrisponde alla busta paga</div>'
-        : diff>0 ? '<div style="margin-top:4px;color:var(--muted)">Oltre al cedolino (€ '+parseFloat(bustaDoc.netto_busta).toFixed(2)+') risultano € '+diff.toFixed(2)+' da pagare fuori busta.</div>'
-        : '<div style="margin-top:4px;color:var(--red);font-weight:700">⚠ Il cedolino supera il dovuto di € '+Math.abs(diff).toFixed(2)+' — controlla presenze e paga</div>')
+      + '<div style="font-weight:800;font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);margin-bottom:2px">Confronto col cedolino</div>'
+      + riga('Stipendio del mese (presenze)', eur(totaleLordo))
+      + riga('di cui in busta (cedolino) · ' + statoCed, eur(ced))
+      + (fuoriBusta >= -0.01
+          ? riga('di cui fuori busta', eur(fuoriBusta))
+          : '<div style="margin-top:3px;color:#b45309;font-weight:700">⚠ Il cedolino è più alto dello stipendio da presenze di ' + eur(-fuoriBusta) + ': controlla presenze e paga giornaliera</div>')
+      + (Math.abs(datoFuori) > 0.01 ? riga('Già dato fuori busta (acconti' + (restituzioni > 0 ? ' meno restituzioni' : '') + ')', eur(datoFuori), ';color:var(--muted)') : '')
+      + conclusione
       + '</div>';
   }
   // Festività lavorate: sempre mostrate SEPARATE dall'ordinario, in
