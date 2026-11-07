@@ -95,7 +95,7 @@ def costruisci(src, lingua, foto_base, esiste=None, lingue=None, guida=None):
     for x in src['menu_voci_allergeni']: al_di.setdefault(x['voce_id'], []).append(x['allergene_id'])
     var_di = {}
     for x in ordina(src['menu_varianti']):
-        if x.get('attiva') is not False: var_di.setdefault(x['voce_id'], []).append({'g': x.get('gruppo') or '', 'n': x['nome'], 'd': x.get('delta_cent') or 0})
+        if x.get('attiva') is not False: var_di.setdefault(x['voce_id'], []).append({'g': L(x, 'gruppo', 'menu_varianti') if x.get('gruppo') else '', 'n': L(x, 'nome', 'menu_varianti'), 'd': x.get('delta_cent') or 0})  # varianti tradotte come il resto
     disp_v, disp_c = {}, {}
     for x in src['menu_disponibilita']:
         r = {k: v for k, v in dict(g=x.get('giorni'), dal=x.get('dal'), al=x.get('al'), da=(x.get('dalle') or '')[:5] or None, a=(x.get('alle') or '')[:5] or None).items() if v}
