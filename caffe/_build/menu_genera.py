@@ -241,6 +241,7 @@ def main():
     ap.add_argument('--tutte-le-lingue', action='store_true', help="italiano nella cartella e ogni lingua attiva del database in una sottocartella (en/, fr/, ...)")
     ap.add_argument('--copia-foto', action='store_true'); ap.add_argument('--noindex', action='store_true', help='pagina di prova: non indicizzata dai motori di ricerca')
     ap.add_argument('--guida-url', default='../guida-nuova/', help="indirizzo della guida visto dalla cartella del menu (vuoto = nessuna guida); per le altre lingue si aggiunge la loro sottocartella")
+    ap.add_argument('--fuso', default='Europe/Rome', help='fuso orario del locale (IANA) per le fasce di disponibilità')
     ap.add_argument('--statistiche', action='store_true', help='attiva i contatori anonimi di visita (funzione menu_stat_registra; nessun cookie, nessun dato sul telefono)')
     ap.add_argument('--consenti-vuoto', action='store_true', help='genera anche se nessuna voce è pubblicata (altrimenti si ferma per non svuotare il menu)'); ap.add_argument('--modello', default=os.path.join(QUI, 'menu_template.html'))
     a = ap.parse_args()
@@ -266,6 +267,7 @@ def main():
         radice_ = cod == codici[0] and (cod == 'it' or not a.tutte_le_lingue)
         guida = (('' if radice_ or re.match(r'^(https?:)?/', a.guida_url) else '../') + a.guida_url + ('' if cod == 'it' else cod + '/')) if a.guida_url else None
         d, DEF, cfg = costruisci(src, cod, base, None if a.json else file_esiste, lingue, guida)  # --json = prove senza rete: nessun controllo
+        d['fuso'] = a.fuso  # fasce orarie di disponibilità calcolate sull'ora del locale, non su quella del telefono
         if a.statistiche:  # contatori anonimi: solo la funzione pubblica menu_stat_registra, con la chiave anon (già pubblica)
             su, sk = (src.get('_url') or os.environ.get('MENU_SB_URL', '')).rstrip('/'), os.environ.get('MENU_SB_KEY', '')
             if su.startswith('https://') and sk: d['stat'] = {'u': su + '/rest/v1/rpc/menu_stat_registra', 'k': sk}

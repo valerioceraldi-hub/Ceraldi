@@ -272,9 +272,19 @@ function min(h){ var p = String(h || '0:0').split(':'); return (+p[0]) * 60 + (+
 function p2(n){ return (n < 10 ? '0' : '') + n; }
 var VOCI = {}, CATDI = {};
 D.sezioni.forEach(function(s){ s.c.forEach(function(c){ c.v.forEach(function(v){ VOCI[v.id] = v; CATDI[v.id] = c; }); }); });
+/* ora del locale (fuso dal generatore), non quella del telefono: un turista con l'orologio di casa vede le stesse fasce del banco */
+function oraLocale(){
+  var n = new Date();
+  if(D.fuso && window.Intl) try{
+    var p = {}; new Intl.DateTimeFormat('en-GB', { timeZone: D.fuso, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', weekday: 'short' }).formatToParts(n).forEach(function(x){ p[x.type] = x.value; });
+    var g = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(p.weekday) + 1;
+    if(g > 0 && p.hour != null) return { min: (+p.hour % 24) * 60 + (+p.minute), dow: g, iso: p.year + '-' + p.month + '-' + p.day };
+  }catch(e){}
+  return { min: n.getHours() * 60 + n.getMinutes(), dow: (n.getDay() + 6) % 7 + 1, iso: n.getFullYear() + '-' + p2(n.getMonth() + 1) + '-' + p2(n.getDate()) };
+}
 function dispOk(v){
   if(!v.dp || !v.dp.length) return true;
-  var n = new Date(), m = n.getHours() * 60 + n.getMinutes(), dow = (n.getDay() + 6) % 7 + 1, iso = n.getFullYear() + '-' + p2(n.getMonth() + 1) + '-' + p2(n.getDate());
+  var t = oraLocale(), m = t.min, dow = t.dow, iso = t.iso;
   return v.dp.some(function(r){
     if(r.g && r.g.length && r.g.indexOf(dow) < 0) return false;
     if(r.dal && iso < r.dal) return false; if(r.al && iso > r.al) return false;
@@ -399,11 +409,13 @@ function proposte(){
     return '<button type="button" class="pc" data-voce="' + v.id + '">' + img(v.fg || v.f, pulisci(v.n)) + '<span class="c"><span class="ey">' + esc(T('proposta_etichetta')) + '</span><span class="r"><h4>' + esc(pulisci(v.n)) + '</h4><span class="prz">' + prezzo(v.p) + '</span></span>' + (v.d ? '<span class="d">' + esc(v.d) + '</span>' : '') + '</span></button>'; }).join('') +
     '</div><div class="punti" aria-hidden="true">' + l.map(function(_, i){ return '<i' + (i ? '' : ' class="on"') + '></i>'; }).join('') + '</div>';
 }
+function catVis(c){ return c.v.some(dispOk); }   /* categoria con almeno una voce disponibile ora */
+function secVis(s){ return s.c.some(catVis); }
 function tavola(s){
-  var n = s.c.reduce(function(t, c){ return t + c.v.length; }, 0), f = s.f;
-  if(!f) s.c.some(function(c){ return c.v.some(function(v){ if(v.f){ f = v.f; return true; } }); });
-  var nomi = s.c.slice(0, 4).map(function(c){ return pulisci(c.n); }).join(' · ');
-  return '<button type="button" class="tav' + (f ? '' : ' senza') + '" data-sez="' + s.id + '">' + (f ? '<img src="' + esc(f) + '" alt="">' : '') + '<span class="t"><small>' + n + ' ' + esc(T('voci')) + '</small><h3>' + esc(pulisci(s.n)) + '</h3><span class="q">' + esc(nomi) + (s.c.length > 4 ? '…' : '') + '</span></span></button>';
+  var cv = s.c.filter(catVis), n = cv.reduce(function(t, c){ return t + c.v.filter(dispOk).length; }, 0), f = s.f;
+  if(!f) cv.some(function(c){ return c.v.some(function(v){ if(v.f && dispOk(v)){ f = v.f; return true; } }); });
+  var nomi = cv.slice(0, 4).map(function(c){ return pulisci(c.n); }).join(' · ');
+  return '<button type="button" class="tav' + (f ? '' : ' senza') + '" data-sez="' + s.id + '">' + (f ? '<img src="' + esc(f) + '" alt="">' : '') + '<span class="t"><small>' + n + ' ' + esc(T('voci')) + '</small><h3>' + esc(pulisci(s.n)) + '</h3><span class="q">' + esc(nomi) + (cv.length > 4 ? '…' : '') + '</span></span></button>';
 }
 function piede(){
   var L = D.locale, riga2 = [L.orari, L.tel ? T('tel') + ' ' + L.tel : ''].filter(Boolean).join(' · ');
@@ -411,7 +423,7 @@ function piede(){
 }
 function home(){
   var m = mom(), h = '<div class="vh">' + copertina(m) + momentoHtml(m) + proposte() + blocchi('home', 'dopo_proposte');
-  if(D.sezioni.length) h += '<div class="gut"><div class="tit"><h3>' + esc(T('menu')) + '</h3><span class="ey">' + esc(T('sezione_invito')) + '</span></div><div class="tavole">' + D.sezioni.map(tavola).join('') + '</div></div>';
+  if(D.sezioni.length) h += '<div class="gut"><div class="tit"><h3>' + esc(T('menu')) + '</h3><span class="ey">' + esc(T('sezione_invito')) + '</span></div><div class="tavole">' + D.sezioni.filter(secVis).map(tavola).join('') + '</div></div>';
   else h += '<p class="vuoto-menu">' + esc(T('menu_vuoto')) + '</p>';
   return h + blocchi('home', 'dopo_sezioni') + blocchi('home', 'piede') + piede() + '</div>';
 }
@@ -421,18 +433,19 @@ var _aperte = {};
 function sezione(){
   var s = D.sezioni.find(function(x){ return x.id === S.sez; }); if(!s) return home();
   var h = '<div class="sezv" data-s="' + s.id + '"><div class="bar gut" id="bar"><div class="r"><button type="button" class="ind" data-home>‹ ' + esc(T('menu')) + '</button><h2>' + esc(pulisci(s.n)) + '</h2></div>' +
-    '<div class="chips" id="chips">' + s.c.map(function(c, i){ return '<button type="button" data-vai="c' + c.id + '"' + (i ? '' : ' class="on"') + '>' + esc(pulisci(c.n)) + '</button>'; }).join('') + '</div></div><main class="gut" style="padding-bottom:130px">';
+    '<div class="chips" id="chips">' + s.c.filter(catVis).map(function(c, i){ return '<button type="button" data-vai="c' + c.id + '"' + (i ? '' : ' class="on"') + '>' + esc(pulisci(c.n)) + '</button>'; }).join('') + '</div></div><main class="gut" style="padding-bottom:130px">';
   s.c.forEach(function(c){ h += categoria(c); });
   return h + (T('nota_prezzi') ? '<p class="piede" style="padding:26px 0 0">' + esc(T('nota_prezzi')) + '</p>' : '') + '</main></div>';
 }
 function categoria(c){
   var pc = proposteDi('categoria', c.id), cons = ((D.consigli || {})[c.id] || []).filter(function(id){ return VOCI[id] && dispOk(VOCI[id]) && !VOCI[id].es && pc.indexOf(VOCI[id]) < 0; });
   var mostrati = pc.map(function(v){ return v.id; }).concat(cons);
-  var resto = c.v.filter(function(v){ return mostrati.indexOf(v.id) < 0; });
+  var resto = c.v.filter(function(v){ return mostrati.indexOf(v.id) < 0 && dispOk(v); });
+  if(!pc.length && !cons.length && !resto.length) return '';  /* tutta fuori orario: niente titolo vuoto */
   var lungo = resto.length > 14 && !_aperte[c.id], vis = lungo ? resto.slice(0, 10) : resto;
   var h = '<section class="cat" id="c' + c.id + '"><h3>' + esc(pulisci(c.n)) + '</h3>' + (nota(c.n) ? '<p class="nota">' + esc(nota(c.n)) + '</p>' : '') + (c.d ? '<p class="desc">' + esc(c.d) + '</p>' : '');
   h += pc.map(function(v){ return evidenza(v, T('proposta_etichetta')); }).join('') + cons.map(function(id){ return evidenza(VOCI[id], T('consiglio')); }).join('');
-  h += '<ul class="righe">' + vis.filter(dispOk).map(riga).join('') + '</ul>';
+  h += '<ul class="righe">' + vis.map(riga).join('') + '</ul>';
   if(lungo) h += '<button type="button" class="altre" data-apri="' + c.id + '">' + esc(T('mostra_altre')) + ' ' + (resto.length - 10) + '</button>';
   return h + '</section>';
 }
