@@ -27,6 +27,7 @@ with tempfile.TemporaryDirectory() as t:
     dsc = lambda h: re.search(r'<meta name="description" content="([^"]*)">', h).group(1)
     ok('titolo con etichetta per lingua e diverso tra lingue', tit(it).startswith('Menu e prezzi') and tit(en).startswith('Menu and prices'))
     ok('descrizione diversa tra lingue', dsc(it) != dsc(en))
+    ok('descrizione entro 160 caratteri', len(dsc(it)) <= 160 and len(dsc(en)) <= 160)
     ok('anteprime Open Graph', all(('property="og:%s"' % k) in it for k in ('title', 'description', 'url', 'type')))
     body = it[it.find('<div class="app" id="app">'):]
     ok('contenuto leggibile senza JavaScript (H1 + prodotti)', '<h1>' in body[:400] and body.count('<li>') >= len(voci) > 0)

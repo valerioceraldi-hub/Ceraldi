@@ -279,12 +279,19 @@ def testa_sito(sito, cod, codici, d, valuta):
         h += '<link rel="alternate" hreflang="x-default" href="%s">' % ea(url_lingua(sito, codici[0], codici))
     lo = d['locale']; nome = lo.get('nome') or 'Menu'
     # descrizione diversa per lingua: etichetta e nomi delle sezioni sono già tradotti
-    sez = ', '.join(x for x in (pulisci_nome(s.get('n')) for s in d.get('sezioni', [])) if x)
-    desc = '%s — %s%s' % (nome, ETICHETTA_MENU.get(cod, 'Menu'), (': ' + sez) if sez else '')
-    desc = '. '.join(x for x in (desc, ' · '.join(x for x in (lo.get('ind'), lo.get('orari')) if x)) if x)
-    h += '<meta name="description" content="%s">' % ea(desc[:300])
+    # descrizione diversa per lingua (etichetta e sezioni già tradotte), entro ~160 caratteri: oltre Google la taglia.
+    # Si toglie prima l'orario, poi l'indirizzo, poi le ultime sezioni (sempre intere, mai parole tagliate a metà).
+    sezioni = [x for x in (pulisci_nome(s.get('n')) for s in d.get('sezioni', [])) if x]
+    def componi(n_sez, coda):
+        t = '%s — %s' % (nome, ETICHETTA_MENU.get(cod, 'Menu'))
+        if n_sez: t += ': ' + ', '.join(sezioni[:n_sez]) + ('…' if n_sez < len(sezioni) else '')
+        c = ' · '.join(x for x in coda if x)
+        return (t + (' ' if t.endswith('…') else '. ') + c) if c else t
+    prove = [componi(n, c) for c in ((lo.get('ind'), lo.get('orari')), (lo.get('ind'),), ()) for n in range(len(sezioni), -1, -1)]
+    desc = next((x for x in prove if len(x) <= 160), prove[-1])
+    h += '<meta name="description" content="%s">' % ea(desc)
     tit = titolo_sito(cod, d)
-    h += '<meta property="og:type" content="website"><meta property="og:url" content="%s"><meta property="og:title" content="%s"><meta property="og:description" content="%s">' % (ea(can), ea(tit), ea(desc[:300]))
+    h += '<meta property="og:type" content="website"><meta property="og:url" content="%s"><meta property="og:title" content="%s"><meta property="og:description" content="%s">' % (ea(can), ea(tit), ea(desc))
     if lo.get('nome'): h += '<meta property="og:site_name" content="%s">' % ea(lo['nome'])
     if cod in OG_LOCALE: h += '<meta property="og:locale" content="%s">' % OG_LOCALE[cod]
     def voce(v):
