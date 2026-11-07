@@ -452,7 +452,7 @@ select.inp{background-image:none}
   <button class="tab-item" data-tab="altro" onclick="vaiTab('altro')"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></span><span class="tab-lbl">Altro</span></button>
 </nav>
 <script>
-var APP_VERSION='1.2';
+var APP_VERSION='1.3';
 var APP={key:'menu',nome:'Menu',versione:APP_VERSION,authKey:'mn_auth_v1',oldAuthKey:null,
   markBg:'linear-gradient(145deg,#C08A4D 0%,#8B5A2B 55%,#4A2C14 100%)',
   markSvg:'<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3v7a3 3 0 0 0 3 3v8"/><path d="M7 3v6"/><path d="M10 3v7a3 3 0 0 1-3 3"/><path d="M17 21V3c-2 1.5-3 4-3 7v4h3"/></svg>',
@@ -1900,6 +1900,8 @@ function renderAltro(){
     '<div><b class="tnum">' + conta('archiviato') + '</b><span>Archiviate</span></div><div><b class="tnum">' + D.voci.filter(function(v){ return v.foto_path; }).length + '</b><span>Con foto</span></div></div>' +
     '<div class="sec-title">Il locale</div><div class="grp">' +
       '<button class="row" onclick="apriLocale()"><span class="row-ico">📍</span><div class="row-main"><div class="row-t">Indirizzo, contatti, orari e Wi-Fi</div><div class="row-s">' + esc([loc.indirizzo, loc.orari && loc.orari.testo].filter(Boolean).join(' · ') || 'Da compilare') + '</div></div><span class="chev">›</span></button></div>' +
+    '<div class="sec-title">Statistiche</div><div class="grp">' +
+      '<button class="row" onclick="apriStatistiche()"><span class="row-ico">📊</span><div class="row-main"><div class="row-t">Statistiche del menu</div><div class="row-s">Aperture, prodotti più guardati, orari, lingue</div></div><span class="chev">›</span></button></div>' +
     '<div class="sec-title">Pagina del menu per i clienti</div><div class="grp">' +
       '<button class="row" onclick="apriMomenti()"><span class="row-ico">🌅</span><div class="row-main"><div class="row-t">Momenti della giornata</div><div class="row-s">Saluto e consiglio per mattina, pomeriggio, sera…</div></div><span class="chev">›</span></button>' +
       '<button class="row" onclick="apriRacc()"><span class="row-ico">🤝</span><div class="row-main"><div class="row-t">Abbinamenti e consigli</div><div class="row-s">' + (D.racc || []).length + ' impostati</div></div><span class="chev">›</span></button>' +
@@ -2493,6 +2495,128 @@ function trRiga(t){
   var d = TR_TAB[t.tabella], r = d && (D[d[0]] || []).find(function(x){ return String(x[d[1]]) === String(t.riga_id); });
   return { it: r ? r[t.campo] : null, nome: r ? (r.nome || r.titolo || r.codice || r.saluto || '') : '', tipo: d ? d[2] : t.tabella };
 }
+/* ===== Statistiche del menu (S3) =====
+   Legge solo il riepilogo calcolato dal database (rpc menu_stat_riepilogo, solo admin): nessun dato grezzo scaricato. */
+var _st = { per: '7', dati: null, nomi: null };
+function stOggi(){ return new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Rome' })); }
+function stIso(d){ return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function stPeriodo(per){
+  var o = stOggi(), dal = new Date(o);
+  if(per === '7') dal.setDate(o.getDate() - 6);
+  else if(per === 'mese') dal = new Date(o.getFullYear(), o.getMonth(), 1);
+  else if(per === 'anno') dal = new Date(o.getFullYear(), 0, 1);
+  return { dal: stIso(dal), al: stIso(o), giorni: Math.round((o - dal) / 864e5) + 1 };
+}
+function stN(n){ return (Number(n) || 0).toLocaleString('it-IT'); }
+function stBarre(righe, max){  /* righe: [{et, n, sotto}] — barre orizzontali, leggibili a 390 px */
+  max = max || Math.max.apply(null, righe.map(function(r){ return r.n; }).concat([1]));
+  return '<div class="grp" style="padding:10px 14px">' + righe.map(function(r){
+    return '<div style="display:flex;align-items:center;gap:8px;padding:5px 0"><div style="flex:0 0 38%;min-width:0;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(r.et) + (r.sotto ? '<div style="font-size:11px;color:var(--ink3)">' + esc(r.sotto) + '</div>' : '') + '</div>' +
+      '<div style="flex:1;height:10px;background:var(--surface3);border-radius:99px;overflow:hidden"><div style="height:100%;width:' + Math.max(2, Math.round(r.n / max * 100)) + '%;background:var(--blue);border-radius:99px"></div></div>' +
+      '<b class="tnum" style="flex:0 0 auto;min-width:36px;text-align:right;font-size:13px">' + stN(r.n) + '</b></div>';
+  }).join('') + '</div>';
+}
+function stVuoto(t){ return '<div class="hint" style="padding:6px 2px 14px">' + esc(t) + '</div>'; }
+async function apriStatistiche(){
+  apriSheet('shSt', { titolo: 'Statistiche del menu', alto: true, corpo: '<div class="hint" style="text-align:center;padding:30px 0">Carico…</div>',
+    piede: '<div class="btn-row"><button class="btn btn-s" onclick="stImpostazioni()">Impostazioni</button><button class="btn btn-p" onclick="chiudiSheet(\'shSt\')">Chiudi</button></div>' });
+  if(!_st.nomi){
+    try{
+      var r = await Promise.all([api('menu_blocchi?select=id,titolo,link_testo,link_url,link_pagina&limit=1000'), api('menu_pagine?select=codice,titolo&limit=200')]);
+      _st.nomi = { b: {}, p: {} };
+      (r[0] || []).forEach(function(b){ _st.nomi.b[b.id] = b.link_testo || b.titolo || ('Blocco ' + b.id); });
+      (r[1] || []).forEach(function(p){ _st.nomi.p[p.codice] = p.titolo || p.codice; });
+    }catch(e){ _st.nomi = { b: {}, p: {} }; }
+  }
+  stCarica();
+}
+async function stCarica(){
+  var P = stPeriodo(_st.per), box = document.querySelector('#shSt .sheet-bd'); if(!box) return;
+  try{ _st.dati = await api('rpc/menu_stat_riepilogo', { method: 'POST', body: { dal: P.dal, al: P.al } }); }
+  catch(e){ box.innerHTML = '<div class="empty"><div class="ei">⚠️</div>' + esc(e.message) + '</div>'; return; }
+  if(document.getElementById('shSt')) stDisegna();
+}
+function stDisegna(){
+  var box = document.querySelector('#shSt .sheet-bd'), d = _st.dati || {}, P = stPeriodo(_st.per); if(!box) return;
+  var seg = '<div class="seg" id="stPer">' + [['oggi', 'Oggi'], ['7', '7 giorni'], ['mese', 'Mese'], ['anno', 'Anno']].map(function(x){
+    return '<button type="button" class="seg-b' + (_st.per === x[0] ? ' active' : '') + '" onclick="_st.per=\'' + x[0] + '\';stCarica()">' + x[1] + '</button>'; }).join('') + '</div>';
+  var cfg = d.config || {}, avviso = cfg.attivo === false ? '<div class="hint" style="background:var(--surface2);border-radius:10px;padding:10px 12px;margin-bottom:10px">⏸ La raccolta è <b>spenta</b>. La riaccendi da Impostazioni.</div>' : '';
+  var ap = Number(d.aperture) || 0, pr = (d.prodotti || []).reduce(function(s, x){ return s + (Number(x.n) || 0); }, 0);
+  var pg = d.per_giorno || [], top = pg.slice().sort(function(a, b){ return b.n - a.n; })[0];
+  var h = seg + avviso +
+    '<div class="kpi"><div><b class="tnum">' + stN(ap) + '</b><span>Aperture del menu</span></div>' +
+    '<div><b class="tnum">' + (P.giorni > 1 ? stN(Math.round(ap / P.giorni)) : stN(ap)) + '</b><span>' + (P.giorni > 1 ? 'Media al giorno' : 'Oggi') + '</span></div>' +
+    '<div><b class="tnum">' + stN(pr) + '</b><span>Prodotti aperti</span></div>' +
+    '<div><b class="tnum">' + (top && P.giorni > 1 ? new Date(top.g + 'T12:00:00').toLocaleDateString('it-IT', { day: 'numeric', month: 'short' }) : '–') + '</b><span>' + (top && P.giorni > 1 ? 'Giorno migliore (' + stN(top.n) + ')' : 'Giorno migliore') + '</span></div></div>';
+  if(!ap && !pr){
+    box.innerHTML = h + '<div class="empty"><div class="ei">📊</div>Ancora nessun dato in questo periodo.<br><span style="font-size:13px">I numeri compaiono quando i clienti aprono il menu.</span></div>' + stNota();
+    return;
+  }
+  /* andamento: per giorno (7 giorni / mese), per mese (anno) */
+  if(_st.per === '7' || _st.per === 'mese'){
+    var mappa = {}; pg.forEach(function(x){ mappa[x.g] = x.n; });
+    var righe = [], o = stOggi(), dd = new Date(P.dal + 'T12:00:00');
+    while(stIso(dd) <= P.al){ righe.push({ et: dd.toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric', month: 'short' }), n: mappa[stIso(dd)] || 0 }); dd.setDate(dd.getDate() + 1); }
+    h += '<div class="sec-title">Aperture per giorno</div>' + stBarre(righe.reverse());
+  } else if(_st.per === 'anno'){
+    var mesi = {}; pg.forEach(function(x){ var k = x.g.slice(0, 7); mesi[k] = (mesi[k] || 0) + Number(x.n); });
+    var rm = Object.keys(mesi).sort().reverse().map(function(k){ return { et: new Date(k + '-15T12:00:00').toLocaleDateString('it-IT', { month: 'long' }), n: mesi[k] }; });
+    h += '<div class="sec-title">Aperture per mese</div>' + stBarre(rm);
+  }
+  /* fasce orarie */
+  var po = (d.per_ora || []).filter(function(x){ return x.aperture || x.prodotti; });
+  h += '<div class="sec-title">Orari: quando aprono il menu</div>' + (po.length ? stBarre(po.map(function(x){ return { et: String(x.h).padStart(2, '0') + ':00–' + String(x.h + 1).padStart(2, '0') + ':00', n: Number(x.aperture) || 0, sotto: stN(x.prodotti) + ' prodotti aperti' }; })) : stVuoto('Nessun dato.'));
+  /* prodotti */
+  var prod = (d.prodotti || []).slice(0, 30).map(function(x){
+    var ore = x.ore || {}, picco = Object.keys(ore).sort(function(a, b){ return ore[b] - ore[a]; })[0];
+    return { et: x.nome || ('Prodotto ' + x.id + ' (non più nel menu)'), n: x.n, sotto: picco != null ? 'di più tra le ' + String(picco).padStart(2, '0') + ' e le ' + String(+picco + 1).padStart(2, '0') : '' };
+  });
+  h += '<div class="sec-title">Prodotti più aperti</div>' + (prod.length ? stBarre(prod) : stVuoto('Nessun prodotto aperto in questo periodo.'));
+  /* sezioni e categorie */
+  var sz = (d.sezioni || []).map(function(x){ return { et: x.nome || ('Sezione ' + x.id), n: x.n }; });
+  if(sz.length) h += '<div class="sec-title">Sezioni</div>' + stBarre(sz);
+  var ct = (d.categorie || []).slice(0, 15).map(function(x){ return { et: x.nome || ('Categoria ' + x.id), n: x.n }; });
+  if(ct.length) h += '<div class="sec-title">Categorie (clic sulle linguette)</div>' + stBarre(ct);
+  /* lingue */
+  var nomiL = { it: '🇮🇹 Italiano' }; (D.lingue || []).forEach(function(g){ nomiL[g.codice] = (g.bandiera ? g.bandiera + ' ' : '') + (g.nome || g.codice); });
+  var lg = (d.lingue || []).map(function(x){ return { et: nomiL[x.l] || x.l, n: x.n }; });
+  if(lg.length) h += '<div class="sec-title">Lingue (aperture)</div>' + stBarre(lg);
+  /* altri clic */
+  var vn = {}; (D.voci || []).forEach(function(v){ vn[v.id] = v.nome; });
+  var al = (d.altri || []).map(function(x){
+    var et = x.tipo === 'wifi' ? '📶 Wi-Fi' : x.tipo === 'pagina' ? '📄 Pagina «' + ((_st.nomi && _st.nomi.p[x.chiave]) || x.chiave) + '»' :
+      x.tipo === 'blocco' ? '🔗 ' + ((_st.nomi && _st.nomi.b[x.chiave]) || ('Blocco ' + x.chiave)) : '🍽 Proposta: ' + (vn[x.chiave] || ('prodotto ' + x.chiave));
+    return { et: et, n: x.n };
+  });
+  if(al.length) h += '<div class="sec-title">Altri clic (recensioni, pagine, Wi-Fi, proposte)</div>' + stBarre(al);
+  box.innerHTML = h + stNota();
+}
+function stNota(){
+  return '<div class="hint" style="margin-top:14px;line-height:1.45">«Aperture» = volte in cui il menu è stato aperto. Ricaricare la pagina, tornare indietro o cambiare lingua non conta; due scansioni del QR in momenti diversi contano due. ' +
+    'Nessun cookie e nessun dato personale: solo numeri per giorno, ora e lingua. Orari in ora italiana.</div>';
+}
+function stImpostazioni(){
+  var c = (_st.dati && _st.dati.config) || {};
+  apriSheet('shStCfg', { titolo: 'Impostazioni statistiche', indietro: 'Statistiche', corpo:
+    '<div class="grp"><div class="row"><div class="row-main"><div class="row-t">Raccolta attiva</div><div class="row-s">Spenta, il menu smette di inviare dati entro pochi minuti. I numeri già raccolti restano.</div></div>' +
+      '<label class="tgl"><input type="checkbox" id="stAtt"' + (c.attivo !== false ? ' checked' : '') + '><span></span></label></div></div>' +
+    '<div class="sec-title">Limiti di sicurezza</div>' +
+    '<div class="field"><label>Massimo di eventi al giorno</label><input class="inp" type="number" inputmode="numeric" id="stTg" min="0" max="1000000" value="' + (Number(c.tetto_giorno) || 20000) + '"></div>' +
+    '<div class="field"><label>Massimo di eventi in un\'ora</label><input class="inp" type="number" inputmode="numeric" id="stTo" min="0" max="1000000" value="' + (Number(c.tetto_ora) || 4000) + '"></div>' +
+    '<div class="hint">Proteggono il database se qualcuno prova a inviare dati falsi: oltre il limite i nuovi eventi vengono ignorati fino all\'ora (o al giorno) successivo. Il consumo reale di Supabase si vede in Supabase › Billing › Usage.</div>',
+    piede: '<div class="btn-row"><button class="btn btn-s" onclick="chiudiSheet(\'shStCfg\')">Annulla</button><button class="btn btn-p" id="stSalva" onclick="stSalva()">Salva</button></div>' });
+}
+async function stSalva(){
+  var tg = parseInt(document.getElementById('stTg').value, 10), to = parseInt(document.getElementById('stTo').value, 10);
+  if(!(tg >= 0 && tg <= 1000000) || !(to >= 0 && to <= 1000000)){ toast('⚠️ Inserisci numeri tra 0 e 1.000.000'); return; }
+  var b = document.getElementById('stSalva'); b.disabled = true;
+  try{
+    var ris = await api('menu_stat_config?id=eq.1', { method: 'PATCH', prefer: 'return=representation', body: { attivo: document.getElementById('stAtt').checked, tetto_giorno: tg, tetto_ora: to, aggiornato_il: new Date().toISOString(), aggiornato_da: (_authSess && _authSess.user && _authSess.user.id) || null } });
+    if(!ris || !ris.length) throw new Error('Non salvato: serve un account amministratore');
+    chiudiSheet('shStCfg'); toast('✓ Impostazioni salvate'); stCarica();
+  }catch(e){ b.disabled = false; toast('⚠️ ' + e.message); }
+}
+
 async function apriTraduzioni(){
   if(!lingueAttive().length){ toast('Nessuna lingua attiva'); return; }
   if(!_tr.lingua || !lingueAttive().some(function(g){ return g.codice === _tr.lingua; })) _tr.lingua = lingueAttive()[0].codice;
