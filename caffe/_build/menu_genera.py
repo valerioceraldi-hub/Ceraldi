@@ -235,6 +235,39 @@ def copia_foto(pagine, out):
 
 def json_js(o): return json.dumps(o, ensure_ascii=False, separators=(',', ':')).replace('<', '\\u003c').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029')
 
+# ── Menu pubblicato sul sito dell'attività (--sito): indirizzo canonico, versioni nelle altre lingue,
+#    dati strutturati schema.org «Menu» per i motori di ricerca, link per tornare al sito. Nulla di specifico di un locale.
+def url_lingua(sito, cod, codici):
+    return sito + ('' if cod == codici[0] and cod == 'it' else cod + '/')
+
+def testa_sito(sito, cod, codici, d, valuta):
+    ea = lambda s: str(s).replace('&', '&amp;').replace('"', '&quot;').replace('<', '&lt;')
+    can = url_lingua(sito, cod, codici)
+    h = '<link rel="canonical" href="%s">' % ea(can)
+    if len(codici) > 1:
+        h += ''.join('<link rel="alternate" hreflang="%s" href="%s">' % (c, ea(url_lingua(sito, c, codici))) for c in codici)
+        h += '<link rel="alternate" hreflang="x-default" href="%s">' % ea(url_lingua(sito, codici[0], codici))
+    lo = d['locale']; nome = lo.get('nome') or 'Menu'
+    desc = ' · '.join(x for x in (nome, lo.get('ind'), lo.get('orari')) if x)
+    h += '<meta name="description" content="%s">' % ea(desc[:300])
+    def voce(v):
+        o = {'@type': 'MenuItem', 'name': v.get('n') or ''}
+        if v.get('d'): o['description'] = v['d']
+        if isinstance(v.get('p'), (int, float)) and v['p'] > 0: o['offers'] = {'@type': 'Offer', 'price': '%.2f' % (v['p'] / 100), 'priceCurrency': valuta}
+        return o
+    ld = {'@context': 'https://schema.org', '@type': 'Menu', 'name': nome, 'url': can, 'inLanguage': cod,
+          'hasMenuSection': [{'@type': 'MenuSection', 'name': s.get('n') or '',
+                              'hasMenuSection': [{'@type': 'MenuSection', 'name': c.get('n') or '', 'hasMenuItem': [voce(v) for v in c.get('v', [])]} for c in s.get('c', [])]}
+                             for s in d.get('sezioni', [])]}
+    return h + '<script type="application/ld+json">' + json_js(ld) + '</script>'
+
+def ritorno_sito(sito):
+    """Barra sottile in cima: «‹ dominio» per tornare alla home del sito (il menu ha la grafica dell'app, non la barra del sito)."""
+    p = urllib.parse.urlparse(sito); home = p.scheme + '://' + p.netloc + '/'
+    nome = re.sub(r'^www\.', '', p.netloc)
+    return ('<a class="ritorno-sito" href="%s" style="display:block;max-width:480px;margin:0 auto;padding:7px max(20px,env(safe-area-inset-left,0px));'
+            'background:var(--scuro);color:var(--su-scuro);font:500 .75rem/1.3 var(--f-testo);letter-spacing:.06em;text-decoration:none;opacity:.92">&lsaquo; %s</a>') % (home, nome)
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', required=True); ap.add_argument('--lingua', default='it', help='una sola lingua (it, en, ...)'); ap.add_argument('--json'); ap.add_argument('--esporta-json')
@@ -242,9 +275,16 @@ def main():
     ap.add_argument('--copia-foto', action='store_true'); ap.add_argument('--noindex', action='store_true', help='pagina di prova: non indicizzata dai motori di ricerca')
     ap.add_argument('--guida-url', default='../guida-nuova/', help="indirizzo della guida visto dalla cartella del menu (vuoto = nessuna guida); per le altre lingue si aggiunge la loro sottocartella")
     ap.add_argument('--fuso', default='Europe/Rome', help='fuso orario del locale (IANA) per le fasce di disponibilità')
+    ap.add_argument('--sito', default='', help="indirizzo pubblico della cartella del menu sul sito dell'attività (es. https://www.esempio.it/menu/): indirizzo canonico, versioni nelle altre lingue, dati strutturati per i motori di ricerca e link per tornare al sito")
+    ap.add_argument('--caratteri', default='', help="foglio di stile dei caratteri ospitati dal sito (es. /assets/font.css) al posto di Google Fonts: nessuna chiamata a servizi esterni; deve contenere le famiglie scelte nell'Aspetto")
+    ap.add_argument('--valuta', default='EUR', help='valuta dei prezzi nei dati strutturati (codice ISO 4217)')
     ap.add_argument('--statistiche', action='store_true', help='attiva i contatori anonimi di visita (funzione menu_stat_registra; nessun cookie, nessun dato sul telefono)')
     ap.add_argument('--consenti-vuoto', action='store_true', help='genera anche se nessuna voce è pubblicata (altrimenti si ferma per non svuotare il menu)'); ap.add_argument('--modello', default=os.path.join(QUI, 'menu_template.html'))
     a = ap.parse_args()
+    if a.sito:
+        if not re.match(r'^https://[a-z0-9.-]+\.[a-z]{2,}(/|$)', a.sito, re.I): sys.exit('--sito deve essere un indirizzo https completo, es. https://www.esempio.it/menu/')
+        if not a.sito.endswith('/'): a.sito += '/'
+        if a.noindex: sys.exit('--sito e --noindex insieme non hanno senso: il menu sul sito è fatto per essere trovato')
     if a.json: src = json.load(open(a.json, encoding='utf-8'))
     else:
         url, k = os.environ.get('MENU_SB_URL'), os.environ.get('MENU_SB_KEY')
@@ -279,6 +319,7 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     for cod, d, DEF, cfg in pagine:
         css, link = tema_css(cfg)
+        if a.caratteri and link: link = '<link rel="stylesheet" href="%s">' % a.caratteri.replace('"', '')
         titolo = d['locale']['nome'] or 'Menu'
         t = t0
         for k, v in (('__LANG__', cod), ('__TITOLO__', titolo.replace('<', '')), ('__FONT_LINK__', link), ('__TEMA_CSS__', css), ('__DATI__', json_js(d)), ('__DEF__', json_js(DEF))):
@@ -286,6 +327,9 @@ def main():
         cart = a.out if cod == codici[0] and (cod == 'it' or not a.tutte_le_lingue) else os.path.join(a.out, cod)
         os.makedirs(cart, exist_ok=True)
         if a.noindex: t = t.replace('<meta charset="utf-8">', '<meta charset="utf-8"><meta name="robots" content="noindex,nofollow">', 1)
+        if a.sito:
+            t = t.replace('<meta charset="utf-8">', '<meta charset="utf-8">' + testa_sito(a.sito, cod, codici, d, a.valuta), 1)
+            t = t.replace('<body>', '<body>' + ritorno_sito(a.sito), 1)
         tmp = os.path.join(cart, 'index.html.tmp')
         open(tmp, 'w', encoding='utf-8').write(t); os.replace(tmp, os.path.join(cart, 'index.html'))
         print('ok: %s/index.html  lingua=%s sezioni=%d voci=%d pagine=%d momenti=%d' % (cart, cod, len(d['sezioni']), sum(len(c['v']) for s in d['sezioni'] for c in s['c']), len(d['pagine']), len(d['momenti'])))

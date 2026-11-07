@@ -268,7 +268,7 @@ def main():
         d = costruisci(src, cod, base, a.anteprima)
         d['lingue'] = [dict(info[x], u=vai(cod, x)) for x in codici] if len(codici) > 1 else []
         d['pre'] = '' if radice(cod) else '../'
-        d['menu'] = d['pre'] + a.menu_url + ('' if cod == 'it' or not re.search(r'menu', a.menu_url) else cod + '/')  # il menu nella stessa lingua
+        d['menu'] = ('' if re.match(r'^(https?:)?/', a.menu_url) else d['pre']) + a.menu_url + ('' if cod == 'it' or not re.search(r'menu', a.menu_url) else cod + '/')  # il menu nella stessa lingua
         pagine.append((cod, d))
     d0 = pagine[0][1]
     if not d0['luoghi'] and not d0['itinerari'] and not d0['racconti']:
