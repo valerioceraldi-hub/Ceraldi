@@ -452,7 +452,7 @@ select.inp{background-image:none}
   <button class="tab-item" data-tab="altro" onclick="vaiTab('altro')"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></span><span class="tab-lbl">Altro</span></button>
 </nav>
 <script>
-var APP_VERSION='1.4';
+var APP_VERSION='1.5';
 var APP={key:'menu',nome:'Menu',versione:APP_VERSION,authKey:'mn_auth_v1',oldAuthKey:null,
   markBg:'linear-gradient(145deg,#C08A4D 0%,#8B5A2B 55%,#4A2C14 100%)',
   markSvg:'<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3v7a3 3 0 0 0 3 3v8"/><path d="M7 3v6"/><path d="M10 3v7a3 3 0 0 1-3 3"/><path d="M17 21V3c-2 1.5-3 4-3 7v4h3"/></svg>',
@@ -722,6 +722,7 @@ async function api(percorso, o){
       var msg = (j && (j.message || j.hint || j.details)) || ('Errore ' + r.status);
       var e1 = new Error(msg); e1.status = r.status; e1.codice = j && j.code; e1.corpo = j; throw e1;
     }
+    if((o.method || 'GET') !== 'GET' && cambiaMenuPubblico(percorso)) pianificaPubblica();   // ogni salvataggio del menu → aggiornamento immediato
     return j;
   }
 }
@@ -1415,7 +1416,10 @@ async function salvaVoce(){
       if(c.stato !== 'pubblicato') await api('menu_categorie?id=eq.' + c.id, { method: 'PATCH', prefer: 'return=minimal', body: { stato: 'pubblicato' } });
       if(s.stato !== 'pubblicato') await api('menu_sezioni?id=eq.' + s.id, { method: 'PATCH', prefer: 'return=minimal', body: { stato: 'pubblicato' } });
     }
+    var testoCambiato = E.nuova || nome !== v.nome || (corpo.descrizione || '') !== (v.descrizione || '') ||
+      JSON.stringify(E.varianti.map(function(x){ return [x.gruppo, x.nome]; })) !== JSON.stringify(variantiDi(v.id || -1).map(function(x){ return [x.gruppo, x.nome]; }));
     chiudiSheet('shVoce'); toast(E.nuova ? '✓ Voce creata' : '✓ Salvato'); E = null; await carica();
+    if(testoCambiato && stato === 'pubblicato') trDopoSalvataggio(id);   // lingue straniere subito, prima della pubblicazione
   }catch(e){
     _registraErrore('salvaVoce/' + passo, e.message);
     if((E.nuova && id) || ['voce', 'foto'].indexOf(passo) < 0){ // salvata in parte: riapro la voce com'è ora nel database
@@ -2683,6 +2687,64 @@ async function trSalvaCfg(){
     if(!ris || !ris.length) throw new Error('Non salvato: serve un account amministratore');
     chiudiSheet('shTrCfg'); toast('✓ Impostazioni salvate');
   }catch(e){ b.disabled = false; toast('⚠️ ' + e.message); }
+}
+
+/* ===== Pubblicazione immediata del menu (Back Office 1.5) =====
+   Dopo ogni salvataggio di contenuti del menu, chiede al server (funzione menu-pubblica) di rigenerare
+   subito le pagine per i clienti. Salvataggi ravvicinati = un solo aggiornamento; se è in corso una
+   traduzione immediata, aspetta che finisca. Il giro automatico di ogni mezz'ora resta come riserva. */
+var _pub = { timer: null, trInCorso: 0, controllo: null, inizio: 0 };
+function cambiaMenuPubblico(p){
+  var t = String(p || '').split('?')[0];
+  if(/^rpc\/(menu_traduzione_manuale|menu_traduzione_ripristina|menu_ripristina)$/.test(t)) return true;
+  return /^(menu_(?!stat)[a-z_]+|locale|contenuti_collegamenti)$/.test(t);
+}
+function pianificaPubblica(ritardo){
+  clearTimeout(_pub.timer);
+  _pub.timer = setTimeout(function(){ if(_pub.trInCorso > 0) pianificaPubblica(2000); else pubblicaMenu(); }, ritardo || 4000);
+  pubBadge('⏳ Aggiorno il menu per i clienti…');
+}
+async function trDopoSalvataggio(id){
+  _pub.trInCorso++; pianificaPubblica();
+  try{
+    await trChiama({ tabella: 'menu_voci', riga_id: String(id) });
+    var vs = variantiDi(id); for(var i = 0; i < vs.length; i++) await trChiama({ tabella: 'menu_varianti', riga_id: String(vs[i].id) });
+  }catch(e){ toast('Lingue straniere: ' + e.message + ' (riprovo da solo entro mezz\'ora)'); }
+  finally{ _pub.trInCorso--; }
+}
+function pubBadge(testo, fine){
+  var b = document.getElementById('pubBadge');
+  if(!testo){ if(b) b.remove(); return; }
+  if(!b){ b = document.createElement('div'); b.id = 'pubBadge'; b.setAttribute('role', 'status');
+    b.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 74px);z-index:9000;background:var(--surface);color:var(--ink);box-shadow:var(--shadow),0 6px 20px rgba(0,0,0,.15);border-radius:99px;padding:9px 16px;font-size:13.5px;font-weight:600;max-width:calc(100vw - 32px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+    document.body.appendChild(b); }
+  b.textContent = testo;
+  if(fine) setTimeout(function(){ if(b.textContent === testo) b.remove(); }, 6000);
+}
+async function chiamaPubblica(corpo){
+  await _authPronto();
+  var r = await fetch(SB_URL + '/functions/v1/menu-pubblica', { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: SB_KEY, Authorization: 'Bearer ' + _authToken() }, body: JSON.stringify(corpo || {}) });
+  var j = null; try{ j = await r.json(); }catch(e){}
+  if(!r.ok) throw new Error((j && j.errore) || ('Errore ' + r.status));
+  return j || {};
+}
+async function pubblicaMenu(){
+  try{
+    await chiamaPubblica({});
+    _pub.inizio = Date.now(); pubBadge('⏳ Il menu per i clienti si sta aggiornando (2–3 minuti)…');
+    clearInterval(_pub.controllo);
+    _pub.controllo = setInterval(async function(){
+      if(Date.now() - _pub.inizio > 8 * 60000){ clearInterval(_pub.controllo); pubBadge('Aggiornamento lento: il menu sarà comunque aggiornato al prossimo giro', true); return; }
+      try{
+        var s = await chiamaPubblica({ azione: 'stato' }), m = s.menu;
+        if(!m || new Date(m.creato).getTime() < _pub.inizio - 60000) return;     // non ancora partito
+        if(m.stato !== 'completed') return;
+        if(m.esito !== 'success'){ clearInterval(_pub.controllo); pubBadge('⚠️ Aggiornamento non riuscito: riprovo da solo entro mezz\'ora', true); return; }
+        if(s.pagine && s.pagine.stato === 'completed'){ clearInterval(_pub.controllo); pubBadge('✓ Menu per i clienti aggiornato', true); }
+        else pubBadge('⏳ Quasi fatto: pubblico le pagine…');
+      }catch(e){ /* ritenta al prossimo controllo */ }
+    }, 10000);
+  }catch(e){ pubBadge('Menu per i clienti: ' + e.message, true); }
 }
 
 /* ===== Statistiche del menu (S3) =====
