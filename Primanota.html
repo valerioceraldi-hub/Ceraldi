@@ -590,7 +590,7 @@ function avvisoCreditoIA(){
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.40.3</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.42.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -16773,9 +16773,38 @@ async function upsertMovimentiBanca(nuovi){
     // silenziosamente la lettura degli abbinamenti esistenti, rischiando
     // di sovrascrivere "abbinata:false" su movimenti oltre il 1000° già
     // riconciliati. sbFetchAll pagina davvero, nessun limite.
-    const esistenti = await sbFetchAll('movimenti_banca?select=id,abbinata,fattura_id,fattura_label,verificata_banca,ignorata,banca,note');
+    const esistenti = await sbFetchAll('movimenti_banca?select=id,abbinata,fattura_id,fattura_label,verificata_banca,ignorata,banca,note,data,importo,descrizione');
     var mapEsistenti = {};
     if(Array.isArray(esistenti)) esistenti.forEach(function(r){ mapEsistenti[r.id] = r; });
+
+    // 07/11 — Stesso movimento con dicitura cambiata dalla banca (es. "ADDEBITO
+    // NEXI" → "SPESA CON CARTA DI CREDITO NEXI", stesso mandato, stessa data,
+    // stesso importo): l'id si costruisce dal testo, quindi veniva salvato come
+    // movimento nuovo e l'addebito compariva due volte. Qui non si inserisce di
+    // nuovo se esiste già un movimento con stessa banca+data+importo+mandato SDD
+    // e testo diverso. Due addebiti veri hanno testo identico (id _dup1, _dup2)
+    // e non sono toccati.
+    var _normT = function(t){ return String(t||'').replace(/\s+/g,' ').trim().toUpperCase(); };
+    var _perChiave = {};
+    (Array.isArray(esistenti) ? esistenti : []).forEach(function(r){
+      var md = (typeof _rcMandato === 'function') ? _rcMandato(r.descrizione) : '';
+      if(!md) return;
+      var k = [r.banca||'BPM', String(r.data).slice(0,10), (+r.importo).toFixed(2), md].join('|');
+      (_perChiave[k] = _perChiave[k] || []).push(r);
+    });
+    var _giaPresenti = 0;
+    nuovi = nuovi.filter(function(m){
+      if(mapEsistenti[m.id]) return true;
+      var md = (typeof _rcMandato === 'function') ? _rcMandato(m.descrizione) : '';
+      if(!md) return true;
+      var k = [m.banca||'BPM', String(m.data).slice(0,10), (+m.importo).toFixed(2), md].join('|');
+      var simili = _perChiave[k]; if(!simili || !simili.length) return true;
+      if(simili.some(function(r){ return _normT(r.descrizione) === _normT(m.descrizione); })) return true;
+      _giaPresenti++; console.warn('[Import] già presente con altra dicitura, non duplicato:', m.id, '↔', simili[0].id);
+      return false;
+    });
+    if(_giaPresenti){ try{ toast('ℹ️ '+_giaPresenti+(_giaPresenti===1?' movimento era già presente':' movimenti erano già presenti')+' con una dicitura diversa: non duplicati'); }catch(e){} }
+    if(!nuovi.length) return;
 
     var payload = nuovi.map(function(m){
       var ex = mapEsistenti[m.id] || {};
@@ -17649,6 +17678,9 @@ async function sincronizzaPaypal(){
       }
     });
     _salvaPaypalLocale(mese);
+    // 07/11: le transazioni vanno anche su Supabase (prima stavano solo su questo telefono)
+    // e ognuna viene collegata al conto da cui sono usciti i soldi, se è univoco.
+    try{ await ppSalvaCloud(_paypalTransazioni); }catch(e){ console.warn('PayPal cloud:', e); }
     var noteScarti = [];
     if(scartatePerCodice) noteScarti.push(scartatePerCodice+' non di pagamento (rifornimenti/trasferimenti interni)');
     if(scartate) noteScarti.push(scartate+' righe gemelle senza beneficiario');
@@ -17807,8 +17839,16 @@ function renderRiconciliazionePaypal(){
     html += '<div style="font-size:13px;font-weight:700;color:#1a7a3a;margin-bottom:8px">✓ Abbinate ('+abbinate.length+')</div>';
     abbinate.forEach(function(t){
       var f = mapAbbinate[t.id];
-      html += '<div style="padding:7px 0;border-top:1px solid var(--sep);font-size:12px">';
-      html += esc(t.data)+' · '+fmt(Math.abs(t.importo||0))+' → '+esc(f.fornitore||'')+' N°'+esc(f.numero||'');
+      // 07/11: la riga si apre sui dettagli (pagamento, fattura, conto di addebito)
+      // e mostra sempre data fattura e tasto XML (regola fissa del 20/10).
+      var _mid = (f.riconciliazione && f.riconciliazione.movId) || ('paypal:'+t.id);
+      var _dif = Math.abs(Math.abs(+f.importo||0) - Math.abs(+t.importo||0));
+      html += '<div style="padding:9px 0;border-top:1px solid var(--sep);font-size:13px;display:flex;gap:8px;align-items:center">';
+      html += '<div onclick="_movSchedaApri('+esc(JSON.stringify(_mid))+')" style="flex:1;min-width:0;cursor:pointer;line-height:1.4">'
+        + esc(t.data)+' · <b>'+fmt(Math.abs(t.importo||0))+'</b> → '+esc(f.fornitore||'')+' N°'+esc(f.numero||'')
+        + '<br><span style="font-size:12px;color:var(--ink3)">fattura del '+(f.data ? esc(String(f.data).slice(8,10)+'/'+String(f.data).slice(5,7)+'/'+String(f.data).slice(0,4)) : '—')+' · '+fmt(Math.abs(+f.importo||0))
+        + (_dif >= 0.004 ? ' · diff. '+fmt(_dif) : '')+' · tocca per i dettagli ›</span></div>';
+      html += '<button onclick="aprifatturaAllegata('+esc(JSON.stringify(f.id))+')" style="flex-shrink:0;padding:6px 9px;border:1px solid var(--sep);border-radius:8px;background:none;font-family:inherit;font-size:12px;font-weight:600">📄 XML</button>';
       html += '</div>';
     });
     html += '</div>';
@@ -30987,6 +31027,98 @@ async function _authEntra(){
     }
   }, 400);
 }
+// 07/11 — Scheda dei pagamenti che NON stanno in movimenti_banca: PayPal (id
+// "paypal:…") e carta Nexi (id "carta:…"). Prima finivano in "Movimento non
+// trovato" perché la scheda cercava solo tra i movimenti bancari.
+// Per PayPal mostra anche con quale addebito è stato finanziato (SDD in banca
+// o riga carta): stesso importo al centesimo, nei 7 giorni successivi.
+async function _movSchedaEsterna(movId, sh){
+  var isPP = movId.indexOf('paypal:') === 0;
+  var dIt = function(g){ return g ? String(g).slice(8,10)+'/'+String(g).slice(5,7)+'/'+String(g).slice(0,4) : '—'; };
+  var addGg = function(g, n){ var d = new Date(String(g).slice(0,10)+'T12:00:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); };
+  var riga = function(l, v){ return '<div style="display:flex;gap:12px;padding:9px 0;border-bottom:1px solid var(--sep);font-size:14px"><div style="width:96px;flex-shrink:0;color:var(--ink3)">'+l+'</div><div style="flex:1;min-width:0;word-break:break-word">'+v+'</div></div>'; };
+  var docs = (fatture||[]).filter(function(f){ return f && f.riconciliazione && f.riconciliazione.movId === movId; });
+  var ric = docs.length ? docs[0].riconciliazione : null;
+  var dati = { data: ric ? ric.data : '', importo: ric ? Math.abs(+ric.importo||0) : 0, descr: ric ? (ric.descrizione||'') : '' };
+  var raw = movId.replace(/^(paypal|carta):/, '');
+  if(!isPP){
+    try{
+      var cr = await sbFetch('movimenti_carta?id=eq.'+encodeURIComponent(raw)+'&select=*');
+      if(cr && cr.length){ dati.data = cr[0].data; dati.importo = Math.abs(+cr[0].importo||0); dati.descr = cr[0].descrizione || dati.descr; }
+    }catch(e){}
+  } else {
+    // dettaglio dalla copia locale delle transazioni scaricate (se questo dispositivo le ha)
+    try{
+      for(var i = 0; i < localStorage.length; i++){
+        var k = localStorage.key(i); if(!k || k.indexOf('ceraldi_paypal_tx_') !== 0) continue;
+        var arr = JSON.parse(localStorage.getItem(k)||'[]');
+        var tx = arr.filter(function(t){ return raw.split('+').indexOf(String(t.id)) >= 0; });
+        if(tx.length){
+          if(!dati.data) dati.data = tx[0].data;
+          if(!dati.importo) dati.importo = tx.reduce(function(a,t){ return a + Math.abs(+t.importo||0); }, 0);
+          var nome = tx[0].controparteNome || tx[0].controparteEmail || '';
+          if(nome) dati.descr = 'PayPal → ' + nome + (tx[0].nota ? ' · ' + tx[0].nota : '');
+          break;
+        }
+      }
+    }catch(e){}
+  }
+  // con cosa è stato finanziato (solo PayPal)
+  var fin = null;
+  if(isPP){
+    try{
+      var sv = await sbFetch('paypal_transazioni?id=in.('+raw.split('+').map(encodeURIComponent).join(',')+')&select=addebito_tipo,addebito_id,addebito_confermato');
+      sv = (sv || []).filter(function(r){ return r.addebito_tipo && r.addebito_confermato; });
+      if(sv.length){
+        if(sv[0].addebito_tipo === 'saldo') fin = { tipo: 'saldo' };
+        else if(sv[0].addebito_tipo === 'banca'){
+          var mb = await sbFetch('movimenti_banca?id=eq.'+encodeURIComponent(sv[0].addebito_id)+'&select=id,data,descrizione,banca');
+          if(mb && mb[0]) fin = { tipo: 'banca', id: mb[0].id, data: mb[0].data, banca: mb[0].banca || 'BPM', descr: mb[0].descrizione };
+        } else if(sv[0].addebito_tipo === 'carta'){
+          var mc = await sbFetch('movimenti_carta?id=eq.'+encodeURIComponent(sv[0].addebito_id)+'&select=id,data,descrizione');
+          if(mc && mc[0]) fin = { tipo: 'carta', id: mc[0].id, data: mc[0].data, descr: mc[0].descrizione };
+        }
+      }
+    }catch(e){}
+  }
+  if(isPP && !fin && dati.data && dati.importo){
+    var imp = (-dati.importo).toFixed(2), da = String(dati.data).slice(0,10), a = addGg(da, 7);
+    try{
+      var rb = await sbFetch('movimenti_banca?importo=eq.'+imp+'&data=gte.'+da+'&data=lte.'+a+'&descrizione=ilike.*paypal*&select=id,data,importo,descrizione,banca&order=data.asc');
+      if(rb && rb.length === 1) fin = { tipo:'banca', id: rb[0].id, data: rb[0].data, banca: rb[0].banca || 'BPM', descr: rb[0].descrizione };
+      else if(rb && rb.length > 1) fin = { tipo:'molti', n: rb.length };
+    }catch(e){}
+    if(!fin){
+      try{
+        var rc = await sbFetch('movimenti_carta?importo=eq.'+imp+'&data=gte.'+da+'&data=lte.'+a+'&descrizione=ilike.*paypal*&select=id,data,descrizione');
+        if(rc && rc.length === 1) fin = { tipo:'carta', id: rc[0].id, data: rc[0].data, descr: rc[0].descrizione };
+      }catch(e){}
+    }
+  }
+  var blocchi = docs.map(function(f){
+    var dif = Math.abs(Math.abs(+f.importo||0) - dati.importo);
+    var idj = esc(JSON.stringify(f.id));
+    return '<div style="background:rgba(0,122,255,.10);border-radius:12px;padding:10px 12px;margin-top:8px;font-size:14px;line-height:1.45">🧾 <b>'+esc(f.fornitore||'')+(f.numero?' n. '+esc(f.numero):'')+'</b>'
+      + '<br><span style="display:inline-block;margin:4px 0;padding:2px 9px;border-radius:99px;background:rgba(0,122,255,.15);color:#0a5bd6;font-weight:700;font-size:13px">del '+dIt(f.data)+'</span> · '+fmt(Math.abs(+f.importo||0))
+      + (ric && dif >= 0.004 && ric.parziale !== true && docs.length === 1 ? '<br><span style="font-size:12.5px;color:var(--ink3)">Differenza di '+fmt(dif)+' tra fattura e pagamento'+(dif < 0.05 ? ' (arrotondamento)' : '')+'.</span>' : '')
+      + '<div style="display:flex;gap:8px;margin-top:8px"><button onclick="if(typeof aprifatturaAllegata===\'function\')aprifatturaAllegata('+idj+')" style="flex:1;padding:9px;border:1px solid var(--sep);border-radius:10px;background:var(--surface);font-weight:600;font-size:13px">📄 Vedi XML</button>'
+      + '<button onclick="document.getElementById(\'movSchedaMo\').remove();openEdit('+idj+')" style="flex:1;padding:9px;border:1px solid var(--sep);border-radius:10px;background:var(--surface);font-weight:600;font-size:13px">Apri fattura</button></div></div>';
+  }).join('') || '<div style="background:var(--sep);border-radius:12px;padding:10px 12px;margin-top:8px;font-size:14px;color:var(--ink3)">Nessuna fattura risulta collegata a questo pagamento.</div>';
+  var boxFin = '';
+  if(isPP){
+    if(fin && fin.tipo === 'banca') boxFin = '<div style="background:rgba(52,199,89,.12);border-radius:12px;padding:10px 12px;margin-top:8px;font-size:14px;line-height:1.45">🏦 Pagato con addebito <b>'+esc(fin.banca)+'</b> del '+dIt(fin.data)+' di '+fmt(dati.importo)+'<br><button onclick="_movSchedaApri('+esc(JSON.stringify(fin.id))+')" style="margin-top:6px;border:none;background:none;color:#0a5bd6;font-weight:700;font-size:14px;padding:0">Apri il movimento ›</button></div>';
+    else if(fin && fin.tipo === 'carta') boxFin = '<div style="background:rgba(52,199,89,.12);border-radius:12px;padding:10px 12px;margin-top:8px;font-size:14px;line-height:1.45">💳 Pagato con la <b>carta Nexi</b> il '+dIt(fin.data)+' ('+fmt(dati.importo)+')</div>';
+    else if(fin && fin.tipo === 'saldo') boxFin = '<div style="background:rgba(52,199,89,.12);border-radius:12px;padding:10px 12px;margin-top:8px;font-size:14px;line-height:1.45">💰 Pagato con il <b>saldo PayPal</b> (nessun addebito in banca o sulla carta da collegare)</div>';
+    else if(fin && fin.tipo === 'molti') boxFin = '<div style="background:rgba(255,159,10,.14);border-radius:12px;padding:10px 12px;margin-top:8px;font-size:14px;line-height:1.45">Ci sono '+fin.n+' addebiti PayPal con lo stesso importo nei giorni successivi: non scelgo io, guardali in Cassa → Banca.</div>';
+    else boxFin = '<div style="background:var(--sep);border-radius:12px;padding:10px 12px;margin-top:8px;font-size:14px;color:var(--ink3);line-height:1.45">Non trovo ancora l\'addebito in banca o sulla carta (di solito arriva 1–4 giorni dopo): carica l\'estratto aggiornato. Se PayPal ha pagato con i soldi che aveva già sul suo saldo, non c\'è nessun addebito da collegare.<button onclick="ppImpostaSaldo('+esc(JSON.stringify(movId))+')" style="display:block;margin-top:8px;padding:9px 12px;border:1px solid var(--sep);border-radius:10px;background:var(--surface);font-weight:600;font-size:13px">Pagato con il saldo PayPal</button></div>';
+  }
+  sh.innerHTML = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px"><div style="font-size:17px;font-weight:700">'+(isPP ? '🅿️ Pagamento PayPal' : '💳 Movimento carta Nexi')+'</div><button onclick="document.getElementById(\'movSchedaMo\').remove()" style="border:none;background:var(--sep);width:30px;height:30px;border-radius:15px;font-size:16px">✕</button></div>'
+    + '<div style="display:flex;align-items:baseline;justify-content:space-between;margin:8px 0 6px"><div style="font-size:15px">'+dIt(dati.data)+'</div><div style="font-size:20px;font-weight:700">'+fmt(dati.importo)+'</div></div>'
+    + riga('Descrizione', esc(dati.descr||'—'))
+    + riga('Codice', '<span style="font-size:12px;color:var(--ink3)">'+esc(raw)+'</span>')
+    + '<div style="font-size:13px;font-weight:700;color:var(--ink3);margin-top:14px;text-transform:uppercase;letter-spacing:.3px">Fattura pagata</div>' + blocchi
+    + (isPP ? '<div style="font-size:13px;font-weight:700;color:var(--ink3);margin-top:14px;text-transform:uppercase;letter-spacing:.3px">Conto da cui sono usciti i soldi</div>' + boxFin : '');
+}
 // 28/09 — Scheda di un movimento bancario (sola lettura), aperta dal link
 // "Apri in Ceraldi Fatture" di Ceraldi Presenze: mostra esattamente il
 // movimento originale della banca e a cosa è collegato (fattura o stipendio).
@@ -31000,12 +31132,18 @@ async function _movSchedaApri(movId){
   sh.style.cssText = 'background:var(--bg);border-radius:20px 20px 0 0;width:100%;max-width:500px;max-height:85vh;overflow:auto;padding:16px 20px calc(20px + env(safe-area-inset-bottom));animation:slideUp .3s cubic-bezier(.32,.72,0,1)';
   sh.innerHTML = '<div style="font-size:15px;color:var(--ink3);padding:30px 0;text-align:center">⏳ Carico il movimento…</div>';
   mo.appendChild(sh); document.body.appendChild(mo);
+  // 07/11: PayPal ("paypal:…") e carta Nexi ("carta:…") non stanno in movimenti_banca
+  if(/^(paypal|carta):/.test(String(movId))){
+    try{ await _movSchedaEsterna(String(movId), sh); }
+    catch(e){ sh.innerHTML = '<div style="padding:20px 0;color:var(--red)">Errore nel caricare il pagamento: '+esc(e.message||e)+'</div>'; }
+    return;
+  }
   var m = null, stip = [], dip = {};
   try{
     var rows = await sbFetch('movimenti_banca?id=eq.'+encodeURIComponent(movId)+'&select=*');
     if(rows && rows.length) m = _bancaNorm(rows[0]);
   }catch(e){ sh.innerHTML = '<div style="padding:20px 0;color:var(--red)">Errore nel caricare il movimento: '+esc(e.message||e)+'</div>'; return; }
-  if(!m){ sh.innerHTML = '<div style="font-size:17px;font-weight:700;margin-bottom:8px">Movimento non trovato</div><div style="font-size:14px;color:var(--ink3);line-height:1.45">Il movimento <b>'+esc(movId)+'</b> non esiste più nei movimenti bancari (forse l\'estratto conto è stato ricaricato). In Ceraldi Presenze annulla il collegamento e ricollega il movimento giusto.</div><button onclick="document.getElementById(\'movSchedaMo\').remove()" style="margin-top:16px;width:100%;padding:13px;border:none;border-radius:12px;background:var(--sep);font-weight:700;font-size:15px">Chiudi</button>'; return; }
+  if(!m){ sh.innerHTML = '<div style="font-size:17px;font-weight:700;margin-bottom:8px">Movimento non trovato</div><div style="font-size:14px;color:var(--ink3);line-height:1.45">Il movimento <b>'+esc(movId)+'</b> non esiste più nei movimenti bancari (forse l\'estratto conto è stato ricaricato). Il collegamento resta salvato: apri la fattura o lo stipendio collegato e ricollega il movimento giusto.</div><button onclick="document.getElementById(\'movSchedaMo\').remove()" style="margin-top:16px;width:100%;padding:13px;border:none;border-radius:12px;background:var(--sep);font-weight:700;font-size:15px">Chiudi</button>'; return; }
   try{
     stip = await sbFetch('presenze_bonifici_stipendio?movimento_banca_id=eq.'+encodeURIComponent(movId)+'&select=*') || [];
     if(stip.length){ var ps = await sbFetch('presenze_profili?select=id,nome,cognome&id=in.('+stip.map(function(r){return r.dipendente_id;}).join(',')+')') || []; ps.forEach(function(p){ dip[p.id] = p.nome+(p.cognome?' '+p.cognome:''); }); }
@@ -37553,9 +37691,15 @@ function ricvSddControllo(){
       var fa = A.docs.map(function(x){ return String(x.f.id); }), fb = B.docs.map(function(x){ return String(x.f.id); });
       if(fa.length && fb.length && !fa.some(function(id){ return fb.indexOf(id) >= 0; })) continue;
       var stessoGiorno = A.M.data === B.M.data, cB = B.cat || ((ricvCatM(B.M, RICV.ctx || {}) || {}).cat);
-      voci.push({ chiave: 'sdd_doppio|' + A.M.key + '|' + B.M.key, tipo: 'sdd_doppio', gravita: stessoGiorno && cB !== 'paypal' ? 'alta' : 'media', movs: [raw(A), raw(B)], S: B,
+      var _rA = raw(A), _rB = raw(B), _dop = null;
+      if(!(_rA.abbinata && _rB.abbinata)){
+        var _nasc = _rB.abbinata ? _rA : (_rA.abbinata ? _rB : (String(_rA.id) > String(_rB.id) ? _rA : _rB));
+        var _nt = function(t){ return String(t || '').replace(/\s+/g, ' ').trim().toUpperCase(); };
+        _dop = { id: _nasc.id, data: String(B.M.data).slice(0, 10), importo: +e, nexi: /nexi/i.test(String(_rA.descrizione || '') + String(_rB.descrizione || '')), stessoMandato: !!(ma && ma === mb), testoDiverso: _nt(_rA.descrizione) !== _nt(_rB.descrizione) };
+      }
+      voci.push({ chiave: 'sdd_doppio|' + A.M.key + '|' + B.M.key, tipo: 'sdd_doppio', doppione: _dop, etichettaOk: 'Sono due addebiti veri', gravita: stessoGiorno && cB !== 'paypal' ? 'alta' : 'media', movs: [raw(A), raw(B)], S: B,
         titolo: 'Addebito doppio? ' + nomeMov(B) + ' · 2 × ' + fmt(+e),
-        testo: (stessoGiorno ? 'Lo stesso giorno (' + ricGg(A.M.data) + ')' : 'Il ' + ricGg(A.M.data) + ' e il ' + ricGg(B.M.data)) + ' ' + nomeMov(B) + ' ha addebitato due volte ' + fmt(+e) + (ma && ma === mb ? ' con lo stesso mandato' : '') + '.' + (cB === 'paypal' ? ' Con PayPal possono essere due acquisti uguali: controlla in PayPal.' : '') + ' Guarda l\'estratto conto: se il secondo non c\'è, è stato importato due volte (eliminalo); se c\'è, chiedi il rimborso al fornitore.' });
+        testo: (stessoGiorno ? 'Lo stesso giorno (' + ricGg(A.M.data) + ')' : 'Il ' + ricGg(A.M.data) + ' e il ' + ricGg(B.M.data)) + ' ' + nomeMov(B) + ' ha addebitato due volte ' + fmt(+e) + (ma && ma === mb ? ' con lo stesso mandato' : '') + '.' + (cB === 'paypal' ? ' Con PayPal possono essere due acquisti uguali: controlla in PayPal.' : '') + (_dop && _dop.stessoMandato && _dop.testoDiverso ? ' Stesso mandato, stesso giorno e stesso importo ma con testo diverso: quasi certamente la banca ha cambiato la dicitura e il movimento è stato importato due volte.' : '') + ' Guarda l\'estratto conto: se il secondo non c\'è, tocca «È lo stesso movimento»; se c\'è, tocca «Sono due addebiti veri» (e chiedi il rimborso al fornitore se non erano dovuti).' });
     }
   });
   // 3) addebiti attesi e non arrivati: fatture SDD scadute che l'estratto conto copre
@@ -37583,7 +37727,168 @@ function ricvSddControllo(){
   }
   var R = { fino: fino, voci: voci };
   RICV._sdd = { C: C, R: R };
+  try{ if(typeof dopAutoRisolvi === 'function') setTimeout(dopAutoRisolvi, 0); }catch(e){}
   return R;
+}
+/* ── PayPal come "ponte" (07/11) ────────────────────────────────────────
+   La fattura si collega al conto che ha pagato davvero (addebito SDD in banca,
+   riga carta Nexi o saldo PayPal); la transazione PayPal dice solo A CHI. Qui:
+   · salvataggio su Supabase (tabella paypal_transazioni) di ogni transazione;
+   · collegamento automatico al conto di addebito quando è UNIVOCO: stesso importo
+     al centesimo, stessa banca/carta, nei 7 giorni dopo, e lo stesso numero di
+     transazioni e di addebiti (altrimenti non indovina: resta da scegliere);
+   · «Pagato con il saldo PayPal» se non c'è nessun addebito da collegare. */
+async function ppSalvaCloud(txs){
+  var righe = (txs || []).filter(function(t){ return t && t.id && t.data; }).map(function(t){
+    return { id: String(t.id), data: String(t.data).slice(0, 10), importo: +t.importo || 0, controparte_nome: t.controparteNome || null,
+      controparte_email: t.controparteEmail || null, nota: t.nota || null, codice_evento: t.codiceEvento || null, updated_at: new Date().toISOString() };
+  });
+  if(!righe.length) return 0;
+  await sbFetch('paypal_transazioni', { method: 'POST', headers: Object.assign({}, SB_H, { 'Prefer': 'resolution=merge-duplicates,return=minimal' }), body: JSON.stringify(righe) });
+  return await ppCollegaAddebiti(righe);
+}
+async function ppCollegaAddebiti(righe){
+  var addGg = function(g, n){ var d = new Date(String(g).slice(0, 10) + 'T12:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+  var uscite = (righe || []).filter(function(t){ return (+t.importo || 0) < 0; });
+  if(!uscite.length) return 0;
+  var ids = uscite.map(function(t){ return t.id; });
+  var gia = await sbFetch('paypal_transazioni?id=in.(' + ids.map(encodeURIComponent).join(',') + ')&select=id,addebito_tipo,addebito_confermato') || [];
+  var fatti = {}; gia.forEach(function(r){ if(r.addebito_tipo && r.addebito_confermato) fatti[r.id] = 1; });
+  var da = uscite.reduce(function(m, t){ return !m || t.data < m ? t.data : m; }, ''), a = addGg(uscite.reduce(function(m, t){ return t.data > m ? t.data : m; }, ''), 7);
+  var banca = await sbFetch('movimenti_banca?data=gte.' + da + '&data=lte.' + a + '&importo=lt.0&descrizione=ilike.*paypal*&ignorata=eq.false&select=id,data,importo') || [];
+  var carta = await sbFetch('movimenti_carta?data=gte.' + da + '&data=lte.' + a + '&importo=not.is.null&descrizione=ilike.*paypal*&ignorata=eq.false&select=id,data,importo') || [];
+  var gruppi = {}, n = 0;
+  uscite.forEach(function(t){ if(fatti[t.id]) return; var k = Math.abs(+t.importo).toFixed(2); (gruppi[k] = gruppi[k] || []).push(t); });
+  var salva = [];
+  Object.keys(gruppi).forEach(function(k){
+    var T = gruppi[k].sort(function(x, y){ return x.data < y.data ? -1 : 1; });
+    [['banca', banca.filter(function(m){ return Math.abs(Math.abs(+m.importo) - +k) < 0.005; })], ['carta', carta.filter(function(m){ return Math.abs(Math.abs(+m.importo) - +k) < 0.005; })]].some(function(par){
+      var M = par[1].sort(function(x, y){ return x.data < y.data ? -1 : 1; });
+      if(!M.length || M.length !== T.length) return false;
+      for(var i = 0; i < T.length; i++){ if(M[i].data < T[i].data || M[i].data > addGg(T[i].data, 7)) return false; }
+      T.forEach(function(t, i){ salva.push({ id: t.id, data: String(t.data).slice(0, 10), importo: +t.importo, addebito_tipo: par[0], addebito_id: String(M[i].id), addebito_confermato: true, updated_at: new Date().toISOString() }); });
+      return true;
+    });
+  });
+  if(salva.length){
+    await sbFetch('paypal_transazioni', { method: 'POST', headers: Object.assign({}, SB_H, { 'Prefer': 'resolution=merge-duplicates,return=minimal' }), body: JSON.stringify(salva) });
+    n = salva.length;
+  }
+  return n;
+}
+async function ppImpostaSaldo(movId){
+  try{
+    var ids = String(movId).replace(/^paypal:/, '').split('+');
+    var righe = await sbFetch('paypal_transazioni?id=in.(' + ids.map(encodeURIComponent).join(',') + ')&select=id,data,importo') || [];
+    if(!righe.length){ toast('⚠️ Sincronizza prima il mese in Cassa → PayPal'); return; }
+    await sbFetch('paypal_transazioni', { method: 'POST', headers: Object.assign({}, SB_H, { 'Prefer': 'resolution=merge-duplicates,return=minimal' }), body: JSON.stringify(righe.map(function(r){ return { id: r.id, data: r.data, importo: r.importo, addebito_tipo: 'saldo', addebito_id: null, addebito_confermato: true, updated_at: new Date().toISOString() }; })) });
+    toast('✓ Segnato: pagato con il saldo PayPal');
+    _movSchedaApri(movId);
+  }catch(e){ toast('❌ Non riuscito: ' + (e.message || e)); }
+}
+/* ── Controllo XML agganciato (07/11) ───────────────────────────────────
+   Un XML può finire su una fattura che non è la sua (es. GB FOOD ricomincia la
+   numerazione ogni anno: stesso numero nel 2025 e nel 2026). Il controllo è sul
+   contenuto, quindi vale qualunque sia la strada con cui l'XML è arrivato:
+   data dell'XML lontana più di 45 giorni dalla fattura, oppure totale diverso
+   (senza ritenuta d'acconto). Lo calcola la vista Supabase fatture_xml_controllo
+   (solo righe sospette, niente XML scaricati). */
+var _XMLC = { lista: null, caricando: false, t: 0 };
+async function xmlControlloCarica(){
+  if(_XMLC.caricando) return; _XMLC.caricando = true;
+  try{
+    var r = await sbFetch('fatture_xml_controllo?select=*');
+    _XMLC.lista = Array.isArray(r) ? r : []; _XMLC.t = Date.now();
+    try{ ricDatiCambiati(); }catch(e){}
+  }catch(e){ _XMLC.lista = _XMLC.lista || []; _XMLC.t = Date.now(); console.warn('controllo XML:', e); }
+  finally{ _XMLC.caricando = false; }
+}
+function xmlControlloVoci(){
+  if(_XMLC.lista === null || Date.now() - _XMLC.t > 6 * 3600 * 1000) setTimeout(xmlControlloCarica, 0);
+  var gg = function(d){ return d ? String(d).slice(8, 10) + '/' + String(d).slice(5, 7) + '/' + String(d).slice(0, 4) : '—'; };
+  var out = [];
+  (_XMLC.lista || []).forEach(function(x){
+    var f = (fatture || []).find(function(y){ return String(y.id) === String(x.id); });
+    if(!f || f.deletedAt) return;
+    var tot = +x.xml_totale || 0, reg = Math.abs(+f.importo || 0), nome = (typeof ricvBello === 'function' ? ricvBello(f.fornitore) : f.fornitore) + (f.numero ? ' n° ' + f.numero : '');
+    if(x.motivo === 'data'){
+      out.push({ chiave: 'xml_altro|' + x.id + '|data', tipo: 'xml_altro', gravita: 'alta', fatture: [f], xml: { id: x.id, motivo: 'data' },
+        titolo: 'L\'XML sembra di un\'altra fattura: ' + nome,
+        testo: 'La fattura è del ' + gg(f.data) + ' ma l\'XML collegato è del ' + gg(x.xml_data) + ' (totale ' + fmt(tot) + ', registrata ' + fmt(reg) + '). Di solito è una fattura con lo stesso numero di un altro anno. Stacca l\'XML sbagliato e riscarica quello giusto dal cassetto fiscale: importi e pagamenti non cambiano.' });
+    } else {
+      var pagata = f.stato === 'pagata' || f.stato === 'parziale';
+      out.push({ chiave: 'xml_altro|' + x.id + '|importo', tipo: 'xml_altro', gravita: reg < 0.01 ? 'alta' : 'media', fatture: [f], xml: { id: x.id, motivo: 'importo', totale: tot, puoiUsare: !pagata && f.tipo !== 'nota_credito' },
+        titolo: 'Importo diverso dall\'XML: ' + nome,
+        testo: 'Registrata ' + fmt(reg) + ', nell\'XML ' + fmt(tot) + '.' + (pagata ? ' È già segnata come pagata: controlla se c\'è uno sconto o un pagamento diverso prima di cambiarla.' : ' Se l\'XML è quello giusto, usa il suo importo.') });
+    }
+  });
+  return out;
+}
+async function _xmlStacca(fid){
+  var f = (fatture || []).find(function(y){ return String(y.id) === String(fid); }); if(!f) return;
+  if(!confirm('Stacco l\'XML dalla fattura ' + (f.fornitore || '') + ' n° ' + (f.numero || '') + '?\n\nImporti e pagamenti non cambiano. L\'XML giusto va riscaricato dal cassetto fiscale.')) return;
+  var ok = await dbUpdatePartial(f.id, { fattura_allegata: '', fattura_allegata_name: '' });
+  if(!ok){ toast('❌ Non riuscito'); return; }
+  f.fatturaAllegata = ''; f.fatturaAllegataName = '';
+  try{ localStorage.removeItem('cf_xml_' + f.id); }catch(e){}
+  _XMLC.lista = (_XMLC.lista || []).filter(function(x){ return String(x.id) !== String(fid); });
+  toast('✓ XML staccato');
+  try{ ricDatiCambiati(); await _anAggiornaHome(true); _anRenderFoglio(); }catch(e){}
+}
+async function _xmlUsaImporto(fid, tot){
+  var f = (fatture || []).find(function(y){ return String(y.id) === String(fid); }); if(!f || !(tot > 0)) return;
+  if(!confirm('Cambio l\'importo di ' + (f.fornitore || '') + ' n° ' + (f.numero || '') + ' da ' + fmt(Math.abs(+f.importo || 0)) + ' a ' + fmt(tot) + ' (importo dell\'XML)?\n\nSi può correggere di nuovo con Modifica.')) return;
+  var ok = await dbUpdatePartial(f.id, { importo: tot });
+  if(!ok){ toast('❌ Non riuscito'); return; }
+  f.importo = tot;
+  _XMLC.lista = (_XMLC.lista || []).filter(function(x){ return String(x.id) !== String(fid); });
+  toast('✓ Importo aggiornato');
+  try{ ricDatiCambiati(); await _anAggiornaHome(true); _anRenderFoglio(); }catch(e){}
+}
+/* ── Doppioni di addebito (07/11) ───────────────────────────────────────
+   Stesso addebito importato due volte (la banca cambia a volte la dicitura
+   e l'id nasce dal testo). Due vie, entrambe reversibili (il movimento
+   nascosto resta in "Ignorati" in Riconciliazione):
+   · automatica, SOLO con una prova indipendente: l'estratto della carta Nexi
+     dichiara un unico addebito di quell'importo in quella data;
+   · con un tocco, dall'avviso «Addebito doppio?». */
+var _DOP = { riep: null, tentati: {}, busy: false };
+async function _dopNascondi(id, motivo, auto){
+  try{
+    var r = await sbFetch('movimenti_banca?id=eq.' + encodeURIComponent(id) + '&select=*');
+    if(!r || !r[0]) throw new Error('movimento non trovato');
+    var m = _bancaNorm(r[0]);
+    if(m.abbinata && m.fatturaId) throw new Error('è collegato a una fattura: scollegalo prima');
+    m.ignorata = true; m.abbinata = false; m.fatturaId = null; m.fatturaLabel = ''; m.verificataBanca = false;
+    await salvaMovimentoBanca(m);
+    var oggi = new Date().toISOString().slice(0, 10).split('-').reverse().join('/');
+    var nota = ((r[0].note ? r[0].note + ' ' : '') + 'Doppione nascosto il ' + oggi + ': ' + motivo).trim();
+    await sbFetch('movimenti_banca?id=eq.' + encodeURIComponent(id), { method: 'PATCH', body: JSON.stringify({ note: nota }) });
+    toast(auto ? '✓ Doppione trovato e nascosto (lo trovi in «Ignorati»)' : '✓ Doppione nascosto — lo trovi in «Ignorati», ripristinabile');
+  }catch(e){
+    toast('❌ Non riuscito: ' + (e.message || e));
+    try{ if(typeof _registraErrore === 'function') _registraErrore('database', 'Nascondi doppione: ' + (e.message || e)); }catch(_e){}
+    return false;
+  }
+  try{ _anMovCache = null; }catch(e){}
+  try{ ricDatiCambiati(); }catch(e){}
+  try{ await _anAggiornaHome(true); _anRenderFoglio(); }catch(e){}
+  return true;
+}
+async function dopAutoRisolvi(){
+  if(_DOP.busy) return; _DOP.busy = true;
+  try{
+    var R = RICV && RICV._sdd && RICV._sdd.R; if(!R) return;
+    var voci = R.voci.filter(function(v){ return v.tipo === 'sdd_doppio' && v.doppione && v.doppione.nexi && !_DOP.tentati[v.chiave] && !_anIgnorataChiave(v.chiave); });
+    if(!voci.length) return;
+    if(!_DOP.riep){ _DOP.riep = await sbFetch('carta_estratti_riepilogo?select=totale_addebito_cc,data_addebito') || []; }
+    for(var i = 0; i < voci.length; i++){
+      var v = voci[i], d = v.doppione; _DOP.tentati[v.chiave] = 1;
+      var prove = _DOP.riep.filter(function(x){ return String(x.data_addebito).slice(0, 10) === d.data && Math.abs(+x.totale_addebito_cc - d.importo) < 0.02; });
+      if(prove.length === 1) await _dopNascondi(d.id, 'estratto Nexi: un solo addebito di ' + fmt(d.importo) + ' il ' + d.data.split('-').reverse().join('/'), true);
+    }
+  }catch(e){ console.warn('dopAutoRisolvi:', e); }
+  finally{ _DOP.busy = false; }
 }
 function ricvSddApriMov(key){ try{ _anChiudi(); }catch(e){} ricvVaiA(null); setTimeout(function(){ try{ ricvApri(key); }catch(e){} }, 500); }
 function ricvSddVoceHtml(a, ignorata){
@@ -37591,6 +37896,12 @@ function ricvSddVoceHtml(a, ignorata){
   var movRiga = function(m){ var key = ricMovKey(m.id); return '<button class="an-row" data-k="' + esc(key) + '" onclick="ricvSddApriMov(this.dataset.k)"><span class="an-row-ico">🏦</span><span class="an-row-main"><b>' + _anData(m.data) + ' · ' + fmt(Math.abs(m.importo || 0)) + '</b><span>' + esc(String(m.descrizione || '').slice(0, 110)) + '</span></span><span class="an-row-chev">›</span></button>'; };
   var righe = (a.fatture || []).map(_anRigaFattura).join('') + (a.movs || (a.mov ? [a.mov] : [])).map(movRiga).join('');
   var azione = a.tipo === 'sdd_estratto' ? '<button class="an-fix" style="margin-top:10px;width:100%;padding:11px" onclick="_anChiudi();ricvVaiA(null)">Vai alla riconciliazione per caricarlo</button>' : '';
+  if(a.tipo === 'xml_altro' && a.xml && !ignorata){
+    azione = a.xml.motivo === 'data'
+      ? '<button class="an-fix" style="margin-top:10px;width:100%;padding:11px" data-id="' + esc(String(a.xml.id)) + '" onclick="_xmlStacca(this.dataset.id)">Stacca l\'XML sbagliato</button>'
+      : (a.xml.puoiUsare ? '<button class="an-fix" style="margin-top:10px;width:100%;padding:11px" data-id="' + esc(String(a.xml.id)) + '" data-t="' + esc(String(a.xml.totale)) + '" onclick="_xmlUsaImporto(this.dataset.id,+this.dataset.t)">Usa l\'importo dell\'XML (' + fmt(a.xml.totale) + ')</button>' : '');
+  }
+  if(a.tipo === 'sdd_doppio' && a.doppione) azione = '<button class="an-fix" style="margin-top:10px;width:100%;padding:11px" data-id="' + esc(String(a.doppione.id)) + '" onclick="_dopNascondi(this.dataset.id,\'Confermato da te: stesso movimento importato due volte\')">È lo stesso movimento: nascondi il doppione</button>';
   return '<div class="an-item' + (ignorata ? ' an-item-ign' : '') + '"><div class="an-item-hd"><span class="an-pill ' + cls + '">' + lab + '</span><span class="an-item-t">' + esc(a.titolo) + '</span></div>' +
     '<div class="an-item-txt">' + esc(a.testo) + '</div>' + (righe ? '<div class="an-rows">' + righe + '</div>' : '') + (ignorata ? '' : azione) +
     (ignorata ? '<button class="an-ign" data-k="' + esc(a.chiave) + '" onclick="_anIgnora(this.dataset.k,false)">↺ Ripristina</button>'
@@ -38058,6 +38369,7 @@ var RICV_AN_BANCA = /^(beneficiario|pagamento_.*|riferimenti_disallineati|pagata
           fatture: [], movimenti: [], rischio: 0, etichettaOk: 'Lo guardo dopo' });
       }
       try{ ricvSddControllo().voci.forEach(function(v){ resto.push(v); }); }catch(e2){ console.warn('controllo SDD:', e2); }
+      try{ xmlControlloVoci().forEach(function(v){ resto.push(v); }); }catch(e3){ console.warn('controllo XML:', e3); }
       return resto;
     }catch(e){ console.warn('ric v2 anomalie:', e); return out; }
   };
@@ -38066,7 +38378,7 @@ var RICV_AN_BANCA = /^(beneficiario|pagamento_.*|riferimenti_disallineati|pagata
   if(typeof _anHtmlVoce !== 'function') return;
   var orig = _anHtmlVoce;
   _anHtmlVoce = function(a, ignorata){
-    if(a && /^sdd_/.test(a.tipo || '')) return ricvSddVoceHtml(a, ignorata);
+    if(a && (/^sdd_/.test(a.tipo || '') || a.tipo === 'xml_altro')) return ricvSddVoceHtml(a, ignorata);
     if(!a || a.tipo !== 'riconciliazione') return orig.apply(this, arguments);
     var cls = { alta: 'an-g-alta', media: 'an-g-media', bassa: 'an-g-bassa' }[a.gravita], lab = { alta: 'Importante', media: 'Da verificare', bassa: 'Da confermare' }[a.gravita];
     return '<div class="an-item' + (ignorata ? ' an-item-ign' : '') + '"><div class="an-item-hd"><span class="an-pill ' + cls + '">' + lab + '</span><span class="an-item-t">' + esc(a.titolo) + '</span></div>' +
