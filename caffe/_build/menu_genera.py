@@ -240,6 +240,36 @@ def json_js(o): return json.dumps(o, ensure_ascii=False, separators=(',', ':')).
 def url_lingua(sito, cod, codici):
     return sito + ('' if cod == codici[0] and cod == 'it' else cod + '/')
 
+# Etichetta della pagina nella lingua del menu (titolo, H1, anteprime): lingue senza voce → «Menu».
+ETICHETTA_MENU = {'it': 'Menu e prezzi', 'en': 'Menu and prices', 'fr': 'Carte et prix', 'de': 'Speisekarte und Preise', 'es': 'Carta y precios', 'pt': 'Menu e preços'}
+OG_LOCALE = {'it': 'it_IT', 'en': 'en_GB', 'fr': 'fr_FR', 'de': 'de_DE', 'es': 'es_ES', 'pt': 'pt_PT'}
+
+def pulisci_nome(n): return re.sub(r'\s*⏳.*$', '', str(n or '')).strip()  # come pulisci() del modello
+
+def titolo_sito(cod, d):
+    nome = d['locale'].get('nome') or ''
+    et = ETICHETTA_MENU.get(cod, 'Menu')
+    return (et + ' | ' + nome) if nome else et
+
+def corpo_statico(cod, d):
+    """Contenuto leggibile senza JavaScript dentro #app (titolo, sezioni, categorie, prodotti e prezzi):
+    è quello che leggono i motori di ricerca; il modello lo sostituisce subito con il menu interattivo."""
+    e = lambda s: str(s).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    pz = lambda c: (str(c // 100) if c % 100 == 0 else ('%.2f' % (c / 100)).replace('.', ',')) + ' €'
+    h = '<div class="gut" style="padding:24px 20px"><h1>%s</h1>' % e(titolo_sito(cod, d).replace(' | ', ' · '))
+    lo = d['locale']
+    info = ' · '.join(x for x in (lo.get('ind'), lo.get('orari')) if x)
+    if info: h += '<p>%s</p>' % e(info)
+    for s in d.get('sezioni', []):
+        h += '<h2>%s</h2>' % e(pulisci_nome(s.get('n')))
+        for c in s.get('c', []):
+            h += '<h3>%s</h3><ul>' % e(pulisci_nome(c.get('n')))
+            for v in c.get('v', []):
+                p = v.get('p')
+                h += '<li>%s%s</li>' % (e(pulisci_nome(v.get('n'))), (' — ' + pz(int(round(p)))) if isinstance(p, (int, float)) and p > 0 else '')
+            h += '</ul>'
+    return h + '</div>'
+
 def testa_sito(sito, cod, codici, d, valuta):
     ea = lambda s: str(s).replace('&', '&amp;').replace('"', '&quot;').replace('<', '&lt;')
     can = url_lingua(sito, cod, codici)
@@ -248,8 +278,15 @@ def testa_sito(sito, cod, codici, d, valuta):
         h += ''.join('<link rel="alternate" hreflang="%s" href="%s">' % (c, ea(url_lingua(sito, c, codici))) for c in codici)
         h += '<link rel="alternate" hreflang="x-default" href="%s">' % ea(url_lingua(sito, codici[0], codici))
     lo = d['locale']; nome = lo.get('nome') or 'Menu'
-    desc = ' · '.join(x for x in (nome, lo.get('ind'), lo.get('orari')) if x)
+    # descrizione diversa per lingua: etichetta e nomi delle sezioni sono già tradotti
+    sez = ', '.join(x for x in (pulisci_nome(s.get('n')) for s in d.get('sezioni', [])) if x)
+    desc = '%s — %s%s' % (nome, ETICHETTA_MENU.get(cod, 'Menu'), (': ' + sez) if sez else '')
+    desc = '. '.join(x for x in (desc, ' · '.join(x for x in (lo.get('ind'), lo.get('orari')) if x)) if x)
     h += '<meta name="description" content="%s">' % ea(desc[:300])
+    tit = titolo_sito(cod, d)
+    h += '<meta property="og:type" content="website"><meta property="og:url" content="%s"><meta property="og:title" content="%s"><meta property="og:description" content="%s">' % (ea(can), ea(tit), ea(desc[:300]))
+    if lo.get('nome'): h += '<meta property="og:site_name" content="%s">' % ea(lo['nome'])
+    if cod in OG_LOCALE: h += '<meta property="og:locale" content="%s">' % OG_LOCALE[cod]
     def voce(v):
         o = {'@type': 'MenuItem', 'name': v.get('n') or ''}
         if v.get('d'): o['description'] = v['d']
@@ -320,7 +357,7 @@ def main():
     for cod, d, DEF, cfg in pagine:
         css, link = tema_css(cfg)
         if a.caratteri and link: link = '<link rel="stylesheet" href="%s">' % a.caratteri.replace('"', '')
-        titolo = d['locale']['nome'] or 'Menu'
+        titolo = titolo_sito(cod, d) if a.sito else (d['locale']['nome'] or 'Menu')
         t = t0
         for k, v in (('__LANG__', cod), ('__TITOLO__', titolo.replace('<', '')), ('__FONT_LINK__', link), ('__TEMA_CSS__', css), ('__DATI__', json_js(d)), ('__DEF__', json_js(DEF))):
             t = t.replace('/*' + k + '*/null' if k in ('__DATI__', '__DEF__') else k, v)
@@ -330,6 +367,7 @@ def main():
         if a.sito:
             t = t.replace('<meta charset="utf-8">', '<meta charset="utf-8">' + testa_sito(a.sito, cod, codici, d, a.valuta), 1)
             t = t.replace('<body>', '<body>' + ritorno_sito(a.sito), 1)
+            t = t.replace('<div class="app" id="app"></div>', '<div class="app" id="app">' + corpo_statico(cod, d) + '</div>', 1)
         tmp = os.path.join(cart, 'index.html.tmp')
         open(tmp, 'w', encoding='utf-8').write(t); os.replace(tmp, os.path.join(cart, 'index.html'))
         print('ok: %s/index.html  lingua=%s sezioni=%d voci=%d pagine=%d momenti=%d' % (cart, cod, len(d['sezioni']), sum(len(c['v']) for s in d['sezioni'] for c in s['c']), len(d['pagine']), len(d['momenti'])))

@@ -950,6 +950,11 @@ def robots():
     return f"User-agent: *\nAllow: /\n\nSitemap: {BASE}sitemap.xml\n"
 
 if __name__ == "__main__":
+    import sys
+    if "--forza" not in sys.argv:  # dal 27/10/2026 il sito vive nel repository ceraldi-caffe (www.ceraldicaffe.it)
+        sys.exit("Il sito ora si genera nel repository ceraldi-caffe (_build/build.py), non qui.\n"
+                 "In questa cartella restano solo le pagine-ponte verso www.ceraldicaffe.it: rigenerarle qui\n"
+                 "rimetterebbe online la vecchia copia che fa concorrenza al sito ufficiale su Google.")
     scrivi("index.html", home("it"))
     scrivi("en/index.html", home("en"))
     scrivi("storie/index.html", indice_storie())

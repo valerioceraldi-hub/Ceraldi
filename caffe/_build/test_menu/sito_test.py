@@ -23,6 +23,15 @@ with tempfile.TemporaryDirectory() as t:
     voci = [v for s in ld.get('hasMenuSection', []) for c in s.get('hasMenuSection', []) for v in c.get('hasMenuItem', [])]
     ok('prodotti con prezzo in EUR', voci and all(v['offers']['priceCurrency'] == 'EUR' and re.match(r'^\d+\.\d\d$', v['offers']['price']) for v in voci if 'offers' in v))
     ok('link per tornare al sito', 'class="ritorno-sito" href="https://www.esempio.it/"' in it and '&lsaquo; esempio.it' in it)
+    tit = lambda h: re.search(r'<title>(.*?)</title>', h).group(1)
+    dsc = lambda h: re.search(r'<meta name="description" content="([^"]*)">', h).group(1)
+    ok('titolo con etichetta per lingua e diverso tra lingue', tit(it).startswith('Menu e prezzi') and tit(en).startswith('Menu and prices'))
+    ok('descrizione diversa tra lingue', dsc(it) != dsc(en))
+    ok('anteprime Open Graph', all(('property="og:%s"' % k) in it for k in ('title', 'description', 'url', 'type')))
+    body = it[it.find('<div class="app" id="app">'):]
+    ok('contenuto leggibile senza JavaScript (H1 + prodotti)', '<h1>' in body[:400] and body.count('<li>') >= len(voci) > 0)
+    subprocess.run([sys.executable, GEN, '--json', os.path.join(QUI, 'fix_ml.json'), '--out', os.path.join(t, 'y0'), '--tutte-le-lingue'], check=True, capture_output=True)
+    ok('senza --sito #app resta vuoto', '<div class="app" id="app"></div>' in open(os.path.join(t, 'y0', 'index.html'), encoding='utf-8').read())
     r = subprocess.run([sys.executable, GEN, '--json', os.path.join(QUI, 'fix.json'), '--out', os.path.join(t, 'x'), '--sito', 'http://esempio.it/'], capture_output=True, text=True)
     ok('rifiuta indirizzi non https', r.returncode != 0)
     r = subprocess.run([sys.executable, GEN, '--json', os.path.join(QUI, 'fix.json'), '--out', os.path.join(t, 'y')], check=True, capture_output=True)
