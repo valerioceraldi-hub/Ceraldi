@@ -4676,32 +4676,43 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
       <button class="sheet-cls" onclick="closeSheet('sh-cambioTurno')">&#x2715;</button>
     </div>
     <div class="sheet-body">
-      <div style="background:var(--accent-light);border-radius:12px;padding:12px;margin-bottom:16px;font-size:12px;color:var(--text);line-height:1.5">
-        Richiedi di scambiare un turno con un collega. La richiesta verrà inviata all'amministratore per l'approvazione.
+      <div class="field-lbl" style="margin-top:0">Cosa vuoi fare? *</div>
+      <div id="ct-tipi"></div>
+      <div id="ct-form" style="display:none">
+        <div id="ct-box-mio">
+          <div class="field-lbl" id="ct-lbl-mio">Il tuo turno *</div>
+          <select class="field-inp" id="ct-mio" style="appearance:auto" onchange="ctAggiorna()"></select>
+        </div>
+        <div id="ct-box-collega">
+          <div class="field-lbl" id="ct-lbl-collega">Collega *</div>
+          <select class="field-inp" id="ct-collega" style="appearance:auto" onchange="ctCollegaCambiato()"></select>
+        </div>
+        <div id="ct-box-suo">
+          <div class="field-lbl" id="ct-lbl-suo">Il turno del collega *</div>
+          <select class="field-inp" id="ct-suo" style="appearance:auto" onchange="ctAggiorna()"></select>
+        </div>
+        <div id="ct-riepilogo" style="display:none;background:var(--accent-light);border-radius:12px;padding:12px;margin:4px 0 14px;font-size:13px;line-height:1.55;color:var(--text)"></div>
+        <div class="field-lbl">Motivo / note <span style="color:var(--muted);font-weight:400">(opzionale)</span></div>
+        <textarea class="field-inp field-inp last" id="ct-note" rows="2" placeholder="Es. visita medica, impegno personale…" style="resize:vertical"></textarea>
       </div>
-      <div class="field-lbl">Data del turno da cambiare *</div>
-      <input class="field-inp" type="date" id="ct-data">
-      <div class="field-lbl">Collega con cui fare lo scambio *</div>
-      <select class="field-inp" id="ct-collega" style="appearance:auto">
-        <option value="">— seleziona collega —</option>
-      </select>
-      <div class="field-lbl">Fascia oraria del turno *</div>
-      <select class="field-inp" id="ct-fascia" style="appearance:auto">
-        <option value="">— seleziona fascia oraria —</option>
-        <option value="06:30-15:30">06:30 – 15:30</option>
-        <option value="07:30-15:30">07:30 – 15:30</option>
-        <option value="08:00-16:00">08:00 – 16:00</option>
-        <option value="09:00-19:00">09:00 – 19:00</option>
-        <option value="09:30-19:30">09:30 – 19:30</option>
-        <option value="10:00-20:00">10:00 – 20:00</option>
-        <option value="15:00-21:30">15:00 – 21:30</option>
-      </select>
-      <div class="field-lbl">Motivo / note <span style="color:var(--muted);font-weight:400">(opzionale)</span></div>
-      <textarea class="field-inp field-inp last" id="ct-note" rows="3" placeholder="Es. visita medica, impegno personale…" style="resize:vertical"></textarea>
       <div class="msg" id="ct-msg"></div>
     </div>
     <div class="sheet-foot">
       <button class="btn-primary" id="ct-btn" onclick="inviaRichiestaCambioTurno()" style="font-size:16px;padding:16px;background:#6d28d9">Invia richiesta</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── SHEET: novità sui turni (dipendente) ── -->
+<div class="overlay" id="sh-turni-novita">
+  <div class="sheet" style="max-height:88vh">
+    <div class="sheet-handle"></div>
+    <div class="sheet-hdr"><span class="sheet-title" id="tn-titolo" style="font-size:19px">🗓 Nuovi turni</span><button class="sheet-cls" onclick="closeSheet('sh-turni-novita')">&#x2715;</button></div>
+    <div class="sheet-body" id="tn-body"></div>
+    <div class="sheet-foot" style="display:flex;flex-direction:column;gap:8px">
+      <button class="btn-primary" id="tn-vai" onclick="tpNovitaVai(false)">Vedi i miei turni</button>
+      <button class="btn-secondary" onclick="tpNovitaVai(true)">🔄 Chiedi un cambio</button>
+      <button class="btn-secondary" onclick="closeSheet('sh-turni-novita')">Più tardi</button>
     </div>
   </div>
 </div>
@@ -9344,13 +9355,103 @@ async function tpDipRender() {
   box.innerHTML = sett.map(card).join('') + libHtml;
   // "visto": i turni pubblicati sono stati mostrati al dipendente
   for (const s of sett) {
-    if (!s.c.visto_il || (s.riconf && (!s.c.visto_il || s.c.visto_il < s.c.confermato_il))) {
+    const _dtV = x => x ? new Date(x).getTime() : 0;
+    if (!s.c.visto_il || s.tt.some(t => _dtV(t.modificato_il || t.pubblicato_il) > _dtV(s.c.visto_il)) || (s.riconf && (!s.c.visto_il || s.c.visto_il < s.c.confermato_il))) {
       const ora = new Date().toISOString();
       const { error } = await sb.from('presenze_turni_conferme').upsert({ dipendente_id: ME.id, settimana_inizio: s.L, visto_il: ora }, { onConflict: 'dipendente_id,settimana_inizio' });
       if (!error) certifica('visione', 'turni_visti', { silenzioso: true, tabella: 'presenze_turni', rif: s.L, dati: { turni: s.tt.map(t => t.data + ' ' + t.fascia_oraria + ' ' + t.reparto) } });
     }
   }
+  // Visti i turni: i cambi turno approvati finora non sono più "novità" e il numeretto si azzera
+  try { localStorage.setItem('ct_vista_' + ME.id, new Date().toISOString()); } catch (e) {}
+  tpNovitaInvalida();
+  try { aggiornaNavBadge(); } catch (e) {}
 }
+
+/* ── NOVITÀ SUI TURNI (dipendente): finestra + numeretto sul pulsante Turni ──
+   Novità = turni pubblicati o cambiati dopo l'ultima volta che il dipendente ha
+   aperto «Turni», cambi turno approvati che lo riguardano, e conferma turni
+   richiesta dall'admin. Non dipende dal link della notifica: appena l'app si
+   apre (o torna in primo piano) la finestra compare, ovunque ci si trovi. */
+let _tpNovitaCache = null;
+function tpNovitaInvalida() { _tpNovitaCache = null; }
+async function tpDipNovita(forza) {
+  const vuoto = { turni: [], cambi: [], daConf: false, n: 0 };
+  if (!ME || ME.ruolo === 'admin' || KIOSK) return vuoto;
+  if (!forza && _tpNovitaCache && Date.now() - _tpNovitaCache.t < 45000) return _tpNovitaCache.v;
+  const oggi = todayISO(), lun = lunediSettimana(0), lunProx = aggiungiGiorni(lun, 7), fine = aggiungiGiorni(lun, 13);
+  let marker = null; try { marker = localStorage.getItem('ct_vista_' + ME.id); } catch (e) {}
+  if (!marker) marker = new Date(Date.now() - 3 * 864e5).toISOString();
+  const [rT, rC, rA] = await Promise.all([
+    sb.from('presenze_turni').select('id,data,fascia_oraria,reparto,postazione,settimana_inizio,pubblicato_il,modificato_il').eq('dipendente_id', ME.id).eq('stato', 'pubblicato').gte('data', lun).lte('data', fine).order('data'),
+    sb.from('presenze_turni_conferme').select('*').eq('dipendente_id', ME.id).in('settimana_inizio', [lun, lunProx]),
+    sb.from('presenze_cambi_turno').select('id,tipo,nome_richiedente,nome_collega,richiedente_id,collega_id,applicato_il,riepilogo').eq('stato', 'approvata').or('richiedente_id.eq.' + ME.id + ',collega_id.eq.' + ME.id).gt('applicato_il', marker).order('applicato_il'),
+  ]);
+  if (rT.error) return vuoto;
+  const dt = x => x ? new Date(x).getTime() : 0;
+  const turni = []; let daConf = false;
+  [lun, lunProx].forEach(L => {
+    const tt = (rT.data || []).filter(t => t.settimana_inizio === L || lunediDi(t.data) === L);
+    if (!tt.length) return;
+    const c = (rC.data || []).find(x => x.settimana_inizio === L) || {};
+    const visto = dt(c.visto_il);
+    tt.forEach(t => { if (t.data >= oggi && (!visto || dt(t.pubblicato_il) > visto || dt(t.modificato_il) > visto)) turni.push(t); });
+    if (c.richiesta_il && c.conferma_richiesta !== false && tpStatoConferma(c, tt).daConf) daConf = true;
+  });
+  const cambi = rA.error ? [] : (rA.data || []);
+  const v = { turni, cambi, daConf, n: turni.length + cambi.length + (daConf && !turni.length && !cambi.length ? 1 : 0) };
+  _tpNovitaCache = { t: Date.now(), v };
+  return v;
+}
+function ctEffettoPerMe(c) {
+  const ri = c.riepilogo || {}, A = ri.turno_richiedente, B = ri.turno_collega, io = c.richiedente_id === ME.id;
+  const altro = io ? c.nome_collega : c.nome_richiedente;
+  if (c.tipo === 'scambio') return 'Scambio con ' + altro + ': ' + (io ? 'fai ' + ctDescr(B) + ' (non più ' + ctDescr(A) + ')' : 'fai ' + ctDescr(A) + ' (non più ' + ctDescr(B) + ')');
+  if (c.tipo === 'copertura') return io ? altro + ' fa al posto tuo ' + ctDescr(A) + ' (da recuperare)' : 'Fai tu ' + ctDescr(A) + ' al posto di ' + altro;
+  return io ? 'Recupero: fai tu ' + ctDescr(B) + ' al posto di ' + altro : altro + ' fa il tuo turno ' + ctDescr(B) + ' (recupero chiuso)';
+}
+async function tpDipMostraNovita(forza) {
+  if (!ME || ME.ruolo === 'admin' || KIOSK) return false;
+  let nv; try { nv = await tpDipNovita(true); } catch (e) { return false; }
+  if (!nv || !nv.n) return false;
+  const firma = nv.turni.map(t => t.id + ':' + (t.modificato_il || t.pubblicato_il)).join('|') + '#' + nv.cambi.map(c => c.id).join(',') + (nv.daConf ? '#conf' : '');
+  try { if (!forza && sessionStorage.getItem('tp_novita_' + ME.id) === firma) return false; } catch (e) {}
+  if (document.querySelector('.overlay.on')) return false; // un'altra finestra è aperta: si riprova al prossimo controllo
+  const dt = x => x ? new Date(x).getTime() : 0;
+  const modificati = nv.turni.some(t => t.modificato_il && dt(t.modificato_il) > dt(t.pubblicato_il));
+  $('tn-titolo').textContent = nv.cambi.length && !nv.turni.length ? '🔄 Cambio turno approvato' : (modificati ? '✏️ Turni modificati' : (nv.turni.length ? '🗓 Nuovi turni' : '✍️ Conferma i tuoi turni'));
+  let h = '';
+  if (nv.turni.length) {
+    h += '<div style="font-size:13px;color:var(--muted);margin-bottom:8px">' + (modificati ? 'Questi turni sono cambiati:' : 'Ti sono stati assegnati questi turni:') + '</div>'
+      + nv.turni.slice(0, 8).map(t => '<div style="padding:9px 12px;margin-bottom:6px;background:var(--bg);border-radius:10px;font-weight:700;font-size:14px">' + esc(ctDescr(t)) + '</div>').join('')
+      + (nv.turni.length > 8 ? '<div style="font-size:12px;color:var(--muted)">…e altri ' + (nv.turni.length - 8) + '</div>' : '');
+  }
+  if (nv.cambi.length) {
+    h += '<div style="font-size:13px;color:var(--muted);margin:' + (h ? '14px' : '0') + ' 0 8px">Cambio turno approvato:</div>'
+      + nv.cambi.map(c => '<div style="padding:9px 12px;margin-bottom:6px;background:rgba(109,40,217,.07);border-radius:10px;font-size:14px;line-height:1.45">' + esc(ctEffettoPerMe(c)) + '</div>').join('');
+  }
+  if (nv.daConf) h += '<div style="margin-top:12px;font-size:13px;font-weight:700;color:var(--accent)">✍️ L\u2019amministratore chiede di confermare i tuoi turni.</div>';
+  $('tn-body').innerHTML = h;
+  $('tn-vai').textContent = nv.daConf ? 'Vedi e conferma i turni' : 'Vedi i miei turni';
+  try { sessionStorage.setItem('tp_novita_' + ME.id, firma); } catch (e) {}
+  openSheet('sh-turni-novita');
+  return true;
+}
+function tpNovitaVai(cambio) {
+  closeSheet('sh-turni-novita');
+  switchPage('pg-turni-dip');
+  if (cambio) setTimeout(() => openSheetCambioTurno(), 350);
+}
+// App che torna in primo piano o turni cambiati mentre è aperta: aggiorna il numeretto e, se serve, apre la finestra
+let _tpNovitaUltimo = 0;
+function tpNovitaControlla(ritardo) {
+  if (!ME || ME.ruolo === 'admin' || KIOSK) return;
+  if (Date.now() - _tpNovitaUltimo < 15000) return;
+  _tpNovitaUltimo = Date.now();
+  tpNovitaInvalida();
+  setTimeout(async () => { try { await aggiornaNavBadge(); await tpDipMostraNovita(false); } catch (e) { console.warn('[novità turni]', e); } }, ritardo || 400);
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') tpNovitaControlla(600); });
 async function tpDipConferma(L) {
   const { data: tt } = await sb.from('presenze_turni').select('*').eq('dipendente_id', ME.id).eq('stato', 'pubblicato').gte('data', L).lte('data', aggiungiGiorni(L, 6)).order('data');
   const testo = 'Confermo di aver ricevuto e letto i miei turni della settimana ' + fmtSettimanaLbl(L) + ': ' + (tt || []).map(t => tpDescrTurno(t).split('\n')[0]).join('; ') + '.';
@@ -15624,9 +15725,10 @@ function statoBadgeCT(stato) {
 function renderCambioTurnoCard(c, isAdmin) {
   const dataLbl = new Date(c.data_turno).toLocaleDateString('it-IT',{day:'2-digit',month:'short',year:'numeric'});
   const titolo = isAdmin ? (c.nome_richiedente+' ↔ '+c.nome_collega) : ('Turno del '+dataLbl);
+  const tipoLbl = (CT_TIPI[c.tipo] ? CT_TIPI[c.tipo].nome + ' · ' : '');
   const sub = isAdmin
-    ? ('Turno del '+dataLbl+(c.fascia_oraria?' · '+c.fascia_oraria.replace('-',' – '):''))
-    : (c.fascia_oraria ? c.fascia_oraria.replace('-',' – ') : '');
+    ? (tipoLbl+'Turno del '+dataLbl+(c.fascia_oraria?' · '+c.fascia_oraria.replace('-',' – '):''))
+    : (tipoLbl + (c.fascia_oraria ? c.fascia_oraria.replace('-',' – ') : ''));
   const richiedeAzioneCollega = !isAdmin && c.stato === 'attesa_collega' && c.collega_id === ME.id;
   const bordo = richiedeAzioneCollega ? 'border:1.5px solid #6d28d9;background:rgba(109,40,217,.04)' : '';
   return `<div class="card" style="margin-bottom:10px;cursor:pointer;${bordo}" onclick="openDettaglioCambioTurno('${c.id}',${isAdmin})">
@@ -15644,9 +15746,43 @@ function renderCambioTurnoCard(c, isAdmin) {
   </div>`;
 }
 
+// Turni collegati a una richiesta (da presenze_turni; se non ci sono più, la copia salvata all'approvazione)
+async function ctCaricaTurniCambio(c) {
+  const out = { A: null, B: null };
+  const ids = [c.turno_richiedente_id, c.turno_collega_id].filter(Boolean);
+  if (ids.length) {
+    const { data } = await sb.from('presenze_turni').select('id,data,fascia_oraria,reparto,postazione,dipendente_id').in('id', ids);
+    (data || []).forEach(t => { if (t.id === c.turno_richiedente_id) out.A = t; if (t.id === c.turno_collega_id) out.B = t; });
+  }
+  const ri = c.riepilogo || {};
+  if (!out.A && ri.turno_richiedente) out.A = ri.turno_richiedente;
+  if (!out.B && ri.turno_collega) out.B = ri.turno_collega;
+  return out;
+}
+function ctBloccoEffetto(c, t) {
+  const nr = esc(c.nome_richiedente), nc = esc(c.nome_collega);
+  const riga = (chi, cosa, dove) => '<div style="margin-bottom:8px"><div style="font-size:12px;color:var(--muted)">' + chi + '</div><div style="font-weight:700">' + cosa + '</div>' + (dove ? '<div style="font-size:13px;color:var(--accent);font-weight:600">' + dove + '</div>' : '') + '</div>';
+  let h = '';
+  if (c.tipo === 'scambio' && t.A && t.B) {
+    h = riga(nr + ' lascia', esc(ctDescr(t.A)), '→ lo fa ' + nc) + riga(nc + ' lascia', esc(ctDescr(t.B)), '→ lo fa ' + nr);
+  } else if (c.tipo === 'copertura' && t.A) {
+    h = riga(nr + ' non fa', esc(ctDescr(t.A)), '→ lo fa ' + nc) + '<div style="font-size:12px;color:var(--muted)">' + (c.stato === 'approvata' ? (c.recupero_aperto ? '⏳ ' + nr + ' deve ancora recuperare' : '✓ Recuperato') : nr + ' lo recupererà in un altro giorno') + '</div>';
+  } else if (c.tipo === 'recupero' && t.B) {
+    h = riga(nr + ' fa', esc(ctDescr(t.B)), 'al posto di ' + nc + ' (chiude il recupero)');
+  } else {
+    const dataLbl = new Date(c.data_turno).toLocaleDateString('it-IT', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+    h = '<div style="font-size:12px;color:var(--muted);margin-bottom:4px">Data del turno</div><div style="font-weight:700;text-transform:capitalize">' + dataLbl + '</div>'
+      + (c.fascia_oraria ? '<div style="font-size:12px;color:var(--muted);margin-top:8px">Fascia oraria</div><div style="font-weight:700">' + c.fascia_oraria.replace('-', ' – ') + '</div>' : '')
+      + '<div style="font-size:12px;color:var(--muted);margin-top:8px">Richiesta vecchia: i turni non sono collegati, vanno sistemati a mano.</div>';
+  }
+  const av = c.riepilogo && c.riepilogo.avvisi && c.riepilogo.avvisi.length ? '<div style="font-size:12px;color:var(--yellow);margin-top:6px">⚠ ' + c.riepilogo.avvisi.map(esc).join('; ') + '</div>' : '';
+  return '<div style="background:var(--bg);border-radius:12px;padding:14px;margin-bottom:14px"><div style="font-size:12px;font-weight:800;margin-bottom:8px">COSA CAMBIA</div>' + h + av + '</div>';
+}
+
 async function openDettaglioCambioTurno(id, isAdmin) {
   const c = await DB.safe(() => DB.cambiTurno.byId(id), 'Impossibile caricare il cambio turno');
   if (!c) return;
+  const ctT = await ctCaricaTurniCambio(c);
   const dataLbl = new Date(c.data_turno).toLocaleDateString('it-IT',{weekday:'long',day:'2-digit',month:'long',year:'numeric'});
 
   $('sh-ct-body').innerHTML = `
@@ -15654,15 +15790,11 @@ async function openDettaglioCambioTurno(id, isAdmin) {
       <span style="font-size:40px">🔄</span>
       <div style="flex:1">
         <div style="font-size:18px;font-weight:800">${esc(c.nome_richiedente)} ↔ ${esc(c.nome_collega)}</div>
-        <div style="font-size:13px;color:var(--muted)">Richiesta di scambio turno</div>
+        <div style="font-size:13px;color:var(--muted)">${esc(CT_TIPI[c.tipo] ? CT_TIPI[c.tipo].nome : 'Cambio turno')}</div>
       </div>
       ${statoBadgeCT(c.stato)}
     </div>
-    <div style="background:var(--bg);border-radius:12px;padding:14px;margin-bottom:14px">
-      <div style="font-size:12px;color:var(--muted);margin-bottom:4px">Data del turno</div>
-      <div style="font-weight:700;text-transform:capitalize">${dataLbl}</div>
-      ${c.fascia_oraria ? '<div style="font-size:12px;color:var(--muted);margin-top:8px">Fascia oraria</div><div style="font-weight:700">'+c.fascia_oraria.replace('-',' – ')+'</div>' : ''}
-    </div>
+    ${ctBloccoEffetto(c, ctT)}
     <div style="background:var(--bg);border-radius:12px;padding:14px;margin-bottom:14px">
       <div style="font-size:12px;color:var(--muted);margin-bottom:4px">Richiedente</div>
       <div style="font-weight:700">${esc(c.nome_richiedente)}</div>
@@ -15762,25 +15894,62 @@ async function eliminaCambioTurno(id) {
 
 async function rispondiCambioTurno(id, esito) {
   closeSheet('sh-dettaglioCambioTurno');
+  if (esito === 'approvata') {
+    // L'approvazione SPOSTA davvero i turni (funzione del database, tutto o niente):
+    // se i turni nel frattempo sono cambiati, o c'è un conflitto, non tocca nulla.
+    const { data: r, error } = await sb.rpc('presenze_cambio_turno_applica', { p_id: id });
+    if (error || !r || !r.ok) {
+      alert('Cambio turno NON applicato:\n\n' + ((error && error.message) || 'errore sconosciuto') + '\n\nI turni non sono stati toccati.');
+      caricaCambiTurnoAdmin();
+      return;
+    }
+    try { await ctNotificaApprovazione(id, r); } catch (e) { console.warn('notifica cambio turno:', e); }
+    toast(r.avvisi && r.avvisi.length ? '✓ Cambio turno applicato — attenzione: ' + r.avvisi.join('; ') : '✓ Cambio turno approvato: turni aggiornati');
+    try { if (typeof aggiornaNavBadge === 'function') aggiornaNavBadge(); } catch (e) {}
+    try { if (typeof TP !== 'undefined' && TP && TP.lun && typeof tpCarica === 'function') tpCarica(); } catch (e) {}
+    caricaCambiTurnoAdmin();
+    return;
+  }
   const ok = await DB.safe(
     () => DB.cambiTurno.rispondi(id, { stato: esito, risposto_il: new Date().toISOString() }),
     'Errore durante il salvataggio'
   );
   if (!ok) return;
-  // Notifica entrambi i dipendenti coinvolti
   try {
     const c = await DB.cambiTurno.byId(id);
     if (c) {
-      const dataLbl = new Date(c.data_turno).toLocaleDateString('it-IT',{day:'2-digit',month:'long'});
-      const esitoLbl = esito === 'approvata' ? '✅ approvato' : '❌ rifiutato';
-      const fasciaTxt = c.fascia_oraria ? ' (fascia '+c.fascia_oraria.replace('-',' – ')+')' : '';
-      const msg = '🔄 <b>Cambio turno '+esitoLbl+'</b>\n\nIl cambio turno del '+dataLbl+fasciaTxt+' tra te e il collega è stato '+esitoLbl+' dall\'amministratore.';
-      await inviaNotificaDipendente(c.richiedente_id, msg);
-      await inviaNotificaDipendente(c.collega_id, msg);
+      const msg = '🔄 <b>Cambio turno ❌ rifiutato</b>\n\nLa richiesta di cambio turno ('
+        + escTG(ctDescr({ data: c.data_turno, fascia_oraria: c.fascia_oraria })) + ') tra ' + escTG(c.nome_richiedente) + ' e ' + escTG(c.nome_collega)
+        + ' è stata rifiutata dall\'amministratore. I turni restano come prima.';
+      const meta = { tabella: 'presenze_cambi_turno', rif: id, tipo: 'cambio_turno' };
+      await inviaNotificaDipendente(c.richiedente_id, msg, '#turni', meta);
+      await inviaNotificaDipendente(c.collega_id, msg, '#turni', meta);
     }
-  } catch(e) { console.warn('notifica cambio turno:', e); }
-  toast(esito === 'approvata' ? '✓ Cambio turno approvato' : 'Cambio turno rifiutato');
+  } catch (e) { console.warn('notifica cambio turno:', e); }
+  toast('Cambio turno rifiutato');
   caricaCambiTurnoAdmin();
+}
+
+// Dopo l'approvazione: ognuno dei due riceve il proprio effetto, con il link alla sezione Turni
+async function ctNotificaApprovazione(id, r) {
+  const A = r.turno_richiedente, B = r.turno_collega;
+  const nr = escTG(r.nome_richiedente), nc = escTG(r.nome_collega);
+  let perReq, perCol;
+  if (r.tipo === 'scambio') {
+    perReq = 'Non fai più: ' + escTG(ctDescr(A)) + '\nFai invece: ' + escTG(ctDescr(B)) + ' (era di ' + nc + ')';
+    perCol = 'Non fai più: ' + escTG(ctDescr(B)) + '\nFai invece: ' + escTG(ctDescr(A)) + ' (era di ' + nr + ')';
+  } else if (r.tipo === 'copertura') {
+    perReq = 'Non fai: ' + escTG(ctDescr(A)) + ' — lo fa ' + nc + '.\nResta da recuperare: quando vuoi, da Turni → Cambio turno → «Recupero».';
+    perCol = 'Fai tu: ' + escTG(ctDescr(A)) + ' al posto di ' + nr + '.\n' + nr + ' lo recupererà in un altro giorno.';
+  } else {
+    perReq = 'Fai tu: ' + escTG(ctDescr(B)) + ' al posto di ' + nc + '.\nIl recupero è chiuso: siete pari.';
+    perCol = 'Non fai: ' + escTG(ctDescr(B)) + ' — lo fa ' + nr + ' (recupero).\nIl recupero è chiuso: siete pari.';
+  }
+  const intest = '🔄 <b>Cambio turno ✅ approvato</b>\n\n';
+  const coda = '\n\nI tuoi turni in app sono già aggiornati.';
+  const meta = { tabella: 'presenze_cambi_turno', rif: id, tipo: 'cambio_turno' };
+  await inviaNotificaDipendente(r.richiedente_id, intest + perReq + coda, '#turni', meta);
+  await inviaNotificaDipendente(r.collega_id, intest + perCol + coda, '#turni', meta);
 }
 
 async function caricaAssenzeDip() {
@@ -16530,100 +16699,200 @@ async function inviaRichiestaAssenza() {
 }
 
 /* ═══════ CAMBIO TURNO TRA COLLEGHI ═══════ */
+/* ══════════════════════════════════════════════════════════════════
+   CAMBIO TURNO — collegato ai turni veri (scambio / scendi tu / recupero)
+   La richiesta punta a turni reali (presenze_turni). Alla approvazione
+   dell'admin la funzione del database presenze_cambio_turno_applica li
+   sposta davvero, quindi timbrature, promemoria e riepiloghi restano giusti.
+   ══════════════════════════════════════════════════════════════════ */
+const _CT = { tipo: null, miei: [], tutti: [], colleghi: [], debiti: [], occupati: new Set() };
+const CT_TIPI = {
+  scambio:   { icona: '🔄', nome: 'Scambio',               desc: 'Io faccio il turno di un collega e lui fa il mio' },
+  copertura: { icona: '🙏', nome: 'Scendi tu al posto mio', desc: 'Un collega fa il mio turno; io lo recupero in un altro giorno' },
+  recupero:  { icona: '↩️', nome: 'Recupero',              desc: 'Ora scendo io al posto di un collega che mi aveva coperto' },
+};
+function ctSezione(t) {
+  if (!t) return '';
+  return t.reparto === 'sala' ? 'Sala' : t.postazione === 'pasticceria' ? 'Banco Pasticceria' : t.postazione === 'bar' ? 'Banco Bar'
+    : (t.reparto ? t.reparto.charAt(0).toUpperCase() + t.reparto.slice(1) : '');
+}
+function ctDescr(t) { // "Sabato 15 novembre · 15:00–21:30 · Sala"
+  if (!t) return '—';
+  const f = String(t.fascia_oraria || t.fascia || '');
+  const d = new Date(String(t.data).slice(0, 10) + 'T12:00:00').toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long' });
+  return d.charAt(0).toUpperCase() + d.slice(1) + (f ? ' · ' + f.replace('-', '–') : '') + (ctSezione(t) ? ' · ' + ctSezione(t) : '');
+}
+function ctOpzioni(sel, righe, placeholder) {
+  sel.innerHTML = '<option value="">' + placeholder + '</option>';
+  righe.forEach(r => { const o = document.createElement('option'); o.value = r.value; o.textContent = r.testo; sel.appendChild(o); });
+}
+
 async function openSheetCambioTurno() {
-  // FIX: prima, se una qualsiasi di queste righe falliva (elemento non
-  // trovato, ME non ancora pronto, errore di rete sui colleghi), la
-  // funzione si interrompeva silenziosamente PRIMA di aprire la sheet —
-  // il pulsante sembrava "morto" senza nessun errore visibile. Ora tutto
-  // è protetto e la sheet si apre comunque, con un messaggio se qualcosa
-  // non è andato a buon fine nel caricare i colleghi.
-  try {
-    $('ct-data').value = todayISO();
-    $('ct-note').value = '';
-    $('ct-fascia').value = '';
-    hideMsg('ct-msg');
-  } catch (e) {
-    console.error('openSheetCambioTurno - reset campi:', e);
-  }
-  // Popola elenco colleghi (esclude se stesso)
-  const sel = $('ct-collega');
-  if (sel) sel.innerHTML = '<option value="">— seleziona collega —</option>';
+  _CT.tipo = null;
+  try { $('ct-note').value = ''; hideMsg('ct-msg'); } catch (e) { console.error('openSheetCambioTurno - reset:', e); }
+  $('ct-form').style.display = 'none';
+  $('ct-btn').disabled = true;
+  $('ct-tipi').innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  openSheet('sh-cambioTurno');
   try {
     if (!ME || !ME.id) throw new Error('Profilo non ancora caricato, riprova tra un istante');
-    const { data: tuttiColleghi, error: colErr } = await sb.rpc('presenze_colleghi');
-    if (colErr) throw new Error(colErr.message);
-    const colleghi = (tuttiColleghi||[]).filter(c => c.ruolo === 'dipendente' && c.attivo && c.id !== ME.id);
-    (colleghi||[]).forEach(c => {
-      const opt = document.createElement('option');
-      opt.value = c.id;
-      opt.textContent = (c.nome||'')+(c.cognome?' '+c.cognome:'');
-      sel.appendChild(opt);
-    });
-  } catch(e) {
-    console.warn('colleghi:', e);
-    showMsg('ct-msg', 'Non riesco a caricare l\u2019elenco colleghi: ' + e.message, 'err');
+    const [rT, rC, rD, rP] = await Promise.all([
+      sb.from('presenze_turni').select('id,dipendente_id,data,fascia_oraria,reparto,postazione').eq('stato', 'pubblicato').not('dipendente_id', 'is', null).gte('data', todayISO()).order('data').order('fascia_oraria'),
+      sb.rpc('presenze_colleghi'),
+      sb.from('presenze_cambi_turno').select('*').eq('richiedente_id', ME.id).eq('tipo', 'copertura').eq('stato', 'approvata').eq('recupero_aperto', true).order('data_turno'),
+      sb.from('presenze_cambi_turno').select('turno_richiedente_id,turno_collega_id').eq('stato', 'attesa_admin'),
+    ]);
+    if (rT.error) throw new Error(rT.error.message);
+    if (rC.error) throw new Error(rC.error.message);
+    _CT.tutti = rT.data || [];
+    _CT.miei = _CT.tutti.filter(t => t.dipendente_id === ME.id);
+    _CT.colleghi = (rC.data || []).filter(c => c.ruolo === 'dipendente' && c.attivo && c.id !== ME.id);
+    _CT.debiti = rD.data || [];
+    _CT.occupati = new Set();
+    (rP.data || []).forEach(x => { if (x.turno_richiedente_id) _CT.occupati.add(x.turno_richiedente_id); if (x.turno_collega_id) _CT.occupati.add(x.turno_collega_id); });
+  } catch (e) {
+    console.warn('cambio turno - caricamento:', e);
+    $('ct-tipi').innerHTML = '';
+    showMsg('ct-msg', 'Non riesco a caricare i turni: ' + e.message, 'err');
+    return;
   }
-  openSheet('sh-cambioTurno');
+  $('ct-tipi').innerHTML = Object.keys(CT_TIPI).map(k => {
+    const t = CT_TIPI[k];
+    const off = (k === 'recupero' && !_CT.debiti.length) || (k !== 'recupero' && !_CT.miei.length);
+    const nota = k === 'recupero' && !_CT.debiti.length ? 'Nessun turno da recuperare al momento'
+      : (k !== 'recupero' && !_CT.miei.length ? 'Non hai turni pubblicati da oggi in poi' : t.desc);
+    return '<div id="ct-tipo-' + k + '" onclick="' + (off ? '' : "ctScegli('" + k + "')") + '" style="display:flex;gap:12px;align-items:center;padding:12px;margin-bottom:8px;border:1.5px solid var(--border);border-radius:12px;background:var(--surface);' + (off ? 'opacity:.45' : 'cursor:pointer') + '">'
+      + '<span style="font-size:26px">' + t.icona + '</span><div><div style="font-weight:800;font-size:15px">' + t.nome + '</div><div style="font-size:12px;color:var(--muted);line-height:1.4">' + nota + '</div></div></div>';
+  }).join('');
+}
+
+function ctScegli(tipo) {
+  _CT.tipo = tipo;
+  Object.keys(CT_TIPI).forEach(k => { const el = $('ct-tipo-' + k); if (el) { el.style.borderColor = k === tipo ? '#6d28d9' : 'var(--border)'; el.style.background = k === tipo ? 'rgba(109,40,217,.07)' : 'var(--surface)'; } });
+  $('ct-form').style.display = 'block';
+  hideMsg('ct-msg');
+  const libero = t => !_CT.occupati.has(t.id);
+  $('ct-box-mio').style.display = tipo === 'recupero' ? 'none' : 'block';
+  $('ct-box-suo').style.display = tipo === 'copertura' ? 'none' : 'block';
+  if (tipo === 'scambio') {
+    $('ct-lbl-mio').textContent = 'Il TUO turno (quello che lasci) *';
+    $('ct-lbl-collega').textContent = 'Collega con cui scambi *';
+    $('ct-lbl-suo').textContent = 'Il turno del COLLEGA (quello che prendi tu) *';
+  } else if (tipo === 'copertura') {
+    $('ct-lbl-mio').textContent = 'Il TUO turno che non farai *';
+    $('ct-lbl-collega').textContent = 'Collega che scende al posto tuo *';
+  } else {
+    $('ct-lbl-collega').textContent = 'Quale recupero fai? *';
+    $('ct-lbl-suo').textContent = 'Il turno del collega che fai tu *';
+  }
+  ctOpzioni($('ct-mio'), _CT.miei.filter(libero).map(t => ({ value: t.id, testo: ctDescr(t) })), '— scegli il tuo turno —');
+  if (tipo === 'recupero') {
+    ctOpzioni($('ct-collega'), _CT.debiti.map(d => ({ value: d.id, testo: d.nome_collega + ' — ti ha coperto: ' + ctDescr({ data: d.data_turno, fascia_oraria: d.fascia_oraria }) })), '— scegli —');
+  } else {
+    ctOpzioni($('ct-collega'), _CT.colleghi.map(c => ({ value: c.id, testo: (c.nome || '') + (c.cognome ? ' ' + c.cognome : '') })), '— scegli il collega —');
+  }
+  ctOpzioni($('ct-suo'), [], tipo === 'copertura' ? '' : '— prima scegli il collega —');
+  ctAggiorna();
+}
+
+function ctCollegaDaSelezione() { // id del collega scelto (per il recupero la scelta è la copertura da recuperare)
+  const v = $('ct-collega').value;
+  if (!v) return null;
+  if (_CT.tipo === 'recupero') { const d = _CT.debiti.find(x => x.id === v); return d ? d.collega_id : null; }
+  return v;
+}
+function ctCollegaCambiato() {
+  const cid = ctCollegaDaSelezione();
+  if (_CT.tipo !== 'copertura') {
+    const suoi = cid ? _CT.tutti.filter(t => t.dipendente_id === cid && !_CT.occupati.has(t.id)) : [];
+    ctOpzioni($('ct-suo'), suoi.map(t => ({ value: t.id, testo: ctDescr(t) })), cid ? (suoi.length ? '— scegli il suo turno —' : 'Questo collega non ha turni da oggi in poi') : '— prima scegli il collega —');
+  }
+  ctAggiorna();
+}
+function ctNomeCollega() {
+  const cid = ctCollegaDaSelezione();
+  if (!cid) return '';
+  const c = _CT.colleghi.find(x => x.id === cid);
+  if (c) return (c.nome || '') + (c.cognome ? ' ' + c.cognome : '');
+  const d = _CT.debiti.find(x => x.collega_id === cid);
+  return d ? d.nome_collega : '';
+}
+function ctAggiorna() {
+  const box = $('ct-riepilogo'), btn = $('ct-btn');
+  const A = _CT.tutti.find(t => t.id === $('ct-mio').value), B = _CT.tutti.find(t => t.id === $('ct-suo').value);
+  const nome = ctNomeCollega(), t = _CT.tipo;
+  let righe = [], pronto = false;
+  if (t === 'scambio' && A && B && nome) {
+    righe = ['<b>Tu</b> non fai: ' + esc(ctDescr(A)) + ' → lo fa <b>' + esc(nome) + '</b>', '<b>' + esc(nome) + '</b> non fa: ' + esc(ctDescr(B)) + ' → lo fai <b>tu</b>']; pronto = true;
+  } else if (t === 'copertura' && A && nome) {
+    righe = ['<b>Tu</b> non fai: ' + esc(ctDescr(A)) + ' → lo fa <b>' + esc(nome) + '</b>', 'Poi lo recuperi tu in un altro giorno: dopo l’approvazione torni qui e scegli «Recupero».']; pronto = true;
+  } else if (t === 'recupero' && B && nome) {
+    righe = ['<b>Tu</b> fai: ' + esc(ctDescr(B)) + ' al posto di <b>' + esc(nome) + '</b>', 'Così il recupero è chiuso: siete pari.']; pronto = true;
+  }
+  if (pronto) { box.innerHTML = righe.join('<br>') + '<br><span style="color:var(--muted);font-size:12px">Decide l’amministratore. Finché non approva, i turni restano come sono.</span>'; box.style.display = 'block'; } else { box.style.display = 'none'; }
+  btn.disabled = !pronto;
 }
 
 async function inviaRichiestaCambioTurno() {
-  const data = $('ct-data').value;
-  const collegaId = $('ct-collega').value;
-  const fascia = $('ct-fascia').value;
+  const tipo = _CT.tipo;
+  if (!tipo) { showMsg('ct-msg', 'Scegli cosa vuoi fare', 'err'); return; }
+  const collegaId = ctCollegaDaSelezione();
+  const A = (tipo !== 'recupero') ? _CT.tutti.find(t => t.id === $('ct-mio').value) : null;
+  const B = (tipo !== 'copertura') ? _CT.tutti.find(t => t.id === $('ct-suo').value) : null;
+  const origine = tipo === 'recupero' ? _CT.debiti.find(d => d.id === $('ct-collega').value) : null;
+  if (!collegaId) { showMsg('ct-msg', 'Scegli il collega', 'err'); return; }
+  if (tipo !== 'recupero' && !A) { showMsg('ct-msg', 'Scegli il tuo turno', 'err'); return; }
+  if (tipo !== 'copertura' && !B) { showMsg('ct-msg', 'Scegli il turno del collega', 'err'); return; }
   const note = $('ct-note').value.trim();
-  if (!data)      { showMsg('ct-msg','Seleziona la data del turno','err'); return; }
-  if (!collegaId) { showMsg('ct-msg','Seleziona il collega con cui scambiare','err'); return; }
-  if (!fascia)    { showMsg('ct-msg','Seleziona la fascia oraria del turno','err'); return; }
+  const nomeRichiedente = ME.nome + (ME.cognome ? ' ' + ME.cognome : '');
+  const nomeCollega = ctNomeCollega() || '—';
+  const riferimento = A || B; // turno che compare nelle liste (data e fascia)
 
-  const { data: _colleghiTutti } = await sb.rpc('presenze_colleghi');
-  const collega = (_colleghiTutti||[]).find(c => c.id === collegaId) || null;
-  const nomeRichiedente = ME.nome + (ME.cognome ? ' '+ME.cognome : '');
-  const nomeCollega = collega ? (collega.nome||'')+(collega.cognome?' '+collega.cognome:'') : '—';
-
-  const _testoCT2 = 'Chiedo di scambiare con ' + nomeCollega + ' il turno del ' + _dataRich(data) + ' (' + fascia.replace('-', '–') + ')' + (note ? '. Note: ' + note : '') + '.';
+  let _testoCT2;
+  if (tipo === 'scambio') _testoCT2 = 'Chiedo di scambiare con ' + nomeCollega + ': io non faccio ' + ctDescr(A) + ' (lo fa lui/lei), io faccio ' + ctDescr(B) + '.';
+  else if (tipo === 'copertura') _testoCT2 = 'Chiedo che ' + nomeCollega + ' faccia al posto mio ' + ctDescr(A) + '. Lo recupererò in un altro giorno.';
+  else _testoCT2 = 'Recupero: faccio io ' + ctDescr(B) + ' al posto di ' + nomeCollega + ', che mi aveva coperto.';
+  if (note) _testoCT2 += ' Note: ' + note + '.';
   const _firmaCT2 = await firmaRichiesta('richiesta_cambio_turno', 'presenze_cambi_turno', _testoCT2);
   if (_firmaCT2 === false) return;
 
   const btn = $('ct-btn');
   btn.disabled = true; btn.textContent = 'Invio in corso…';
-
   let insertErr = null;
   try {
     await DB.cambiTurno.insert({
       richiedente_id: ME.id, nome_richiedente: nomeRichiedente,
       collega_id: collegaId, nome_collega: nomeCollega,
-      data_turno: data, fascia_oraria: fascia, note: note || null,
+      data_turno: String(riferimento.data).slice(0, 10), fascia_oraria: riferimento.fascia_oraria, note: note || null,
+      tipo, turno_richiedente_id: A ? A.id : null, turno_collega_id: B ? B.id : null, origine_id: origine ? origine.id : null,
       stato: 'attesa_admin'
     });
   } catch (e) { insertErr = e; }
-
   if (insertErr) {
-    const msgErr = insertErr.message.includes('schema cache') || insertErr.message.includes('does not exist')
-      ? 'Tabella non configurata su Supabase — contatta l\'amministratore tecnico'
-      : insertErr.message;
-    showMsg('ct-msg', msgErr, 'err'); btn.disabled=false; btn.textContent='Invia richiesta'; return;
+    const msgErr = /schema cache|does not exist/.test(insertErr.message || '') ? 'Tabella non configurata su Supabase — contatta l\'amministratore tecnico' : insertErr.message;
+    showMsg('ct-msg', msgErr, 'err'); btn.disabled = false; btn.textContent = 'Invia richiesta'; return;
   }
   certificaRichiesta('richiesta_cambio_turno', 'presenze_cambi_turno', _testoCT2, _firmaCT2, null);
 
-  // Passaggio semplificato: niente accettazione preventiva del collega —
-  // decide solo l'admin. Il collega riceve solo un avviso informativo.
-  const dataLbl = new Date(data).toLocaleDateString('it-IT',{weekday:'long',day:'2-digit',month:'long'});
-  let msgCollega = '🔄 <b>Cambio turno richiesto</b>\n\n';
-  msgCollega += '<b>'+escTG(nomeRichiedente)+'</b> ha chiesto di scambiare con te il turno del <b>'+dataLbl+'</b>\n';
-  msgCollega += '⏰ Fascia: <b>'+fascia.replace('-',' – ')+'</b>\n';
-  if (note) msgCollega += '\nNote: '+escTG(note)+'\n';
-  msgCollega += '\nLa richiesta è ora all\'amministratore per l\'approvazione.';
-  await inviaNotificaDipendente(collegaId, msgCollega, '#richieste');
+  const meta = { tabella: 'presenze_cambi_turno', rif: null, tipo: 'cambio_turno' };
+  let msgCollega = '🔄 <b>Cambio turno richiesto</b>\n\n<b>' + escTG(nomeRichiedente) + '</b> ';
+  if (tipo === 'scambio') msgCollega += 'ti propone uno scambio:\n• non fa: ' + escTG(ctDescr(A)) + ' (lo faresti tu)\n• fa: ' + escTG(ctDescr(B)) + ' (il tuo turno)\n';
+  else if (tipo === 'copertura') msgCollega += 'chiede che tu faccia al posto suo:\n• ' + escTG(ctDescr(A)) + '\nLo recupererà lui/lei in un altro giorno.\n';
+  else msgCollega += 'fa il recupero: scende al posto tuo:\n• ' + escTG(ctDescr(B)) + '\n';
+  if (note) msgCollega += '\nNote: ' + escTG(note) + '\n';
+  msgCollega += '\nLa richiesta è ora all\'amministratore: finché non approva, non cambia nulla.';
+  await inviaNotificaDipendente(collegaId, msgCollega, '#turni', meta);
 
-  let msgAdmin = '🔄 <b>Cambio turno da approvare</b>\n\n';
-  msgAdmin += '<b>'+escTG(nomeRichiedente)+'</b> ↔ <b>'+escTG(nomeCollega)+'</b>\n';
-  msgAdmin += 'Turno del <b>'+dataLbl+'</b> · Fascia: <b>'+fascia.replace('-',' – ')+'</b>\n';
-  if (note) msgAdmin += '\nNote: '+escTG(note)+'\n';
-  msgAdmin += '\n<a href="'+APP_URL+'#assenze">📲 Apri Ceraldi Presenze per approvare</a>';
+  let msgAdmin = '🔄 <b>Cambio turno da approvare</b> · ' + CT_TIPI[tipo].nome + '\n\n<b>' + escTG(nomeRichiedente) + '</b> ↔ <b>' + escTG(nomeCollega) + '</b>\n';
+  if (A) msgAdmin += '• ' + escTG(nomeRichiedente) + ' lascia: ' + escTG(ctDescr(A)) + '\n';
+  if (B) msgAdmin += '• ' + escTG(nomeCollega) + ' lascia: ' + escTG(ctDescr(B)) + '\n';
+  if (tipo === 'copertura') msgAdmin += '• Da recuperare in un altro giorno\n';
+  if (note) msgAdmin += '\nNote: ' + escTG(note) + '\n';
+  msgAdmin += '\n<a href="' + APP_URL + '#assenze">📲 Apri Ceraldi Presenze per approvare</a>';
   await inviaNotificaTelegram(msgAdmin);
 
   toast('✓ Richiesta inviata all\'amministratore');
-  btn.disabled=false; btn.textContent='Invia richiesta';
+  btn.disabled = false; btn.textContent = 'Invia richiesta';
   closeSheet('sh-cambioTurno');
   await caricaCambiTurnoDip();
 }
@@ -26505,6 +26774,9 @@ async function aggiornaNavBadge() {
       .eq('dipendente_id', ME.id)
       .not('richiesta_tipo','is',null);
     setNavBadge('pg-qr', (c3||0)+(c3b||0));
+
+    // Badge Turni: turni nuovi/modificati non ancora visti, cambi turno approvati, conferma richiesta
+    try { const nv = await tpDipNovita(); setNavBadge('pg-turni-dip', nv.n); } catch (e) { console.warn('badge turni:', e); }
   }
 }
 
@@ -29676,7 +29948,10 @@ async function mostraProssimaAzioneInSospesa() {
     $('ctm-ora').textContent = '';
     hideMsg('ctm-msg');
     openSheet('sh-confTimbr');
+    return;
   }
+  // Nulla da confermare: se ci sono turni nuovi/modificati, la finestra che porta a «Turni»
+  await tpDipMostraNovita(false);
 }
 let _ctPresenzaId = null;
 
