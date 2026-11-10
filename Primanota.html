@@ -27461,6 +27461,12 @@ function _sfVediRegistro(nome){
 // ══════════════════════════════════════════════════════════════════════════
 var _BF_KEY='fatture_bonifica_davvero_aperte';
 var _bfOk=null, _bfSel={}, _bfAperto={};
+// 10/11/2026 (Valerio: «Gelinova non risulta pagata ma è pagata parzialmente: ci sono gli acconti»).
+// Il pannello contava e proponeva l'importo INTERO anche per le fatture con acconti già registrati.
+// Il motore dei conti (residuoFattura → ricConti) sa già quanto resta: qui si usa quello, come in
+// «Da pagare», scadenzario e riepilogo. pagato = totale − residuo.
+function _bfResiduo(f){ var r = typeof residuoFattura === 'function' ? residuoFattura(f) : (f.importo||0); return Math.round(r*100)/100; }
+function _bfPagato(f){ return Math.max(0, Math.round(((Math.abs(f.importo||0)) - _bfResiduo(f))*100)/100); }
 function _bfVecchie(){
   var oggi=new Date(); var lim=new Date(oggi.getTime()-30*86400000).toISOString().slice(0,10);
   var lim2=new Date(oggi.getTime()-60*86400000).toISOString().slice(0,10);
@@ -27489,7 +27495,8 @@ function _bfProveBanca(lista){
   lista.forEach(function(f){
     var d0=String(f.data||'').slice(0,10); if(!d0) return;
     var d1=new Date(new Date(d0+'T12:00:00').getTime()+150*86400000).toISOString().slice(0,10);
-    var c=movs.filter(function(m){ return Math.abs(Math.abs(m.importo)-(f.importo||0))<0.01 && m.data>=d0 && m.data<=d1; });
+    var rs=_bfResiduo(f);
+    var c=movs.filter(function(m){ var v=Math.abs(m.importo); return (Math.abs(v-(f.importo||0))<0.01 || (rs>0.009 && Math.abs(v-rs)<0.01)) && m.data>=d0 && m.data<=d1; });
     if(c.length===1) out.push({f:f, m:c[0]});
   });
   return out;
@@ -27512,12 +27519,12 @@ function _bfRender(){
   var box=document.getElementById('bfBody'); if(!box) return;
   var lista=_bfVecchie();
   if(!lista.length){ box.innerHTML='<div class="an-vuoto"><div style="font-size:38px">✅</div><b>Registro in ordine</b><span>Nessuna fattura scaduta da oltre un mese ancora aperta.</span></div>'; return; }
-  var tot=lista.reduce(function(s,f){ return s+(f.importo||0); },0);
+  var tot=lista.reduce(function(s,f){ return s+_bfResiduo(f); },0);
   var prove=_bfProveBanca(lista), conProva={}; prove.forEach(function(p){ conProva[String(p.f.id)]=1; });
   var perF={};
   lista.forEach(function(f){ if(conProva[String(f.id)]) return; var k=f.fornitore||'—'; (perF[k]=perF[k]||[]).push(f); });
   var _bfC=_bfContesto();
-  var gruppi=Object.keys(perF).map(function(k){ var a=perF[k].sort(function(x,y){ return String(x.data).localeCompare(String(y.data)); }); return {nome:k, fatt:a, tot:a.reduce(function(s,f){ return s+(f.importo||0); },0)}; }).sort(function(a,b){ return b.tot-a.tot; });
+  var gruppi=Object.keys(perF).map(function(k){ var a=perF[k].sort(function(x,y){ return String(x.data).localeCompare(String(y.data)); }); return {nome:k, fatt:a, tot:a.reduce(function(s,f){ return s+_bfResiduo(f); },0)}; }).sort(function(a,b){ return b.tot-a.tot; });
   var html='<div class="bf-hero"><div><b>'+lista.length+'</b><span>fatture scadute da oltre un mese</span></div><div><b>'+fmt(tot)+'</b><span>risultano ancora da pagare</span></div></div>'+
     '<div class="an-intro">Quasi sempre sono fatture già pagate e mai segnate: finché restano aperte, «Da pagare», «Scadute» e le uscite previste risultano gonfiati. Ogni modifica finisce nello storico della fattura e si può annullare.</div>';
   if(prove.length){
@@ -27530,7 +27537,7 @@ function _bfRender(){
     var metodi={}; g.fatt.forEach(function(f){ var p=f.pagamento||'—'; metodi[p]=(metodi[p]||0)+1; });
     var metodo=Object.keys(metodi).sort(function(a,b){ return metodi[b]-metodi[a]; })[0];
     var aperto=_bfAperto[g.nome];
-    var sel=_bfSel[g.nome]||(_bfSel[g.nome]={}); g.fatt.forEach(function(f){ if(sel[f.id]===undefined) sel[f.id]=true; });
+    var sel=_bfSel[g.nome]||(_bfSel[g.nome]={}); g.fatt.forEach(function(f){ if(sel[f.id]===undefined) sel[f.id]=(_bfPagato(f)<0.01); }); // con acconti già registrati si sta pagando a rate: non si preseleziona per «segna pagata»
     var nSel=g.fatt.filter(function(f){ return sel[f.id]; }).length;
     var tr={}; g.fatt.forEach(function(f){ tr[f.id]=_bfTraccia(f,_bfC); });
     var nNessuna=g.fatt.filter(function(f){ return tr[f.id]==='nessuna'; }).length, nNd=g.fatt.filter(function(f){ return tr[f.id]==='nd'; }).length;
@@ -27538,7 +27545,7 @@ function _bfRender(){
     return '<div class="an-item bf-g" style="animation-delay:'+Math.min(gi,8)*35+'ms">'+
       '<button class="bf-hd" data-g="'+esc(g.nome)+'" onclick="_bfToggle(this.dataset.g)"><span class="cr-main"><b>'+esc(g.nome)+'</b><span>'+g.fatt.length+' fattur'+(g.fatt.length===1?'a':'e')+' · dal '+_anData(g.fatt[0].data)+' al '+_anData(g.fatt[g.fatt.length-1].data)+(metodo&&metodo!=='—'?' · di solito '+esc(metodo):'')+'</span></span><span class="cr-imp">'+fmt(g.tot)+'</span><span class="bf-chev'+(aperto?' on':'')+'">›</span></button>'+
       (aperto ?
-        '<div class="bf-list">'+g.fatt.map(function(f){ return '<label class="bf-f"><input type="checkbox" '+(sel[f.id]?'checked':'')+' data-g="'+esc(g.nome)+'" data-id="'+esc(String(f.id))+'" onchange="_bfSelF(this.dataset.g,this.dataset.id,this.checked)"><span class="cr-main"><b>N° '+esc(f.numero||'—')+'</b><span>'+_anData(f.data)+(f.scadenza?' · scad. '+_anData(f.scadenza):'')+(f.stato==='parziale'?' · parziale':'')+'</span>'+TAG[tr[f.id]]+'</span><span class="cr-imp">'+fmt(f.importo)+'</span>'+_btnXml(f,'mini')+'</label>'; }).join('')+'</div>'+
+        '<div class="bf-list">'+g.fatt.map(function(f){ return '<label class="bf-f"><input type="checkbox" '+(sel[f.id]?'checked':'')+' data-g="'+esc(g.nome)+'" data-id="'+esc(String(f.id))+'" onchange="_bfSelF(this.dataset.g,this.dataset.id,this.checked)"><span class="cr-main"><b>N° '+esc(f.numero||'—')+'</b><span>'+_anData(f.data)+(f.scadenza?' · scad. '+_anData(f.scadenza):'')+(_bfPagato(f)>0.009?' · pagati '+fmt(_bfPagato(f))+' su '+fmt(f.importo):'')+'</span>'+TAG[tr[f.id]]+'</span><span class="cr-imp">'+fmt(_bfResiduo(f))+(_bfPagato(f)>0.009?'<small style="display:block;font-size:10px;color:var(--ink3);font-weight:500">restano</small>':'')+'</span>'+_btnXml(f,'mini')+'</label>'; }).join('')+'</div>'+
         (nNessuna ? '<button class="bf-cont" data-g="'+esc(g.nome)+'" onclick="_bfSelSenzaTraccia(this.dataset.g)"><b>Seleziona le '+nNessuna+' senza traccia in banca</b><span>Nessun bonifico, addebito o carta con quell\'importo o quel nome: imposta «Contanti»</span></button>' : '')+
         (nNd===g.fatt.length ? '<div class="bf-nota-m">L\'estratto conto di quel periodo non è ancora caricato: dopo l\'import l\'app ti dirà quali risultano pagate in banca e quali no.</div>' : '')+
         '<div class="sf-lbl" style="margin-top:12px">1 · Come le hai pagate?</div>'+
@@ -27578,10 +27585,11 @@ function _bfTraccia(f, C){
   var d1=piu(150), oggiK=new Date().toISOString().slice(0,10);
   var fineServe = piu(60) < oggiK ? piu(60) : oggiK;
   if(C.min > d0 || C.max < fineServe) return 'nd';
-  var imp=Math.abs(f.importo||0);
+  var imp=Math.abs(f.importo||0), imp2=_bfResiduo(f);
   var inFin=function(x){ return x.data>=d0 && x.data<=d1; };
-  if(C.movs.some(function(m){ return inFin(m) && Math.abs(Math.abs(m.importo)-imp)<0.01; })) return 'banca';
-  if(C.carta.some(function(c){ return inFin(c) && Math.abs(Math.abs(parseFloat(c.importo)||0)-imp)<0.01; })) return 'banca';
+  var uguale=function(v){ return Math.abs(v-imp)<0.01 || (imp2>0.009 && Math.abs(v-imp2)<0.01); };
+  if(C.movs.some(function(m){ return inFin(m) && uguale(Math.abs(m.importo)); })) return 'banca';
+  if(C.carta.some(function(c){ return inFin(c) && uguale(Math.abs(parseFloat(c.importo)||0)); })) return 'banca';
   var parole=String(f.fornitore||'').toLowerCase().replace(/[^a-zà-ù0-9 ]/g,' ').split(/\s+/).filter(function(w){ return w.length>=3 && !/^(s\.?r\.?l|spa|srls|snc|sas|della|delle|group|italia|unipersonale|societ)/.test(w); });
   if(parole.length){ var reP=new RegExp('\\b'+parole[0].replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\b','i');
     if(C.movs.some(function(m){ return inFin(m) && reP.test(String(m.descrizione||'')); })) return 'banca'; }
@@ -27606,7 +27614,8 @@ async function _bfPaga(nome, modo, dataScelta){
   var desc={fattura:'alla data di ciascuna fattura', scadenza:'alla scadenza di ciascuna (o alla data fattura se manca)', data:'il '+_anData(dataScelta)}[modo];
   var metodoSc=_bfMetodo[nome]||'';
   var metodoLbl=metodoSc ? (_BF_METODI.find(function(x){ return x[0]===metodoSc; })||['',''])[1].toLowerCase() : '';
-  if(!confirm('Segnare come PAGATE '+lista.length+' fattur'+(lista.length===1?'a':'e')+' di '+nome+' ('+fmt(lista.reduce(function(s,f){ return s+(f.importo||0); },0))+'), '+desc+(metodoSc?', pagate con '+metodoLbl:', senza cambiare il metodo')+'?\n\nSi può annullare dallo storico di ogni fattura.')) { if(modo==='data'){ var inp=document.querySelector('.bf-data'); if(inp) inp.value=''; } return; }
+  var _nPar=lista.filter(function(f){ return _bfPagato(f)>0.009; }).length;
+  if(!confirm('Segnare come PAGATE '+lista.length+' fattur'+(lista.length===1?'a':'e')+' di '+nome+' (restano da pagare '+fmt(lista.reduce(function(s,f){ return s+_bfResiduo(f); },0))+(_nPar?'; '+_nPar+' '+(_nPar===1?'ha':'hanno')+' già degli acconti registrati':'')+'), '+desc+(metodoSc?', pagate con '+metodoLbl:', senza cambiare il metodo')+'?\n\nSi può annullare dallo storico di ogni fattura.')) { if(modo==='data'){ var inp=document.querySelector('.bf-data'); if(inp) inp.value=''; } return; }
   var ok=0;
   for(var i=0;i<lista.length;i++){
     var f=lista[i];
@@ -33692,10 +33701,26 @@ function _pnQuotaNuova(f, imp, movId){
 }
 
 /* ══ FOGLI (base comune) ══ */
+// 10/11/2026 (Valerio: «in Controllo anomalie alcuni pulsanti blu non funzionano»). Causa: i fogli
+// aprono con uno z-index fisso (290–330) ma il Controllo anomalie e la sistemazione guidata stanno a
+// 880–890: «Com'è andata? Scegli ›» (nota di credito) apriva il foglio SOTTO e non si vedeva niente.
+// Regola generale: un foglio nuovo sta sempre sopra ogni schermo intero già aperto.
+function _pnZSopra(base){
+  var z = base;
+  Array.prototype.forEach.call(document.body.children, function(el){
+    if(!el.style || el.classList.contains('toast')) return;
+    var cs = getComputedStyle(el);
+    if(cs.position !== 'fixed' || cs.display === 'none' || el.offsetHeight < window.innerHeight * 0.5) return;
+    var n = parseInt(cs.zIndex, 10);
+    if(isFinite(n) && n < 99000 && n >= z) z = n + 1;
+  });
+  return z;
+}
 function pnFoglio(id, opz){
   var vecchio = document.getElementById(id); if(vecchio) vecchio.remove();
   var mo = document.createElement('div'); mo.id = id; mo.className = 'pn-mo' + (opz.alto ? ' alto' : '');
-  mo.style.zIndex = opz.z || 290;
+  var _zf = opz.z || 290; try{ _zf = _pnZSopra(_zf); }catch(e){}
+  mo.style.zIndex = _zf;
   mo.innerHTML = '<div class="pn-sh" role="dialog" aria-modal="true" aria-label="' + esc(opz.titolo || '') + '"><div class="pn-sh-hd"><div class="pn-sh-t"><b>' + esc(opz.titolo || '') + '</b>' + (opz.sotto ? '<small>' + opz.sotto + '</small>' : '') + '</div><button class="pn-x" aria-label="Chiudi" onclick="pnChiudi(\'' + id + '\')">✕</button></div><div class="pn-sh-bd"></div>' + (opz.piede ? '<div class="pn-sh-ft"></div>' : '') + '</div>';
   mo.addEventListener('click', function(e){ if(e.target === mo) pnChiudi(id); });
   document.body.appendChild(mo);
@@ -37239,8 +37264,10 @@ function ricvPrevisione(){
   var bpm = Object.keys(C.stati).map(function(k){ return C.stati[k]; }).filter(function(S){ return S.M.fonte === 'banca' && (S.M.conto === 'BPM' || !S.M.conto || (unito && S.M.conto === 'SumUp')); });
   bpm.sort(function(a, b){ return a.M.data < b.M.data ? -1 : 1; });
   var ultima = bpm.length ? bpm[bpm.length - 1].M.data : Sld.al;
-  var saldo = Sld.saldo + (unito ? SU.saldo : 0), dopo = 0;
-  bpm.forEach(function(S){ var al = S.M.conto === 'SumUp' ? SU.al : Sld.al; if(S.M.data > al){ saldo += S.M.importo; dopo++; } });
+  var SUa = unito ? rcSaldoAttuale(SU, 'SumUp') : null;
+  var saldo = Sld.saldo + (SUa ? SUa.saldo : 0), dopo = SUa ? SUa.n : 0;
+  // SumUp è già conteggiato sopra (anche gli accrediti POS «ignorati», che qui non arrivano): qui solo BPM
+  bpm.forEach(function(S){ if(S.M.conto === 'SumUp') return; if(S.M.data > Sld.al){ saldo += S.M.importo; dopo++; } });
   var base = ultima > Sld.al ? ultima : Sld.al;
   var fineStoria = new Date(base + 'T12:00:00'), iniStoria = new Date(fineStoria); iniStoria.setDate(iniStoria.getDate() - 126);
   var iniK = ricvIso(iniStoria), recente = new Date(fineStoria); recente.setDate(recente.getDate() - 56); var recK = ricvIso(recente);
@@ -38242,6 +38269,26 @@ async function rcCarica(){
 function rcIso(d){ return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
 function rcGg(d){ d = String(d || ''); return d.length >= 10 ? d.slice(8, 10) + '/' + d.slice(5, 7) + '/' + d.slice(0, 4) : d; }
 function rcVersamentoBanca(m){ return m && +m.importo > 0 && !/sumup/i.test(String(m.banca || m.conto || '') + ' ' + (m.descrizione || '')) && /vers\.?\s*contanti|versamento\s+contanti|versamento\s+(di\s+)?denaro/i.test(m.descrizione || ''); }
+// 10/11/2026 (Valerio: «il saldo di SumUp è sbagliato, non capisco dove l'hai preso»).
+// Il saldo di un conto non si calcola: è il numero che qualcuno ha scritto (SumUp, a mano) o
+// letto dall'ultimo estratto (BPM) in un certo giorno. Restava identico per settimane mentre sul
+// conto entravano gli incassi POS e uscivano bonifici e giroconti. Ora vale:
+//   ultimo saldo scritto + tutti i movimenti di QUEL conto dopo quel giorno.
+// Contano anche i movimenti «ignorati» dalla riconciliazione (gli accrediti POS di SumUp lo sono:
+// non vanno abbinati a una fattura, ma i soldi sul conto ci sono). Un movimento del giorno stesso
+// del saldo si considera già dentro il saldo (stessa regola della previsione).
+// Un solo punto di calcolo: fondo cassa e previsione leggono da qui, così i numeri sono gli stessi.
+function rcSaldoAttuale(snap, conto){
+  if(!snap || typeof snap.saldo !== 'number') return null;
+  var al = String(snap.al || '').slice(0, 10), somma = 0, n = 0, fino = al;
+  (typeof _bancaMovimenti !== 'undefined' ? _bancaMovimenti : []).forEach(function(m){
+    if(!m || (m.banca || 'BPM') !== conto) return;
+    var d = String(m.data || '').slice(0, 10);
+    if(!al || d <= al) return;
+    somma += +m.importo || 0; n++; if(d > fino) fino = d;
+  });
+  return { saldo: Math.round((snap.saldo + somma) * 100) / 100, al: fino, base: snap.saldo, baseAl: al, n: n, stimato: n > 0 };
+}
 function rcCalcola(){
   var anno = new Date().getFullYear();
   var ini = RCASSA.ini && RCASSA.ini.data ? RCASSA.ini : { importo: 0, data: anno + '-01-01', predefinito: true };
@@ -38268,8 +38315,8 @@ function rcCalcola(){
     if(vb.some(function(x){ return Math.abs(x.v - imp) <= 0.005 && Math.abs((new Date(x.d) - new Date(d)) / 86400000) <= 5; })) return;
     R.versApp += imp; R.nVA++; });
   R.contanti = (+ini.importo || 0) + R.incassi - R.pagate - R.versBanca - R.versApp;
-  R.bpm = window._ceSaldo && typeof window._ceSaldo.saldo === 'number' ? window._ceSaldo : null;
-  R.su = window._ceSaldoSU && typeof window._ceSaldoSU.saldo === 'number' ? window._ceSaldoSU : null;
+  R.bpm = rcSaldoAttuale(window._ceSaldo, 'BPM');
+  R.su = rcSaldoAttuale(window._ceSaldoSU, 'SumUp');
   R.totale = R.contanti + (R.bpm ? R.bpm.saldo : 0) + (R.su ? R.su.saldo : 0);
   ['incassi', 'pagate', 'versBanca', 'versApp', 'contanti', 'totale'].forEach(function(k){ R[k] = Math.round(R[k] * 100) / 100; });
   return R;
@@ -38288,9 +38335,9 @@ aggiornaSaldoCassa = function(){
   el('saldoCassaContanti').textContent = fmt(R.contanti); el('saldoCassaContanti').style.color = R.contanti < 0 ? '#ff6b6b' : '';
   if(el('saldoCassaContantiN')) el('saldoCassaContantiN').textContent = R.contanti < 0 ? 'negativo: tocca per capire' : 'tocca per il conto';
   el('saldoCassaBpm').textContent = R.bpm ? fmt(R.bpm.saldo) : '—';
-  if(el('saldoCassaBpmN')) el('saldoCassaBpmN').textContent = R.bpm ? 'estratto al ' + rcGg(R.bpm.al) : 'carica l\'estratto';
+  if(el('saldoCassaBpmN')) el('saldoCassaBpmN').textContent = R.bpm ? (R.bpm.stimato ? 'stima al ' + rcGg(R.bpm.al) + ' · dall\'estratto del ' + rcGg(R.bpm.baseAl) : 'estratto al ' + rcGg(R.bpm.al)) : 'carica l\'estratto';
   el('saldoCassaSumUp').textContent = R.su ? fmt(R.su.saldo) : 'Inserisci';
-  if(el('saldoCassaSumUpN')) el('saldoCassaSumUpN').textContent = R.su ? 'al ' + rcGg(R.su.al) + ' · tocca per aggiornare' : 'tocca per scriverlo';
+  if(el('saldoCassaSumUpN')) el('saldoCassaSumUpN').textContent = R.su ? (R.su.stimato ? 'stima al ' + rcGg(R.su.al) + ' · tocca per correggere' : 'al ' + rcGg(R.su.al) + ' · tocca per aggiornare') : 'tocca per scriverlo';
   el('saldoCassaIni').textContent = fmt(+R.ini.importo || 0);
   if(el('saldoCassaIniN')) el('saldoCassaIniN').textContent = R.ini.predefinito ? 'da impostare · tocca' : 'al ' + rcGg(R.da);
 };
@@ -38306,7 +38353,8 @@ function rcApriDettaglio(){
     (R.nVA ? riga('−', 'Versamenti segnati nell\'app', R.nVA + ' dopo l\'ultimo estratto: si confermano col prossimo', R.versApp) : '') +
     '<div class="rc-tot"><span>Contanti in cassa</span><b class="' + (R.contanti < 0 ? 'neg' : '') + '">' + fmt(R.contanti) + '</b></div></div>';
   if(R.contanti < 0) h += '<div class="rc-nota ko">Un saldo di contanti negativo non è possibile: manca un\'entrata. Di solito è il fondo iniziale (i contanti che c\'erano in cassa il ' + rcGg(R.da) + ') oppure qualche chiusura di cassa non registrata.</div>';
-  h += '<div class="rc-nota">Il totale del fondo cassa somma i contanti, il saldo di Banco BPM' + (R.bpm ? ' (' + fmt(R.bpm.saldo) + ', estratto al ' + rcGg(R.bpm.al) + ')' : ' (non ancora caricato)') + ' e quello di SumUp' + (R.su ? ' (' + fmt(R.su.saldo) + ' al ' + rcGg(R.su.al) + ')' : ' (da inserire)') + '.</div>';
+  var _rcDa = function(S){ return S.stimato ? ' (' + fmt(S.saldo) + ': saldo di ' + fmt(S.base) + ' del ' + rcGg(S.baseAl) + ' più ' + S.n + (S.n === 1 ? ' movimento' : ' movimenti') + ' fino al ' + rcGg(S.al) + ')' : ' (' + fmt(S.saldo) + ' al ' + rcGg(S.al) + ')'; };
+  h += '<div class="rc-nota">Il totale del fondo cassa somma i contanti, il saldo di Banco BPM' + (R.bpm ? _rcDa(R.bpm) : ' (non ancora caricato)') + ' e quello di SumUp' + (R.su ? _rcDa(R.su) : ' (da inserire)') + '. I saldi dei conti sono il numero scritto più i movimenti arrivati dopo: se non coincide con quello che vedi in banca, scrivi il saldo vero e da lì riparte.</div>';
   h += '<button class="sk-btn prim big" style="width:100%" onclick="pnChiudi(\'rcFoglio\');rcModificaIniziale()">Modifica il fondo iniziale</button>';
   var mo = pnFoglio('rcFoglio', { titolo: 'Contanti in cassa', sotto: 'Solo dati ufficiali: chiusure, fatture ed estratti conto', z: 330 });
   mo.querySelector('.pn-sh-bd').innerHTML = h;
@@ -38332,7 +38380,8 @@ async function rcSalvaIniziale(){
 function rcChiediSumUp(){
   var R = rcCalcola();
   var mo = pnFoglio('rcFoglio', { titolo: 'Saldo SumUp', sotto: 'Lo trovi nell\'app SumUp, alla voce Conto', z: 330 });
-  mo.querySelector('.pn-sh-bd').innerHTML = '<label class="rc-lbl">Saldo di oggi (€)</label><input id="ceSaldoSU" type="text" inputmode="decimal" placeholder="0,00" class="rc-inp" value="' + (R.su ? String(R.su.saldo).replace('.', ',') : '') + '">' +
+  var _suNota = R.su && R.su.stimato ? '<div class="rc-nota" style="margin-top:0">L\'app stima oggi <b>' + fmt(R.su.saldo) + '</b>: l\'ultimo saldo scritto (' + fmt(R.su.base) + ' il ' + rcGg(R.su.baseAl) + ') più ' + R.su.n + ' movimenti SumUp arrivati dopo, fino al ' + rcGg(R.su.al) + '. Se in SumUp vedi un altro numero, scrivi quello.</div>' : '';
+  mo.querySelector('.pn-sh-bd').innerHTML = _suNota + '<label class="rc-lbl">Saldo di oggi (€)</label><input id="ceSaldoSU" type="text" inputmode="decimal" placeholder="Quello che vedi in SumUp" class="rc-inp" value="">' +
     '<button class="sk-btn prim big" style="width:100%;margin-top:12px" onclick="rcSalvaSumUp()">Salva</button>';
 }
 async function rcSalvaSumUp(){ if(typeof ricvSalvaSaldoSU === 'function') await ricvSalvaSaldoSU(); pnChiudi('rcFoglio'); aggiornaSaldoCassa(); }
@@ -40197,6 +40246,22 @@ async function _utCarica(forza){
 // ── numeri e date ──
 function _utN(v, dec){ return (+v || 0).toLocaleString('it-IT', { minimumFractionDigits: dec == null ? 0 : dec, maximumFractionDigits: dec == null ? 2 : dec }); }
 function _utEu(v, dec){ return v == null || !isFinite(v) ? '—' : '€ ' + _utN(v, dec == null ? 2 : dec); }
+// 10/11/2026 (Valerio: «le voci non tornano col totale, perché?»). Un controllo che dice solo «non torna»
+// non fa capire nulla. Per il controllo delle voci mostra i numeri: somma delle voci lette, totale della
+// bolletta, differenza; e dice se il totale è comunque confermato da imponibile + IVA.
+function _utControlloRiga(c, d){
+  var riga = function(testo, ok){ return '<div class="ut-riga"><span>' + testo + '</span><b>' + (ok ? '<span class="ut-pill ok">torna</span>' : '<span class="ut-pill no">non torna</span>') + '</b></div>'; };
+  var base = riga(esc(c.testo), c.ok);
+  if(c.ok || !d || !/voci non tornano/i.test(c.testo || '')) return base;
+  var tipo = d.tipo, voci = [['consumi', d.costo_consumi], ['quota fissa', d.quota_fissa]];
+  if(tipo === 'luce') voci.push(['quota potenza', d.quota_potenza]);
+  voci.push(['accise e IVA', d.accise_iva]);
+  if(d.altre_partite) voci.push(['altre partite', d.altre_partite]);
+  if(voci.some(function(v){ return typeof v[1] !== 'number'; }) || typeof d.totale !== 'number') return base;
+  var somma = Math.round(voci.reduce(function(t, v){ return t + v[1]; }, 0) * 100) / 100, diff = Math.round((d.totale - somma) * 100) / 100;
+  var fisc = (typeof d.imponibile === 'number' && typeof d.iva === 'number') ? Math.abs(d.imponibile + d.iva - d.totale) < 0.05 : null;
+  return base + '<div class="pa-nota" style="margin:2px 0 8px;line-height:1.45">Le voci lette (' + voci.map(function(v){ return v[0] + ' ' + _utEu(v[1]); }).join(' + ') + ') fanno <b>' + _utEu(somma) + '</b>; il totale in bolletta è <b>' + _utEu(d.totale) + '</b>: ' + (Math.abs(diff) < 0.005 ? 'nessuna differenza.' : 'mancano <b>' + _utEu(Math.abs(diff)) + '</b>' + (diff > 0 ? ' (una voce della bolletta non è stata letta).' : ' (le voci lette superano il totale).')) + (fisc === true ? ' Il totale è comunque giusto: imponibile + IVA = ' + _utEu(d.imponibile + d.iva) + '.' : (fisc === false ? ' Attenzione: anche imponibile + IVA non coincide col totale, controlla il PDF.' : '')) + '</div>';
+}
 function _utU(b){ return (b && (b.unita || (b.dati || {}).unita)) || ''; }
 function _utD(iso){ if(!iso || !/^\d{4}-\d{2}-\d{2}/.test(iso)) return iso || '—'; var p = iso.slice(0, 10).split('-'); return p[2] + '/' + p[1] + '/' + p[0]; }
 function _utGiorni(dal, al){ if(!dal || !al) return null; var a = Date.parse(dal + 'T12:00:00'), b = Date.parse(al + 'T12:00:00'); return isFinite(a) && isFinite(b) ? Math.round((b - a) / 86400000) + 1 : null; }
@@ -40474,7 +40539,7 @@ function _utDettaglio(bid){
   var fa = b.fattura_id ? _utFattura(b.fattura_id) : null;
   var h = '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">' + (b.pdf_path ? '<button class="an-fix" data-b="' + b.id + '" onclick="_utPdf(this.dataset.b)">Vedi la bolletta (PDF)</button>' : '') + (fa && typeof _btnXml === 'function' ? _btnXml(fa) : '') + '</div>';
   if(fa) h += '<div class="an-rows" style="margin-bottom:10px">' + _anRigaFattura(fa) + '</div>';
-  h += '<div class="ut-box">' + (b.controlli || []).map(function(c){ return '<div class="ut-riga"><span>' + esc(c.testo) + '</span><b>' + (c.ok ? '<span class="ut-pill ok">torna</span>' : '<span class="ut-pill no">non torna</span>') + '</b></div>'; }).join('') + '</div>';
+  h += '<div class="ut-box">' + (b.controlli || []).map(function(c){ return _utControlloRiga(c, d); }).join('') + '</div>';
   h += '<div class="ut-box">' + _utCampiHtml(d, pr, false) + '</div>';
   h += '<div class="pa-nota">Fonte: ' + ({ pdf: 'PDF caricato', xml: 'PDF allegato alla fattura elettronica', gmail: 'email della casella della società' }[b.fonte] || b.fonte) + '.</div>';
   mo.querySelector('.pn-sh-bd').innerHTML = h;
@@ -40550,7 +40615,7 @@ function _utMostraLettura(j, opz){
   else if(!j.fornitura) h += '<div class="ut-ban blu"><b>Nuova fornitura.</b> Alla conferma l\'app crea la scheda ' + esc(UT_NOME[tipo] || '') + ' per il codice ' + esc(d.codice_fornitura || '—') + '.</div>';
   if(j.fattura){ var fa = _utFattura(j.fattura.id); h += '<div class="ut-lbl" style="margin-top:4px">Fattura elettronica corrispondente</div>' + (fa ? '<div class="an-rows">' + _anRigaFattura(fa) + '</div>' : '<div class="ut-box"><div class="ut-riga"><span>' + esc(j.fattura.fornitore || '') + ' n° ' + esc(j.fattura.numero) + '</span><b>' + _utEu(Math.abs(j.fattura.importo)) + '</b></div></div>'); }
   else h += '<div class="pa-nota" style="margin:0 2px 8px">Nessuna fattura elettronica con questo numero in app (se arriva dopo, la bolletta resta valida lo stesso).</div>';
-  if((j.controlli || []).length) h += '<div class="ut-lbl">Controlli sui totali</div><div class="ut-box">' + j.controlli.map(function(c){ return '<div class="ut-riga"><span>' + esc(c.testo) + '</span><b>' + (c.ok ? '<span class="ut-pill ok">torna</span>' : '<span class="ut-pill no">non torna</span>') + '</b></div>'; }).join('') + '</div>';
+  if((j.controlli || []).length) h += '<div class="ut-lbl">Controlli sui totali</div><div class="ut-box">' + j.controlli.map(function(c){ return _utControlloRiga(c, d); }).join('') + '</div>';
   h += '<div class="ut-lbl">Dati letti <em>' + ((j.mancanti || []).length ? 'mancano: ' + j.mancanti.map(function(k){ return (j.etichette || {})[k] || k; }).join(', ') : 'tutti i dati principali trovati') + '</em></div><div class="ut-box" id="utCampi">' + _utCampiHtml(d, j.provenienza || {}, true, j.mancanti) + '</div>';
   h += '<button class="btn btn-p" id="utSalvaBtn" style="width:100%;margin-top:12px;padding:13px" onclick="_utSalvaLettura(this)">Conferma e archivia</button>' +
     '<div style="font-size:11.5px;color:var(--ink3);margin-top:8px;text-align:center">Il PDF resta archiviato con la bolletta e si può riaprire quando vuoi.</div>';
