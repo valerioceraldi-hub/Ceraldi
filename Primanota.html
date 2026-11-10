@@ -10386,7 +10386,7 @@ async function _eseguiEsportazioneAvanzata(){
     });
     righe.push([]);
     var oggi = new Date().toISOString().slice(0,10);
-    var scadute = base.filter(function(f){ return (f.stato==='da_pagare'||f.stato==='parziale') && f.scadenza && f.scadenza<oggi; });
+    var scadute = base.filter(function(f){ return (f.stato==='da_pagare'||f.stato==='parziale') && contaInDaPagare(f) && f.scadenza && f.scadenza<oggi; });
     righe.push(['SCADUTE NON SALDATE (aging)', 'N. fatture', 'Residuo totale']);
     var bucket = {'0-30':[0,0], '31-60':[0,0], '61-90':[0,0], '90+':[0,0]};
     scadute.forEach(function(f){
@@ -10486,7 +10486,7 @@ async function _eseguiEsportazioneAvanzata(){
   // ═══ 8. FATTURE SCADUTE / INSOLUTE ═══
   (function(){
     var oggi = new Date().toISOString().slice(0,10);
-    var sub = base.filter(function(f){ return (f.stato==='da_pagare'||f.stato==='parziale') && f.scadenza && f.scadenza<oggi; });
+    var sub = base.filter(function(f){ return (f.stato==='da_pagare'||f.stato==='parziale') && contaInDaPagare(f) && f.scadenza && f.scadenza<oggi; });
     var head = ['Fornitore','Numero fattura','Data fattura','Scadenza','Giorni di ritardo','Importo totale','Pagato','Residuo','Metodo abituale'];
     var body = sub.sort(function(a,b){return (a.scadenza||'').localeCompare(b.scadenza||'');}).map(function(f){
       var r = _fatturaPagatoResiduo(f);
@@ -15971,7 +15971,7 @@ function verificaScadenzeNotif(){
   if(last===today) return;
   let n=0;
   fatture.forEach(f=>{
-    if((f.stato==='da_pagare'||f.stato==='parziale') && f.scadenza){
+    if((f.stato==='da_pagare'||f.stato==='parziale') && f.scadenza && contaInDaPagare(f)){
       const d=new Date(f.scadenza+'T12:00:00');
       const diff=Math.round((d-oggi)/86400000);
       if(diff>=0 && diff<=3) n++;
@@ -26826,7 +26826,7 @@ function _crCerca(q){
   // Fornitori (con numero di fatture e totale)
   if(imp===null && !dt){
     var perF={};
-    F.forEach(function(f){ var n=f.fornitore||''; if(!n) return; var k=_crTesto(n); if(!perF[k]) perF[k]={nome:n, n:0, tot:0, daPagare:0}; perF[k].n++; perF[k].tot+=(f.importo||0); if(f.stato==='da_pagare'||f.stato==='parziale') perF[k].daPagare++; });
+    F.forEach(function(f){ var n=f.fornitore||''; if(!n) return; var k=_crTesto(n); if(!perF[k]) perF[k]={nome:n, n:0, tot:0, daPagare:0}; perF[k].n++; perF[k].tot+=(f.importo||0); if((f.stato==='da_pagare'||f.stato==='parziale') && contaInDaPagare(f)) perF[k].daPagare++; });
     ris.fornitori=Object.keys(perF).map(function(k){ return perF[k]; }).filter(function(x){ return contieneTutte(x.nome); }).sort(function(a,b){ return b.n-a.n; });
   }
   // Fatture
@@ -28424,7 +28424,7 @@ function _cePrevisione(){
   var sett=[]; for(var i=0;i<8;i++){ var a=new Date(oggi); a.setDate(a.getDate()+i*7); var b=new Date(a); b.setDate(b.getDate()+6); sett.push({da:_ceIso(a), a:_ceIso(b), fatt:0, nF:0, top:[]}); }
   var senzaScad=0, vecchie=0;
   (fatture||[]).forEach(function(f){
-    if(!(f.stato==='da_pagare'||f.stato==='parziale') || f.tipo==='nota_credito' || f.tipo==='ddt') return;
+    if(!(f.stato==='da_pagare'||f.stato==='parziale') || f.tipo==='nota_credito' || f.tipo==='ddt' || !contaInDaPagare(f)) return;
     if(f.pagamento==='contanti') return;
     var res=Math.max(0,(+f.importo||0)-(f.stato==='parziale'?(+f.parzPagato||0):0)); if(!res) return;
     if(!f.scadenza){ senzaScad++; return; }
@@ -28585,7 +28585,7 @@ function _fsControlli(mk){
   var ultimoMov=movs.reduce(function(mx,x){ return x.data>mx?x.data:mx; },'');
   var bancaCompleta = ultimoMov && +ultimoMov.slice(8,10) >= giorniMese-4;
   var nonRic=movs.filter(function(x){ if(!(x.importo<0) || x.abbinata || x.ignorata) return false; var k=_ceMovCat(x); return k==='bonifico'||k==='assegno'||k==='sdd'; }).length;
-  var aperte=fatt.filter(function(f){ return f.tipo!=='nota_credito' && (f.stato==='da_pagare'||f.stato==='parziale'); });
+  var aperte=fatt.filter(function(f){ return f.tipo!=='nota_credito' && (f.stato==='da_pagare'||f.stato==='parziale') && contaInDaPagare(f); });
   return {mk:mk, fatt:fatt, conXml:conXml, senzaXml:senzaXml, ch:ch, mancanti:mancanti, giorniMese:giorniMese, movs:movs, ultimoMov:ultimoMov, bancaCompleta:bancaCompleta, nonRic:nonRic, aperte:aperte,
     corr:ch.reduce(function(s,c){ return s+(+c.totale_corrispettivi||0); },0), totFatt:fatt.reduce(function(s,f){ return s+(+f.importo||0); },0)};
 }
@@ -30049,7 +30049,7 @@ function _fnDati(){
     if(f.tipo==='ddt' || !f.fornitore) return;
     var x=m[f.fornitore]=m[f.fornitore]||{nome:f.fornitore, n:0, spesa:0, res:0, scad:0, ultima:'', metodi:{}};
     if(String(f.data||'')>=dal){ x.spesa+=(+f.importo||0); x.n++; }
-    if(f.tipo!=='nota_credito' && (f.stato==='da_pagare'||f.stato==='parziale')){ var r=Math.max(0,Math.abs(+f.importo||0)-(f.stato==='parziale'?(+f.parzPagato||0):0)); x.res+=r; if(f.scadenza && f.scadenza<oggiK) x.scad++; }
+    if(f.tipo!=='nota_credito' && (f.stato==='da_pagare'||f.stato==='parziale') && contaInDaPagare(f)){ var r=Math.max(0,Math.abs(+f.importo||0)-(f.stato==='parziale'?(+f.parzPagato||0):0)); x.res+=r; if(f.scadenza && f.scadenza<oggiK) x.scad++; }
     if(String(f.data||'')>x.ultima) x.ultima=String(f.data||'');
     if(f.pagamento) x.metodi[f.pagamento]=(x.metodi[f.pagamento]||0)+1;
   });
