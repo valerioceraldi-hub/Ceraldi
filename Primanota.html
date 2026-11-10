@@ -7027,6 +7027,10 @@ function askDel(id){
 // ───────────────────────────────────────────────────────────────────────────────
 let _quickPayUndoTimer = null;
 
+// Pagata alla consegna: scorciatoia comune alle due schermate di pagamento.
+// Regola fissa: si salda tutto quello che resta, in contanti, alla data della fattura (mai nel futuro).
+function _pagConsegnaData(f){ var o = new Date().toISOString().slice(0,10), d = String(f && f.data || '').slice(0,10); return (d && d <= o) ? d : o; }
+function _pagConsegnaTesto(f){ var d = _pagConsegnaData(f); return '\ud83d\udce6 Pagata alla consegna<small style="display:block;font-weight:500;font-size:11px;opacity:.85;margin-top:2px">tutto in contanti · ' + d.split('-').reverse().join('/') + '</small>'; }
 function quickPay(id){
   const f = fatture.find(x=>x.id===id);
   if(!f) return;
@@ -7063,7 +7067,8 @@ function _quickPayConfirmDialog(id){
   html += '<button id="qpcClose" style="background:var(--surface2);border:none;border-radius:99px;width:30px;height:30px;font-size:18px;cursor:pointer;color:var(--ink3)">\u00d7</button>';
   html += '</div>';
   html += '<div style="font-size:13px;color:var(--ink3);margin-bottom:16px;line-height:1.5"><b style="color:var(--ink)">' + esc(f.fornitore||'\u2014') + '</b> \u2014 <span style="font-size:15px;font-weight:700;color:var(--ink)">' + fmt(f.importo||0) + '</span></div>';
-  html += '<div style="font-size:11px;font-weight:600;color:var(--ink3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Metodo di pagamento</div>';
+  html += '<button id="qpcConsegna" style="width:100%;padding:13px;margin-bottom:16px;border:1.5px solid var(--green);border-radius:12px;background:var(--surface);color:var(--green);font-size:15px;font-weight:700;cursor:pointer;font-family:inherit">' + _pagConsegnaTesto(f) + '</button>';
+  html += '<div style="font-size:11px;font-weight:600;color:var(--ink3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Oppure scegli il metodo</div>';
   html += '<div id="qpcMetodiGrid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px">';
   metodi.forEach(function(m){
     var sel = m.k === metodoDefault;
@@ -7134,6 +7139,7 @@ function _quickPayConfirmDialog(id){
   };
 
   document.getElementById('qpcClose').onclick = function(){ mo.remove(); };
+  document.getElementById('qpcConsegna').onclick = async function(){ mo.remove(); await _finalizzaQuickPay(id, 'contanti', backup, _pagConsegnaData(f), ''); };
   document.getElementById('qpcConfermaBtn').onclick = function(){
     if(selectedMetodo === 'assegno'){
       var numAss = (document.getElementById('qpcAssNum').value||'').trim();
@@ -34142,7 +34148,7 @@ function pnRegistraPagamento(id){
   if(!voci.length || Math.abs(voci[0].v - C.residuo) > 0.009) voci.push({ t: 'Tutto quello che resta', v: C.residuo, metodo: f.pagamento });
   PRP.voci = voci;
   var mo = pnFoglio('pnPaga', { titolo: 'Registra un pagamento', sotto: esc(f.fornitore || '') + ' · n° ' + esc(f.numero || '—') + ' · restano ' + fmt(C.residuo), z: 320, piede: true });
-  mo.querySelector('.pn-sh-bd').innerHTML = '<div class="pp-voci">' + voci.map(function(v, i){ return '<label class="pp-v"><input type="radio" name="ppv" ' + (i === 0 ? 'checked' : '') + ' onchange="PRP.scelta=' + i + ';pprpAggiorna()"><span><b>' + esc(v.t) + '</b>' + (v.assegno ? '<small>assegno n° ' + esc(v.assegno) + '</small>' : '') + '</span><em>' + fmt(v.v) + '</em></label>'; }).join('') +
+  mo.querySelector('.pn-sh-bd').innerHTML = '<button class="sk-btn big" style="width:100%;margin-bottom:12px;color:var(--green);border:1.5px solid var(--green);background:var(--surface)" onclick="pprpConsegna(this)">' + _pagConsegnaTesto(f) + '</button><div class="pp-voci">' + voci.map(function(v, i){ return '<label class="pp-v"><input type="radio" name="ppv" ' + (i === 0 ? 'checked' : '') + ' onchange="PRP.scelta=' + i + ';pprpAggiorna()"><span><b>' + esc(v.t) + '</b>' + (v.assegno ? '<small>assegno n° ' + esc(v.assegno) + '</small>' : '') + '</span><em>' + fmt(v.v) + '</em></label>'; }).join('') +
     '<label class="pp-v"><input type="radio" name="ppv" onchange="PRP.scelta=-1;pprpAggiorna()"><span><b>Un altro importo</b></span><input id="ppAltro" inputmode="decimal" placeholder="0,00" onfocus="this.previousElementSibling.previousElementSibling.checked=true;PRP.scelta=-1" oninput="pprpAggiorna()"></label></div>' +
     '<div class="pr-griglia" style="margin-top:12px"><label class="pr-campo"><span>Pagato il</span><input type="date" id="ppData" value="' + oggi + '"></label><label class="pr-campo"><span>Come</span><select id="ppMetodo">' + [['bonifico', 'Bonifico'], ['assegno', 'Assegno'], ['contanti', 'Contanti'], ['carta', 'Carta'], ['sdd', 'Addebito SDD']].map(function(o){ return '<option value="' + o[0] + '"' + (((voci[0] && voci[0].metodo) || f.pagamento) === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label></div>' +
     '<div class="sk-nota">Quando il movimento arriva in banca, collegalo con «Riconcilia»: l\'importo resta lo stesso, non viene contato due volte.</div>';
@@ -34153,6 +34159,14 @@ function pprpAggiorna(){
   var ft = document.querySelector('#pnPaga .pn-sh-ft'); if(!ft) return;
   var f = pnF(PRP.id), C = scConti(f, fatture), v = scR2(pprpImporto()), troppo = v > C.residuo + 0.009;
   ft.innerHTML = (troppo ? '<div class="nc-tot"><span class="ko">Più di quanto resta da pagare (' + fmt(C.residuo) + ')</span></div>' : '') + '<button class="sk-btn prim big" ' + (v < 0.01 || troppo ? 'disabled' : '') + ' onclick="pprpSalva(this)">Registra ' + fmt(v) + '</button>';
+}
+async function pprpConsegna(btn){
+  var f = pnF(PRP.id); if(!f) return;
+  var C = scConti(f, fatture), a = document.getElementById('ppAltro'), dt = document.getElementById('ppData'), me = document.getElementById('ppMetodo');
+  if(!a || !dt || !me || C.residuo < 0.01) return;
+  PRP.scelta = -1; a.value = String(scR2(C.residuo)).replace('.', ','); dt.value = _pagConsegnaData(f); me.value = 'contanti';
+  var h = btn.innerHTML; await pprpSalva(btn);
+  if(document.body.contains(btn)){ btn.disabled = false; btn.innerHTML = h; } // solo se il salvataggio non è andato a buon fine
 }
 async function pprpSalva(btn){
   var f = pnF(PRP.id); if(!f) return;
