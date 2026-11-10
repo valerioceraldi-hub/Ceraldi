@@ -37443,9 +37443,15 @@ function ricvPrevHtml(){
 async function ricvSalvaSaldoSU(){
   var el = document.getElementById('ceSaldoSU'), v = typeof _ceNumero === 'function' ? _ceNumero(el && el.value) : parseFloat(String(el && el.value).replace(',', '.'));
   if(!isFinite(v)){ toast('Scrivi il saldo, es. 4.250,00', { forza: true }); return; }
-  var d = { saldo: Math.round(v * 100) / 100, al: ricvIso(new Date()), salvato_il: new Date().toISOString() };
+  var oggi = ricvIso(new Date());
+  // Stima PRIMA di scrivere il nuovo saldo, per mostrare lo scarto col numero reale
+  var stima = null; try{ stima = rcSaldoAttuale(window._ceSaldoSU, 'SumUp'); }catch(e){}
+  // Movimenti di oggi già presenti ora: sono già nel saldo che leggi. Quelli che arriveranno dopo si sommano.
+  var inclusi = (typeof _bancaMovimenti !== 'undefined' ? _bancaMovimenti : []).filter(function(m){ return m && (m.banca || 'BPM') === 'SumUp' && String(m.data || '').slice(0, 10) === oggi; }).map(function(m){ return m.id; });
+  var d = { saldo: Math.round(v * 100) / 100, al: oggi, salvato_il: new Date().toISOString(), inclusi: inclusi };
+  if(stima) d.scarto = Math.round((d.saldo - stima.saldo) * 100) / 100;
   window._ceSaldoSU = d;
-  try{ await sbFetch('ceraldi_stato_condiviso?on_conflict=id', { method: 'POST', headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify({ id: 'banca_saldo_sumup', data: d, updated_at: new Date().toISOString() }) }); toast('✓ Saldo SumUp salvato', { forza: true }); }
+  try{ await sbFetch('ceraldi_stato_condiviso?on_conflict=id', { method: 'POST', headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify({ id: 'banca_saldo_sumup', data: d, updated_at: new Date().toISOString() }) }); toast(d.scarto != null && Math.abs(d.scarto) >= 0.5 ? '✓ Saldo salvato. Lo scarto con la stima era ' + fmt(d.scarto) + ': controlla se manca qualche movimento' : '✓ Saldo SumUp salvato (la stima tornava)', { forza: true }); }
   catch(e){ toast('⚠️ Salvato solo su questo dispositivo', { forza: true }); }
   if(typeof _ceRender === 'function') _ceRender();
 }
@@ -38297,7 +38303,10 @@ function rcSaldoAttuale(snap, conto){
   (typeof _bancaMovimenti !== 'undefined' ? _bancaMovimenti : []).forEach(function(m){
     if(!m || (m.banca || 'BPM') !== conto) return;
     var d = String(m.data || '').slice(0, 10);
-    if(!al || d <= al) return;
+    if(!al || d < al) return;
+    // Giorno del saldo: se il saldo riporta l'elenco dei movimenti già visti (snap.inclusi) valgono solo quelli;
+    // senza elenco (saldi vecchi) tutto il giorno si considera già dentro.
+    if(d === al && (!Array.isArray(snap.inclusi) || snap.inclusi.indexOf(m.id) >= 0)) return;
     somma += +m.importo || 0; n++; if(d > fino) fino = d;
   });
   return { saldo: Math.round((snap.saldo + somma) * 100) / 100, al: fino, base: snap.saldo, baseAl: al, n: n, stimato: n > 0 };
@@ -38395,6 +38404,7 @@ function rcChiediSumUp(){
   var mo = pnFoglio('rcFoglio', { titolo: 'Saldo SumUp', sotto: 'Lo trovi nell\'app SumUp, alla voce Conto', z: 330 });
   var _suNota = R.su && R.su.stimato ? '<div class="rc-nota" style="margin-top:0">L\'app stima oggi <b>' + fmt(R.su.saldo) + '</b>: l\'ultimo saldo scritto (' + fmt(R.su.base) + ' il ' + rcGg(R.su.baseAl) + ') più ' + R.su.n + ' movimenti SumUp arrivati dopo, fino al ' + rcGg(R.su.al) + '. Se in SumUp vedi un altro numero, scrivi quello.</div>' : '';
   mo.querySelector('.pn-sh-bd').innerHTML = _suNota + '<label class="rc-lbl">Saldo di oggi (€)</label><input id="ceSaldoSU" type="text" inputmode="decimal" placeholder="Quello che vedi in SumUp" class="rc-inp" value="">' +
+    '<div class="rc-nota">I movimenti di oggi già presenti qui si considerano dentro il saldo; quelli che arrivano dopo vengono sommati. Se in SumUp ne vedi di oggi non ancora importati, aspetta l\'import prima di scrivere il saldo.</div>' +
     '<button class="sk-btn prim big" style="width:100%;margin-top:12px" onclick="rcSalvaSumUp()">Salva</button>';
 }
 async function rcSalvaSumUp(){ if(typeof ricvSalvaSaldoSU === 'function') await ricvSalvaSaldoSU(); pnChiudi('rcFoglio'); aggiornaSaldoCassa(); }
