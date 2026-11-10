@@ -6250,6 +6250,7 @@ function _mostraStep2PagDefault(mo, sheet, nomeForn){
   const esistente = getPagDefault(nomeForn);
   const metodoIniziale = esistente ? (typeof esistente==='string'?esistente:esistente.pagamento) : '';
   const statoIniziale  = esistente ? (typeof esistente==='string'?'da_pagare':(esistente.stato||'pagata')) : 'pagata';
+  const _inpPd = document.getElementById('pagDefaultForn'); if(_inpPd) _inpPd.value = nomeForn; // il salvataggio legge il nome da qui
   _pagDefaultSelezionato = metodoIniziale || '';
   _statoDefaultSelezionato = statoIniziale;
 
@@ -9194,6 +9195,7 @@ function aggiungiPagDefault(){
   });
   ['da_pagare','pagata'].forEach(s=>{ const b=document.getElementById('pds-'+s); if(b) b.className='stato-btn'+(s==='pagata'?' active-ok':''); });
   renderPagDefault();
+  try{ _renderGestioneFornitori((document.getElementById('gestFornCerca')||{}).value||''); }catch(e){}
   toast('✅ Default salvato!');
 }
 
@@ -9202,6 +9204,7 @@ function eliminaPagDefault(forn){
   delete db[forn];
   sbSaveImpostazione(KDP, db).catch(()=>{});
   renderPagDefault();
+  try{ _renderGestioneFornitori((document.getElementById('gestFornCerca')||{}).value||''); }catch(e){}
   toast('Rimosso');
 }
 
@@ -9972,8 +9975,18 @@ function _renderGestioneFornitori(filtro){
   if(!elenco.length){ el.innerHTML = '<div style="text-align:center;color:var(--ink3);padding:24px;font-size:13px">Nessun fornitore trovato</div>'; return; }
   el.innerHTML = elenco.map(n=>{
     const nSicuro = esc(n).replace(/'/g,"\\'");
+    // Pagamento predefinito del fornitore (corrispondenza esatta sul nome, senza somiglianze)
+    let pdTxt = '';
+    try{
+      const dbPd = cacheGet(KDP, {}), kPd = Object.keys(dbPd).find(k=>k.trim().toLowerCase()===n.trim().toLowerCase());
+      if(kPd){
+        const v = dbPd[kPd], pg = (typeof v==='string') ? v : (v && v.pagamento) || '', st = (typeof v==='string') ? 'da_pagare' : (v && v.stato) || 'da_pagare';
+        if(pg) pdTxt = ({contanti:'💵 Contanti',bonifico:'🏦 Bonifico',assegno:'📝 Assegno',carta:'💳 Carta',sdd:'🔁 SDD'}[pg]||pg) + ' · ' + (st==='pagata'?'registrata già pagata':'da pagare');
+      }
+    }catch(e){}
     return `<div class="gf-row" data-nome="${esc(n)}" style="display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--sep)">
-      <span class="gf-nome" style="flex:1;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(n)}</span>
+      <span class="gf-nome" style="flex:1;min-width:0;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(n)}${pdTxt?'<span style="display:block;font-size:11px;color:var(--ink3);margin-top:2px">'+esc(pdTxt)+'</span>':''}</span>
+      <button onclick="_modificaPagDefault('${nSicuro}')" style="background:var(--surface2);border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;padding:6px 9px;color:var(--ink2)" title="Metodo di pagamento e stato predefiniti">💳 Pagamento</button>
       <button onclick="gestioneFornRinomina('${nSicuro}')" style="background:none;border:none;font-size:16px;cursor:pointer;padding:4px" title="Correggi il nome">✏️</button>
       <button onclick="gestioneFornElimina('${nSicuro}')" style="background:none;border:none;font-size:16px;cursor:pointer;padding:4px" title="Rimuovi dai suggerimenti">🗑️</button>
     </div>`;
