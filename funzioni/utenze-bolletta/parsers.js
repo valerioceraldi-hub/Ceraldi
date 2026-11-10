@@ -15,7 +15,7 @@
 export const PIVA_CERALDI = '04523831214';
 // da aumentare ogni volta che cambiano i lettori: le fatture già controllate
 // senza successo vengono ricontrollate col lettore nuovo
-export const VERSIONE_LETTORE = 3;
+export const VERSIONE_LETTORE = 4;
 
 // numero italiano «1.234,56» → 1234.56 ; «13.418» (migliaia) → 13418
 export function num(s) {
@@ -114,6 +114,10 @@ function leggiEnel(R) {
   if ((x = R.cerca(new RegExp('Quota consumi\\s+' + NUM + '\\s*kWh\\s+' + NUM + '\\s*€/kWh\\s+' + NUM + '\\s*€', 'i')))) {
     R.set('consumo', num(x.m[1]), x.r); R.set('prezzo_medio_consumi', num(x.m[2]), x.r); R.set('costo_consumi', num(x.m[3]), x.r);
   }
+  // Energia reattiva immessa/prelevata: è dentro il totale della sezione «Quota consumi» ma non nella riga «Quota consumi … kWh»
+  { let rea = 0, trovata = false, re = new RegExp('Energia reattiva (?:immessa|prelevata)(?: [a-z]+)?\\s+' + NUM + '\\s*kVarh\\s+' + NUM + '\\s*€/kVarh\\s+' + NUM + '\\s*€', 'gi'), mm;
+    while ((mm = re.exec(R.testo || '')) !== null) { rea += num(mm[3]); trovata = true; }
+    if (trovata) R.set('costo_reattiva', Math.round(rea * 100) / 100, 'Energia reattiva (kVarh) fatturata in bolletta'); }
   R.set('unita', 'kWh', 'kWh');
   if ((x = R.cerca(/^Consumi (Rilevati|Stimati)/im))) R.set('letture', /stim/i.test(x.m[1]) ? 'stimata' : 'reale', x.r);
   if ((x = R.cerca(new RegExp('di cui spesa per la vendita di energia elettrica\\s+' + NUM + '\\s*€/kWh\\s+' + NUM + '\\s*€', 'i')))) { R.set('prezzo_medio_vendita', num(x.m[1]), x.r); R.set('costo_vendita_consumi', num(x.m[2]), x.r); }
@@ -312,7 +316,7 @@ export const ETICHETTE = {
   consumo: 'Consumo del periodo', unita: 'Unità', consumo_fasce: 'Consumo per fascia', letture: 'Letture', letture_dettaglio: 'Letture del contatore', consumo_annuo: 'Consumo annuo', consumo_fatturato: 'Consumo fatturato',
   prezzo_medio_consumi: 'Prezzo medio consumi (tutto compreso)', prezzo_medio_vendita: 'Prezzo medio solo energia/materia', prezzo_medio_rete: 'Prezzo medio rete e oneri', costo_consumi: 'Quota consumi €', costo_vendita_consumi: 'di cui vendita €', costo_rete_consumi: 'di cui rete e oneri €',
   quota_fissa: 'Quota fissa €', quota_fissa_mese: 'Quota fissa €/mese', quota_potenza: 'Quota potenza €', prezzo_potenza: 'Prezzo potenza €/kW/mese', potenza_fatturata: 'Potenza fatturata kW', potenza_impegnata: 'Potenza impegnata kW', potenza_max: 'Potenza massima prelevata kW', picchi_potenza: 'Picchi di potenza mensili',
-  accise_iva: 'Accise e IVA €', altre_partite: 'Altre partite €', prezzi_fasce: 'Prezzi per fascia €/kWh', reattiva_fatturata: 'Energia reattiva fatturata kVarh', cosfi: 'Cos φ',
+  accise_iva: 'Accise e IVA €', costo_reattiva: 'Energia reattiva €', altre_partite: 'Altre partite €', prezzi_fasce: 'Prezzi per fascia €/kWh', reattiva_fatturata: 'Energia reattiva fatturata kVarh', cosfi: 'Cos φ',
   offerta_nome: 'Offerta', offerta_tipo: 'Tipo offerta', offerta_codice: 'Codice offerta', offerta_decorrenza: 'Condizioni economiche dal', offerta_scadenza: 'Scadenza condizioni economiche', contratto_scadenza: 'Scadenza contratto', oneri_recesso: 'Oneri di recesso',
   spesa_annua: 'Spesa annua dichiarata €', storico: 'Storico consumi', insoluto: 'Arretrati dichiarati dal fornitore', autolettura: 'Periodo per l\'autolettura', deposito_cauzionale: 'Deposito cauzionale €', tipologia: 'Tipologia bolletta', acconto: 'Bolletta di acconto', tariffa: 'Tariffa', contatore: 'Contatore',
   costo_acquedotto: 'Acquedotto €', costo_fognatura: 'Fognatura €', costo_depurazione: 'Depurazione €', costo_oneri: 'Oneri perequazione €', altri_addebiti: 'Altri addebiti €', scaglioni: 'Scaglioni acqua', prezzi_unitari: 'Prezzi €/m³'
@@ -342,7 +346,7 @@ export function leggiBolletta(testo, opz = {}) {
   if (dati.consumo_fasce && dati.consumo != null) { const s = Object.values(dati.consumo_fasce).reduce((a, b) => a + (+b || 0), 0); c(Math.abs(s - dati.consumo) < 1, 'F1+F2+F3 = consumo totale (' + s + ' kWh)', 'F1+F2+F3 = ' + s + ' ma il totale letto è ' + dati.consumo); }
   if (dati.scaglioni && dati.consumo != null) { const s = dati.scaglioni.reduce((a, b) => a + b.mc, 0); c(Math.abs(s - dati.consumo) < 0.5, 'Scaglioni = consumo (' + s + ' m³)', 'Scaglioni = ' + s + ' m³ ma il consumo letto è ' + dati.consumo); }
   if (dati.imponibile != null && dati.iva != null && dati.totale != null && dati.tipo !== 'luce') c(Math.abs(dati.imponibile + dati.iva - dati.totale) < 0.05, 'Imponibile + IVA = totale', 'Imponibile + IVA (' + (dati.imponibile + dati.iva).toFixed(2) + ') ≠ totale ' + dati.totale);
-  if (dati.tipo === 'luce' && dati.costo_consumi != null && dati.quota_fissa != null && dati.quota_potenza != null && dati.accise_iva != null && dati.totale != null) c(Math.abs(dati.costo_consumi + dati.quota_fissa + dati.quota_potenza + dati.accise_iva + (dati.altre_partite || 0) - dati.totale) < 0.05, 'Consumi + quota fissa + potenza + ' + (dati.altre_partite ? 'altre partite + ' : '') + 'accise/IVA = totale', 'Le voci non tornano col totale');
+  if (dati.tipo === 'luce' && dati.costo_consumi != null && dati.quota_fissa != null && dati.quota_potenza != null && dati.accise_iva != null && dati.totale != null) c(Math.abs(dati.costo_consumi + (dati.costo_reattiva || 0) + dati.quota_fissa + dati.quota_potenza + dati.accise_iva + (dati.altre_partite || 0) - dati.totale) < 0.05, 'Consumi + ' + (dati.costo_reattiva ? 'energia reattiva + ' : '') + 'quota fissa + potenza + ' + (dati.altre_partite ? 'altre partite + ' : '') + 'accise/IVA = totale', 'Le voci non tornano col totale');
   if (dati.tipo === 'gas' && dati.costo_consumi != null && dati.quota_fissa != null && dati.accise_iva != null && dati.totale != null) c(Math.abs(dati.costo_consumi + dati.quota_fissa + dati.accise_iva + (dati.altre_partite || 0) - dati.totale) < 0.05, 'Consumi + quota fissa + ' + (dati.altre_partite ? 'altre partite + ' : '') + 'accise/IVA = totale', 'Le voci non tornano col totale');
   if (dati.costo_vendita_consumi != null && dati.costo_rete_consumi != null && dati.costo_consumi != null) c(Math.abs(dati.costo_vendita_consumi + dati.costo_rete_consumi - dati.costo_consumi) < 0.05, 'Vendita + rete = quota consumi', 'Vendita + rete ≠ quota consumi');
   return { lettore, riconosciuto: ric, dati, campi: R.campi, mancanti, daConfermare, controlli };
