@@ -6263,7 +6263,7 @@ function _mostraStep2PagDefault(mo, sheet, nomeForn){
       <button onclick="document.getElementById('pagDefDropdownMo').remove()" style="background:var(--surface2);border:none;border-radius:99px;width:30px;height:30px;font-size:17px;cursor:pointer">&#215;</button>
     </div>
     <div style="padding:16px 20px">
-      <div style="font-size:12px;color:var(--ink3);font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Come lo paghi di solito?</div>
+      <div style="font-size:12px;color:var(--ink3);font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Come lo paghi di solito? <span style="text-transform:none;font-weight:400">(tocca di nuovo per togliere: deciderai ogni volta)</span></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:16px" id="pagDefaultBtns2">
         ${['contanti','bonifico','assegno','carta','sdd'].map(t=>
           `<button class="pag-btn${t===metodoIniziale?' sc':''}" id="pdb2-${t}" onclick="_pdStep2Metodo('${t}')"><span class="ic">${pagIco[t]}</span>${pagLbl[t]}</button>`
@@ -6280,6 +6280,7 @@ function _mostraStep2PagDefault(mo, sheet, nomeForn){
 }
 
 function _pdStep2Metodo(tipo){
+  if(_pagDefaultSelezionato === tipo) tipo = ''; // ritoccando quello attivo si toglie: metodo deciso ogni volta
   _pagDefaultSelezionato = tipo;
   const cls = {contanti:'sc', bonifico:'sb', assegno:'sa', carta:'sc', sdd:'sb'};
   ['contanti','bonifico','assegno','carta','sdd'].forEach(t=>{
@@ -6298,7 +6299,20 @@ function _pdStep2Stato(stato){
 }
 
 function _pdStep2Salva(){
-  if(!_pagDefaultSelezionato){ toast('⚠️ Scegli un metodo di pagamento'); return; }
+  if(!_pagDefaultSelezionato){
+    // Nessun metodo fisso: resta solo l'eventuale «sempre pagato alla consegna»; senza quello il default sparisce
+    const nome = ((document.getElementById('pagDefaultForn')||{}).value||'').trim();
+    if(!nome){ toast('⚠️ Scegli il fornitore'); return; }
+    const db = cacheGet(KDP, {});
+    const k = Object.keys(db).find(x=>x.trim().toLowerCase()===nome.toLowerCase()) || nome;
+    if(_statoDefaultSelezionato === 'pagata') db[k] = { pagamento: '', stato: 'pagata' }; else delete db[k];
+    sbSaveImpostazione(KDP, db).catch(()=>{});
+    renderPagDefault();
+    try{ _renderGestioneFornitori((document.getElementById('gestFornCerca')||{}).value||''); }catch(e){}
+    toast(_statoDefaultSelezionato === 'pagata' ? '✅ Salvato: sempre pagato, metodo deciso ogni volta' : '✅ Nessun default: decidi ogni volta');
+    const mo3 = document.getElementById('pagDefDropdownMo'); if(mo3) mo3.remove();
+    return;
+  }
   aggiungiPagDefault();
   const mo2 = document.getElementById('pagDefDropdownMo');
   if(mo2) mo2.remove();
@@ -27337,7 +27351,7 @@ function _sfRender(){
   var senzaScad=aperte.filter(function(f){ return !f.scadenza; });
   var metodi=[['contanti','Contanti'],['bonifico','Bonifico'],['sdd','SDD'],['assegno','Assegno'],['carta','Carta']];
   var htmlTermini='<div class="gr-card"><div class="gr-t" style="font-size:14px">Termini di pagamento</div><div class="gr-s" style="margin-bottom:10px">Salvati sul database: valgono su tutti i tuoi dispositivi.</div>'+
-    '<div class="sf-lbl">Metodo abituale</div><div class="sf-chips">'+metodi.map(function(m){ return '<button class="chip'+(metodo===m[0]?' active':'')+'" data-m="'+m[0]+'" onclick="_sfSet(\'metodo\',this.dataset.m)">'+m[1]+'</button>'; }).join('')+'</div>'+
+    '<div class="sf-lbl">Metodo abituale</div><div class="gr-s" style="margin:-2px 0 8px">Se non ne scegli nessuno, il metodo lo decidi ogni volta al pagamento. Tocca di nuovo quello attivo per toglierlo.</div><div class="sf-chips">'+metodi.map(function(m){ return '<button class="chip'+(metodo===m[0]?' active':'')+'" data-m="'+m[0]+'" onclick="_sfSet(\'metodo\',this.dataset.m)">'+m[1]+'</button>'; }).join('')+'</div>'+
     '<div class="sf-lbl">Scadenza</div><div class="sf-chips">'+[['0','Subito'],['30','30 gg'],['60','60 gg'],['90','90 gg']].map(function(g){ return '<button class="chip'+(String(giorni)===g[0]?' active':'')+'" data-g="'+g[0]+'" onclick="_sfSet(\'giorni\',this.dataset.g)">'+g[1]+'</button>'; }).join('')+
       '<input id="sfGiorni" type="number" inputmode="numeric" min="0" max="365" placeholder="altro" value="'+(['','0','30','60','90'].indexOf(String(giorni))<0?esc(String(giorni)):'')+'" oninput="_sfSet(\'giorni\',this.value,true)" style="width:78px;padding:7px 10px;font-size:13px"></div>'+
     '<label class="sf-toggle"><input type="checkbox" id="sfFineMese" '+(fineMese?'checked':'')+' onchange="_sfSet(\'fineMese\',this.checked)"> <span>Fine mese (es. «30 gg fine mese»)</span></label>'+
@@ -27387,6 +27401,8 @@ async function _sfSetCategoria(k){
 }
 function _sfSet(campo, val, daInput){
   if(!_sfStato || !_sfStato.sel) return;
+  // Il metodo si può anche togliere: ritoccando quello attivo resta «nessuno» e si decide di volta in volta
+  if(campo==='metodo' && _sfStato.sel.metodo===val) val='';
   _sfStato.sel[campo]=val;
   if(campo==='metodo') document.querySelectorAll('#sfBody [data-m]').forEach(function(b){ b.classList.toggle('active', b.dataset.m===val); });
   if(campo==='giorni'){
@@ -27405,6 +27421,9 @@ async function _sfSalva(){
     // allinea anche il "pagamento predefinito" già usato dall'app all'inserimento
     // delle fatture (KDP), con la stessa funzione che lo sincronizza su Supabase
     if(rec.metodo_pagamento){ try{ var db=cacheGet(KDP,{}); var prec=db[S.nome]; db[S.nome]={pagamento:rec.metodo_pagamento, stato:(prec&&prec.stato)||'da_pagare'}; sbSaveImpostazione(KDP,db).catch(function(){}); }catch(e){} }
+    else { // nessun metodo abituale: si decide ogni volta. Tolgo il metodo dal predefinito; se il fornitore è «sempre pagato alla consegna» resta solo quell'impostazione
+      try{ var db2=cacheGet(KDP,{}), k2=Object.keys(db2).find(function(k){ return k.trim().toLowerCase()===S.nome.trim().toLowerCase(); });
+        if(k2){ var pr2=db2[k2]; if(pr2 && typeof pr2==='object' && pr2.stato==='pagata') db2[k2]={pagamento:'', stato:'pagata'}; else delete db2[k2]; sbSaveImpostazione(KDP,db2).catch(function(){}); } }catch(e){} }
     S.row=Object.assign({}, S.row||{}, rec);
     toast('✓ Scheda salvata');
     _sfRender();
