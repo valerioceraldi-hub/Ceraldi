@@ -76,3 +76,5 @@ Foto da Wikimedia Commons con licenza libera (uso commerciale consentito citando
 | `purgatorio-teschio-inferriata.jpg` | Adam Harangozó | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Santa_Maria_delle_Anime_del_Purgatorio_ad_Arco_01.jpg) |
 | `galleria-umberto-mosaico-leone.jpg` (ritagliata) | IlSistemone | CC BY-SA 3.0 | [Commons](https://commons.wikimedia.org/wiki/File:NaplesGalleryUmbertoILeone.jpg) |
 | `banksy-madonna-2012.jpg` | ho visto nina volare | CC BY-SA 2.0 | [Flickr](https://www.flickr.com/photos/41099823@N00/8109248839) |
+| `palazzo-reale-giardino.jpg` | Yair Haklai | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Royal_Palace_(Naples)_-_Garden.jpg) |
+| `sansevero-navata-pavimento.jpg` | David Sivyer | CC BY-SA 2.0 | [Commons](https://commons.wikimedia.org/wiki/File:Immagine_d%27insieme_2,_Cappella_Sansevero.jpg) |
