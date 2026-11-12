@@ -309,7 +309,7 @@ def ritorno_sito(sito):
     """Barra sottile in cima: «‹ dominio» per tornare alla home del sito (il menu ha la grafica dell'app, non la barra del sito)."""
     p = urllib.parse.urlparse(sito); home = p.scheme + '://' + p.netloc + '/'
     nome = re.sub(r'^www\.', '', p.netloc)
-    return ('<a class="ritorno-sito" href="%s" style="display:block;max-width:480px;margin:0 auto;padding:7px max(20px,env(safe-area-inset-left,0px));'
+    return ('<a class="ritorno-sito" href="%s" style="display:block;max-width:var(--lw,480px);margin:0 auto;padding:7px max(20px,env(safe-area-inset-left,0px));'
             'background:var(--scuro);color:var(--su-scuro);font:500 .75rem/1.3 var(--f-testo);letter-spacing:.06em;text-decoration:none;opacity:.92">&lsaquo; %s</a>') % (home, nome)
 
 def main():
