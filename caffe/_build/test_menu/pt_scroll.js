@@ -15,6 +15,12 @@ ok('finestra aperta: pagina bloccata',await p.evaluate(()=>document.body.style.p
 await p.mouse.move(195,600);await p.mouse.wheel(0,500);await p.waitForTimeout(200);
 ok('rotella con finestra aperta non sposta la pagina sotto',Math.round(-parseFloat(await p.evaluate(()=>document.body.style.top)))===ys);
 ok('chiudi visibile con testo',/Chiudi/i.test(await p.locator('.chiudi').first().textContent()));
+const cb=await p.locator('.chiudi').first().boundingBox();
+ok('Chiudi dentro lo schermo',cb.y>=0&&cb.y+cb.height<=700&&cb.x+cb.width<=390);
+await p.evaluate(()=>{const f=document.querySelector('.foglio');f.style.maxHeight='300px';const sp=document.createElement('div');sp.style.height='1500px';f.appendChild(sp);f.scrollTop=900;});
+await p.waitForTimeout(100);const cb2=await p.locator('.chiudi').first().boundingBox();const fb=await p.locator('.foglio').boundingBox();
+ok('Chiudi resta visibile scorrendo la scheda',cb2.y>=fb.y-1&&cb2.y<fb.y+80);
+ok('Wi-Fi e lingua nascosti con finestra aperta',await p.evaluate(()=>[...document.querySelectorAll('.wf,.lng')].every(e=>getComputedStyle(e).display==='none')));
 await p.locator('.chiudi').first().click();await p.waitForTimeout(200);
 ok('dopo la chiusura stessa posizione '+await y(),Math.abs(await y()-ys)<=2);
 await p.locator('.ind').first().click();await p.waitForTimeout(300);
