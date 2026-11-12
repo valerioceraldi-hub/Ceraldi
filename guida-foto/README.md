@@ -73,3 +73,6 @@ Foto da Wikimedia Commons con licenza libera (uso commerciale consentito citando
 | `santa-chiara-schienale-maiolica.jpg` | MentNFG | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Chiostro_di_Santa_Chiara_WLM24_(34).jpg) |
 | `san-lorenzo-abside-altare.jpg` | Giuseppe Guida | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Basilica_di_San_Lorenzo_Maggiore._(6146).jpg) |
 | `piazza-girolamini.jpg` | Rodrigo Silva | CC BY 2.0 | [Commons](https://commons.wikimedia.org/wiki/File:Piazza_Girolamini_-_Naples_-_Italy_(15036436065).jpg) |
+| `purgatorio-teschio-inferriata.jpg` | Adam Harangozó | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Santa_Maria_delle_Anime_del_Purgatorio_ad_Arco_01.jpg) |
+| `galleria-umberto-mosaico-leone.jpg` (ritagliata) | IlSistemone | CC BY-SA 3.0 | [Commons](https://commons.wikimedia.org/wiki/File:NaplesGalleryUmbertoILeone.jpg) |
+| `banksy-madonna-2012.jpg` | ho visto nina volare | CC BY-SA 2.0 | [Flickr](https://www.flickr.com/photos/41099823@N00/8109248839) |
