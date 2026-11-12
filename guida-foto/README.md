@@ -69,3 +69,7 @@ Foto da Wikimedia Commons con licenza libera (uso commerciale consentito citando
 | `certosa-san-martino.jpg` | Tremej | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Il_chiostro_grande_del_Dosio_a_dicembre_Certosa_di_San_Martino_Napoli.jpg) |
 | `castel-sant-elmo.jpg` | Wolfgang Moroder | CC BY-SA 3.0 | [Commons](https://commons.wikimedia.org/wiki/File:Castel_Sant_Elmo_Napoli_lato_ingresso.jpg) |
 | `san-biagio-dei-librai.jpg` | Luca Aless | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Napoli_-_Via_San_Biagio_dei_librai_(Spaccanapoli).JPG) |
+| `port-alba-via-dei-librai.jpg` | Adam Harangozó | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Port%27Alba,_Naples_01.jpg) |
+| `santa-chiara-schienale-maiolica.jpg` | MentNFG | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Chiostro_di_Santa_Chiara_WLM24_(34).jpg) |
+| `san-lorenzo-abside-altare.jpg` | Giuseppe Guida | CC BY-SA 4.0 | [Commons](https://commons.wikimedia.org/wiki/File:Basilica_di_San_Lorenzo_Maggiore._(6146).jpg) |
+| `piazza-girolamini.jpg` | Rodrigo Silva | CC BY 2.0 | [Commons](https://commons.wikimedia.org/wiki/File:Piazza_Girolamini_-_Naples_-_Italy_(15036436065).jpg) |
