@@ -5,7 +5,7 @@ await p.route('**/*',r=>/^file:/.test(r.request().url())?r.continue():r.abort())
 await p.goto('file://'+process.cwd()+'/out/index.html');
 await p.addStyleTag({content:'#app{padding-bottom:1800px}'});
 const y=()=>p.evaluate(()=>Math.round(window.scrollY));
-await p.evaluate(()=>window.scrollTo(0,250));await p.waitForTimeout(100);const y0=await y();ok('home scrollata '+y0,y0>100);
+await p.evaluate(()=>window.scrollTo(0,250));await p.waitForTimeout(100);await p.locator('.tav').first().scrollIntoViewIfNeeded();await p.waitForTimeout(100);const y0=await y();ok('home scrollata '+y0,y0>100);
 await p.locator('.tav').first().click();await p.waitForTimeout(200);
 ok('sezione in cima',(await y())===0);
 await p.evaluate(()=>window.scrollTo(0,180));await p.waitForTimeout(100);const ys=await y();
