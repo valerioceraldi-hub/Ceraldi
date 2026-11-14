@@ -33594,7 +33594,13 @@ async function _ncTogliUso(nc, f){
   if(!u) return;
   if(f){
     var lordo = Math.abs(f.importo || 0);
-    if(u.pagata){ f.parzPagato = scR2(Math.min(lordo, (f.parzPagato || 0) + u.imp)); f.stato = (f.parzPagato >= lordo - 0.01) ? 'pagata' : 'parziale'; }
+    if(u.pagata){
+      // 14/11/2026: fattura «pagata» con parzPagato a 0 = pagata per intero (stessa convenzione di
+      // _eseguiAggancioNC → pagatoReale). Prima lo 0 era letto come «pagato zero» e la fattura
+      // tornava «parziale» con soldi senza prove (caso ME.PA. 3224/C, nota di credito 129039).
+      var baseP = (scStato(f) === 'pagata' && (f.parzPagato || 0) <= 0.01) ? lordo : (f.parzPagato || 0);
+      f.parzPagato = scR2(Math.min(lordo, baseP + u.imp)); f.stato = (f.parzPagato >= lordo - 0.01) ? 'pagata' : 'parziale';
+    }
     else { f.parzPagato = Math.max(0, scR2((f.parzPagato || 0) - u.imp)); f.stato = f.parzPagato > 0.01 ? 'parziale' : 'da_pagare'; }
     var num = String(nc.numero || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     f.note = String(f.note || '').replace(new RegExp('(\\s·\\s)?Nota di credito N°' + num + ' applicata: -€\\s?[\\d.,]+'), '').replace(/^\s*·\s*/, '').trim();
