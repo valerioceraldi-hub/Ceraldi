@@ -590,7 +590,7 @@ function avvisoCreditoIA(){
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.45.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.46.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -1392,7 +1392,8 @@ html[data-theme="dark"] .reg-import-link{border-color:rgba(255,255,255,.08)}
     <button class="chip" id="inctab-versamenti" onclick="setIncTab('versamenti',this)">📤 Versamenti</button>
     <button class="chip" id="inctab-lista" onclick="setIncTab('lista',this)">📋 Storico</button>
     <button class="chip" id="inctab-banca" onclick="setIncTab('banca',this)">🏦 Riconciliazione</button>
-    <button class="chip" id="inctab-carta" onclick="setIncTab('carta',this)">💳 Carta</button>
+    <!-- v10.46.0: la carta Nexi si riconcilia nella Riconciliazione unica (conto «Carta Nexi»): il tab Carta resta nel codice ma non si mostra -->
+    <button class="chip" id="inctab-carta" onclick="setIncTab('carta',this)" style="display:none">💳 Carta</button>
     <button class="chip" id="inctab-paypal" onclick="setIncTab('paypal',this)">🅿️ PayPal</button>
   </div>
 
@@ -1667,7 +1668,7 @@ html[data-theme="dark"] .reg-import-link{border-color:rgba(255,255,255,.08)}
          strumenti tecnici, uso raro — stessi identici onclick di prima. -->
     <button class="btn btn-s" style="width:100%;margin-bottom:8px" onclick="_ricChiudi();_controlloIntegritaRiconciliazioni()">🔍 Controllo integrità riconciliazioni</button>
     <button class="btn btn-s" style="width:100%;margin-bottom:8px" onclick="_ricChiudi();ricaricaBancaCompleta()">🔄 Ricarica tutti i movimenti da zero (se un numero non torna)</button>
-    <button class="btn btn-s" style="width:100%" onclick="_ricChiudi();ricvVistaAttiva()&&!RICV.soloClassica?ricvUsaClassica(true):ricvTornaNuova()">🔀 Cambia vista: semplice ↔ classica</button>
+    <button class="btn btn-s" style="width:100%" onclick="_ricChiudi();ricvVistaAttiva()&&!RICV.soloClassica?ricvUsaClassica(true):ricvTornaNuova()">🔀 Vista classica (vecchia) ↔ vista unica</button>
   </div>
 
   <!-- RICONCILIAZIONE CARTA DI CREDITO AZIENDALE (Nexi) — 08/08, richiesta da Valerio -->
@@ -2092,8 +2093,9 @@ html[data-theme="dark"] .reg-import-link{border-color:rgba(255,255,255,.08)}
 
     <div style="background:var(--surface);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);margin-bottom:12px">
       <div style="font-size:16px;font-weight:700;margin-bottom:2px">💳 Carta di credito aziendale (Nexi)</div>
-      <div style="font-size:12px;color:var(--ink3);margin-bottom:12px">Alimenta la Riconciliazione carta (Cassa → Carta di credito)</div>
+      <div style="font-size:12px;color:var(--ink3);margin-bottom:12px">Le spese si collegano alle fatture in Cassa → Riconciliazione, conto «Carta Nexi»</div>
       <button onclick="document.getElementById('inputCartaPDF').click()" class="btn btn-s" style="width:100%;padding:12px;color:var(--red)">📄 Carica estratto Nexi (PDF)</button>
+      <button onclick="_apriEliminaEstrattoCarta()" class="btn btn-s" style="width:100%;padding:10px;margin-top:8px;color:var(--ink3);font-size:12px">🗑️ Elimina un estratto Nexi caricato per errore</button>
       <input type="file" id="inputCartaPDF" accept=".pdf" style="display:none" onchange="onCartaPDFSelected(this)">
       <div id="cartaImportInfo" style="font-size:12px;color:var(--ink3);text-align:center;margin-top:8px"></div>
     </div>
@@ -4598,81 +4600,34 @@ async function _confermaRiconciliaGruppo(){
 // Cassa → Banca, a seconda di dove ti trovi quando te ne accorgi — stessa
 // identica logica applicata, cambia solo da dove si parte per arrivarci).
 async function _applicaGruppoRiconciliazione(sel, movimenti, opts){
+  // v10.46.0: un solo modo di salvare. Prima qui le fatture diventavano sempre «pagate»
+  // (anche se i movimenti non bastavano) e non si poteva annullare. Ora le quote si
+  // distribuiscono fattura per fattura, lo stato si ricalcola dai movimenti (ricvCollega)
+  // e tutto il gruppo si annulla con un solo «Annulla».
   opts = opts || {};
   if(!movimenti.length || !sel.length) return;
-  const totale = sel.reduce((s,f)=>{
-    const residuo = f.stato==='parziale' ? Math.max(0,(f.importo||0)-(f.parzPagato||0)) : (f.importo||0);
-    return s+residuo;
-  }, 0);
-  // Nota di gruppo, identica su tutte le fatture coinvolte — aprendo anche
-  // una sola delle fatture del gruppo si vede subito il quadro intero, non
-  // solo "la sua quota".
-  const elencoFatture = sel.map(f=>'N°'+(f.numero||'')+' ('+fmt(f.importo||0)+')').join(', ');
-  const elencoMovimenti = movimenti.map(m=>(m.data||'')+' '+fmt(Math.abs(m.importo))).join(' + ');
-  const notaGruppo = 'Pagamento di gruppo: '+sel.length+' fatture ('+elencoFatture+') pagate insieme con '+movimenti.length+' movimenti ('+elencoMovimenti+') — totale '+fmt(totale);
-  // Distribuzione: ogni movimento si aggancia (fatturaId) a UNA fattura del
-  // gruppo, a rotazione — serve solo come riferimento/tracciabilità nel dato
-  // strutturato del movimento bancario; la nota di gruppo sopra, salvata su
-  // OGNI fattura coinvolta, resta la fonte di verità leggibile del quadro
-  // intero, non solo "il suo pezzo".
-  // FIX 24/09: stesso difetto corretto il 23/09 in _cfAbbina — il salvataggio
-  // del movimento partiva senza attesa: se falliva (rete, database), le
-  // fatture venivano segnate pagate da un movimento che nel database restava
-  // "da abbinare". Ora si attende, e al primo errore ci si ferma PRIMA di
-  // toccare le fatture, rimettendo liberi i movimenti già salvati.
-  const _salvati = [];
-  try{
-    for(let i=0;i<movimenti.length;i++){
-      const m = movimenti[i], fRif = sel[i % sel.length];
-      m.abbinata = true;
-      m.fatturaId = fRif.id;
-      m.fatturaLabel = (fRif.fornitore||'')+' N°'+(fRif.numero||'') + ' (gruppo di '+sel.length+')';
-      if(typeof salvaMovimentoBanca==='function') await salvaMovimentoBanca(m);
-      _salvati.push(m);
-    }
-  }catch(e){
-    for(const m of movimenti){ m.abbinata = false; m.fatturaId = null; m.fatturaLabel = ''; }
-    for(const m of _salvati){ try{ await salvaMovimentoBanca(m); }catch(e2){} }
-    toast('⚠️ Salvataggio non riuscito, nessuna fattura modificata: riprova ('+String(e.message||e).slice(0,50)+')');
-    return false;
+  var A = (typeof RIC !== 'undefined' && RIC.ARROT) || 0.5;
+  var bisogni = sel.map(function(f){ var b = (typeof ricvBisogno === 'function' ? ricvBisogno(f) : 0); return { f: f, resta: b > A ? b : Math.abs(nettoFattura(f) || f.importo || 0) }; });
+  var piano = movimenti.map(function(m){
+    var resto = Math.abs(+m.importo || 0), docs = [];
+    bisogni.forEach(function(x){ if(resto <= 0.009 || x.resta <= 0.009) return; var q = Math.round(Math.min(x.resta, resto) * 100) / 100; docs.push({ f: x.f, quota: q }); x.resta = Math.round((x.resta - q) * 100) / 100; resto = Math.round((resto - q) * 100) / 100; });
+    return { m: m, docs: docs };
+  }).filter(function(p){ return p.docs.length; });
+  var prima = (typeof RICV !== 'undefined') ? RICV.annulla.length : 0, fatti = 0;
+  for(var i = 0; i < piano.length; i++){
+    var ok = await ricvCollega(ricMovKey(piano[i].m.id), piano[i].docs, { muto: true });
+    if(!ok) break; fatti++;
   }
-  const dataUltima = movimenti.reduce((max,m)=>(m.data||'')>max?m.data:max, '');
-  for(const f of sel){
-    f.stato = 'pagata';
-    f.dataPagamento = dataUltima || f.dataPagamento;
-    f.riconciliata = true;
-    f.pagamentoOrigine = 'manuale';
-    f.pagamentoImpostatoIl = new Date().toISOString();
-    // CORRETTO IL 21/09 (audit): qui il campo riconciliazione veniva costruito
-    // a mano, scavalcando _impostaDatiRiconciliazione — l'unico punto che tiene
-    // aggiornato lo STORICO dei pagamenti e il riferimento bancario. Risultato:
-    // un pagamento di gruppo non compariva mai nella cronologia della fattura
-    // (che pure l'app promette di mostrare), e una fattura con un acconto già
-    // versato passava a "pagata" lasciando parzPagato fermo al vecchio numero.
-    if(typeof _impostaDatiRiconciliazione==='function'){
-      _impostaDatiRiconciliazione(f, movimenti[0], false, nettoFattura(f));
-      f.riconciliazione.data = dataUltima || f.riconciliazione.data;
-      f.riconciliazione.descrizione = notaGruppo.slice(0,300);
-      if(f.riconciliazioneStorico && f.riconciliazioneStorico.length){
-        f.riconciliazioneStorico[f.riconciliazioneStorico.length-1] = Object.assign({}, f.riconciliazione);
-      }
-    } else {
-      f.riconciliazione = { movId: movimenti[0].id, data: dataUltima, importo: f.importo||0,
-        descrizione: notaGruppo.slice(0,300), parziale: false, banca: movimenti[0].banca || 'BPM' };
-    }
-    f.parzPagato = 0; // saldata per intero dal gruppo: non resta nessun acconto in sospeso
-    if(typeof dbUpdate==='function') await dbUpdate(f);
-  }
+  if(typeof RICV !== 'undefined'){ var blocco = RICV.annulla.splice(prima); if(blocco.length) ricvPushAnnulla('gruppo di ' + sel.length + ' fatture', async function(){ for(var j = blocco.length - 1; j >= 0; j--) await blocco[j].fn(); }); }
+  if(fatti < piano.length){ toast('⚠️ Collegati ' + fatti + ' movimenti su ' + piano.length + ': il resto non è stato salvato. Puoi annullare dalla Riconciliazione.', { forza: true }); return false; }
   if(opts.ridisegnaLista && typeof renderLista==='function') renderLista();
   if(opts.ridisegnaLista && typeof _uscitaSelezione==='function') _uscitaSelezione();
   if(opts.ridisegnaBanca && typeof renderRiconciliazione==='function') renderRiconciliazione();
-  toast('✓ '+sel.length+' fatture riconciliate insieme con '+movimenti.length+' movimenti', {forza:true});
+  var mancano = bisogni.filter(function(x){ return x.resta > A; });
+  toast('✓ ' + sel.length + ' fatture collegate a ' + movimenti.length + ' movimenti' + (mancano.length ? ' · ' + mancano.length + ' restano in parte da pagare' : '') + ' · si può annullare', { forza: true });
   return true;
 }
 
-// ── Selezione multipla movimenti in Cassa → Banca (23/08, richiesta
-// esplicita di Valerio: stesso strumento di riconciliazione di gruppo del
-// Registro, ma iniziando dal lato movimenti invece che dal lato fatture). ──
 let _bancaSelIds = new Set();
 function _toggleSelBanca(id){
   if(_bancaSelIds.has(id)) _bancaSelIds.delete(id); else _bancaSelIds.add(id);
@@ -19761,21 +19716,26 @@ function _regolaNuovaFattura(fornitore, numero, dataFattura){
 // v10.45.0 (audit P1.8): date gg/mm/aaaa anche nella riconciliazione classica
 function _ricGgC(d){ d = String(d || ''); return /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(8, 10) + '/' + d.slice(5, 7) + '/' + d.slice(0, 4) : d; }
 function renderRiconciliazione(){
+  // v10.46.0: la vista unica usa le verifiche di cassa di questa funzione
+  // (POS, versamenti, chiusure dimenticate) senza riscriverle: in «solo verifiche»
+  // si calcola tutto ma non si disegna nulla e non si collega nulla.
+  var _soloVer = !!window._ricSoloVerifiche;
+  if(!_soloVer && typeof RICV !== 'undefined') RICV.cassaMemo = null;
   var _rcMandatiMappa = null; try{ _rcMandatiMappa = (typeof _rcMappaMandati==='function') ? _rcMappaMandati() : null; }catch(e){}
   window._rcMMcache = _rcMandatiMappa;
   if(typeof _renderEstrattiCaricatiBanca==='function') _renderEstrattiCaricatiBanca();
   if(typeof _ricAggiornaChrome==='function') _ricAggiornaChrome();
-  var wrap = document.getElementById('bancaContenuto');
+  var wrap = _soloVer ? document.createElement('div') : document.getElementById('bancaContenuto');
   if(!wrap) return;
   // v10.15 — riconciliazione semplice (un movimento, un posto). La vista
   // classica resta disponibile da «⋯» e per le verifiche di cassa.
-  var _rvNuova = typeof ricvVistaAttiva === 'function' && ricvVistaAttiva() && !RICV.soloClassica;
-  if(typeof ricvAggiornaTorna === 'function') ricvAggiornaTorna(_rvNuova);
+  var _rvNuova = !_soloVer && typeof ricvVistaAttiva === 'function' && ricvVistaAttiva() && !RICV.soloClassica;
+  if(!_soloVer && typeof ricvAggiornaTorna === 'function') ricvAggiornaTorna(_rvNuova);
   if(_rvNuova){
     try{ ricvRender(); return; }
     catch(_rvE){ console.warn('riconciliazione semplice:', _rvE); if(typeof _registraErrore==='function') _registraErrore('js','Riconciliazione semplice: '+(_rvE && _rvE.message || _rvE)); RICV.soloClassica = true; if(typeof ricvAggiornaTorna === 'function') ricvAggiornaTorna(false); }
   }
-  if((document.getElementById('bancaFiltroConto')||{}).value === 'Nexi'){ document.getElementById('bancaFiltroConto').value = ''; }
+  if(!_soloVer && (document.getElementById('bancaFiltroConto')||{}).value === 'Nexi'){ document.getElementById('bancaFiltroConto').value = ''; }
   var mese = (document.getElementById('bancaMese')||{}).value||'';
   if(!_bancaMovimenti.length){
     wrap.innerHTML = '<div style="text-align:center;padding:24px;color:var(--ink3);font-size:13px">📥 Tocca "Importa" qui sopra per caricare il primo estratto</div>';
@@ -20551,7 +20511,10 @@ function renderRiconciliazione(){
       return '💶 Risulta già pagata '+(p==='contanti'?'in CONTANTI':'con CARTA')+(f.dataPagamento?' il '+_anData(f.dataPagamento):'')+'. Se è lo stesso pagamento, confermando diventa «pagata con '+_metodoMovR+'» e si collega a questo movimento. Se invece l\'hai pagata due volte, tocca «Diversa».';
     };
     var _pagDivC = _pagDivF(matchCerto);
-    if(matchCerto && verificato && matchCerto.stato==='pagata' && !_defDiv1 && !isAssegno && !_matchCertoGiaAgganciato && !_movGiaAltrove && !_pagGiaAssegnatoAuto && !_pagDivC){
+    // v10.46.0: niente collegamenti scritti mentre si disegna la vista classica (non si potevano annullare).
+    // I casi sicuri li collega la vista unica, con resoconto e Annulla; qui restano «da confermare».
+    var _noAutoScrittura = true;
+    if(!_noAutoScrittura && matchCerto && verificato && matchCerto.stato==='pagata' && !_defDiv1 && !isAssegno && !_matchCertoGiaAgganciato && !_movGiaAltrove && !_pagGiaAssegnatoAuto && !_pagDivC){
       m.abbinata       = true;
       m.fatturaId      = matchCerto.id;
       m.fatturaLabel   = (matchCerto.fornitore||'') + ' N°' + (matchCerto.numero||'');
@@ -20583,7 +20546,7 @@ function renderRiconciliazione(){
         });
       }
 
-    } else if(matchCerto && !_defaultDiverso(matchCerto.fornitore) && !isAssegno && !_matchCertoGiaAgganciato && !_movGiaAltrove && !_pagDivC){
+    } else if(!_noAutoScrittura && matchCerto && !_defaultDiverso(matchCerto.fornitore) && !isAssegno && !_matchCertoGiaAgganciato && !_movGiaAltrove && !_pagDivC){
       m.abbinata     = true;
       m.fatturaId    = matchCerto.id;
       m.fatturaLabel = (matchCerto.fornitore||'') + ' N°' + (matchCerto.numero||'');
@@ -22069,6 +22032,7 @@ function renderRiconciliazione(){
   var _tabAttivo = window._reconTabAttiva || 'fare';
   var _nVerifiche = (typeof nuoviVers!=='undefined' && nuoviVers ? nuoviVers.length : 0)
     + posManutenzioneNumia.length + posScostamentoFiscale.length + posDiscrepanze.length;
+  if(_soloVer){ window._ricVerificheOut = { html: htmlVerifiche, n: _nVerifiche }; return; }
   var _tabs = [
     {key:'fare',        label:'📋 Da fare',      n:daConfermare.length+nonAbbinatiVis.length+nonAbbinatiStipendio.length+datiVerificaManuale.length, color:'#b36a00'},
     {key:'verifiche',   label:'🔎 Verifiche',    n:_nVerifiche, color:'var(--orange)'},
@@ -26473,16 +26437,13 @@ async function _anCollegaTrovato(mid, fidsCsv){
     var mv = _bancaNorm(r[0]);
     if(mv.abbinata){ toast('Quel movimento nel frattempo è stato abbinato: ricarico'); await _anDopoAzionePagamento(); return; }
     if(!confirm('Collego '+(fs.length === 1 ? 'la fattura '+(fs[0].fornitore||'')+' N° '+(fs[0].numero||'') : 'le '+fs.length+' fatture ('+fs.map(function(f){ return 'N° '+f.numero; }).join(', ')+')')+' al pagamento del '+_anData(mv.data)+' ('+fmt(Math.abs(mv.importo||0))+').\n\nCosa succede:\n• '+(fs.length === 1 ? 'la fattura resta pagata' : 'le fatture restano pagate')+', ora con il pagamento vero collegato\n• il movimento sparisce da «da abbinare» in Riconciliazione\n\nConfermi?')) return;
-    if(fs.length === 1){
-      var f = fs[0];
-      mv.abbinata = true; mv.fatturaId = f.id; mv.fatturaLabel = (f.fornitore||'')+' N°'+(f.numero||'');
-      await salvaMovimentoBanca(mv); // prima la banca: se non riesce, la fattura non si tocca
-      _impostaDatiRiconciliazione(f, mv, false, Math.abs(mv.importo||0));
-      f.riconciliata = true; f.stato = 'pagata'; f.dataPagamento = mv.data;
-      await dbUpdate(f);
-    } else {
-      if(!(await _applicaGruppoRiconciliazione(fs, [mv], {}))){ await _anDopoAzionePagamento(); return; } // l'avviso d'errore l'ha già dato
-    }
+    // v10.46.0: un solo modo di salvare un collegamento (ricvCollega): quote per fattura,
+    // stato ricalcolato dai movimenti, Annulla nella Riconciliazione e Scollega quando vuoi.
+    var key = ricMovKey(mid);
+    if(typeof ricvTrovaRaw === 'function' && !ricvTrovaRaw(key)){ (_bancaMovimenti = _bancaMovimenti || []).push(mv); if(typeof ricInvalida === 'function') ricInvalida(); }
+    var resto = Math.abs(+mv.importo || 0), docs = [];
+    fs.forEach(function(f){ var bis = (typeof ricvBisogno === 'function' ? ricvBisogno(f) : 0) || Math.abs(+f.importo || 0); var q = Math.round(Math.min(bis, resto) * 100) / 100; if(q > 0.009){ docs.push({ f: f, quota: q }); resto -= q; } });
+    if(!docs.length || !(await ricvCollega(key, docs, { muto: true }))){ await _anDopoAzionePagamento(); return; } // l'avviso d'errore l'ha già dato
     toast('✓ Collegat'+(fs.length === 1 ? 'a' : 'e')+' al pagamento del '+_anData(mv.data), {forza:true});
   }catch(e){
     toast('❌ Non riuscito, nulla è stato perso: riprova ('+String(e.message||e).slice(0,50)+')');
@@ -26490,7 +26451,7 @@ async function _anCollegaTrovato(mid, fidsCsv){
   }
   await _anDopoAzionePagamento();
 }
-function _anCercaInBanca(fid){ _anConRitorno(function(){ apriRiconciliaDaFattura(String(fid)); }); }
+function _anCercaInBanca(fid){ _anConRitorno(function(){ ricvDaFattura(fid); }); }
 async function _anSegnaContanti(fid){
   var f = _anTrovaFattura(fid); if(!f) return;
   if(!confirm('Segno che '+(f.fornitore||'')+' N° '+(f.numero||'')+' ('+fmt(Math.abs(f.importo||0))+') è stata pagata in contanti.\n\nCosa succede: resta pagata, il metodo diventa «contanti» e non la cercherò più in banca.\n\nConfermi?')) return;
@@ -27146,7 +27107,8 @@ function _crVaiMovimento(id){
 function _crVaiCarta(){
   var q=(document.getElementById('cercaInp')||{}).value; _crSalvaRecente(q); _crChiudi();
   goTab('incassi', document.querySelectorAll('.tab-item')[2]);
-  setTimeout(function(){ setIncTab('carta', document.getElementById('inctab-carta')); }, 60);
+  // v10.46.0: la carta sta nella Riconciliazione unica
+  setTimeout(function(){ setIncTab('banca', document.getElementById('inctab-banca')); try{ _setBancaConto('Nexi'); }catch(e){} }, 60);
 }
 function _crVaiChiusura(data){
   var q=(document.getElementById('cercaInp')||{}).value; _crSalvaRecente(q); _crChiudi();
@@ -27853,7 +27815,7 @@ async function _bfRipristinaTutte(){
 function _bfCollega(id){
   var f=(fatture||[]).find(function(x){ return String(x.id)===String(id); }); if(!f) return;
   _bfChiudi();
-  apriRiconciliaDaFattura(String(f.id));
+  ricvDaFattura(f.id);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -34302,7 +34264,7 @@ function _pnDisegnaSchedaVero(){
     ]);
     var bt = [];
     if(C.stato !== 'pagata') bt.push('<button class="sk-btn prim" onclick="pnRegistraPagamento(' + pnIdJs(f.id) + ')">✓ Registra pagamento</button>');
-    bt.push('<button class="sk-btn" onclick="apriRiconciliaDaFattura(\'' + f.id + '\')">🔗 Riconcilia con la banca</button>');
+    bt.push('<button class="sk-btn" onclick="ricvDaFattura(' + pnIdJs(f.id) + ')">🔗 Riconcilia con la banca</button>');
     p += '<div class="sk-btns">' + bt.join('') + '</div>';
     if(C.pagato > 0.009) p += '<div class="sk-btns"><button class="sk-btn" style="flex:1" onclick="pnChiediConferma(' + pnIdJs(f.id) + ')">📨 Chiedi conferma al fornitore' + (C.stato === 'pagata' ? ' (saldo)' : ' (acconti)') + '</button></div>';
     p += pnConfermeHtml(f);
@@ -35992,13 +35954,44 @@ var RICV_CAT = {
 // categorie «deboli»: possono comunque avere una fattura (PayPal, avvocato, assicurazione): prima si cerca la fattura
 var RICV_DEBOLI = { stipendio: 1, paypal: 1, legale: 1, assicurazione: 1 };
 var RICV_CAT_ORDINE = ['cliente', 'stipendio', 'tributo', 'mutuo', 'giroconto', 'finanziamento_soci', 'commissione', 'carta', 'paypal', 'incasso', 'versamento', 'restituzione', 'rimborso_spese', 'legale', 'assicurazione', 'altro', 'archivio', 'ignorato'];
+/* v10.46.0 — RICONCILIAZIONE UNICA. Cinque gruppi, ognuno con un compito chiaro:
+   tre gruppi «da fare», le verifiche di cassa (prima solo nella vista classica) e
+   «A posto», che contiene SOLO cose chiuse. «Non sono fatture» non è più un gruppo:
+   i movimenti senza fattura già spiegati stanno in A posto; uno stipendio ancora da
+   collegare in Presenze sta in Da confermare; POS e versamenti in Cassa e incassi.
+   Il gruppo «non» resta nel calcolo (lo usano Riepilogo e altre schermate): cambia
+   solo dove si vede, con ricvGruppoVisto. */
 var RICV_GRUPPI = [
   { k: 'conferma', t: 'Da confermare', s: 'Trovato il documento: dimmi tu', c: 'info' },
   { k: 'sistemare', t: 'Da sistemare', s: 'Qualcosa non torna', c: 'ko' },
   { k: 'capire', t: 'Da capire', s: 'Nessun documento trovato', c: 'warn' },
-  { k: 'non', t: 'Non sono fatture', s: 'Stipendi, tasse, giroconti…', c: 'nd' },
-  { k: 'fatto', t: 'A posto', s: 'Collegati e coerenti', c: 'ok' }
+  { k: 'cassa', t: 'Cassa e incassi', s: 'POS, versamenti, chiusure', c: 'info' },
+  { k: 'fatto', t: 'A posto', s: 'Collegati o spiegati', c: 'ok' }
 ];
+function ricvGruppoVisto(S){
+  if(!S || S.gruppo !== 'non') return S ? S.gruppo : 'capire';
+  if(S.daPresenze) return 'conferma';
+  if(S.cat === 'incasso' || S.cat === 'versamento') return 'cassa';
+  return 'fatto';
+}
+function ricvNomeGruppo(S){
+  if(S && S.gruppo === 'non' && ricvGruppoVisto(S) === 'fatto') return 'Spiegato, senza fattura';
+  if(S && S.daPresenze) return 'Da collegare in Presenze';
+  var g = ricvGruppoVisto(S), G = RICV_GRUPPI.find(function(x){ return x.k === g; });
+  return G ? G.t : '';
+}
+// Verifiche di cassa della vista classica, calcolate senza disegnarle (e senza collegare nulla)
+function ricvCassaVerifiche(){
+  var firma = (typeof ricvFirma === 'function' ? ricvFirma() : '') + '|' + JSON.stringify(ricvFiltri());
+  if(RICV.cassaMemo && RICV.cassaMemo.firma === firma) return RICV.cassaMemo;
+  var out = { html: '', n: 0 };
+  window._ricSoloVerifiche = true; window._ricVerificheOut = null;
+  try{ renderRiconciliazione(); if(window._ricVerificheOut) out = window._ricVerificheOut; }
+  catch(e){ console.warn('verifiche di cassa:', e); if(typeof _registraErrore === 'function') _registraErrore('js', 'Verifiche di cassa: ' + (e.message || e)); }
+  finally{ window._ricSoloVerifiche = false; }
+  RICV.cassaMemo = { firma: firma, html: out.html || '', n: +out.n || 0 };
+  return RICV.cassaMemo;
+}
 
 /* ── contesto dal database: categorie, stipendi collegati in Presenze, proposte rifiutate ── */
 async function ricvCaricaContesto(forza){
@@ -36746,7 +36739,12 @@ async function ricvCollega(key, docs, opz){
     for(var i = 0; i < docs.length; i++){
       var f = docs[i].f, quota = ricR2(Math.abs(docs[i].quota));
       var parziale = docs.length > 1 || quota < Math.abs(+f.importo || 0) - RIC.ARROT;
+      // v10.46.0 (tornare indietro sempre): com'era la fattura prima di questo collegamento.
+      // Resta salvato nel collegamento: scollegando, anche dopo giorni, torna esattamente così.
+      var _prima = { stato: f.stato || '', parzPagato: +f.parzPagato || 0, dataPagamento: f.dataPagamento || '', pagamento: f.pagamento || '', pagamentoOrigine: f.pagamentoOrigine || '', contoPagamento: f.contoPagamento || '', riconciliata: !!f.riconciliata };
       _impostaDatiRiconciliazione(f, movPerDoc, parziale, quota);
+      f.riconciliazione.prima = _prima; f.riconciliazione.quando = new Date().toISOString(); f.riconciliazione.come = opz.auto ? 'automatico' : 'a mano';
+      if(f.riconciliazioneStorico && f.riconciliazioneStorico.length){ var _ult = f.riconciliazioneStorico[f.riconciliazioneStorico.length - 1]; if(_ult && String(_ult.movId) === String(f.riconciliazione.movId)){ _ult.prima = _prima; _ult.quando = f.riconciliazione.quando; _ult.come = f.riconciliazione.come; } }
       if(f.tipo === 'nota_credito'){ f.riconciliazione.rimborso = true; var ul = f.riconciliazioneStorico[f.riconciliazioneStorico.length - 1]; if(ul) ul.rimborso = true; }
       f.riconciliata = true;
       // v10.27: anche se era «pagata in contanti»: se la colleghi a un movimento di banca, in contanti non è uscita (altrimenti la cassa la conta due volte)
@@ -36855,11 +36853,15 @@ async function ricvStacca(key, fid){
   try{
     for(var i = 0; i < docs.length; i++){
       var f = docs[i];
+      // v10.46.0: lo stato di prima salvato nel collegamento (il più vecchio tra quelli tolti)
+      var _tolti = (f.riconciliazioneStorico || []).concat(f.riconciliazione ? [f.riconciliazione] : []).filter(function(s){ return s && (String(s.movId) === mid || ricMovKey(s.movId) === key); });
+      var _primaT = null; _tolti.forEach(function(s){ if(s.prima && (!_primaT || String(s.quando || '') < String(_primaT.q || ''))) _primaT = { p: s.prima, q: s.quando || '' }; });
       f.riconciliazioneStorico = (f.riconciliazioneStorico || []).filter(function(s){ return !s || (String(s.movId) !== mid && ricMovKey(s.movId) !== key); });
       if(f.riconciliazione && (String(f.riconciliazione.movId) === mid || ricMovKey(f.riconciliazione.movId) === key)) f.riconciliazione = f.riconciliazioneStorico.length ? Object.assign({}, f.riconciliazioneStorico[f.riconciliazioneStorico.length - 1]) : null;
       if(f.tipo !== 'nota_credito'){
         var r = _anStatoDopoStacco(f);
-        if(!f.riconciliazione){ f.riconciliata = false; if(f.pagamentoOrigine === 'riconciliazione' || f.pagamentoOrigine === 'banca' || /^(bonifico|assegno|sdd|rid|carta)$/.test(f.pagamento || '')){ f.stato = 'da_pagare'; f.parzPagato = 0; f.dataPagamento = ''; } }
+        if(!f.riconciliazione && _primaT){ var pp = _primaT.p; f.riconciliata = !!pp.riconciliata; f.stato = pp.stato || f.stato; f.parzPagato = +pp.parzPagato || 0; f.dataPagamento = pp.dataPagamento || ''; f.pagamento = pp.pagamento || f.pagamento; f.pagamentoOrigine = pp.pagamentoOrigine || ''; f.contoPagamento = pp.contoPagamento || ''; }
+        else if(!f.riconciliazione){ f.riconciliata = false; if(f.pagamentoOrigine === 'riconciliazione' || f.pagamentoOrigine === 'banca' || /^(bonifico|assegno|sdd|rid|carta)$/.test(f.pagamento || '')){ f.stato = 'da_pagare'; f.parzPagato = 0; f.dataPagamento = ''; } }
         else { f.stato = r.stato; f.parzPagato = r.pagato; }
       } else f.riconciliata = !!(f.riconciliazione && f.riconciliazione.movId);
       await dbUpdate(f);
@@ -36921,7 +36923,31 @@ async function ricvTogliCategoria(key){
   if(!c || !c.id) return;
   try{ await sbFetch('ric_collegamenti?id=eq.' + c.id, { method: 'PATCH', headers: { 'Prefer': 'return=minimal' }, body: JSON.stringify({ stato: 'annullato' }) }); }catch(e){ toast('❌ ' + (e.message || e), { forza: true }); return; }
   var mid = String(ricvTrovaRaw(key).m.id); delete RICV.ctx.cat[mid]; RICV.memo = null;
+  // v10.46.0: anche togliere una categoria si può annullare
+  ricvPushAnnulla('categoria tolta', async function(){ await sbFetch('ric_collegamenti?id=eq.' + c.id, { method: 'PATCH', headers: { 'Prefer': 'return=minimal' }, body: JSON.stringify({ stato: 'attivo' }) }); if(RICV.ctx) RICV.ctx.cat[mid] = c; });
   toast('Categoria tolta', { forza: true }); ricvRidisegna(); ricvApri(key);
+}
+// v10.46.0: una proposta scartata con «Non è questa» si può rimettere, in qualunque momento
+async function ricvRipristinaProposta(key, rifKey){
+  var id = RICV.ctx && RICV.ctx.rif[rifKey]; if(!id || id === 1){ toast('⚠️ Non trovo lo scarto da togliere: ricarica la pagina e riprova', { forza: true }); return; }
+  try{ await sbFetch('ric_collegamenti?id=eq.' + id, { method: 'PATCH', headers: { 'Prefer': 'return=minimal' }, body: JSON.stringify({ stato: 'annullato' }) }); }
+  catch(e){ toast('❌ Non salvato: ' + (e.message || e), { forza: true }); return; }
+  delete RICV.ctx.rif[rifKey]; RICV.memo = null;
+  ricvPushAnnulla('proposta rimessa', async function(){ await sbFetch('ric_collegamenti?id=eq.' + id, { method: 'PATCH', headers: { 'Prefer': 'return=minimal' }, body: JSON.stringify({ stato: 'rifiutato' }) }); if(RICV.ctx) RICV.ctx.rif[rifKey] = id; });
+  toast('✓ La proposta torna tra quelle possibili', { forza: true }); ricvRidisegna(); ricvApri(key);
+}
+// v10.46.0: la regola «fai lo stesso con i prossimi» si toglie da qui (e si può rimettere)
+async function ricvTogliRegola(key, bn){
+  var prima = null;
+  try{
+    var rg = await sbFetch('ceraldi_stato_condiviso?id=eq.ric_regole_categorie&select=data'); var base = (rg && rg[0] && rg[0].data && rg[0].data.regole) || {};
+    prima = JSON.parse(JSON.stringify(base)); delete base[bn];
+    await sbFetch('ceraldi_stato_condiviso?on_conflict=id', { method: 'POST', headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify({ id: 'ric_regole_categorie', data: { regole: base }, updated_at: new Date().toISOString() }) });
+    if(RICV.ctx) RICV.ctx.regole = base;
+  }catch(e){ toast('❌ Non salvato: ' + (e.message || e), { forza: true }); return; }
+  RICV.memo = null;
+  ricvPushAnnulla('regola tolta', async function(){ await sbFetch('ceraldi_stato_condiviso?on_conflict=id', { method: 'POST', headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify({ id: 'ric_regole_categorie', data: { regole: prima }, updated_at: new Date().toISOString() }) }); if(RICV.ctx) RICV.ctx.regole = prima; });
+  toast('✓ Regola tolta: i prossimi movimenti li decidi tu', { forza: true }); ricvRidisegna(); ricvApri(key);
 }
 
 /* ══ SCHERMATA ══ */
@@ -36958,28 +36984,36 @@ function ricvRender(){
   if(!ricvTuttiMovimenti().length){ wrap.innerHTML = '<div id="ricvVista"><div class="rv-vuoto">📥 Tocca «Importa» qui sopra per caricare il primo estratto conto (Banco BPM, SumUp o carta).</div></div>'; return; }
   var C = ricvCalcola(), F = ricvFiltri();
   var nel = [], fuori = { conferma: 0, sistemare: 0, capire: 0 };
-  Object.keys(C.stati).forEach(function(k){ var S = C.stati[k]; if(ricvNelFiltro(S.M, F)) nel.push(S); else if(fuori[S.gruppo] != null && (!F.conto || S.M.conto === F.conto)) fuori[S.gruppo]++; });
+  Object.keys(C.stati).forEach(function(k){ var S = C.stati[k], gv = ricvGruppoVisto(S); if(ricvNelFiltro(S.M, F)) nel.push(S); else if(fuori[gv] != null && (!F.conto || S.M.conto === F.conto)) fuori[gv]++; });
   nel.sort(function(a, b){ return String(b.M.data).localeCompare(String(a.M.data)) || Math.abs(b.M.importo) - Math.abs(a.M.importo); });
-  var per = { conferma: [], sistemare: [], capire: [], non: [], fatto: [] };
-  nel.forEach(function(S){ (per[S.gruppo] || per.capire).push(S); });
+  // v10.46.0: «non» si divide in spiegati (A posto), stipendi da collegare (Da confermare), POS e versamenti (Cassa e incassi)
+  var per = { conferma: [], sistemare: [], capire: [], non: [], cassa: [], fatto: [], spiegati: [] };
+  nel.forEach(function(S){ var gv = ricvGruppoVisto(S); if(S.gruppo === 'non' && gv === 'fatto') per.spiegati.push(S); else if(S.gruppo === 'non' && gv === 'cassa') per.cassa.push(S); else (per[gv] || per.capire).push(S); });
+  var VER = { html: '', n: 0 }; try{ VER = ricvCassaVerifiche(); }catch(e){}
   per.conferma.sort(function(a, b){ var o = { certo: 0, probabile: 1, possibile: 2 }; return (o[a.liv] - o[b.liv]) || String(b.M.data).localeCompare(String(a.M.data)); });
   var docSist = C.docItems;
-  var n = { conferma: per.conferma.length, sistemare: per.sistemare.length + docSist.length, capire: per.capire.length, non: per.non.length, fatto: per.fatto.length };
+  var n = { conferma: per.conferma.length, sistemare: per.sistemare.length + docSist.length, capire: per.capire.length, cassa: VER.n, fatto: per.fatto.length + per.spiegati.length };
   if(!RICV.gruppo) RICV.gruppo = n.conferma ? 'conferma' : (n.sistemare ? 'sistemare' : (n.capire ? 'capire' : 'fatto'));
   var g = RICV.gruppo, tot = nel.length || 1;
   // 20/11/2026: cercando, l'elenco mostra TUTTO ciò che hai trovato, di qualunque gruppo
   // (un movimento «A posto» non resta nascosto dietro «Da confermare»). Toccando un
   // gruppo si restringe a quello; tolta la ricerca si torna come prima.
+  if(g === 'non') g = RICV.gruppo = 'fatto';
   if(F.cerca) g = RICV.cercaG && per[RICV.cercaG] ? RICV.cercaG : 'trovati';
   else RICV.cercaG = null;
-  var pct = Math.round((per.fatto.length + per.non.length) / tot * 100);
+  // v10.46.0: «a posto» conta solo ciò che è chiuso davvero: collegati, spiegati, e POS/versamenti solo se le verifiche di cassa tornano
+  var chiusi = per.fatto.length + per.spiegati.length + (VER.n ? 0 : per.cassa.length);
+  var pct = Math.round(chiusi / tot * 100);
   var ent = nel.filter(function(S){ return S.M.importo > 0; }).reduce(function(s, S){ return s + S.M.importo; }, 0), usc = nel.filter(function(S){ return S.M.importo < 0; }).reduce(function(s, S){ return s - S.M.importo; }, 0);
   try{ var e1 = document.getElementById('bancaStatEnt'), e2 = document.getElementById('bancaStatUsc'), e3 = document.getElementById('bancaStatFare'); if(e1) e1.textContent = '+' + fmt(ent); if(e2) e2.textContent = '−' + fmt(usc); if(e3) e3.textContent = n.conferma + n.sistemare + n.capire; var e3l = document.getElementById('bancaStatFareLbl'); if(e3l) e3l.textContent = 'DA DECIDERE'; }catch(e){}
 
   var h = '<div id="ricvVista">';
   if(RICV.annulla.length) h += '<button class="rv-annulla" onclick="ricvAnnulla()">↩︎ Annulla: ' + esc(RICV.annulla[RICV.annulla.length - 1].t) + '</button>';
   h += '<div class="rv-sintesi"><div class="rv-sint-t"><span>' + nel.length + (nel.length === 1 ? ' movimento' : ' movimenti') + (F.cerca ? (nel.length === 1 ? ' trovato' : ' trovati') + ' in tutti i mesi' : F.mese && !F.dal && !F.al ? ' a ' + (PN_MESI_L[+F.mese.slice(5, 7) - 1] || '') + ' ' + F.mese.slice(0, 4) : (F.dal || F.al ? ' nel periodo scelto' : ' in tutto')) + '</span><b>' + pct + '% a posto</b></div>';
-  h += '<div class="rv-barra" aria-hidden="true">' + ['fatto', 'non', 'conferma', 'capire', 'sistemare'].map(function(k){ var c = k === 'sistemare' ? per.sistemare.length : n[k]; return c ? '<i class="rv-b-' + k + '" style="flex:' + c + '"></i>' : ''; }).join('') + '</div></div>';
+  h += '<div class="rv-barra" aria-hidden="true">' + [['fatto', chiusi], ['conferma', per.conferma.length], ['capire', per.capire.length], ['sistemare', per.sistemare.length], ['cassa', VER.n ? per.cassa.length : 0]].map(function(x){ return x[1] ? '<i class="rv-b-' + x[0] + '" style="flex:' + x[1] + '"></i>' : ''; }).join('') + '</div>' +
+    // riga di situazione: entrate, uscite, cose da fare, ultimo estratto per conto
+    '<div class="rv-sit"><span>Entrate <b class="in">+' + fmt(ent) + '</b></span><span>Uscite <b>' + fmt(-usc) + '</b></span><span>Da fare <b>' + (n.conferma + n.sistemare + n.capire + n.cassa) + '</b></span></div>' +
+    '</div>';
   h += '<div class="rv-gruppi">' + RICV_GRUPPI.map(function(G){
     return '<button class="rv-g rv-g-' + G.k + (G.k === g ? ' on' : '') + '" onclick="ricvSetGruppo(\'' + G.k + '\')" aria-pressed="' + (G.k === g) + '"><span class="rv-g-t"><i></i>' + G.t + '</span><b>' + n[G.k] + '</b><small>' + G.s + '</small></button>';
   }).join('') + '</div>';
@@ -36988,9 +37022,10 @@ function ricvRender(){
 
   h += '<div id="ricvLista" class="rv-lista">';
   var G = RICV_GRUPPI.find(function(x){ return x.k === g; }) || { t: 'Risultati della ricerca' };
-  h += '<div class="rv-lista-h"><h3>' + G.t + '</h3>' + ({ trovati: '<small>in tutti i mesi e i gruppi</small>', conferma: '<small>il più sicuro in cima</small>', sistemare: '<small>una decisione per riga</small>', capire: '<small>manca il documento?</small>', non: '<small>raggruppati da soli</small>', fatto: '<small>i più recenti</small>' })[g] + '</div>';
+  h += '<div class="rv-lista-h"><h3>' + G.t + '</h3>' + ({ trovati: '<small>in tutti i mesi e i gruppi</small>', conferma: '<small>il più sicuro in cima</small>', sistemare: '<small>una decisione per riga</small>', capire: '<small>manca il documento?</small>', non: '<small>raggruppati da soli</small>', fatto: '<small>collegati o spiegati, niente da fare</small>', cassa: '<small>POS e versamenti contro le chiusure</small>' })[g] + '</div>';
   if(g === 'conferma'){
-    var confDoc = per.conferma.filter(function(S){ return !(S.proposte[0] && S.proposte[0].stip); }), confSt = per.conferma.filter(function(S){ return S.proposte[0] && S.proposte[0].stip; });
+    var _eStip = function(S){ return S.daPresenze || (S.proposte[0] && S.proposte[0].stip); };
+    var confDoc = per.conferma.filter(function(S){ return !_eStip(S); }), confSt = per.conferma.filter(_eStip);
     var certi = confDoc.filter(function(S){ return S.liv === 'certo'; }).length;
     if(certi > 1) h += '<button class="sk-btn prim big" onclick="ricvConfermaCerti()">Conferma i ' + certi + ' sicuri</button>';
     if(confDoc.length || !confSt.length) h += ricvRighe(confDoc);
@@ -37011,23 +37046,35 @@ function ricvRender(){
       h += docAltri.slice(0, 80).map(ricvRigaDoc).join('');
       if(docSm.length) h += '<details class="rv-det"' + (docSm.length <= 3 ? ' open' : '') + '><summary><b>' + docSm.length + (docSm.length === 1 ? ' fattura segnata pagata' : ' fatture segnate pagate') + ' senza movimento in banca</b><small>Pagata in contanti? Non ancora pagata? Una per una, con un tocco.</small></summary>' + docSm.slice(0, 80).map(ricvRigaDoc).join('') + '</details>';
     }
-  } else if(g === 'non'){
-    var perCat = {};
-    per.non.forEach(function(S){ var c = S.cat || 'altro'; (perCat[c] = perCat[c] || []).push(S); });
-    RICV_CAT_ORDINE.concat(Object.keys(perCat).filter(function(c){ return RICV_CAT_ORDINE.indexOf(c) < 0; })).forEach(function(c){
-      var L = perCat[c]; if(!L) return;
-      var totc = L.reduce(function(s, S){ return s + S.M.importo; }, 0), daP = L.filter(function(S){ return S.daPresenze; }).length;
-      h += '<button class="rv-cat" onclick="ricvApriCat(\'' + c + '\')" aria-expanded="' + !!RICV.aperte[c] + '"><span><b>' + esc((RICV_CAT[c] || [c])[0]) + '</b><small>' + L.length + (L.length === 1 ? ' movimento' : ' movimenti') + (daP ? ' · ' + daP + ' da collegare in Presenze' : '') + '</small></span><em>' + (totc < 0 ? '−' : '+') + fmt(Math.abs(totc)) + '</em><i>' + (RICV.aperte[c] ? '▾' : '›') + '</i></button>';
-      if(RICV.aperte[c] || F.cerca) h += '<div class="rv-cat-l">' + ricvRighe(L, true) + '</div>';   // cercando, le categorie trovate sono aperte
-    });
-    if(!per.non.length) h += '<div class="rv-vuoto">Nessun movimento in questo gruppo.</div>';
+  } else if(g === 'fatto' || g === 'cassa'){
+    // categorie a fisarmonica (prima era il gruppo «Non sono fatture»)
+    var htmlCat = function(lista){
+      var perCat = {}, o = '';
+      lista.forEach(function(S){ var c = S.cat || 'altro'; (perCat[c] = perCat[c] || []).push(S); });
+      RICV_CAT_ORDINE.concat(Object.keys(perCat).filter(function(c){ return RICV_CAT_ORDINE.indexOf(c) < 0; })).forEach(function(c){
+        var L = perCat[c]; if(!L) return;
+        var totc = L.reduce(function(s, S){ return s + S.M.importo; }, 0);
+        o += '<button class="rv-cat" onclick="ricvApriCat(\'' + c + '\')" aria-expanded="' + !!RICV.aperte[c] + '"><span><b>' + esc((RICV_CAT[c] || [c])[0]) + '</b><small>' + L.length + (L.length === 1 ? ' movimento' : ' movimenti') + '</small></span><em>' + (totc < 0 ? '−' : '+') + fmt(Math.abs(totc)) + '</em><i>' + (RICV.aperte[c] ? '▾' : '›') + '</i></button>';
+        if(RICV.aperte[c] || F.cerca) o += '<div class="rv-cat-l">' + ricvRighe(L, true) + '</div>';   // cercando, le categorie trovate sono aperte
+      });
+      return o;
+    };
+    if(g === 'fatto'){
+      h += per.fatto.length ? ricvRighe(per.fatto) : '<div class="rv-vuoto">Ancora nessun movimento collegato in questo periodo.</div>';
+      if(per.spiegati.length) h += '<div class="rv-sub-h">Senza fattura, già spiegati <small>' + per.spiegati.length + ' · tocca una voce per cambiarla</small></div>' + htmlCat(per.spiegati);
+    } else {
+      h += '<div class="sk-nota rv-cassa-nota">' + (VER.n ? 'Qui sotto i controlli che non tornano: POS confrontati con le chiusure, versamenti da registrare, chiusure dimenticate. Ognuno si risolve da qui.' : '✓ I controlli di cassa del periodo tornano: POS, versamenti e chiusure sono allineati.') + '</div>';
+      if(VER.html) h += '<div class="rv-cassa-ver">' + VER.html + '</div>';
+      if(per.cassa.length) h += '<div class="rv-sub-h">Movimenti di incasso e versamento <small>' + per.cassa.length + '</small></div>' + htmlCat(per.cassa);
+      else h += '<div class="rv-vuoto">Nessun incasso POS o versamento in questo periodo.</div>';
+    }
   } else if(g === 'trovati'){
     h += nel.length ? ricvRighe(nel) : '<div class="rv-vuoto">Nessun movimento trovato in nessun mese. Controlla l\'importo o il testo.</div>';
   } else {
     h += ricvRighe(per[g]);
   }
   h += '</div>';
-  h += '<div class="rv-piede"><button onclick="ricvAutoReport()">🤖 Collegati in automatico</button><button onclick="ricvUsaClassica(true)">Vista classica</button><button onclick="ricvVerificheCassa()">Verifiche di cassa (POS, versamenti)</button><button onclick="ricRileggiSumUp()">Rileggi estratti SumUp</button></div>';
+  h += '<div class="rv-piede"><button onclick="ricvAutoReport()">🤖 Collegati in automatico</button><button onclick="ricRileggiSumUp()">Rileggi estratti SumUp</button><button onclick="ricvUsaClassica(true)">Vista classica (vecchia, sparisce a fine dicembre)</button></div>';
   h += '</div>';
   // 21/10/2026 (Valerio: «apro "Stipendi da collegare" e dopo qualche secondo si chiude»):
   // l'elenco si ridisegna da solo quando arrivano dati nuovi (sincronizzazione, altri
@@ -37039,7 +37086,7 @@ function ricvRender(){
   if(RICV.ctx && RICV.ctx.pronto && !RICV.autoInCorso && ricvAutoAttivo() && RICV.autoN !== ricvTuttiMovimenti().length) setTimeout(function(){ ricvAutoCollega().catch(function(e){ console.warn('auto', e); RICV.autoInCorso = false; }); }, 400);
 }
 function ricvTuttiIMesi(){ ['bancaMese', 'bancaFiltroDal', 'bancaFiltroAl'].forEach(function(id){ var e = document.getElementById(id); if(e) e.value = ''; }); if(typeof _ricAggiornaChrome === 'function') _ricAggiornaChrome(); ricvRender(); }
-function ricvVerificheCassa(){ var cf = document.getElementById('bancaFiltroConto'); if(cf && cf.value === 'Nexi') cf.value = ''; ricvClassicaUnaVolta('verifiche'); }
+function ricvVerificheCassa(){ ricvSetGruppo('cassa'); }   // v10.46.0: le verifiche di cassa stanno nel gruppo «Cassa e incassi»
 function ricvRighe(L, compatte){
   if(!L.length) return '<div class="rv-vuoto">' + ({ conferma: 'Niente da confermare: l\'app non ha proposte aperte.', capire: 'Nessun movimento da capire.', fatto: 'Ancora nessun movimento collegato in questo periodo.', sistemare: 'Niente da sistemare tra i movimenti.' })[RICV.gruppo] + '</div>';
   var sh = L.slice(0, RICV.mostra), h = sh.map(function(S){ return ricvRiga(S, compatte); }).join('');
@@ -37070,6 +37117,7 @@ function ricvRiga(S, compatta){
   else if(S.gruppo === 'sistemare' && S.avvisi && S.avvisi.some(function(a){ return a.cod === 'meta'; })) az = '<button class="sk-btn prim" onclick="ricvSistemaMeta(' + k + ')">Sistema</button>';
   else if(S.gruppo === 'sistemare' && S.completa) az = '<button class="sk-btn prim" onclick="ricvCompleta(' + k + ')">Aggiungi ' + (S.completa.docs.length > 1 ? 'le ' + S.completa.docs.length + ' fatture' : 'la n° ' + esc(S.completa.docs[0].f.numero || '')) + '</button><button class="sk-btn" onclick="ricvApri(' + k + ')">Vedi</button>';
   else if(S.gruppo === 'sistemare' && S.avvisi && S.avvisi[0] && S.avvisi[0].cod === 'nc_e_rimborso') az = '<button class="sk-btn prim" onclick="ricvScollega(' + k + ',' + pnIdJs(S.avvisi[0].f.id) + ')">Scollega dalla nota</button><button class="sk-btn" onclick="ricvApri(' + k + ')">Vedi</button>';
+  else if(S.daPresenze && !(P && P.stip)) az = '<button class="sk-btn prim" onclick="ricvApri(' + k + ')">Scegli dipendente e mese</button>';
   else if(S.gruppo === 'sistemare' || S.gruppo === 'capire') az = '<button class="sk-btn prim" onclick="ricvApri(' + k + ')">Decidi</button>';
   if(az) h += '<div class="rv-az">' + az + '</div>';
   return h + '</div>';
@@ -37087,7 +37135,7 @@ function ricvSceltaDoc(fid){
   var x = (ricvCalcola().docItems || []).filter(function(d){ return d.tipo === 'senza_movimento' && String(d.f.id) === String(fid); })[0] || { t: '', s: '' };
   var id = pnIdJs(f.id), voci = [];
   if(x.nc) voci.push(['È stornata dalla nota di credito', 'La rimetto da pagare e uso la nota n° ' + (x.nc.numero || '') + ' per chiuderla: resta tutto a zero.', 'ricvStornoNc(' + id + ',' + pnIdJs(x.nc.id) + ')', true]);
-  voci.push(['Cerca il pagamento', 'Ti mostro i movimenti in banca e in carta che potrebbero pagarla.', 'apriRiconciliaDaFattura(\'' + esc(String(f.id)) + '\')']);
+  voci.push(['Cerca il pagamento', 'Ti mostro i movimenti in banca e in carta che potrebbero pagarla.', 'ricvDaFattura(' + pnIdJs(f.id) + ')']);
   voci.push(['L\'ho pagata in contanti', 'Resta pagata, con i contanti.', 'ricvSegnaContanti(' + id + ')']);
   voci.push(['Non è ancora pagata', 'La rimetto tra le fatture da pagare.', 'ricvRimettiDaPagare(' + id + ')']);
   var mo = pnFoglio('ricvScelta', { titolo: ricvBello(f.fornitore || '') + ' · n° ' + (f.numero || ''), sotto: fmt(Math.abs(+f.importo || 0)) + ' · ' + ricGg(f.data), z: 335 });
@@ -37132,7 +37180,7 @@ function ricvApri(key){
   var mo = pnFoglio('ricvMov', { titolo: entra ? 'Entrata' : 'Uscita', sotto: esc(M.conto) + ' · ' + ricGg(M.data), alto: true, z: 330 });
   var L = pnLeggiBanca(M.descrizione);
   var h = '<div class="rv-testa"><div class="rv-testa-imp' + (entra ? ' in' : '') + '">' + (entra ? '+' : '−') + fmt(Math.abs(M.importo)) + '</div><div class="rv-testa-chi">' + esc(S.titolo || '—') + '</div>' +
-    '<div class="rv-testa-st"><span class="pn-chip ' + ({ conferma: 'info', sistemare: 'ko', capire: 'warn', non: 'nd', fatto: 'ok' })[S.gruppo] + '">' + esc(RICV_GRUPPI.find(function(G){ return G.k === S.gruppo; }).t) + '</span>' + (S.cat ? '<span class="sk-dim">' + esc((RICV_CAT[S.cat] || [S.cat])[0]) + '</span>' : '') + '</div></div>';
+    '<div class="rv-testa-st"><span class="pn-chip ' + ({ conferma: 'info', sistemare: 'ko', capire: 'warn', cassa: 'info', fatto: 'ok' })[ricvGruppoVisto(S)] + '">' + esc(ricvNomeGruppo(S)) + '</span>' + (S.cat ? '<span class="sk-dim">' + esc((RICV_CAT[S.cat] || [S.cat])[0]) + '</span>' : '') + '</div></div>';
   var kv = [['Tipo', esc(RICV_TIPO_NOME[S.tipo] || 'movimento') + (M.sottotipo ? ' <span class="sk-dim">· ' + esc(M.sottotipo) + '</span>' : '')]];
   if(L.beneficiario) kv.push([entra ? 'Da' : 'A favore di', esc(L.beneficiario)]);
   if(L.causale) kv.push(['Causale', esc(L.causale)]);
@@ -37147,7 +37195,7 @@ function ricvApri(key){
   if(RC && RC.n){
     h += pnSez('Collegato a', ricContiMovimentoHtml(RC, {
       scollega: function(x){ return '<button class="sk-mini" aria-label="Scollega" onclick="ricvScollega(' + k + ',' + pnIdJs(x.f.id) + ')">✕</button>'; },
-      cambia: M.fonte === 'banca' && typeof apriCambioAbbinamentoMov === 'function' ? "pnChiudi('ricvMov');apriCambioAbbinamentoMov(" + ricvJs(M.id) + ")" : ''
+      cambia: ''
     }) + (M.fonte === 'banca' ? '<div class="sk-btns"><button class="sk-btn" onclick="condividiMovimento(' + ricvJs(M.id) + ')">📤 Condividi i conti del movimento</button></div>' : ''));
   }
   // avvisi
@@ -37173,7 +37221,7 @@ function ricvApri(key){
       return '<div class="ric-prop ' + P.livello + '"><div class="ric-prop-h"><div><b>' + esc(P.docs.length > 1 ? P.docs.length + ' documenti di ' + ricvBello(P.docs[0].f.fornitore || '') : (P.docs[0].f.tipo === 'nota_credito' ? 'Rimborso della nota · ' : '') + ricvBello(P.docs[0].f.fornitore || '')) + '</b>' +
         // v10.45.0 (audit P1.6): con un solo documento numero e importo stanno già nel riquadro sotto
         (P.docs.length > 1 ? '<small>' + P.docs.map(function(x){ return 'n° ' + esc(x.f.numero || '—') + ' ' + fmt(Math.abs(x.quota)); }).join(' + ') + '</small>' : '') + '</div>' + ricvChip(P.livello) + '</div>' + '<div class="rv-doc">' + P.docs.map(function(x){ return ricvEstremi(x.f, { quota: x.quota, dataMov: M.data }); }).join('') + '</div>' +
-        '<ul class="ric-motivi">' + P.motivi.map(function(t){ return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>' +
+        '<ul class="ric-motivi">' + P.motivi.map(function(t){ return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>' + ricvSeConfermi(P, M) +
         '<div class="sk-btns"><button class="sk-btn prim sm" onclick="ricvConfermaProposta(' + k + ',' + i + ')">' + (P.spostaDa ? 'Sposta qui la nota' : P.rimborso ? 'Collega il rimborso' : 'Conferma') + '</button><button class="sk-btn sm" onclick="ricvRifiuta(' + k + ',' + i + ')">Non è questa</button></div></div>';
     }).join(''));
   }
@@ -37194,10 +37242,9 @@ function ricvApri(key){
   if(giaStip) h += pnSez('In Presenze', '<div class="sk-nota">' + esc(giaStip.map(function(x){ return x.nome + (x.mese ? ' · ' + ricvMeseNome(x.mese, x.anno) : ''); }).join(', ')) + '. Si modifica da Ceraldi Presenze (Stipendi → bonifici).</div>');
   // cosa posso fare
   var az = [];
-  if(!S.docs || !S.docs.length){
-    if(M.fonte === 'banca' && typeof apriCambioAbbinamentoMov === 'function') az.push('<button class="sk-btn" onclick="pnChiudi(\'ricvMov\');apriCambioAbbinamentoMov(' + ricvJs(M.id) + ')">Scegli tu le fatture</button>');
-    if(M.fonte === 'carta' && typeof _apriPickerAbbinamentoCarta === 'function') az.push('<button class="sk-btn" onclick="pnChiudi(\'ricvMov\');_apriPickerAbbinamentoCarta(' + ricvJs(M.id) + ')">Scegli tu la fattura</button>');
-  } else if(M.fonte === 'banca' && typeof apriCambioAbbinamentoMov === 'function') az.push('<button class="sk-btn" onclick="pnChiudi(\'ricvMov\');apriCambioAbbinamentoMov(' + ricvJs(M.id) + ')">Cambia le fatture</button>');
+  // v10.46.0: un solo «Scegli tu», nella vista unica, con la somma che si aggiorna e Annulla
+  if(!S.docs || !S.docs.length) az.push('<button class="sk-btn" onclick="ricvScegli(' + k + ')">Scegli tu ' + (entra ? 'il documento' : 'le fatture') + '</button>');
+  else { var _qL = (ricIndice().quoteMov[key] || {}).libero || 0; if(_qL > RIC.ARROT) az.push('<button class="sk-btn" onclick="ricvScegli(' + k + ')">Aggiungi fatture per i ' + fmt(_qL) + ' che restano</button>'); }
   if(az.length) h += '<div class="sk-btns">' + az.join('') + '</div>';
   if(!S.docs || !S.docs.length){
     var opz = entra ? ['cliente', 'giroconto', 'finanziamento_soci', 'restituzione', 'legale', 'altro'] : ['tributo', 'giroconto', 'finanziamento_soci', 'commissione', 'mutuo', 'legale', 'assicurazione', 'rimborso_spese', 'altro'];
@@ -37207,7 +37254,180 @@ function ricvApri(key){
     h += (conProp ? '' : '<section class="sk-sez"><div class="sk-sez-t">Non è una fattura?</div>') + '<div class="rv-cats">' + opz.map(function(c){ return '<button class="rv-catb' + (S.cat === c ? ' on' : '') + '" onclick="ricvSegnaCategoria(' + k + ',\'' + c + '\',document.getElementById(\'ricvRicorda\') && document.getElementById(\'ricvRicorda\').checked)">' + esc(RICV_CAT[c][0]) + '</button>'; }).join('') + '</div>' +
       (b ? '<label class="rv-ricorda"><input type="checkbox" id="ricvRicorda"> Fai lo stesso con i prossimi movimenti a «' + esc(ricvBello(b)) + '»</label>' : '') + (conProp ? '</details>' : '</section>');
   }
+  h += ricvStoriaHtml(S, k);
   mo.querySelector('.pn-sh-bd').innerHTML = h;
+}
+
+// v10.46.0: prima di confermare, cosa cambierà sulle fatture (in parole)
+function ricvSeConfermi(P, M){
+  try{
+    if(!P || !P.docs || !P.docs.length) return '';
+    var tipo = RICV_TIPO_NOME[ricvTipo(M)] || 'pagamento', righe = P.docs.map(function(x){
+      var f = x.f, q = Math.abs(+x.quota || 0), bis = ricvBisogno(f), n = 'n° ' + esc(f.numero || '—');
+      if(f.tipo === 'nota_credito') return n + ': il credito risulta rimborsato con questo movimento (' + fmt(q) + ').';
+      if(!(bis > RIC.ARROT)) return n + ': risultava già coperta; il movimento si aggiunge come prova (' + fmt(q) + ').';
+      if(q >= bis - RIC.ARROT) return n + (scStato(f) === 'pagata' ? ': resta pagata, ora con la prova in banca' : ': risulterà pagata') + ' con ' + esc(tipo) + ' il ' + ricGg(M.data) + '.';
+      return n + ': pagati ' + fmt(q) + ' con questo movimento, resteranno ' + fmt(ricR2(bis - q)) + '.';
+    });
+    return '<div class="rv-seconf"><b>Se confermi</b>' + righe.map(function(r){ return '<span>' + r + '</span>'; }).join('') + '<small>Si può annullare subito, o scollegare quando vuoi.</small></div>';
+  }catch(e){ return ''; }
+}
+// v10.46.0: storia del movimento e tutti i modi di tornare indietro (anche nei giorni dopo)
+function ricvStoriaHtml(S, k){
+  try{
+    var M = S.M, righe = [], mid = M.fonte === 'carta' ? 'carta:' + M.id : String(M.id);
+    (S.docs || []).forEach(function(x){
+      var f = x.f, v = (f.riconciliazioneStorico || []).concat(f.riconciliazione ? [f.riconciliazione] : []).filter(function(s){ return s && (String(s.movId) === mid || ricMovKey(s.movId) === M.key); }), e = v[v.length - 1] || {};
+      var quando = e.quando ? new Date(e.quando).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+      righe.push('<div class="sk-riga"><div class="sk-riga-m"><b>Collegato a n° ' + esc(f.numero || '—') + ' · ' + esc(ricvBello(f.fornitore || '').slice(0, 28)) + '</b><small>' + fmt(Math.abs(x.quota || 0)) + (e.come ? ' · ' + esc(e.come) : '') + (quando ? ' il ' + esc(quando) : '') + (e.prima ? ' · scollegando torna com\'era (' + esc(({ pagata: 'pagata', parziale: 'pagata in parte', da_pagare: 'da pagare' })[e.prima.stato] || e.prima.stato || '—') + ')' : '') + '</small></div>' +
+        '<div class="rv-st-az"><button class="sk-btn sm" onclick="pnChiudi(\'ricvMov\');apriScheda(' + pnIdJs(f.id) + ')">Fattura</button><button class="sk-btn sm" onclick="ricvScollega(' + k + ',' + pnIdJs(f.id) + ')">Scollega</button></div></div>');
+    });
+    var cc = RICV.ctx && RICV.ctx.cat[String(M.id)];
+    if(cc && S.cat) righe.push('<div class="sk-riga"><div class="sk-riga-m"><b>Segnato come «' + esc((RICV_CAT[S.cat] || [S.cat])[0]) + '»</b><small>' + (cc.origine === 'manuale' || cc.origine === 'confermato' ? 'scelto da te' : 'riconosciuto in automatico') + '</small></div><div class="rv-st-az"><button class="sk-btn sm" onclick="ricvTogliCategoria(' + k + ')">Togli</button></div></div>');
+    var bn = (typeof _rcNorm === 'function') ? _rcNorm(ricBeneficiario({ descrizione: M.descrizione }) || '') : '';
+    var rg = bn && RICV.ctx && RICV.ctx.regole && RICV.ctx.regole[bn];
+    if(rg) righe.push('<div class="sk-riga"><div class="sk-riga-m"><b>Regola attiva</b><small>I movimenti a «' + esc(ricvBello(ricBeneficiario({ descrizione: M.descrizione }))) + '» vanno in «' + esc((RICV_CAT[rg] || [rg])[0]) + '»</small></div><div class="rv-st-az"><button class="sk-btn sm" onclick="ricvTogliRegola(' + k + ',' + ricvJs(bn) + ')">Togli la regola</button></div></div>');
+    Object.keys((RICV.ctx && RICV.ctx.rif) || {}).forEach(function(rk){
+      if(rk.indexOf(String(M.id) + '|') !== 0) return;
+      var ref = rk.slice(String(M.id).length + 1), f = /^stip:/.test(ref) ? null : pnF(ref);
+      righe.push('<div class="sk-riga"><div class="sk-riga-m"><b>Hai scartato: ' + (f ? 'n° ' + esc(f.numero || '—') + ' · ' + esc(ricvBello(f.fornitore || '').slice(0, 26)) : 'una proposta di stipendio') + '</b><small>con «Non è questa»: non viene più proposta</small></div><div class="rv-st-az"><button class="sk-btn sm" onclick="ricvRipristinaProposta(' + k + ',' + ricvJs(rk) + ')">Rimetti</button></div></div>');
+    });
+    if(!righe.length) return '';
+    return pnSez('Storia e ritorno indietro', '<div class="sk-nota">Ogni passo si può annullare: subito con «Annulla» in cima alla Riconciliazione, oppure da qui in qualunque momento.</div>' + righe.join(''));
+  }catch(e){ return ''; }
+}
+
+/* ══ v10.46.0 «SCEGLI TU» — un solo selettore, dentro la vista unica ══
+   Dal movimento: solo le fatture con qualcosa da pagare, prima quelle dello stesso
+   fornitore e con l'importo più vicino; selezionandone più di una la somma si
+   aggiorna e dice se torna. Dalla fattura: i movimenti candidati con lo stesso motore.
+   Si salva sempre con ricvCollega: Annulla subito, Scollega quando vuoi. */
+var RSC = null;
+function ricvLibero(S){ var q = ricIndice().quoteMov[S.M.key]; return (S.docs && S.docs.length && q) ? Math.max(0, q.libero || 0) : Math.abs(S.M.importo); }
+function ricvScegli(key){
+  var S = ricvCalcola().stati[key]; if(!S) return;
+  RSC = { key: key, sel: [], cerca: '', tutte: false, mostra: 40 };
+  var entra = S.M.importo > 0;
+  pnFoglio('ricvScegli', { titolo: entra ? 'Scegli il documento' : 'Scegli le fatture', sotto: esc(S.titolo || '') + ' · ' + fmt(Math.abs(S.M.importo)) + ' · ' + ricGg(S.M.data), alto: true, z: 340 });
+  ricvScegliDisegna();
+}
+function ricvScegliCandidati(){
+  var S = ricvCalcola().stati[RSC.key]; if(!S) return [];
+  var M = S.M, entra = M.importo > 0, idx = ricIndice(), ap = ricvAperti(idx), lib = ricvLibero(S), A = RIC.ARROT;
+  var chi = (ricvChi(M, idx)[0] || {}).fk || '', gia = {}; (S.docs || []).forEach(function(x){ gia[String(x.f.id)] = 1; });
+  var cerca = String(RSC.cerca || '').trim().toLowerCase(), num = parseFloat(cerca.replace(/\./g, '').replace(',', '.'));
+  var out = [];
+  (fatture || []).forEach(function(f){
+    if(!f || f.deletedAt || f.deleted_at || f.tipo === 'ddt' || gia[String(f.id)]) return;
+    if(entra ? f.tipo !== 'nota_credito' : f.tipo === 'nota_credito') return;
+    // da pagare davvero (residuo) oppure pagata con banca ma senza movimento; le pagate in contanti no
+    var bis = 0, tipoB = '';
+    if(entra) bis = scNcCredito(f);
+    else if(scStato(f) !== 'pagata'){ bis = scConti(f, fatture).residuo; tipoB = 'aperta'; }
+    else if(pnInBanca(f) === 'attesa'){ bis = ap.bis[String(f.id)] || 0; tipoB = 'attesa'; }
+    if(!RSC.tutte && !(bis > A)) return;
+    if(cerca && !((f.fornitore || '').toLowerCase().indexOf(cerca) >= 0 || String(f.numero || '').toLowerCase().indexOf(cerca) >= 0 || (!isNaN(num) && Math.abs(Math.abs(+f.importo || 0) - num) < 1) || (!isNaN(num) && Math.abs(bis - num) < 1))) return;
+    var base = bis > A ? bis : Math.abs(+f.importo || 0), punti = 0, perche = [];
+    if(chi && ricvFk(f) === chi){ punti += 100; perche.push('stesso fornitore'); }
+    var d = Math.abs(base - lib);
+    if(d <= A){ punti += 60; perche.push('importo uguale'); } else if(lib > 0 && d / lib < 0.15){ punti += 40 * (1 - d / lib / 0.15); perche.push('importo vicino'); }
+    var gg = Math.round((new Date(String(M.data).slice(0, 10)) - new Date(String(f.data || M.data).slice(0, 10))) / 86400000);
+    punti += gg >= 0 ? Math.max(0, 10 - gg / 30) : -5;
+    out.push({ f: f, bis: bis, base: base, punti: punti, perche: perche, tipoB: tipoB });
+  });
+  out.sort(function(a, b){ return b.punti - a.punti || String(b.f.data || '').localeCompare(String(a.f.data || '')); });
+  return out;
+}
+function ricvScegliQuote(){
+  var S = ricvCalcola().stati[RSC.key]; if(!S) return { docs: [], somma: 0, lib: 0 };
+  var lib = ricvLibero(S), resto = lib, docs = [], somma = 0;
+  RSC.sel.forEach(function(x){ var q = ricR2(Math.min(x.base, Math.max(0, resto))); somma = ricR2(somma + x.base); if(q > 0.009){ docs.push({ f: x.f, quota: q, intera: q >= x.base - RIC.ARROT }); resto = ricR2(resto - q); } });
+  return { docs: docs, somma: somma, lib: lib, resto: resto };
+}
+function ricvScegliStato(){
+  var Q = ricvScegliQuote(), A = RIC.ARROT;
+  if(!RSC.sel.length) return { cl: 'nd', t: 'Tocca ' + (Q.lib ? 'quello che questo movimento paga' : 'una fattura') + ': disponibili ' + fmt(Q.lib) + '.' };
+  var d = ricR2(Q.somma - Q.lib);
+  if(Math.abs(d) <= A) return { cl: 'ok', t: '✓ Tornano: ' + fmt(Q.somma) + ' su ' + fmt(Q.lib) + '.' };
+  if(d < 0) return { cl: 'warn', t: 'Selezionati ' + fmt(Q.somma) + ' su ' + fmt(Q.lib) + ': restano ' + fmt(-d) + ' del movimento senza fattura.' };
+  var ult = Q.docs[Q.docs.length - 1], escl = RSC.sel.length - Q.docs.length;
+  return { cl: 'warn', t: 'Selezionati ' + fmt(Q.somma) + ', il movimento è ' + fmt(Q.lib) + (ult && !ult.intera ? ': la n° ' + esc(ult.f.numero || '—') + ' riceve ' + fmt(ult.quota) + ' come acconto' : '') + (escl > 0 ? '; ' + (escl === 1 ? 'una fattura non riceve nulla: toglila' : escl + ' fatture non ricevono nulla: toglile') : '') + '.' };
+}
+function ricvScegliDisegna(){
+  var mo = document.getElementById('ricvScegli'); if(!mo || !RSC) return;
+  var L = ricvScegliCandidati(), sel = {}; RSC.sel.forEach(function(x){ sel[String(x.f.id)] = 1; });
+  var st = ricvScegliStato(), entra = (ricvCalcola().stati[RSC.key] || { M: {} }).M.importo > 0;
+  var h = '<div class="rsc-top"><input class="rsc-cerca" type="search" placeholder="Cerca fornitore, numero o importo" value="' + esc(RSC.cerca) + '" oninput="RSC.cerca=this.value;RSC.mostra=40;ricvScegliDisegna();var i=document.querySelector(\'#ricvScegli .rsc-cerca\');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length);}">' +
+    '<label class="rsc-tutte"><input type="checkbox" ' + (RSC.tutte ? 'checked' : '') + ' onchange="RSC.tutte=this.checked;ricvScegliDisegna()"> Mostra anche ' + (entra ? 'note già usate' : 'quelle già pagate') + '</label></div>';
+  h += '<div class="rsc-lista">' + (L.length ? L.slice(0, RSC.mostra).map(function(x){
+    var on = !!sel[String(x.f.id)], prox = (!entra && typeof scProssima === 'function') ? scProssima(x.f, fatture) : null;
+    return '<button class="rsc-it' + (on ? ' on' : '') + '" onclick="ricvScegliTocca(' + pnIdJs(x.f.id) + ')"><span class="rsc-chk">' + (on ? '✓' : '') + '</span><span class="rsc-m"><b>' + esc(x.f.fornitore || '—') + '</b><small>n° ' + esc(x.f.numero || '—') + ' · ' + ricGg(x.f.data) + (prox ? ' · scade ' + ricGg(prox.data) : '') + '</small>' + (x.perche.length ? '<i>' + esc(x.perche.join(' · ')) + '</i>' : '') + '</span><span class="rsc-v"><b>' + fmt(x.bis > RIC.ARROT ? x.bis : x.base) + '</b><small>' + (x.bis > RIC.ARROT ? (entra ? 'credito libero' : x.tipoB === 'attesa' ? 'pagata, manca la banca' : (Math.abs(x.bis - Math.abs(+x.f.importo || 0)) > 0.01 ? 'resta da pagare' : 'da pagare')) : 'già coperta') + '</small></span></button>';
+  }).join('') + (L.length > RSC.mostra ? '<button class="sk-btn big" onclick="RSC.mostra+=40;ricvScegliDisegna()">Mostra altre ' + Math.min(40, L.length - RSC.mostra) + '</button>' : '') : '<div class="rv-vuoto">' + (RSC.cerca ? 'Niente con «' + esc(RSC.cerca) + '».' : 'Nessuna fattura aperta.') + ' Prova «Mostra anche ' + (entra ? 'note già usate' : 'quelle già pagate') + '».</div>') + '</div>';
+  h += '<div class="rsc-piede"><div class="rsc-st ' + st.cl + '">' + st.t + '</div><button class="sk-btn prim big"' + (RSC.sel.length ? '' : ' disabled') + ' onclick="ricvScegliSalva(this)">Collega' + (RSC.sel.length > 1 ? ' le ' + RSC.sel.length : '') + '</button></div>';
+  mo.querySelector('.pn-sh-bd').innerHTML = h;
+}
+function ricvScegliTocca(fid){
+  var i = RSC.sel.findIndex(function(x){ return String(x.f.id) === String(fid); });
+  if(i >= 0) RSC.sel.splice(i, 1);
+  else { var c = ricvScegliCandidati().find(function(x){ return String(x.f.id) === String(fid); }); if(c) RSC.sel.push(c); }
+  ricvScegliDisegna();
+}
+async function ricvScegliSalva(btn){
+  var Q = ricvScegliQuote(); if(!Q.docs.length) return;
+  var testo = Q.docs.map(function(x){ return (x.f.fornitore || '') + ' n° ' + (x.f.numero || '—') + ': ' + fmt(x.quota) + (x.intera ? '' : ' (acconto)'); }).join('\n');
+  if(!confirm('Collego questo movimento a:\n\n' + testo + (Q.resto > RIC.ARROT ? '\n\nRestano ' + fmt(Q.resto) + ' del movimento senza fattura.' : '') + '\n\nSi può annullare.')) return;
+  if(btn) btn.disabled = true;
+  var key = RSC.key, ok = await ricvCollega(key, Q.docs.map(function(x){ return { f: x.f, quota: x.quota }; }));
+  if(!ok){ if(btn) btn.disabled = false; return; }
+  pnChiudi('ricvScegli'); ricvRidisegna(); if(document.getElementById('ricvMov')) ricvApri(key);
+}
+// Dalla scheda della fattura: i movimenti che possono pagarla, con lo stesso motore
+async function ricvDaFattura(fid){
+  var f = pnF(fid); if(!f) return;
+  if(!RICV.ctx){ toast('Carico i movimenti…', { forza: true }); try{ await ricvCaricaContesto(); }catch(e){} }
+  if(!ricvTuttiMovimenti().length){ toast('⚠️ Nessun estratto caricato: importalo da Fiscale → Importazioni', { forza: true }); return; }
+  RSC = { fid: f.id, cerca: '', mostra: 30 };
+  pnFoglio('ricvDaFatt', { titolo: 'Trova il pagamento', sotto: esc(f.fornitore || '') + ' · n° ' + esc(f.numero || '—') + ' · ' + fmt(Math.abs(+f.importo || 0)), alto: true, z: 340 });
+  ricvDaFatturaDisegna();
+}
+function ricvDaFatturaDisegna(){
+  var mo = document.getElementById('ricvDaFatt'); if(!mo || !RSC) return;
+  var f = pnF(RSC.fid); if(!f) return;
+  var nc = f.tipo === 'nota_credito', stati = ricvCalcola().stati, idx = ricIndice(), A = RIC.ARROT;
+  var bis = nc ? scNcCredito(f) : ricvBisogno(f), base = bis > A ? bis : Math.abs(+f.importo || 0), fk = ricvFk(f);
+  var cerca = String(RSC.cerca || '').trim().toLowerCase(), num = parseFloat(cerca.replace(/\./g, '').replace(',', '.'));
+  var L = [];
+  Object.keys(stati).forEach(function(k){
+    var S = stati[k], M = S.M; if(nc ? M.importo <= 0 : M.importo >= 0) return;
+    if((S.docs || []).some(function(x){ return String(x.f.id) === String(f.id); })) return;
+    var lib = ricvLibero(S); if(!(lib > A)) return;
+    if(cerca && !(String(M.descrizione || '').toLowerCase().indexOf(cerca) >= 0 || String(S.titolo || '').toLowerCase().indexOf(cerca) >= 0 || (!isNaN(num) && Math.abs(lib - num) < 1))) return;
+    var punti = 0, perche = [], prop = (S.proposte || []).find(function(P){ return (P.docs || []).some(function(x){ return String(x.f.id) === String(f.id); }); });
+    if(prop){ punti += 200 + (({ certo: 50, probabile: 30 })[prop.livello] || 0); }   // l'affidabilità la dice già l'etichetta
+    var chi = (ricvChi(M, idx)[0] || {}).fk || ''; if(chi && chi === fk){ punti += 80; perche.push('stesso fornitore'); }
+    var d = Math.abs(lib - base); if(d <= A){ punti += 60; perche.push('importo uguale'); } else if(d / base < 0.15){ punti += 40 * (1 - d / base / 0.15); perche.push('importo vicino'); }
+    var gg = Math.round((new Date(String(M.data).slice(0, 10)) - new Date(String(f.data || M.data).slice(0, 10))) / 86400000);
+    punti += gg >= 0 ? Math.max(0, 10 - gg / 30) : -15;
+    if(!cerca && punti < 20) return;
+    L.push({ S: S, lib: lib, punti: punti, perche: perche, prop: prop });
+  });
+  L.sort(function(a, b){ return b.punti - a.punti || String(b.S.M.data).localeCompare(String(a.S.M.data)); });
+  var h = '<div class="sk-nota">' + (bis > A ? (nc ? 'Credito da incassare: ' : 'Da coprire con un pagamento: ') + '<b>' + fmt(bis) + '</b>.' : 'Questa fattura risulta già coperta: puoi comunque collegare un movimento come prova.') + ' Sopra i più probabili.</div>' +
+    '<input class="rsc-cerca" type="search" placeholder="Cerca nome, causale o importo" value="' + esc(RSC.cerca) + '" oninput="RSC.cerca=this.value;ricvDaFatturaDisegna();var i=document.querySelector(\'#ricvDaFatt .rsc-cerca\');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length);}">';
+  h += L.length ? L.slice(0, RSC.mostra).map(function(x){
+    var M = x.S.M, k = ricvJs(M.key), q = ricR2(Math.min(x.lib, base));
+    return '<div class="rv-riga"><button class="rv-riga-m" onclick="pnChiudi(\'ricvDaFatt\');ricvApri(' + k + ')"><span class="rv-r1"><b>' + esc(x.S.titolo || '—') + '</b><em>' + fmt(-Math.abs(M.importo)).replace('-', '−') + '</em></span><small>' + ricGg(M.data) + ' · ' + esc(M.conto) + (Math.abs(x.lib - Math.abs(M.importo)) > 0.01 ? ' · liberi ' + fmt(x.lib) : '') + '</small></button>' +
+      (x.perche.length || x.prop ? '<div class="rv-perche">' + (x.prop ? ricvChip(x.prop.livello) + ' ' : '') + esc(x.perche.join(' · ')) + '</div>' : '') +
+      '<div class="rv-az"><button class="sk-btn prim" onclick="ricvDaFatturaCollega(' + k + ',' + q + ')">Collega ' + fmt(q) + (q < base - A ? ' (acconto)' : '') + '</button></div></div>';
+  }).join('') : '<div class="rv-vuoto">Nessun movimento libero ' + (RSC.cerca ? 'con «' + esc(RSC.cerca) + '»' : 'che somigli a questa fattura') + '. Cerca per nome o importo.</div>';
+  if(L.length > RSC.mostra) h += '<button class="sk-btn big" onclick="RSC.mostra+=30;ricvDaFatturaDisegna()">Mostra altri</button>';
+  mo.querySelector('.pn-sh-bd').innerHTML = h;
+}
+async function ricvDaFatturaCollega(key, quota){
+  var f = pnF(RSC && RSC.fid); if(!f) return;
+  if(!confirm('Collego ' + fmt(quota) + ' di questo movimento a ' + (f.fornitore || '') + ' n° ' + (f.numero || '—') + '?\n\nSi può annullare.')) return;
+  var ok = await ricvCollega(key, [{ f: f, quota: quota }]);
+  if(ok){ pnChiudi('ricvDaFatt'); ricvRidisegna(); }
 }
 
 /* ── 21/10/2026 «Fattura pagata due volte?» (Valerio: «non mi dà la possibilità di
@@ -37227,7 +37447,7 @@ function ricvHtmlDoppia(a, M, k){
   h += '<div class="sk-nota" style="margin-top:8px">Cosa è successo davvero?</div><div class="sk-btns" style="flex-direction:column;align-items:stretch">';
   if(conMov.length || !prove.length) h += '<button class="sk-btn sm prim" onclick="ricvDoppiaSposta(' + k + ',' + pnIdJs(f.id) + ')">La n° ' + esc(f.numero || '') + ' l\'ho pagata con QUESTO bonifico</button><div class="sk-nota" style="margin:0 2px 6px">' + (conMov.length ? 'Il pagamento del ' + conMov.map(function(p){ return ricGg(p.data); }).join(', ') + ' torna libero: lo colleghi poi alla fattura giusta.' : 'La collego a questo movimento.') + '</div>';
   h += '<button class="sk-btn sm" onclick="ricvDoppiaAnche(' + k + ',' + pnIdJs(f.id) + ')">È stata pagata davvero due volte</button><div class="sk-nota" style="margin:0 2px 6px">La collego anche qui: risulterà ' + fmt(a.libero || 0) + ' pagato in più, da chiedere indietro a ' + esc(ricvBello(f.fornitore || '')) + ' o da scalare (lo segue il Controllo anomalie).</div>';
-  if(typeof apriCambioAbbinamentoMov === 'function' && M.fonte === 'banca') h += '<button class="sk-btn sm" onclick="pnChiudi(\'ricvMov\');apriCambioAbbinamentoMov(' + ricvJs(M.id) + ')">Non è la n° ' + esc(f.numero || '') + ': scelgo io la fattura</button>';
+  h += '<button class="sk-btn sm" onclick="ricvScegli(' + k + ')">Non è la n° ' + esc(f.numero || '') + ': scelgo io la fattura</button>';
   return h + '</div>';
 }
 async function ricvDoppiaSposta(key, fid){
@@ -37329,7 +37549,7 @@ async function ricvAutoCollega(){
     for(var i = 0; i < L.length; i++){
       var S = L[i].S, P = L[i].P;
       if(gia[S.M.key]) continue;
-      var ok = await ricvCollega(S.M.key, P.docs, { muto: true });
+      var ok = await ricvCollega(S.M.key, P.docs, { muto: true, auto: true });
       if(!ok) break;   // senza permesso di scrittura o rete giù: mi fermo subito
       for(var j = 0; j < P.docs.length; j++){
         try{ await sbFetch('ric_collegamenti', { method: 'POST', headers: { 'Prefer': 'return=minimal' }, body: JSON.stringify({ ambito: 'fatture', movimento_id: String(S.M.id), movimento_fonte: S.M.fonte === 'carta' ? 'carta' : 'banca', movimento_chiave: S.M.key, movimento_data: S.M.data || null, evento_tipo: 'fattura', evento_ref: String(P.docs[j].f.id), importo: Math.abs(+P.docs[j].quota || 0), affidabilita: 100, livello: 'auto', origine: 'auto', stato: 'attivo', motivi: (P.motivi || []).slice(0, 12) }) }); }catch(e){ console.warn('auto: registro non scritto', e); }
@@ -41459,6 +41679,43 @@ html:not([data-theme="dark"]){--ink3:#6C6C70;--pn-ok:#1a7a3a;--pn-warn:#9a5300;-
 
 /* P2.4 — sui telefoni la versione va sotto il nome, non sotto i pulsanti */
 @media (max-width:460px){.ios-header .hdr-row p .app-ver{display:table;margin:3px 0 0}}
+</style>
+<style>
+/* ══ RICONCILIAZIONE UNICA v10.46.0 ══ */
+.rv-g-cassa{color:#7a4fd6}
+html[data-theme="dark"] .rv-g-cassa{color:#b59cff}
+.rv-b-cassa{background:#7a4fd6}
+.rv-sit{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:9px;font-size:12.5px;color:var(--ink2)}
+.rv-sit b{color:var(--ink);font-weight:700}.rv-sit b.in{color:var(--rv-ok)}
+.rv-seconf{display:flex;flex-direction:column;gap:3px;margin:8px 0 2px;padding:9px 11px;border-radius:12px;background:var(--blue-light);color:var(--ink);font-size:13px;line-height:1.4}
+.rv-seconf b{font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:var(--blue)}
+.rv-seconf small{color:var(--ink3);font-size:12px}
+.rv-st-az{display:flex;gap:6px;flex-shrink:0}
+.rv-st-az .sk-btn{min-width:0;flex:none;padding:8px 11px;font-size:12.5px}
+.rv-cassa-nota{margin:2px 2px 10px}
+.rv-cassa-ver{margin-bottom:10px}
+.rv-sub-h{margin:16px 4px 8px;font-size:13px;font-weight:750;color:var(--ink2)}
+.rv-sub-h small{font-weight:600;color:var(--ink3);margin-left:4px}
+/* «Scegli tu» */
+.rsc-top{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
+.rsc-cerca{width:100%;box-sizing:border-box;padding:12px 14px;border:1px solid var(--ds-hair,var(--sep));border-radius:12px;background:var(--surface);font:inherit;font-size:15px;color:var(--ink);margin-bottom:8px}
+.rsc-tutte{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink2)}
+.rsc-lista{display:flex;flex-direction:column;gap:6px;padding-bottom:96px}
+.rsc-it{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:1.5px solid var(--ds-hair,var(--sep));background:var(--surface);border-radius:14px;padding:10px 12px;font:inherit;color:var(--ink);cursor:pointer;min-height:56px}
+.rsc-it.on{border-color:var(--blue);background:var(--blue-light)}
+.rsc-chk{width:24px;height:24px;border-radius:7px;border:1.5px solid var(--sep);display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff;flex-shrink:0}
+.rsc-it.on .rsc-chk{background:var(--blue);border-color:var(--blue)}
+.rsc-m{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.rsc-m b{font-size:14.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rsc-m small{font-size:12.5px;color:var(--ink3)}
+.rsc-m i{font-style:normal;font-size:12px;color:var(--rv-ok);font-weight:600}
+.rsc-v{display:flex;flex-direction:column;align-items:flex-end;flex-shrink:0}
+.rsc-v b{font-size:15px;font-weight:800;white-space:nowrap}
+.rsc-v small{font-size:11.5px;color:var(--ink3)}
+.rsc-piede{position:sticky;bottom:0;background:var(--surface);border-top:.5px solid var(--ds-hair,var(--sep));margin:0 -16px;padding:10px 16px calc(10px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:8px}
+.rsc-st{font-size:13.5px;font-weight:650;line-height:1.35}
+.rsc-st.ok{color:var(--pn-ok)}.rsc-st.warn{color:var(--pn-warn)}.rsc-st.nd{color:var(--ink2)}
+.rsc-piede .sk-btn[disabled]{opacity:.45}
 </style>
 <script>
 /* v10.45.0 (audit P0.5): il pulsante dell'assistente copriva gli importi a destra.
