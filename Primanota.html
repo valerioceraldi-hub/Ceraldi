@@ -13825,6 +13825,7 @@ function aprisemIncassi(){
 
 function setIncTab(t, btn){
   _incTabAttivo = t;
+  try{ document.getElementById('view-incassi').setAttribute('data-sub', t); }catch(e){}   // v10.46.0: in Riconciliazione il fondo cassa si fa piccolo
   document.querySelectorAll('#view-incassi .chip-row .chip').forEach(c=>c.classList.remove('active'));
   if(btn) btn.classList.add('active');
   document.querySelectorAll('#view-incassi .inc-sec').forEach(s=>s.style.display='none');
@@ -36765,7 +36766,7 @@ async function ricvCollega(key, docs, opz){
     return false;
   }
   RICV.memo = null;
-  ricvPushAnnulla('collegamento ' + ricvBello(m.descrizione).slice(0, 30), function(){ return ricvRipristina(fd, fm); });
+  ricvPushAnnulla('collegamento a ' + docs.map(function(x){ return ricvBello(x.f.fornitore || '').slice(0, 24) + ' n° ' + (x.f.numero || '—'); }).join(', ').slice(0, 60), function(){ return ricvRipristina(fd, fm); });
   if(!opz.muto) toast('✓ Collegato: ' + docs.map(function(x){ return (x.f.fornitore || '') + ' n° ' + (x.f.numero || ''); }).join(', '), { forza: true });
   return true;
 }
@@ -36953,6 +36954,7 @@ async function ricvTogliRegola(key, bn){
 /* ══ SCHERMATA ══ */
 function ricvRidisegna(){
   RICV.memo = null;
+  try{ if(document.getElementById('ricvGuida')) setTimeout(ricvGuidaDisegna, 0); }catch(e){}
   try{ var w = document.getElementById('bancaContenuto'); if(w && document.getElementById('ricvVista')) ricvRender(); }catch(e){ console.warn(e); }
   try{ if(typeof _schedaAggiorna === 'function') _schedaAggiorna(); }catch(e){}
   try{ if(typeof renderLista === 'function') renderLista(); }catch(e){}
@@ -37009,11 +37011,22 @@ function ricvRender(){
 
   var h = '<div id="ricvVista">';
   if(RICV.annulla.length) h += '<button class="rv-annulla" onclick="ricvAnnulla()">↩︎ Annulla: ' + esc(RICV.annulla[RICV.annulla.length - 1].t) + '</button>';
-  h += '<div class="rv-sintesi"><div class="rv-sint-t"><span>' + nel.length + (nel.length === 1 ? ' movimento' : ' movimenti') + (F.cerca ? (nel.length === 1 ? ' trovato' : ' trovati') + ' in tutti i mesi' : F.mese && !F.dal && !F.al ? ' a ' + (PN_MESI_L[+F.mese.slice(5, 7) - 1] || '') + ' ' + F.mese.slice(0, 4) : (F.dal || F.al ? ' nel periodo scelto' : ' in tutto')) + '</span><b>' + pct + '% a posto</b></div>';
-  h += '<div class="rv-barra" aria-hidden="true">' + [['fatto', chiusi], ['conferma', per.conferma.length], ['capire', per.capire.length], ['sistemare', per.sistemare.length], ['cassa', VER.n ? per.cassa.length : 0]].map(function(x){ return x[1] ? '<i class="rv-b-' + x[0] + '" style="flex:' + x[1] + '"></i>' : ''; }).join('') + '</div>' +
-    // riga di situazione: entrate, uscite, cose da fare, ultimo estratto per conto
-    '<div class="rv-sit"><span>Entrate <b class="in">+' + fmt(ent) + '</b></span><span>Uscite <b>' + fmt(-usc) + '</b></span><span>Da fare <b>' + (n.conferma + n.sistemare + n.capire + n.cassa) + '</b></span></div>' +
+  // v10.46.0 — PRIMA VISTA SEMPLICE: una frase, un pulsante. «Cominciamo» mostra una cosa
+  // alla volta con una domanda sì/no (ricvGuida). I gruppi restano sotto per chi vuole scegliere.
+  var periodoT = F.cerca ? 'nella ricerca' : (F.mese && !F.dal && !F.al ? 'a ' + (PN_MESI_L[+F.mese.slice(5, 7) - 1] || '') + ' ' + F.mese.slice(0, 4) : (F.dal || F.al ? 'nel periodo scelto' : 'in tutto'));
+  var daFare = n.conferma + n.sistemare + n.capire + n.cassa;
+  var nCerti = per.conferma.filter(function(S){ return S.liv === 'certo' && !(S.proposte[0] && S.proposte[0].stip) && !S.daPresenze; }).length;
+  h += '<div class="rv-sintesi rv-ora' + (daFare ? '' : ' ok') + '">' +
+    (daFare
+      ? '<div class="rv-ora-t">' + (daFare === 1 ? 'C\'è 1 cosa da guardare' : 'Ci sono ' + daFare + ' cose da guardare') + ' ' + esc(periodoT) + '</div><div class="rv-ora-s">Te le mostro una alla volta: per ognuna basta rispondere sì o no.</div>' +
+        '<button class="sk-btn prim big rv-ora-go" onclick="ricvGuida()">Cominciamo</button>' +
+        (nCerti > 1 ? '<button class="sk-btn big rv-ora-certi" onclick="ricvConfermaCerti()">Conferma subito i ' + nCerti + ' sicuri</button>' : '')
+      : '<div class="rv-ora-t">✓ Tutto a posto ' + esc(periodoT) + '</div><div class="rv-ora-s">Ogni pagamento ha la sua fattura o una spiegazione.</div>') +
+    '<div class="rv-sint-t"><span>' + nel.length + (nel.length === 1 ? ' movimento' : ' movimenti') + '</span><b>' + pct + '% a posto</b></div>' +
+    '<div class="rv-barra" aria-hidden="true">' + [['fatto', chiusi], ['conferma', per.conferma.length], ['capire', per.capire.length], ['sistemare', per.sistemare.length], ['cassa', VER.n ? per.cassa.length : 0]].map(function(x){ return x[1] ? '<i class="rv-b-' + x[0] + '" style="flex:' + x[1] + '"></i>' : ''; }).join('') + '</div>' +
+    '<div class="rv-sit"><span>Entrati <b class="in">+' + fmt(ent) + '</b></span><span>Usciti <b>' + fmt(usc) + '</b></span></div>' +
     '</div>';
+  h += '<div class="rv-oppure">Oppure scegli tu cosa guardare</div>';
   h += '<div class="rv-gruppi">' + RICV_GRUPPI.map(function(G){
     return '<button class="rv-g rv-g-' + G.k + (G.k === g ? ' on' : '') + '" onclick="ricvSetGruppo(\'' + G.k + '\')" aria-pressed="' + (G.k === g) + '"><span class="rv-g-t"><i></i>' + G.t + '</span><b>' + n[G.k] + '</b><small>' + G.s + '</small></button>';
   }).join('') + '</div>';
@@ -37295,6 +37308,74 @@ function ricvStoriaHtml(S, k){
     if(!righe.length) return '';
     return pnSez('Storia e ritorno indietro', '<div class="sk-nota">Ogni passo si può annullare: subito con «Annulla» in cima alla Riconciliazione, oppure da qui in qualunque momento.</div>' + righe.join(''));
   }catch(e){ return ''; }
+}
+
+/* ══ v10.46.0 «UNA ALLA VOLTA» — la riconciliazione spiegata come a un bambino ══
+   Una cosa per volta, una frase semplice e una domanda. Le risposte usano le stesse
+   azioni di sempre (con Annulla e Scollega), poi passa da sola alla successiva.
+   Ordine: prima le proposte sicure, poi probabili, dubbie, stipendi, cose che non
+   tornano e infine i pagamenti senza fattura trovata. «Salta» non cambia nulla. */
+var RG = { salta: {}, fatti: 0 };
+function ricvDaFare(){
+  var C = ricvCalcola(), F = ricvFiltri(), L = [];
+  Object.keys(C.stati).forEach(function(k){ var S = C.stati[k]; if(!ricvNelFiltro(S.M, F)) return; var g = ricvGruppoVisto(S); if(g === 'conferma' || g === 'sistemare' || g === 'capire') L.push(S); });
+  var peso = function(S){ var g = ricvGruppoVisto(S); if(g === 'conferma'){ if(S.daPresenze && !(S.proposte[0])) return 4; return ({ certo: 0, probabile: 1, possibile: 2 })[S.liv] != null ? ({ certo: 0, probabile: 1, possibile: 2 })[S.liv] : 3; } return g === 'sistemare' ? 5 : 6; };
+  L.sort(function(a, b){ return peso(a) - peso(b) || String(b.M.data).localeCompare(String(a.M.data)); });
+  return L;
+}
+function ricvGuida(){ RG = { salta: {}, fatti: 0, tot: ricvDaFare().length }; pnFoglio('ricvGuida', { titolo: 'Una alla volta', alto: true, z: 335 }); ricvGuidaDisegna(); }
+function ricvGuidaSalta(key){ RG.salta[key] = 1; ricvGuidaDisegna(); }
+async function ricvGuidaFai(fn){ try{ await fn(); RG.fatti++; }catch(e){ console.warn(e); } ricvGuidaDisegna(); }
+function ricvGuidaDisegna(){
+  var mo = document.getElementById('ricvGuida'); if(!mo) return;
+  var L = ricvDaFare(), resto = L.filter(function(S){ return !RG.salta[S.M.key]; }), S = resto[0], bd = mo.querySelector('.pn-sh-bd');
+  var tit = mo.querySelector('.pn-sh-t small'); var sotto = L.length ? (L.length === 1 ? 'Ne resta 1' : 'Ne restano ' + L.length) : 'Finito';
+  if(tit) tit.textContent = sotto; else { var t = mo.querySelector('.pn-sh-t'); if(t) t.insertAdjacentHTML('beforeend', '<small>' + sotto + '</small>'); }
+  var annulla = RICV.annulla.length ? '<button class="rv-annulla" onclick="ricvAnnulla()">↩︎ Annulla l\'ultima: ' + esc(RICV.annulla[RICV.annulla.length - 1].t) + '</button>' : '';
+  if(!S){
+    var nS = Object.keys(RG.salta).filter(function(k){ return L.some(function(x){ return x.M.key === k; }); }).length, C = ricvCalcola(), ver = { n: 0 }; try{ ver = ricvCassaVerifiche(); }catch(e){}
+    bd.innerHTML = annulla + '<div class="gd-fine"><div class="gd-fine-ico">✓</div><b>' + (nS ? 'Per ora basta così' : 'Finito!') + '</b><span>' + (RG.fatti ? 'Hai sistemato ' + RG.fatti + (RG.fatti === 1 ? ' cosa.' : ' cose.') : '') + (nS ? ' Ne hai saltate ' + nS + ': le ritrovi nell\'elenco.' : '') + '</span>' +
+      (C.docItems && C.docItems.length ? '<button class="sk-btn big" onclick="pnChiudi(\'ricvGuida\');ricvSetGruppo(\'sistemare\')">Ci sono ' + C.docItems.length + ' fatture da controllare</button>' : '') +
+      (ver.n ? '<button class="sk-btn big" onclick="pnChiudi(\'ricvGuida\');ricvSetGruppo(\'cassa\')">Controlli di cassa da fare: ' + ver.n + '</button>' : '') +
+      (nS ? '<button class="sk-btn big" onclick="RG.salta={};ricvGuidaDisegna()">Riguarda quelle saltate</button>' : '') +
+      '<button class="sk-btn prim big" onclick="pnChiudi(\'ricvGuida\')">Chiudi</button></div>';
+    return;
+  }
+  var M = S.M, k = ricvJs(M.key), entra = M.importo > 0, g = ricvGruppoVisto(S), P = S.proposte && S.proposte[0];
+  var chi = esc(S.titolo || 'qualcuno'), quanto = '<b>' + fmt(Math.abs(M.importo)) + '</b>', conto = esc(M.conto || '');
+  var nSalt = L.length - resto.length, tot = RG.fatti + L.length;
+  var h = annulla + '<div class="gd-pos">' + (RG.fatti + nSalt + 1) + ' di ' + tot + '</div>';
+  h += '<div class="gd-frase">' + (entra ? 'Il ' + ricGg(M.data) + ' sono entrati ' + quanto + ' da «' + chi + '»' : 'Il ' + ricGg(M.data) + ' hai pagato ' + quanto + ' a «' + chi + '»') + ' <span>(' + conto + ')</span></div>';
+  var bott = [];
+  if(g === 'conferma' && P && P.stip){
+    h += '<div class="gd-dom">È lo stipendio di <b>' + esc(P.stip.nome) + '</b> di ' + esc(ricvMeseNome(P.stip.mese, P.stip.anno)) + '?</div>';
+    bott.push('<button class="sk-btn prim big" onclick="ricvGuidaFai(function(){ return ricvConfermaProposta(' + k + ',0); })">✓ Sì</button>');
+    bott.push('<button class="sk-btn big" onclick="ricvGuidaFai(function(){ return ricvRifiuta(' + k + ',0); })">✗ No</button>');
+  } else if(g === 'conferma' && P){
+    h += '<div class="gd-dom">' + (P.docs.length > 1 ? 'Paga queste ' + P.docs.length + ' fatture?' : P.rimborso ? 'È il rimborso di questa nota di credito?' : 'È il pagamento di questa fattura?') + '</div>';
+    h += '<div class="rv-doc">' + P.docs.slice(0, 4).map(function(x){ return ricvEstremi(x.f, { quota: x.quota, dataMov: M.data }); }).join('') + '</div>';
+    h += '<div class="gd-perche">' + ricvChip(P.livello) + ' ' + esc((P.motivi || []).slice(0, 2).join(' · ')) + '</div>';
+    bott.push('<button class="sk-btn prim big" onclick="ricvGuidaFai(function(){ return ricvConfermaProposta(' + k + ',0); })">✓ Sì, è ' + (P.docs.length > 1 ? 'così' : 'lei') + '</button>');
+    bott.push('<button class="sk-btn big" onclick="ricvGuidaFai(function(){ return ricvRifiuta(' + k + ',0); })">✗ No, non è ' + (P.docs.length > 1 ? 'così' : 'lei') + '</button>');
+    bott.push('<button class="sk-btn big" onclick="ricvScegli(' + k + ')">La cerco io</button>');
+  } else if(S.daPresenze){
+    h += '<div class="gd-dom">Sembra uno stipendio. Di chi e di che mese?</div>';
+    bott.push('<button class="sk-btn prim big" onclick="ricvApri(' + k + ')">Scegli dipendente e mese</button>');
+  } else if(g === 'sistemare'){
+    var a = (S.avvisi || [])[0] || {};
+    h += '<div class="gd-dom">Qui qualcosa non torna.</div><div class="gd-perche"><b>' + esc(a.t || '') + '</b><br>' + esc(a.s || S.perche || '') + '</div>';
+    bott.push('<button class="sk-btn prim big" onclick="ricvApri(' + k + ')">Guardiamolo insieme</button>');
+  } else {
+    h += '<div class="gd-dom">' + (entra ? 'Non so cos\'è questa entrata. Cos\'è?' : 'Non ho trovato la fattura. Cos\'è questo pagamento?') + '</div>';
+    if(!entra) bott.push('<button class="sk-btn prim big" onclick="ricvScegli(' + k + ')">È una fattura: la cerco io</button>');
+    else bott.push('<button class="sk-btn prim big" onclick="ricvScegli(' + k + ')">È un rimborso: cerco la nota di credito</button>');
+    var opz = entra ? ['cliente', 'giroconto', 'finanziamento_soci', 'restituzione', 'altro'] : ['tributo', 'commissione', 'giroconto', 'finanziamento_soci', 'mutuo', 'rimborso_spese', 'altro'];
+    h += '<div class="gd-cat-t">Non è una fattura? Tocca cos\'è:</div><div class="rv-cats">' + opz.map(function(c){ return '<button class="rv-catb" onclick="ricvGuidaFai(function(){ return ricvSegnaCategoria(' + k + ',\'' + c + '\',(document.getElementById(\'rgRicorda\')||{}).checked); })">' + esc((RICV_CAT[c] || [c])[0]) + '</button>'; }).join('') + '</div>' +
+      (ricBeneficiario({ descrizione: M.descrizione }) ? '<label class="rv-ricorda"><input type="checkbox" id="rgRicorda"> Fai lo stesso le prossime volte con «' + esc(ricvBello(ricBeneficiario({ descrizione: M.descrizione }))) + '»</label>' : '');
+  }
+  bott.push('<button class="sk-btn big gd-salta" onclick="ricvGuidaSalta(' + k + ')">Non lo so, salta</button>');
+  h += '<div class="gd-az">' + bott.join('') + '</div><button class="gd-dett" onclick="ricvApri(' + k + ')">Vedi tutti i dettagli ›</button>';
+  bd.innerHTML = h; bd.scrollTop = 0;
 }
 
 /* ══ v10.46.0 «SCEGLI TU» — un solo selettore, dentro la vista unica ══
@@ -41696,6 +41777,37 @@ html[data-theme="dark"] .rv-g-cassa{color:#b59cff}
 .rv-cassa-ver{margin-bottom:10px}
 .rv-sub-h{margin:16px 4px 8px;font-size:13px;font-weight:750;color:var(--ink2)}
 .rv-sub-h small{font-weight:600;color:var(--ink3);margin-left:4px}
+/* prima vista semplice */
+.rv-ora{padding:16px}
+.rv-ora-t{font-size:20px;font-weight:800;letter-spacing:-.3px;line-height:1.25;color:var(--ink)}
+.rv-ora.ok .rv-ora-t{color:var(--rv-ok)}
+.rv-ora-s{font-size:14px;color:var(--ink2);margin:4px 0 12px;line-height:1.4}
+.rv-ora-go,.rv-ora-certi{width:100%;margin-bottom:8px}
+.rv-ora .rv-sint-t{margin-top:6px}
+.rv-oppure{margin:16px 4px 8px;font-size:13px;font-weight:700;color:var(--ink3)}
+/* «Una alla volta» */
+.gd-pos{font-size:12.5px;font-weight:700;color:var(--ink3);margin:2px 2px 8px;text-transform:uppercase;letter-spacing:.4px}
+.gd-frase{font-size:19px;line-height:1.35;font-weight:600;color:var(--ink);margin-bottom:12px}
+.gd-frase span{font-size:14px;color:var(--ink3);font-weight:500}
+.gd-dom{font-size:17px;font-weight:800;color:var(--ink);margin:6px 0 10px;line-height:1.3}
+.gd-perche{font-size:14px;line-height:1.45;color:var(--ink2);margin:10px 2px 4px}
+.gd-az{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+.gd-az .sk-btn{width:100%;min-height:50px;font-size:16px}
+.gd-salta{color:var(--ink2)!important}
+.gd-cat-t{font-size:14px;font-weight:700;color:var(--ink2);margin:14px 2px 8px}
+.gd-dett{display:block;margin:14px auto 4px;border:none;background:none;color:var(--blue);font:inherit;font-size:14px;font-weight:700;padding:10px;cursor:pointer}
+.gd-fine{display:flex;flex-direction:column;align-items:stretch;gap:10px;text-align:center;padding:20px 4px}
+.gd-fine-ico{width:64px;height:64px;border-radius:50%;margin:0 auto;background:var(--green-light);color:var(--rv-ok);font-size:34px;font-weight:800;display:flex;align-items:center;justify-content:center}
+.gd-fine b{font-size:21px}.gd-fine span{color:var(--ink2);font-size:14.5px;line-height:1.4}
+/* Cassa: in Riconciliazione il fondo cassa resta piccolo, il lavoro sta in alto */
+#view-incassi[data-sub="banca"] #saldoCassaCard .ds-cassa-grid,#view-incassi[data-sub="banca"] #saldoCassaSotto{display:none}
+#view-incassi[data-sub="banca"] #saldoCassaValore{font-size:28px!important;margin-bottom:0!important}
+#view-incassi[data-sub="banca"] #saldoCassaCard{padding-top:14px!important;padding-bottom:14px!important}
+/* righe con pulsanti: il testo non si schiaccia mai in una colonna di una lettera (v10.46.0) */
+.sk-riga{flex-wrap:wrap}
+.sk-riga>.sk-riga-m{flex:1 1 190px;min-width:0}
+.sk-riga>.sk-btn,.sk-riga>.rv-st-az{flex:0 1 auto;max-width:100%;white-space:normal}
+.sk-riga-m b,.sk-riga-m small{overflow-wrap:anywhere}
 /* «Scegli tu» */
 .rsc-top{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
 .rsc-cerca{width:100%;box-sizing:border-box;padding:12px 14px;border:1px solid var(--ds-hair,var(--sep));border-radius:12px;background:var(--surface);font:inherit;font-size:15px;color:var(--ink);margin-bottom:8px}
