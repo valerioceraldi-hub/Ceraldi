@@ -1438,9 +1438,9 @@ html[data-theme="dark"] .reg-import-link{border-color:rgba(255,255,255,.08)}
            tutto il resto del codice che lo legge (_chgRecalc, salvataggio,
            riconciliazione) — non tocco quella parte, aggiorno solo da dove
            arriva il numero. -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:4px">
-        <div><div style="font-size:10px;color:var(--ink3);margin-bottom:3px">🔵 Numia</div><input type="text" id="chgPosNumia" inputmode="decimal" placeholder="0,00" oninput="_chgPosSplitSum()" style="width:100%;padding:10px;border:1.5px solid var(--sep);border-radius:8px;font-size:14px;background:var(--surface2);box-sizing:border-box;text-align:right"></div>
-        <div><div style="font-size:10px;color:var(--ink3);margin-bottom:3px">🟠 SumUp</div><input type="text" id="chgPosSumUp" inputmode="decimal" placeholder="0,00" oninput="_chgPosSplitSum()" style="width:100%;padding:10px;border:1.5px solid var(--sep);border-radius:8px;font-size:14px;background:var(--surface2);box-sizing:border-box;text-align:right"></div>
+      <div id="chgPosCampi" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:4px">
+        <div id="chgPosNumiaBox"><div id="chgPosNumiaLbl" style="font-size:10px;color:var(--ink3);margin-bottom:3px">🔵 Numia</div><input type="text" id="chgPosNumia" inputmode="decimal" placeholder="0,00" oninput="_chgPosSplitSum()" style="width:100%;padding:10px;border:1.5px solid var(--sep);border-radius:8px;font-size:14px;background:var(--surface2);box-sizing:border-box;text-align:right"></div>
+        <div id="chgPosSumUpBox"><div id="chgPosSumUpLbl" style="font-size:10px;color:var(--ink3);margin-bottom:3px">🟠 SumUp</div><input type="text" id="chgPosSumUp" inputmode="decimal" placeholder="0,00" oninput="_chgPosSplitSum()" style="width:100%;padding:10px;border:1.5px solid var(--sep);border-radius:8px;font-size:14px;background:var(--surface2);box-sizing:border-box;text-align:right"></div>
       </div>
       <input type="hidden" id="chgPos">
       <div style="font-size:11px;color:var(--ink3);text-align:right;margin-bottom:10px">Totale pagamenti elettronici: <b id="chgPosTotaleLbl">€ 0,00</b></div>
@@ -7439,6 +7439,7 @@ async function contiCarica(){
 // dopo un cambio dell'elenco ridisegna ciò che dipende dai conti
 function contiAggiornaSchermate(){
   try{ if(typeof contiDisegnaBottoni === 'function') contiDisegnaBottoni(); }catch(e){}
+  try{ var di = document.getElementById('chgDataInp'); if(di && di.value && typeof _chgPosCampi === 'function') _chgPosCampi(di.value); }catch(e){}
   try{ if(typeof RICV !== 'undefined'){ RICV.cassaMemo = null; RICV.memo = null; } }catch(e){}
   try{ if(typeof RCASSA !== 'undefined' && typeof rcCarica === 'function'){ RCASSA.caricato = false; rcCarica(); } }catch(e){}
   try{ var sec = document.getElementById('inc-banca'); if(sec && sec.offsetParent !== null && typeof renderRiconciliazione === 'function') renderRiconciliazione(); }catch(e){}
@@ -7489,7 +7490,7 @@ function _ctScheda(id){
     _ctScelta('arrivo', 'automatico', '🔄', 'Arrivano da soli', 'Nessun promemoria', c.arrivo === 'automatico') + '</div>';
   h += '<label class="rc-lbl" for="ctDal">Lo uso dal</label><input id="ctDal" class="rc-inp ct-inp" type="date" value="' + esc(c.dal) + '"><div class="ct-aiuto">Lascia vuoto se lo usavi già prima di iniziare con l\'app.</div>';
   if(!nuovo && c.al) h += '<label class="rc-lbl" for="ctAl">L\'ho usato fino al</label><input id="ctAl" class="rc-inp ct-inp" type="date" value="' + esc(c.al) + '"><div class="ct-aiuto">Ultimo giorno in cui l\'hai usato.</div>';
-  if(nuovo) h += '<div class="rc-nota" style="margin-top:12px">' + 'Un conto corrente nuovo compare subito nella riconciliazione e nel fondo cassa (il saldo lo scrivi tu). L\'importazione dei suoi estratti arriva con il prossimo aggiornamento.</div>';
+  if(nuovo) h += '<div class="rc-nota" style="margin-top:12px">' + 'Un conto corrente nuovo compare subito nella riconciliazione e nel fondo cassa. I suoi estratti li importi da Fiscale → Importazioni → «Importa qualsiasi file»: se l\'estratto riporta i saldi, il saldo si aggiorna da solo. Una carta, un POS o un pagamento online nuovo per ora entrano nell\'elenco e nel promemoria degli estratti.</div>';
   h += '<button class="sk-btn prim big" style="width:100%;margin-top:14px" onclick="_ctSalva()">' + (nuovo ? 'Aggiungi' : 'Salva') + '</button>';
   if(!nuovo && attivo){
     var conSaldo = c.movimenti === 'banca' && c.saldo;
@@ -7507,6 +7508,28 @@ function _ctNuovoId(nome, L){
   L.forEach(function(c){ usati[c.id.toLowerCase()] = 1; });
   while(usati[id.toLowerCase()]) id = base + (n++);
   return id;
+}
+// Un conto nuovo: id ricavato dal nome (non cambia più), colore libero. Un conto corrente ha i
+// movimenti in banca e un suo saldo; gli altri tipi per ora stanno nell'elenco e nel promemoria.
+function _ctNuovo(L, nome, tipo, arrivo, dal){
+  var nuovoId = _ctNuovoId(nome, L);
+  var usati = L.map(function(c){ return c.colore; }), col = CONTI_COLORI.filter(function(x){ return usati.indexOf(x) < 0; })[0] || CONTI_COLORI[L.length % CONTI_COLORI.length];
+  return contiNorm({ id: nuovoId, nome: nome, tipo: tipo, colore: col, arrivo: arrivo, movimenti: tipo === 'conto' ? 'banca' : '', archivio: nuovoId,
+    saldo: tipo === 'conto' ? 'banca_saldo_' + nuovoId.toLowerCase() : '', saldoDa: 'mano', dal: dal || '', al: '' });
+}
+// Crea un conto dall'esterno dell'elenco (per esempio importando l'estratto di una banca nuova).
+// Se esiste già un conto con quel nome restituisce il suo id. Restituisce '' se non è riuscito a salvare.
+async function contiCrea(nome, tipo, arrivo, dal){
+  nome = String(nome || '').trim().replace(/\s+/g, ' '); if(!nome) return '';
+  var trovato = '', esisteva = false, voce = {};
+  var ok = await contiSalva(function(L){
+    var g = L.filter(function(c){ return c.nome.toLowerCase() === nome.toLowerCase(); })[0];
+    if(g){ trovato = g.id; esisteva = true; return null; }
+    var n = _ctNuovo(L, nome, tipo || 'conto', arrivo || 'estratto', dal); trovato = n.id;
+    Object.assign(voce, { azione: 'aggiunto', id: n.id, nome: n.nome, prima: null, dopo: n });
+    return L.concat([n]);
+  }, voce);
+  return (ok || esisteva) ? trovato : '';
 }
 function _ctChi(){ try{ return (window._authSess && _authSess.user && _authSess.user.email) || ''; }catch(e){ return ''; } }
 // Legge l'elenco aggiornato dal database, applica la modifica e lo riscrive con la sua voce di storia.
@@ -7541,10 +7564,7 @@ async function _ctSalva(){
   var ok = await contiSalva(function(L){
     if(L.some(function(c){ return c.id !== id && c.nome.toLowerCase() === f.nome.toLowerCase(); })) throw new Error('C\'è già un conto con questo nome');
     if(!id){
-      nuovoId = _ctNuovoId(f.nome, L);
-      var usati = L.map(function(c){ return c.colore; }), col = CONTI_COLORI.filter(function(x){ return usati.indexOf(x) < 0; })[0] || CONTI_COLORI[L.length % CONTI_COLORI.length];
-      var n = contiNorm({ id: nuovoId, nome: f.nome, tipo: CT.tipo, colore: col, arrivo: CT.arrivo, movimenti: CT.tipo === 'conto' ? 'banca' : '', archivio: nuovoId,
-        saldo: CT.tipo === 'conto' ? 'banca_saldo_' + nuovoId.toLowerCase() : '', saldoDa: 'mano', dal: f.dal, al: '' });
+      var n = _ctNuovo(L, f.nome, CT.tipo, CT.arrivo, f.dal); nuovoId = n.id;
       Object.assign(voce, { azione: 'aggiunto', id: nuovoId, nome: n.nome, prima: null, dopo: n });
       return L.concat([n]);
     }
@@ -14469,8 +14489,21 @@ async function caricaChiusuraGiorno(){
     if(posSumUpLive > 0) document.getElementById('chgPosSumUp').value = _fNum(posSumUpLive);
   }
   _chgPosSplitSum();
+  _chgPosCampi(data);
   _renderPosDetails(data);
   _chgAggiornaInfoCompatta(data);
+}
+// v10.47.0: nella chiusura compaiono i POS in uso quel giorno (Impostazioni → Conti e incassi).
+// Un POS non in uso resta visibile solo se quel giorno ha già un importo, per non nascondere un dato.
+function _chgPosCampi(data){
+  var vis = 0;
+  [['Numia', 'chgPosNumia', '🔵'], ['SumUp', 'chgPosSumUp', '🟠']].forEach(function(x){
+    var box = document.getElementById(x[1] + 'Box'), lbl = document.getElementById(x[1] + 'Lbl'); if(!box) return;
+    var mostra = contoAttivo(x[0], data) || _pNum(gv(x[1])) > 0;
+    box.style.display = mostra ? '' : 'none'; if(mostra) vis++;
+    if(lbl) lbl.textContent = x[2] + ' ' + contoNome(x[0]);
+  });
+  var g = document.getElementById('chgPosCampi'); if(g) g.style.gridTemplateColumns = vis > 1 ? '1fr 1fr' : '1fr';
 }
 
 // Riga compatta sotto la data: meteo + sciopero (se c'è) + totale Prima Nota
@@ -30916,7 +30949,7 @@ function _faRender(){
       (V.errori.length?'<div class="fa-err">'+V.errori.map(esc).join('<br>')+'</div>':'')+'</div>'+
       '<div class="gr-kpi" style="margin:10px 0"><div><span>Movimenti</span><b>'+A.mov.length+'</b><em class="ce-dl">'+S.nuoviN+' nuovi · '+(A.mov.length-S.nuoviN)+' già presenti</em></div><div><span>'+(sg<0?'Rimborsi':'Entrate')+'</span><b>'+fmt(Math.abs(ent.reduce(function(s,m){ return s+m.importo; },0)))+'</b></div><div><span>'+(sg<0?'Spese':'Uscite')+'</span><b>'+fmt(Math.abs(usc.reduce(function(s,m){ return s+m.importo; },0)))+'</b></div></div>'+
       '<div class="sf-lbl">Anteprima (prime e ultime righe)</div><div class="cr-grp fa-prev">'+A.mov.slice(0,8).concat(A.mov.length>12?[null]:[]).concat(A.mov.slice(Math.max(8,A.mov.length-4))).map(function(m){ return m===null?'<div class="fa-pr fa-dots">…</div>':'<div class="fa-pr"><span>'+_anData(m.data)+'</span><span class="fa-pd">'+esc(m.descrizione)+'</span><b style="color:'+(sg*m.importo<0?'var(--red)':'var(--green)')+'">'+(sg*m.importo<0?'−':'+')+fmt(Math.abs(m.importo))+'</b></div>'; }).join('')+'</div>'+
-      '<label class="fa-conto">Conto / emittente<input id="faConto" value="'+esc(S.conto||R.conto||'')+'"></label>'+
+      _faContoHtml(S)+
       (V.ok ? '<button class="bon-go" style="margin-top:12px" onclick="_faImporta(this)">'+(S.nuovo?'Salva il formato e importa ':'Importa ')+S.nuoviN+' moviment'+(S.nuoviN===1?'o':'i')+'</button>'
             : '<button class="bon-go" style="margin-top:12px" onclick="_faRiprova()">Riprova a impararlo</button>')+
       '<button class="an-ign" style="margin-top:8px" onclick="_faS.fase=\'inizio\';_faRender()">Annulla</button>';
@@ -30937,7 +30970,7 @@ async function _faFile(file){
   var S=_faS;
   try{
     _faLavoro('Leggo il file…', file.name);
-    var F=await _faLeggiFile(file); S.F=F;
+    var F=await _faLeggiFile(file); S.F=F; S.file=file;
     // 1) formato già noto?
     var best=null, bs=0;
     S.ricette.forEach(function(R){ if(R.dest!==S.dest) return; var sc=_faFirmaOk(R,F); if(sc>bs){ bs=sc; best=R; } });
@@ -30959,14 +30992,57 @@ async function _faFile(file){
   }catch(e){ toast('❌ '+(e.message||e)); if(typeof _registraErrore==='function') _registraErrore('js','Formati appresi: '+(e.message||e)); S.fase='inizio'; _faRender(); }
 }
 function _faAnteprima(){
-  var S=_faS; S.conto=S.conto||S.ric.conto||'';
-  var D=_faDedup(S.app.mov, S.dest, S.conto||S.ric.conto||''); S.app.mov=D; S.nuoviN=D.filter(function(m){ return !m.gia; }).length;
+  var S=_faS; if(!S.conto) S.conto=_faContoIniziale(S.ric, S.dest);
+  // il controllo dei già presenti dipende dal conto: si rifà da capo a ogni scelta
+  var D=_faDedup(S.app.mov.map(function(m){ var x=Object.assign({}, m); delete x.gia; return x; }), S.dest, S.conto==='__nuovo'?'':S.conto); S.app.mov=D; S.nuoviN=D.filter(function(m){ return !m.gia; }).length;
   S.fase='anteprima'; _faRender();
 }
+/* v10.47.0 — A quale conto vanno i movimenti: si sceglie dall'elenco di Impostazioni → Conti e
+   incassi (prima era un campo di testo libero: un nome scritto diverso creava un «conto» a parte).
+   «Conto nuovo» lo aggiunge all'elenco al momento dell'importazione. Le spese con carta vanno
+   sempre nei movimenti della carta. */
+function _faContiScelta(dest){
+  return contiTutti().filter(function(c){ return dest==='carta' ? c.movimenti==='carta' : (c.movimenti==='banca' && c.tipo==='conto'); });
+}
+function _faContoIniziale(R, dest){
+  var L=_faContiScelta(dest), v=String((R&&R.conto)||'');
+  var g=L.filter(function(c){ return c.id===v || c.nome.toLowerCase()===v.toLowerCase(); })[0];
+  // nessuna scelta automatica per un formato nuovo: l'estratto di una banca nuova non deve finire su Banco BPM per sbaglio
+  return g ? g.id : '';
+}
+function _faContoHtml(S){
+  var L=_faContiScelta(S.dest), js=function(x){ return esc(JSON.stringify(x)).replace(/"/g,'&quot;'); };
+  if(S.dest==='carta'){
+    return '<div class="sf-lbl" style="margin-top:12px">Dove vanno</div><div class="gr-s" style="margin:0 2px">Nei movimenti della carta'+(L.length?' ('+esc(L.map(function(c){ return c.nome; }).join(', '))+')':'')+'.</div>';
+  }
+  var h='<div class="sf-lbl" style="margin-top:12px">Di quale conto è questo estratto?</div><div class="sf-chips">'+
+    L.map(function(c){ return '<button class="chip'+(S.conto===c.id?' active':'')+'" onclick="_faScegliConto('+js(c.id)+')">'+esc(c.nome)+(contoAttivo(c.id)?'':' (non più in uso)')+'</button>'; }).join('')+
+    '<button class="chip'+(S.conto==='__nuovo'?' active':'')+'" onclick="_faScegliConto(\'__nuovo\')">＋ Conto nuovo</button></div>';
+  if(S.conto==='__nuovo') h+='<label class="fa-conto">Come si chiama il conto nuovo<input id="faContoNuovo" placeholder="Per esempio Banca Sella" maxlength="40" value="'+esc(S.contoNuovo||'')+'" oninput="_faS.contoNuovo=this.value"></label>'+
+    '<div class="gr-s" style="margin:4px 2px 0">Lo aggiungo all\'elenco dei conti (Impostazioni → Conti e incassi): da lì puoi cambiargli nome o smettere di usarlo.</div>';
+  else if(!S.conto) h+='<div class="gr-s" style="margin:4px 2px 0;color:var(--pn-warn,#9a5300)">Scegli il conto prima di importare.</div>';
+  return h;
+}
+function _faScegliConto(id){ var S=_faS; if(!S) return; S.conto=id; _faAnteprima(); }
 async function _faRiprova(){ var S=_faS; if(!S.F) return; S.ric=null; try{ var f=S.F; _faLavoro('Riprovo…'); var R=await _faChiediRicetta(f,S.dest,S.ver.errori,S.ric); var A=_faApplica(R,f), V=_faVerifica(A); R.dest=S.dest; R.tipoFile=f.tipo; S.ric=R; S.app=A; S.ver=V; S.nuovo=true; S.tentativi=(S.tentativi||0)+1; _faAnteprima(); }catch(e){ toast('❌ '+(e.message||e)); S.fase='anteprima'; _faRender(); } }
 async function _faImporta(btn){
   var S=_faS, R=S.ric; if(!S.ver.ok) return;
-  var conto=(document.getElementById('faConto')||{}).value||R.conto||'Conto';
+  var conto='', cObj=null;
+  if(S.dest==='carta'){ cObj=_faContiScelta('carta')[0]||null; conto=cObj?cObj.id:'carta'; }
+  else {
+    if(!S.conto){ toast('⚠️ Scegli di quale conto è l\'estratto', { forza: true }); return; }
+    if(S.conto==='__nuovo'){
+      var nome=String((document.getElementById('faContoNuovo')||{}).value||S.contoNuovo||'').trim();
+      if(!nome){ toast('⚠️ Scrivi come si chiama il conto nuovo', { forza: true }); return; }
+      if(btn){ btn.disabled=true; btn.textContent='Aggiungo il conto…'; }
+      conto=await contiCrea(nome, 'conto', 'estratto', '');
+      if(!conto){ if(btn){ btn.disabled=false; btn.textContent='Riprova'; } return; }
+      S.conto=conto;
+      // se il nome era già nell'elenco i «già presenti» vanno ricontrollati su quel conto
+      var D2=_faDedup(S.app.mov.map(function(m){ var x=Object.assign({}, m); delete x.gia; return x; }), 'banca', conto); S.app.mov=D2; S.nuoviN=D2.filter(function(m){ return !m.gia; }).length;
+    } else conto=S.conto;
+    cObj=contoDi(conto);
+  }
   if(btn){ btn.disabled=true; btn.textContent='Importo…'; }
   try{
     var nuovi=S.app.mov.filter(function(m){ return !m.gia; });
@@ -30975,17 +31051,23 @@ async function _faImporta(btn){
     if(S.dest==='banca'){
       var rows=nuovi.map(function(m){ return {id:mk(m), data:m.data, descrizione:m.descrizione, importo:m.importo, tipo:m.importo<0?'uscita':'entrata', sottotipo:(typeof _bancaSottotipo==='function'?_bancaSottotipo(m.descrizione):''), abbinata:false, fatturaId:null, banca:conto}; });
       if(rows.length){ await upsertMovimentiBanca(rows); rows.forEach(function(r){ _bancaMovimenti.push(r); }); try{ _salvaBancaLocale(); }catch(e){} }
-      // saldo finale verificato → punto di partenza della previsione (solo per il conto principale)
-      if(S.ver.quad && S.ver.quad.ok && typeof _ceSalvaSaldo==='function' && /bpm/i.test(conto)){ var al=S.app.mov.reduce(function(x,m){ return m.data>x?m.data:x; },''); if(!window._ceSaldo||al>=window._ceSaldo.al) _ceSalvaSaldo(S.app.saldoFin, al, true); }
+      // saldo finale verificato con la quadratura → saldo del conto (fondo cassa e previsione)
+      if(S.ver.quad && S.ver.quad.ok){ var al=S.app.mov.reduce(function(x,m){ return m.data>x?m.data:x; },''); try{ await contiSaldoDaEstratto(cObj, S.app.saldoFin, al); }catch(e){} }
     } else {
       var rowsC=nuovi.map(function(m){ return {id:mk(m), data:m.data, descrizione:m.descrizione, importo:m.importo, titolare:'', cartaUltime4:'', tipo:m.importo<0?'storno':'acquisto'}; });
       if(rowsC.length){ await upsertMovimentiCarta(rowsC); }
     }
+    // il file originale resta nell'archivio degli estratti (conta per il promemoria del conto)
+    if(S.file && cObj && cObj.archivio && typeof _esSalvaFile==='function'){
+      var dd=S.app.mov.map(function(m){ return m.data; }).sort();
+      try{ await _esSalvaFile(cObj.archivio, S.file, { dal: dd[0]||null, al: dd[dd.length-1]||null, righe: S.app.mov.length, note: 'Importa qualsiasi file · '+(R.nome||'') }); }catch(e){}
+    }
     R.conto=conto; R.usi=(R.usi||0)+1; R.ultimoUso=new Date().toISOString(); R.verifica=S.ver.livello;
     if(S.nuovo){ R.creato=new Date().toISOString(); S.ricette.push(R); }
     await _faSalvaRicette(S.ricette);
-    toast('✓ Importati '+nuovi.length+' movimenti'+(S.nuovo?' · formato salvato':''));
-    S.fase='inizio'; S.F=null; S.conto=''; _faRender();
+    toast('✓ Importati '+nuovi.length+' movimenti'+(cObj&&S.dest!=='carta'?' in '+cObj.nome:'')+(S.nuovo?' · formato salvato':''), { forza: true });
+    S.fase='inizio'; S.F=null; S.file=null; S.conto=''; S.contoNuovo=''; _faRender();
+    try{ contiAggiornaSchermate(); }catch(e){}
   }catch(e){ toast('❌ Import non riuscito: '+(e.message||e)); if(btn){ btn.disabled=false; btn.textContent='Riprova'; } if(typeof _registraErrore==='function') _registraErrore('database','Import formato appreso: '+(e.message||e)); }
 }
 async function _faElimina(i){
@@ -37300,6 +37382,9 @@ function ricvRender(){
   var VER = { html: '', n: 0 }; try{ VER = ricvCassaVerifiche(); }catch(e){}
   per.conferma.sort(function(a, b){ var o = { certo: 0, probabile: 1, possibile: 2 }; return (o[a.liv] - o[b.liv]) || String(b.M.data).localeCompare(String(a.M.data)); });
   var docSist = C.docItems;
+  // v10.47.0: i controlli di cassa (POS e versamenti contro le chiusure) contano per un conto solo se su quel
+  // conto arrivano incassi o versamenti; con «Tutti» contano sempre. Così un conto nuovo non eredita 30 avvisi non suoi.
+  if(F.conto && !per.cassa.length) VER = { html: '', n: 0 };
   var n = { conferma: per.conferma.length, sistemare: per.sistemare.length + docSist.length, capire: per.capire.length, cassa: VER.n, fatto: per.fatto.length + per.spiegati.length };
   if(!RICV.gruppo) RICV.gruppo = n.conferma ? 'conferma' : (n.sistemare ? 'sistemare' : (n.capire ? 'capire' : 'fatto'));
   var g = RICV.gruppo, tot = nel.length || 1;
@@ -39398,6 +39483,16 @@ async function rcSalvaSumUp(){ return rcSalvaSaldo('SumUp'); }
 function rcChiaro(hex){ var n = parseInt(String(hex).slice(1), 16); if(!isFinite(n)) return '#8e8e93'; var m = function(x){ return Math.round(x + (255 - x) * 0.4); }; return 'rgb(' + m(n >> 16 & 255) + ',' + m(n >> 8 & 255) + ',' + m(n & 255) + ')'; }
 function rcSnap(chiave){ return chiave === 'banca_saldo' ? window._ceSaldo : (chiave === 'banca_saldo_sumup' ? window._ceSaldoSU : (window._ceSaldoConti || {})[chiave]); }
 function rcSnapScrivi(chiave, d){ if(chiave === 'banca_saldo') window._ceSaldo = d; else if(chiave === 'banca_saldo_sumup') window._ceSaldoSU = d; else { window._ceSaldoConti = window._ceSaldoConti || {}; window._ceSaldoConti[chiave] = d; } }
+// Saldo letto da un estratto che quadra (saldo iniziale + movimenti = saldo finale): diventa il
+// saldo del conto se è più recente di quello che c'è. Banco BPM continua a usare _ceSalvaSaldo.
+async function contiSaldoDaEstratto(c, saldo, al){
+  if(!c || !c.saldo || typeof saldo !== 'number' || !al) return;
+  if(c.saldo === 'banca_saldo'){ if(typeof _ceSalvaSaldo === 'function' && (!window._ceSaldo || al >= window._ceSaldo.al)) await _ceSalvaSaldo(saldo, al, true); return; }
+  var vecchio = rcSnap(c.saldo); if(vecchio && String(vecchio.al || '') > al) return;
+  var d = { saldo: Math.round(saldo * 100) / 100, al: al, salvato_il: new Date().toISOString(), fonte: 'estratto' };
+  rcSnapScrivi(c.saldo, d);
+  await sbFetch('ceraldi_stato_condiviso?on_conflict=id', { method: 'POST', headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify({ id: c.saldo, data: d, updated_at: new Date().toISOString() }) });
+}
 // i riquadri dei conti nel fondo cassa
 function rcDisegnaConti(R){
   var box = document.getElementById('saldoCassaConti'); if(!box) return;
