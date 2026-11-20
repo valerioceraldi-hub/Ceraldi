@@ -590,7 +590,7 @@ function avvisoCreditoIA(){
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.43.2</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.44.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -11842,6 +11842,100 @@ function _generaPdfRegistrazione(f){
 
   return doc.output('blob');
 }
+// 20/11/2026 (Valerio: «voglio condividere il movimento per mostrare al
+// commercialista le fatture collegate e che i conti tornano»): PDF del
+// movimento bancario con tutti i documenti che paga (fatture e note di
+// credito) e la quadratura al centesimo. I conti escono da ricContiMovimento,
+// la stessa funzione delle schede: il PDF dice esattamente ciò che vedi.
+function _generaPdfMovimento(R){
+  if(!window.jspdf || !window.jspdf.jsPDF){ toast('⚠️ Libreria PDF non disponibile'); return null; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({unit:'mm', format:'a4'});
+  const mv = R.mov;
+  const _dIt=(d)=>{ if(!d) return ''; const s=String(d).slice(0,10); return s.slice(8,10)+'/'+s.slice(5,7)+'/'+s.slice(0,4); };
+  const _e=(n)=>fmt(n).replace(/ | /g,' ');
+  let y=20;
+  const nuovaPagina=(spazio)=>{ if(y + (spazio||8) > 272){ doc.addPage(); y=20; } };
+  doc.setFont('helvetica','bold'); doc.setFontSize(16);
+  doc.text('Caffetteria Ceraldi', 15, y); y+=8;
+  doc.setFontSize(12); doc.setFont('helvetica','normal');
+  doc.text('Movimento bancario - documenti pagati', 15, y); y+=6;
+  doc.setDrawColor(200); doc.line(15,y,195,y); y+=10;
+  doc.setFontSize(11);
+  const riga=(label,valore)=>{
+    if(valore===undefined || valore===null || valore==='') return;
+    const righe=doc.splitTextToSize(String(valore), 130);
+    nuovaPagina(righe.length*5.5);
+    doc.setFont('helvetica','bold'); doc.text(label+':', 15, y);
+    doc.setFont('helvetica','normal'); doc.text(righe, 62, y);
+    y+=Math.max(8, righe.length*5.5+2.5);
+  };
+  const sezione=(titolo)=>{
+    nuovaPagina(20);
+    y+=2; doc.setFont('helvetica','bold'); doc.setFontSize(12); doc.text(titolo, 15, y);
+    doc.setDrawColor(220); doc.line(15,y+1.5,195,y+1.5); y+=8; doc.setFontSize(11);
+  };
+  // ── il movimento, come lo riporta la banca ──
+  riga('Data', _dIt(mv.data));
+  riga('Conto', mv.banca || 'BPM');
+  riga('Importo', (R.entrata ? '+ ' : '- ') + _e(R.totale) + (R.entrata ? ' (entrata)' : ' (uscita)'));
+  if(mv.sottotipo) riga('Tipo', mv.sottotipo);
+  riga('Descrizione', mv.descrizione || '-');
+  riga('ID movimento', String(mv.id));
+  // ── i documenti ──
+  const forn = {}; R.fatture.concat(R.note).forEach(function(x){ forn[(x.f.fornitore||'').trim()] = x.f; });
+  const unico = Object.keys(forn).length === 1 ? forn[Object.keys(forn)[0]] : null;
+  if(unico){ riga('Fornitore', (unico.fornitore||'').replace(/\s{2,}/g,' ')); if(unico.piva) riga('P.IVA', unico.piva); }
+  const tabella=(titolo, L, segno)=>{
+    if(!L.length) return;
+    sezione(titolo+' ('+L.length+')');
+    doc.setFontSize(10); doc.setFont('helvetica','bold');
+    doc.text('N° documento', 15, y); doc.text('Data', 55, y); if(!unico) doc.text('Fornitore', 80, y); doc.text('Importo', 195, y, {align:'right'});
+    y+=6; doc.setFont('helvetica','normal');
+    L.forEach(function(x){
+      nuovaPagina(6);
+      doc.text(String(x.f.numero||'-'), 15, y); doc.text(_dIt(x.f.data), 55, y);
+      if(!unico) doc.text(doc.splitTextToSize((x.f.fornitore||'').replace(/\s{2,}/g,' '), 80)[0]||'', 80, y);
+      const parz = Math.abs(Math.abs(+x.f.importo||0) - x.importo) > 0.009;
+      doc.text((segno<0?'- ':'')+_e(x.importo)+(parz?' (su '+_e(Math.abs(+x.f.importo||0))+')':''), 195, y, {align:'right'});
+      y+=6;
+    });
+    doc.setFont('helvetica','bold');
+    doc.text('Totale', 15, y); doc.text((segno<0?'- ':'')+_e(segno<0?R.totNote:R.totFatture), 195, y, {align:'right'});
+    y+=8; doc.setFontSize(11); doc.setFont('helvetica','normal');
+  };
+  tabella(R.entrata ? 'Documenti' : 'Fatture pagate', R.fatture, 1);
+  tabella('Note di credito scalate dal pagamento', R.note, -1);
+  // ── i conti (tutto il blocco sulla stessa pagina) ──
+  nuovaPagina(R.note.length ? 62 : 48);
+  sezione('Conti');
+  const conto=(label, v, grassetto)=>{ nuovaPagina(7); doc.setFont('helvetica', grassetto?'bold':'normal'); doc.text(label, 15, y); doc.text(v, 195, y, {align:'right'}); y+=7; };
+  conto(R.entrata ? 'Totale documenti' : 'Totale fatture', _e(R.totFatture));
+  if(R.note.length){ conto('Meno note di credito', '- '+_e(R.totNote)); conto('Totale da pagare', _e(R.netto), true); }
+  conto('Importo del movimento', _e(R.totale), true);
+  conto('Differenza', _e(Math.abs(R.differenza)));
+  y+=3; nuovaPagina(14);
+  if(R.torna){ doc.setFillColor(52,199,89); doc.setTextColor(30,120,50); }
+  else { doc.setFillColor(255,159,10); doc.setTextColor(160,90,0); }
+  doc.circle(18, y-1.3, 2.2, 'F');
+  doc.setFont('helvetica','bold'); doc.setFontSize(12);
+  doc.text(R.torna ? 'I conti tornano al centesimo.' : 'I conti non tornano: differenza di '+_e(Math.abs(R.differenza))+'.', 23, y);
+  doc.setTextColor(0); doc.setFontSize(11); doc.setFont('helvetica','normal');
+  const _np=doc.internal.getNumberOfPages();
+  for(let pg=1; pg<=_np; pg++){
+    doc.setPage(pg);
+    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(140);
+    doc.text('Generato da Caffetteria Ceraldi — Gestione Fatture · '+new Date().toLocaleDateString('it-IT')+' · pag. '+pg+'/'+_np, 15, 285);
+  }
+  return doc.output('blob');
+}
+function condividiMovimento(movId){
+  var R = (typeof ricContiMovimento === 'function') ? ricContiMovimento(movId) : null;
+  if(!R || !R.n){ toast('Questo movimento non ha documenti collegati da condividere'); return; }
+  var blob = _generaPdfMovimento(R); if(!blob) return;
+  var nome = 'movimento_' + String(R.mov.data||'').slice(0,10) + '_' + Math.round(R.totale*100)/100 + '_' + R.n + '_documenti.pdf';
+  condividi(blob, nome.replace(/[^a-zA-Z0-9_.-]/g,'_'), 'application/pdf');
+}
 function condividiRegistrazione(id){
   const f=fatture.find(x=>x.id===id);
   if(!f) return;
@@ -19518,6 +19612,21 @@ function _ricAzzeraFiltri(){
   var i = document.getElementById('bancaFiltroImporto'); if(i) i.value='';
   renderRiconciliazione();
 }
+// 20/11/2026 (Valerio: «questo movimento non lo trovo nella riconciliazione»):
+// l'importo si legge come lo scrivi (5047,28 · 5.047,28 · -5047,28 · € 5.047,28 ·
+// 5047.28) e, quando cerchi per testo o importo, si cerca in TUTTI i mesi: il
+// periodo serve solo per sfogliare. Prima la ricerca restava nel mese aperto
+// (all'apertura quello corrente) e un movimento di maggio non usciva mai.
+// Una sola lettura per la vista semplice e per quella classica.
+function ricImportoCercato(s){
+  s = String(s == null ? '' : s).replace(/[€\s+\u2212-]/g, '');
+  if(!s) return null;
+  if(s.indexOf(',') >= 0) s = s.replace(/\./g, '').replace(',', '.');
+  else if(/^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '');
+  var v = parseFloat(s);
+  return isNaN(v) ? null : Math.abs(v);
+}
+function ricRicercaAttiva(){ return !!((gv('bancaFiltroTesto') || '').trim() || ricImportoCercato(gv('bancaFiltroImporto')) !== null); }
 // Aggiorna solo l'etichetta della pill "Periodo" e il pallino sulla pill
 // "Filtri" — lettura pura dei campi esistenti, nessuna scrittura sui dati.
 function _ricAggiornaChrome(){
@@ -19531,7 +19640,9 @@ function _ricAggiornaChrome(){
   var pill = document.getElementById('bancaPeriodoPill');
   if(pill){
     var dal = gv('bancaFiltroDal'), al = gv('bancaFiltroAl'), mese = gv('bancaMese');
-    if(dal || al){
+    if(ricRicercaAttiva()){
+      pill.textContent = '🔍 Tutti i mesi';
+    } else if(dal || al){
       pill.textContent = '📅 '+(dal?_fmtDataBreveEstratti(dal):'…')+' → '+(al?_fmtDataBreveEstratti(al):'…');
     } else if(mese){
       var mesiIt=['Gen','Feb','Mar','Apr','Mag','Giu','Lug','Ago','Set','Ott','Nov','Dic'];
@@ -19625,7 +19736,7 @@ function renderRiconciliazione(){
     wrap.innerHTML = '<div style="text-align:center;padding:24px;color:var(--ink3);font-size:13px">📥 Tocca "Importa" qui sopra per caricare il primo estratto</div>';
     return;
   }
-  var movMese = mese ? _bancaMovimenti.filter(function(m){return m.data.indexOf(mese)===0;}) : _bancaMovimenti;
+  var movMese = (mese && !ricRicercaAttiva()) ? _bancaMovimenti.filter(function(m){return m.data.indexOf(mese)===0;}) : _bancaMovimenti;
   if(!movMese.length){
     wrap.innerHTML = '<div style="text-align:center;padding:16px;color:var(--ink3);font-size:13px">Nessun movimento nel mese</div>';
     return;
@@ -19646,10 +19757,13 @@ function renderRiconciliazione(){
   // movimento (entrata/uscita) quasi mai è quello che ci si ricorda, solo
   // la cifra — con una piccola tolleranza per gli arrotondamenti.
   var _fTesto = (gv('bancaFiltroTesto')||'').trim().toLowerCase();
-  var _fImportoRaw = (gv('bancaFiltroImporto')||'').trim().replace(',','.');
-  var _fImporto = _fImportoRaw ? parseFloat(_fImportoRaw) : null;
-  if(_fDal) movMese = movMese.filter(function(m){ return m.data >= _fDal; });
-  if(_fAl)  movMese = movMese.filter(function(m){ return m.data <= _fAl; });
+  var _fImporto = ricImportoCercato(gv('bancaFiltroImporto'));
+  // 20/11/2026: cercando per testo o importo si guarda in tutti i mesi
+  if(_fTesto || _fImporto !== null) movMese = _bancaMovimenti;
+  else {
+    if(_fDal) movMese = movMese.filter(function(m){ return m.data >= _fDal; });
+    if(_fAl)  movMese = movMese.filter(function(m){ return m.data <= _fAl; });
+  }
   if(_fMetodo) movMese = movMese.filter(function(m){ return _categorizzaMovimento(m).key === _fMetodo; });
   if(_fStato==='riconciliati')     movMese = movMese.filter(function(m){ return m.abbinata && !m.ignorata; });
   if(_fStato==='non_riconciliati') movMese = movMese.filter(function(m){ return !m.abbinata && !m.ignorata; });
@@ -21909,6 +22023,8 @@ function renderRiconciliazione(){
     {key:'scartati',    label:'🚫 Scartati',      n:nonAbbinatiAltroScartato.length+ignorati.length, color:'var(--ink3)'},
     {key:'tutti',       label:'📦 Altro',         n:movMeseAltro.length, color:'var(--ink)'}
   ];
+  // 20/11/2026: cercando (testo o importo), se il tab aperto è vuoto apro quello con i risultati
+  if(typeof ricRicercaAttiva === 'function' && ricRicercaAttiva()){ var _tA = _tabs.find(function(t){ return t.key === _tabAttivo; }); if(!_tA || !_tA.n){ var _tR = _tabs.find(function(t){ return t.n; }); if(_tR) _tabAttivo = _tR.key; } }
   html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;padding-bottom:2px">';
   _tabs.forEach(function(t){
     var att = _tabAttivo===t.key;
@@ -31201,8 +31317,17 @@ async function _movSchedaApri(movId){
   var riga = function(l, v){ return '<div style="display:flex;gap:12px;padding:9px 0;border-bottom:1px solid var(--sep);font-size:14px"><div style="width:96px;flex-shrink:0;color:var(--ink3)">'+l+'</div><div style="flex:1;min-width:0;word-break:break-word">'+v+'</div></div>'; };
   var f = m.fatturaId ? (fatture||[]).find(function(x){ return String(x.id)===String(m.fatturaId); }) : null;
   var coll = '';
+  // 20/11/2026: tutti i documenti collegati (fatture e note di credito) e i conti, dal motore —
+  // prima si vedeva solo la fattura scritta nel vecchio campo fattura_id
+  var RC = null; try{ if(typeof ricContiMovimento === 'function') RC = ricContiMovimento(m.id); }catch(e){ RC = null; }
+  if(RC && !RC.n) RC = null;
+  var _chiudi = "document.getElementById('movSchedaMo').remove();";
   if(stip.length){
     coll = stip.map(function(r){ return '<div style="background:rgba(52,199,89,.12);border-radius:12px;padding:10px 12px;margin-top:8px;font-size:14px;line-height:1.4">👥 <b>Stipendio di '+esc(dip[r.dipendente_id]||'dipendente')+'</b> — '+MESI[r.mese_riferimento]+' '+r.anno_riferimento+'<br><span style="font-size:12.5px;color:var(--ink3)">'+fmt(+r.importo||0)+' collegati in Ceraldi Presenze il '+dIt(String(r.creato_il||'').slice(0,10))+(r.fonte_copertura==='portafoglio'?' · dal portafoglio del dipendente':'')+'</span></div>'; }).join('');
+  } else if(RC){
+    var _idJs = esc(JSON.stringify(String(m.id)));
+    coll = '<div style="margin-top:8px">' + ricContiMovimentoHtml(RC, { prima: _chiudi, cambia: _chiudi + 'apriCambioAbbinamentoMov(' + _idJs + ')' }) + '</div>'
+      + '<button onclick="condividiMovimento(' + _idJs + ')" style="margin-top:12px;width:100%;padding:13px;border:none;border-radius:12px;background:var(--blue,#007aff);color:#fff;font-weight:700;font-size:15px">📤 Condividi i conti del movimento</button>';
   } else if(m.abbinata && (f || m.fatturaLabel)){
     coll = '<div style="background:rgba(0,122,255,.10);border-radius:12px;padding:10px 12px;margin-top:8px;font-size:14px">🧾 Abbinato a <b>'+esc(f ? ((f.fornitore||'')+(f.numero?' n. '+f.numero:'')) : m.fatturaLabel)+'</b>'+(f?'<br><button onclick="document.getElementById(\'movSchedaMo\').remove();openEdit(\''+esc(f.id)+'\')" style="margin-top:8px;border:none;background:none;color:var(--blue,#007aff);font-weight:700;font-size:14px;padding:0">Apri la fattura ›</button>':'')+'</div>';
   } else {
@@ -34784,6 +34909,7 @@ function ricIndice(){
           if(String(u.nc.id) !== l.fid || resto <= 0.009) return;
           var q = ricR2(Math.min(u.imp, resto, fl.dich));
           fl.dich = ricR2(fl.dich - q); resto = ricR2(resto - q);
+          fl.ncDentro = ricR2((fl.ncDentro || 0) + q);   // 20/11/2026: per mostrare la fattura intera nei conti del movimento
           c.ncNettoUsato[l.fid] = ricR2((c.ncNettoUsato[l.fid] || 0) + q);
         });
       });
@@ -35427,6 +35553,67 @@ function ricApriMovimento(movId, abbina){
   if(typeof _movSchedaApri === 'function') _movSchedaApri(movId);
 }
 // Sul foglio del movimento: «potrebbe essere il rimborso di…»
+/* ── 20/11/2026 I conti di un movimento (Valerio: «quando il movimento è
+   agganciato a più fatture devo avere a vista che i conti tornano»).
+   Quali documenti paga, dal motore (gli stessi legami di ricConti), e se la
+   somma torna al centesimo: fatture − note di credito = movimento. Una sola
+   funzione per la scheda del movimento, la Riconciliazione e il PDF. ── */
+function ricContiMovimento(movId){
+  var idx = ricIndice(), key = ricMovKey(movId), mv = idx.mov[key];
+  if(!mv) return null;
+  var entrata = mv.importo > 0, fatture = [], note = [];
+  (idx.link[key] || []).forEach(function(l){
+    var f = idx.doc[l.fid]; if(!f) return;
+    if(f.tipo === 'nota_credito' && !entrata){ var n = ricR2(Math.abs(+l.dich || 0)); if(n > 0.009) note.push({ f: f, importo: n }); return; }
+    // la quota della fattura più la parte già compensata da una nota dello stesso movimento
+    var q = ricR2((+l.quota || 0) + (+l.ncDentro || 0)); if(q > 0.009) fatture.push({ f: f, importo: q, dedotta: !!l.dedotta });
+  });
+  var perData = function(a, b){ return String(a.f.data || '').localeCompare(String(b.f.data || '')) || String(a.f.numero || '').localeCompare(String(b.f.numero || '')); };
+  fatture.sort(perData); note.sort(perData);
+  var somma = function(L){ return ricR2(L.reduce(function(s, x){ return s + x.importo; }, 0)); };
+  var totF = somma(fatture), totN = somma(note), netto = ricR2(totF - totN), totale = ricR2(Math.abs(+mv.importo || 0)), diff = ricR2(totale - netto);
+  return { key: key, mov: mv, entrata: entrata, fatture: fatture, note: note, n: fatture.length + note.length, totFatture: totF, totNote: totN, netto: netto, totale: totale, differenza: diff, torna: Math.abs(diff) < 0.005 };
+}
+// la riga dei conti, in parole: «14 fatture € 5.802,28 − 1 nota di credito € 755,00 = € 5.047,28»
+function ricContiMovimentoFormula(R){
+  if(!R) return '';
+  var nf = R.fatture.length, nn = R.note.length;
+  var a = nf + (R.entrata ? (nf === 1 ? ' documento ' : ' documenti ') : (nf === 1 ? ' fattura ' : ' fatture ')) + fmt(R.totFatture);
+  return nn ? a + ' − ' + nn + (nn === 1 ? ' nota di credito ' : ' note di credito ') + fmt(R.totNote) + ' = ' + fmt(R.netto) : a;
+}
+// esito dei conti (con il modo di sistemarli sulla stessa schermata)
+function ricContiMovimentoEsitoHtml(R, opz){
+  if(!R || !R.n) return '';
+  opz = opz || {};
+  var form = ricContiMovimentoFormula(R), btn = '';
+  if(R.torna) return '<div class="rc-esito ok"><div class="rc-esito-ico">✓</div><div><b>I conti tornano al centesimo</b><small>' + esc(form) + ', uguale al movimento.</small></div></div>';
+  var d = Math.abs(R.differenza), arr = d <= RIC.ARROT;
+  if(!arr && opz.cambia) btn = '<div class="sk-btns"><button class="sk-btn sm prim" onclick="' + opz.cambia + '">' + (R.differenza > 0 ? 'Aggiungi i documenti mancanti' : 'Correggi i documenti') + '</button></div>';
+  return '<div class="rc-esito ' + (arr ? 'info' : 'warn') + '"><div class="rc-esito-ico">' + (arr ? 'i' : '!') + '</div><div><b>' + (arr ? 'Differenza di ' + fmt(d) + ' (arrotondamento)' : 'I conti non tornano: differenza di ' + fmt(d)) + '</b><small>' + esc(form) + ', il movimento è di ' + fmt(R.totale) + '. ' +
+    (arr ? '' : (R.differenza > 0 ? 'Restano ' + fmt(d) + ' senza documento: manca una fattura o il movimento paga anche altro.' : 'I documenti collegati superano il movimento di ' + fmt(d) + ': uno è di troppo o è pagato anche altrove.')) + '</small>' + btn + '</div></div>';
+}
+// esito in cima (si vede subito se torna), poi un documento per riga, compatto:
+// anche con 15 documenti la scheda resta corta. Tocco = apre il documento.
+function ricContiMovimentoHtml(R, opz){
+  if(!R || !R.n) return '';
+  opz = opz || {};
+  var forn = {}; R.fatture.concat(R.note).forEach(function(x){ forn[ricvBello(x.f.fornitore || '')] = 1; });
+  var piuFornitori = Object.keys(forn).length > 1;
+  var riga = function(x){
+    var nc = x.f.tipo === 'nota_credito', tot = Math.abs(+x.f.importo || 0);
+    var sotto = ['del ' + ricGg(x.f.data)];
+    if(piuFornitori) sotto.push(esc(ricvBello(x.f.fornitore || '').slice(0, 28)));
+    if(Math.abs(tot - x.importo) > 0.009) sotto.push('su ' + fmt(tot));
+    if(x.dedotta) sotto.push('quota ricostruita dal gruppo');
+    return '<div class="sk-riga"><button class="sk-riga-m tap" onclick="' + (opz.prima || '') + 'apriScheda(' + pnIdJs(x.f.id) + ')"><b>' + (nc ? 'Nota di credito' : 'Fatt.') + ' n° ' + esc(x.f.numero || '—') + '</b><small>' + sotto.join(' · ') + '</small></button><span class="sk-riga-v">' + (nc && !R.entrata ? '− ' : '') + fmt(x.importo) + '</span>' + (opz.scollega ? opz.scollega(x) : '') + '</div>';
+  };
+  var h = ricContiMovimentoEsitoHtml(R, opz);
+  if(!piuFornitori) h += '<div class="sk-nota" style="margin-top:8px">' + esc(Object.keys(forn)[0] || '') + '</div>';
+  h += R.fatture.map(riga).join('');
+  if(R.note.length) h += '<div class="sk-nota" style="margin-top:8px">' + (R.note.length === 1 ? 'Nota di credito scalata' : 'Note di credito scalate') + ' da questo pagamento:</div>' + R.note.map(riga).join('');
+  return h;
+}
+
 function ricMovSchedaHtml(m){
   if(!m) return '';
   var h = '';
@@ -35764,14 +35951,18 @@ function ricvTuttiMovimenti(){
 }
 function ricvFiltri(){
   var g = function(id){ var e = document.getElementById(id); return e ? String(e.value || '') : ''; };
-  return { conto: g('bancaFiltroConto'), mese: g('bancaMese'), dal: g('bancaFiltroDal'), al: g('bancaFiltroAl'), testo: g('bancaFiltroTesto').trim().toLowerCase(), importo: g('bancaFiltroImporto').trim().replace(',', '.') };
+  var F = { conto: g('bancaFiltroConto'), mese: g('bancaMese'), dal: g('bancaFiltroDal'), al: g('bancaFiltroAl'), testo: g('bancaFiltroTesto').trim().toLowerCase(), importo: ricImportoCercato(g('bancaFiltroImporto')) };
+  F.cerca = !!(F.testo || F.importo !== null);   // 20/11/2026: cercando, tutti i mesi
+  return F;
 }
 function ricvNelFiltro(M, F){
   if(F.conto && M.conto !== F.conto) return false;
-  if(F.dal || F.al){ if(F.dal && M.data < F.dal) return false; if(F.al && M.data > F.al) return false; }
-  else if(F.mese && M.data.slice(0, 7) !== F.mese) return false;
+  if(!F.cerca){
+    if(F.dal || F.al){ if(F.dal && M.data < F.dal) return false; if(F.al && M.data > F.al) return false; }
+    else if(F.mese && M.data.slice(0, 7) !== F.mese) return false;
+  }
   if(F.testo && (M.descrizione + ' ' + ((M.raw && M.raw.fatturaLabel) || '')).toLowerCase().indexOf(F.testo) < 0) return false;
-  if(F.importo){ var v = parseFloat(F.importo); if(!isNaN(v) && Math.abs(Math.abs(M.importo) - v) >= 0.02) return false; }
+  if(F.importo != null && Math.abs(Math.abs(M.importo) - F.importo) >= 0.02) return false;
   return true;
 }
 
@@ -36126,6 +36317,9 @@ function ricvClassifica(M, idx, ctx, extra){
       }catch(e){}
     }
     S.gruppo = S.avvisi.some(function(a){ return a.liv === 'ko' || a.liv === 'warn'; }) ? 'sistemare' : 'fatto';
+    // 20/11/2026: conta anche le note di credito scalate e dice se i conti tornano (stessa funzione delle schede)
+    var RCm = null; try{ RCm = ricContiMovimento(M.id); }catch(e){}
+    if(RCm && RCm.n > 1){ S.perche = RCm.n + ' documenti collegati' + (RCm.note.length ? ' (' + (RCm.note.length === 1 ? '1 nota di credito' : RCm.note.length + ' note di credito') + ')' : '') + (RCm.torna ? ' · i conti tornano al centesimo' : ''); return S; }
     S.perche = S.docs.length > 1 ? S.docs.length + ' documenti collegati' : (S.docs[0] ? ((S.docs[0].f.tipo === 'nota_credito' ? 'Rimborso della nota ' : 'Fattura ') + 'n° ' + (S.docs[0].f.numero || '—')) : 'Nota di credito scalata nel pagamento');
     return S;
   }
@@ -36638,7 +36832,7 @@ function ricvUsaClassica(si){
   var cf = document.getElementById('bancaFiltroConto'); if(si && cf && cf.value === 'Nexi' && typeof _setBancaConto === 'function'){ _setBancaConto(''); return; }
   if(typeof renderRiconciliazione === 'function') renderRiconciliazione();
 }
-function ricvSetGruppo(k){ RICV.gruppo = k; RICV.mostra = 40; ricvRender(); var v = document.getElementById('ricvLista'); if(v && v.scrollIntoView) v.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
+function ricvSetGruppo(k){ RICV.gruppo = k; RICV.mostra = 40; RICV.cercaG = k; ricvRender(); var v = document.getElementById('ricvLista'); if(v && v.scrollIntoView) v.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
 function ricvApriCat(c){ RICV.aperte[c] = !RICV.aperte[c]; ricvRender(); }
 function ricvJs(s){ return esc(JSON.stringify(String(s))).replace(/"/g, '&quot;'); }
 function ricvChip(liv){
@@ -36665,23 +36859,28 @@ function ricvRender(){
   var n = { conferma: per.conferma.length, sistemare: per.sistemare.length + docSist.length, capire: per.capire.length, non: per.non.length, fatto: per.fatto.length };
   if(!RICV.gruppo) RICV.gruppo = n.conferma ? 'conferma' : (n.sistemare ? 'sistemare' : (n.capire ? 'capire' : 'fatto'));
   var g = RICV.gruppo, tot = nel.length || 1;
+  // 20/11/2026: cercando, l'elenco mostra TUTTO ciò che hai trovato, di qualunque gruppo
+  // (un movimento «A posto» non resta nascosto dietro «Da confermare»). Toccando un
+  // gruppo si restringe a quello; tolta la ricerca si torna come prima.
+  if(F.cerca) g = RICV.cercaG && per[RICV.cercaG] ? RICV.cercaG : 'trovati';
+  else RICV.cercaG = null;
   var pct = Math.round((per.fatto.length + per.non.length) / tot * 100);
   var ent = nel.filter(function(S){ return S.M.importo > 0; }).reduce(function(s, S){ return s + S.M.importo; }, 0), usc = nel.filter(function(S){ return S.M.importo < 0; }).reduce(function(s, S){ return s - S.M.importo; }, 0);
   try{ var e1 = document.getElementById('bancaStatEnt'), e2 = document.getElementById('bancaStatUsc'), e3 = document.getElementById('bancaStatFare'); if(e1) e1.textContent = '+' + fmt(ent); if(e2) e2.textContent = '−' + fmt(usc); if(e3) e3.textContent = n.conferma + n.sistemare + n.capire; }catch(e){}
 
   var h = '<div id="ricvVista">';
   if(RICV.annulla.length) h += '<button class="rv-annulla" onclick="ricvAnnulla()">↩︎ Annulla: ' + esc(RICV.annulla[RICV.annulla.length - 1].t) + '</button>';
-  h += '<div class="rv-sintesi"><div class="rv-sint-t"><span>' + nel.length + (nel.length === 1 ? ' movimento' : ' movimenti') + (F.mese && !F.dal && !F.al ? ' a ' + (PN_MESI_L[+F.mese.slice(5, 7) - 1] || '') + ' ' + F.mese.slice(0, 4) : (F.dal || F.al ? ' nel periodo scelto' : ' in tutto')) + '</span><b>' + pct + '% a posto</b></div>';
+  h += '<div class="rv-sintesi"><div class="rv-sint-t"><span>' + nel.length + (nel.length === 1 ? ' movimento' : ' movimenti') + (F.cerca ? (nel.length === 1 ? ' trovato' : ' trovati') + ' in tutti i mesi' : F.mese && !F.dal && !F.al ? ' a ' + (PN_MESI_L[+F.mese.slice(5, 7) - 1] || '') + ' ' + F.mese.slice(0, 4) : (F.dal || F.al ? ' nel periodo scelto' : ' in tutto')) + '</span><b>' + pct + '% a posto</b></div>';
   h += '<div class="rv-barra" aria-hidden="true">' + ['fatto', 'non', 'conferma', 'capire', 'sistemare'].map(function(k){ var c = k === 'sistemare' ? per.sistemare.length : n[k]; return c ? '<i class="rv-b-' + k + '" style="flex:' + c + '"></i>' : ''; }).join('') + '</div></div>';
   h += '<div class="rv-gruppi">' + RICV_GRUPPI.map(function(G){
     return '<button class="rv-g rv-g-' + G.k + (G.k === g ? ' on' : '') + '" onclick="ricvSetGruppo(\'' + G.k + '\')" aria-pressed="' + (G.k === g) + '"><span class="rv-g-t"><i></i>' + G.t + '</span><b>' + n[G.k] + '</b><small>' + G.s + '</small></button>';
   }).join('') + '</div>';
   var altrove = fuori.conferma + fuori.sistemare + fuori.capire;
-  if(altrove && (F.mese || F.dal || F.al)) h += '<button class="rv-altrove" onclick="ricvTuttiIMesi()">Negli altri mesi: ' + [fuori.conferma ? fuori.conferma + ' da confermare' : '', fuori.sistemare ? fuori.sistemare + ' da sistemare' : '', fuori.capire ? fuori.capire + ' da capire' : ''].filter(Boolean).join(' · ') + ' — <u>vedi tutti i mesi</u></button>';
+  if(altrove && !F.cerca && (F.mese || F.dal || F.al)) h += '<button class="rv-altrove" onclick="ricvTuttiIMesi()">Negli altri mesi: ' + [fuori.conferma ? fuori.conferma + ' da confermare' : '', fuori.sistemare ? fuori.sistemare + ' da sistemare' : '', fuori.capire ? fuori.capire + ' da capire' : ''].filter(Boolean).join(' · ') + ' — <u>vedi tutti i mesi</u></button>';
 
   h += '<div id="ricvLista" class="rv-lista">';
-  var G = RICV_GRUPPI.find(function(x){ return x.k === g; });
-  h += '<div class="rv-lista-h"><h3>' + G.t + '</h3>' + ({ conferma: '<small>il più sicuro in cima</small>', sistemare: '<small>una decisione per riga</small>', capire: '<small>manca il documento?</small>', non: '<small>raggruppati da soli</small>', fatto: '<small>i più recenti</small>' })[g] + '</div>';
+  var G = RICV_GRUPPI.find(function(x){ return x.k === g; }) || { t: 'Risultati della ricerca' };
+  h += '<div class="rv-lista-h"><h3>' + G.t + '</h3>' + ({ trovati: '<small>in tutti i mesi e i gruppi</small>', conferma: '<small>il più sicuro in cima</small>', sistemare: '<small>una decisione per riga</small>', capire: '<small>manca il documento?</small>', non: '<small>raggruppati da soli</small>', fatto: '<small>i più recenti</small>' })[g] + '</div>';
   if(g === 'conferma'){
     var confDoc = per.conferma.filter(function(S){ return !(S.proposte[0] && S.proposte[0].stip); }), confSt = per.conferma.filter(function(S){ return S.proposte[0] && S.proposte[0].stip; });
     var certi = confDoc.filter(function(S){ return S.liv === 'certo'; }).length;
@@ -36711,9 +36910,11 @@ function ricvRender(){
       var L = perCat[c]; if(!L) return;
       var totc = L.reduce(function(s, S){ return s + S.M.importo; }, 0), daP = L.filter(function(S){ return S.daPresenze; }).length;
       h += '<button class="rv-cat" onclick="ricvApriCat(\'' + c + '\')" aria-expanded="' + !!RICV.aperte[c] + '"><span><b>' + esc((RICV_CAT[c] || [c])[0]) + '</b><small>' + L.length + (L.length === 1 ? ' movimento' : ' movimenti') + (daP ? ' · ' + daP + ' da collegare in Presenze' : '') + '</small></span><em>' + (totc < 0 ? '−' : '+') + fmt(Math.abs(totc)) + '</em><i>' + (RICV.aperte[c] ? '▾' : '›') + '</i></button>';
-      if(RICV.aperte[c]) h += '<div class="rv-cat-l">' + ricvRighe(L, true) + '</div>';
+      if(RICV.aperte[c] || F.cerca) h += '<div class="rv-cat-l">' + ricvRighe(L, true) + '</div>';   // cercando, le categorie trovate sono aperte
     });
     if(!per.non.length) h += '<div class="rv-vuoto">Nessun movimento in questo gruppo.</div>';
+  } else if(g === 'trovati'){
+    h += nel.length ? ricvRighe(nel) : '<div class="rv-vuoto">Nessun movimento trovato in nessun mese. Controlla l\'importo o il testo.</div>';
   } else {
     h += ricvRighe(per[g]);
   }
@@ -36826,10 +37027,13 @@ function ricvApri(key){
   if(mdV) kv.push(['Mandato SDD', '<span class="rc-mono">' + esc(mdV) + '</span>']);
   h += pnKv(kv) + '<details class="rc-orig"><summary>Testo originale della banca</summary><div>' + esc(M.descrizione) + '</div></details>';
   // collegato a
-  if(S.docs && S.docs.length){
-    var q = C.idx.quoteMov[key];
-    h += pnSez('Collegato a', S.docs.map(function(x){ return '<div class="sk-riga"><div class="rv-doc rv-doc-tap" style="flex:1;margin:0" onclick="apriScheda(' + pnIdJs(x.f.id) + ')">' + ricvEstremi(x.f, { quota: x.quota, dataMov: M.data }) + (x.dedotta ? '<span class="rv-est-gg">quota ricostruita dal gruppo</span>' : '') + '</div><button class="sk-mini" aria-label="Scollega" onclick="ricvScollega(' + k + ',' + pnIdJs(x.f.id) + ')">✕</button></div>'; }).join('') +
-      (q && q.totale != null ? '<div class="sk-nota">' + (q.libero > RIC.ARROT ? 'Collegati ' + fmt(q.assegnato) + ' su ' + fmt(q.totale) + ': restano ' + fmt(q.libero) + ' senza documento.' : 'Il movimento è tutto collegato.') + '</div>' : ''));
+  // 20/11/2026: fatture E note di credito, con i conti che tornano (o no) al centesimo
+  var RC = ricContiMovimento(M.id);
+  if(RC && RC.n){
+    h += pnSez('Collegato a', ricContiMovimentoHtml(RC, {
+      scollega: function(x){ return '<button class="sk-mini" aria-label="Scollega" onclick="ricvScollega(' + k + ',' + pnIdJs(x.f.id) + ')">✕</button>'; },
+      cambia: M.fonte === 'banca' && typeof apriCambioAbbinamentoMov === 'function' ? "pnChiudi('ricvMov');apriCambioAbbinamentoMov(" + ricvJs(M.id) + ")" : ''
+    }) + (M.fonte === 'banca' ? '<div class="sk-btns"><button class="sk-btn" onclick="condividiMovimento(' + ricvJs(M.id) + ')">📤 Condividi i conti del movimento</button></div>' : ''));
   }
   // avvisi
   (S.avvisi || []).forEach(function(a){
