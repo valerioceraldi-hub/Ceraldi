@@ -11807,6 +11807,16 @@ function _generaPdfRegistrazione(f){
       riga('Descrizione', r.descrizione);
       if(r.movId) riga('ID movimento', r.movId);
       if(r.parziale) riga('Nota', 'Pagamento parziale');
+      // 20/11/2026: se lo stesso movimento paga anche altri documenti, lo dico con i conti
+      // (stessa funzione della scheda del movimento): il commercialista vede subito la quota
+      var RCm = null; try{ if(r.movId && typeof ricContiMovimento === 'function') RCm = ricContiMovimento(r.movId); }catch(e){ RCm = null; }
+      if(RCm && RCm.n > 1){
+        var _tutti = RCm.fatture.concat(RCm.note), _io = _tutti.find(function(x){ return String(x.f.id) === String(f.id); });
+        var _altri = _tutti.filter(function(x){ return String(x.f.id) !== String(f.id); });
+        riga('Pagamento cumulativo', 'Il movimento paga ' + RCm.n + ' documenti: ' + ricContiMovimentoFormula(RCm).replace(/\u2212/g, '-') + '. ' + (RCm.torna ? 'I conti tornano al centesimo.' : 'Differenza di ' + fmt(Math.abs(RCm.differenza)) + ': da verificare.'));
+        if(_io) riga('Quota pagata', fmt(_io.importo) + ' (questo documento)');
+        if(_altri.length) riga('Insieme a', _altri.map(function(x){ var nc = x.f.tipo === 'nota_credito'; return (nc ? 'nota di credito ' : '') + 'n° ' + (x.f.numero || '-') + ' (' + (nc ? '- ' : '') + fmt(x.importo) + ')'; }).join(', '));
+      }
     });
   } else if((f.stato||'pagata')==='pagata' && f.pagamento && f.pagamento!=='contanti'){
     sezione('Movimento in banca');
@@ -21463,6 +21473,10 @@ function renderRiconciliazione(){
     catch(e){ return iso; }
   }
   movAbbinati.forEach(function(m){
+    // 20/11/2026: i documenti di un movimento vengono dal motore (fatture e note di credito),
+    // non più dall'etichetta: «VANDEMOORTELE … N°…, …» senza «15 fatture:» risultava 1 fattura
+    var _rcC = null; try{ if(typeof ricContiMovimento === 'function') _rcC = ricContiMovimento(m.id); }catch(e){ _rcC = null; }
+    if(_rcC && _rcC.n > 1){ _rcC.fatture.concat(_rcC.note).forEach(function(x){ _righeRiconciliate.push({mov:m, fatt:x.f}); }); return; }
     var eMulti = /^\d+ fatture:/.test(m.fatturaLabel||'');
     if(eMulti){
       var fattureCondivise = fatture.filter(function(f){
