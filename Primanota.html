@@ -590,7 +590,7 @@ function avvisoCreditoIA(){
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.46.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.47.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -1354,15 +1354,19 @@ html[data-theme="dark"] .reg-import-link{border-color:rgba(255,255,255,.08)}
         <div id="saldoCassaContanti" class="hero-num ds-cassa-v">€ 0,00</div>
         <div id="saldoCassaContantiN" class="rc-tile-n"></div>
       </div>
-      <div class="ds-cassa-tile" onclick="goTab('incassi',document.querySelector('.tab-item:nth-child(4)'));setTimeout(function(){setIncTab('banca',document.getElementById('inctab-banca'));},200)">
-        <div class="ds-cassa-lbl"><i style="background:#FF8A7A;box-shadow:0 0 6px #FF8A7A"></i>Banco BPM</div>
-        <div id="saldoCassaBpm" class="hero-num ds-cassa-v">—</div>
-        <div id="saldoCassaBpmN" class="rc-tile-n"></div>
-      </div>
-      <div class="ds-cassa-tile" onclick="rcChiediSumUp()">
-        <div class="ds-cassa-lbl"><i style="background:#64D2FF;box-shadow:0 0 6px #64D2FF"></i>SumUp</div>
-        <div id="saldoCassaSumUp" class="hero-num ds-cassa-v">—</div>
-        <div id="saldoCassaSumUpN" class="rc-tile-n"></div>
+      <!-- v10.47.0: un riquadro per ogni conto in uso con un saldo (Impostazioni → Conti e incassi),
+           disegnati da aggiornaSaldoCassa; questi due sono quelli di partenza -->
+      <div id="saldoCassaConti" style="display:contents">
+        <div class="ds-cassa-tile" onclick="goTab('incassi',document.querySelector('.tab-item:nth-child(4)'));setTimeout(function(){setIncTab('banca',document.getElementById('inctab-banca'));},200)">
+          <div class="ds-cassa-lbl"><i style="background:#FF8A7A;box-shadow:0 0 6px #FF8A7A"></i>Banco BPM</div>
+          <div id="saldoCassaBpm" class="hero-num ds-cassa-v">—</div>
+          <div id="saldoCassaBpmN" class="rc-tile-n"></div>
+        </div>
+        <div class="ds-cassa-tile" onclick="rcChiediSumUp()">
+          <div class="ds-cassa-lbl"><i style="background:#64D2FF;box-shadow:0 0 6px #64D2FF"></i>SumUp</div>
+          <div id="saldoCassaSumUp" class="hero-num ds-cassa-v">—</div>
+          <div id="saldoCassaSumUpN" class="rc-tile-n"></div>
+        </div>
       </div>
       <div class="ds-cassa-tile" onclick="rcModificaIniziale()">
         <div class="ds-cassa-lbl"><i style="background:#FFB340;box-shadow:0 0 6px #FFB340"></i>Fondo iniziale</div>
@@ -1563,7 +1567,7 @@ html[data-theme="dark"] .reg-import-link{border-color:rgba(255,255,255,.08)}
       <!-- Selettore conto — INVARIATO (25/08, richiesta esplicita di
            Valerio: "fai in modo che sumup non mi faccia andare in confusione
            con BPM"). Stessa funzione _setBancaConto, stessi 3 bottoni. -->
-      <div class="rb-conti">
+      <div class="rb-conti" id="bancaContiBtns">
         <button id="bancaContoBtnTutti" class="rb-conto attivo" onclick="_setBancaConto('')">Tutti</button>
         <button id="bancaContoBtnBPM" class="rb-conto" onclick="_setBancaConto('BPM')"><i class="rb-conto-dot" style="background:#e0524b"></i>Banco BPM</button>
         <button id="bancaContoBtnSumUp" class="rb-conto" onclick="_setBancaConto('SumUp')"><i class="rb-conto-dot" style="background:#2b6cd4"></i>SumUp</button>
@@ -4931,6 +4935,7 @@ function _impRenderHome(){
       <div class="imp-group">
         ${_impRow('⚙️','Automazioni', 'SumUp, chiusura cassa, riepilogo Telegram, backup, controlli: stato ed esegui ora', "_impRenderSub('automazioni')")}
         ${_impRow('🏢','Azienda e conti', 'Conto per i bonifici, piano dei conti, formati dei file, categorie', "_impRenderSub('azienda')")}
+        ${_impRow('💳','Conti e incassi', 'Banche, carte e POS che usi: aggiungi o smetti di usarli', "_impRenderSub('conti')")}
         ${_impRow('🏦','Banca (Enable Banking)', 'BPM e SumUp: movimenti e saldo in automatico', "_impRenderSub('banca_eb')")}
       </div>
 
@@ -4975,6 +4980,7 @@ function _impRenderSub(key){
   if(key==='riepilogo'){ _rsRender(body); return; }
   if(key==='automazioni'){ _auRender(body); return; }
   if(key==='azienda'){ _azRender(body); return; }
+  if(key==='conti'){ _ctRender(body); return; }
   if(key==='banca_eb'){ _ebRender(body); return; }
   if(key==='apikey'){
     body.innerHTML = _impBack('Intelligenza artificiale') + `
@@ -7350,6 +7356,269 @@ function fmt(n){
   return (v < -0.004 ? '-' : '') + '\u20ac ' + _fmtNF.format(Math.abs(v));
 }
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+/* ══ CONTI E INCASSI (v10.47.0) ══════════════════════════════════════════
+   Un elenco solo dei conti, delle carte e dei POS che usi. Il codice conosce
+   i TIPI (conto corrente, carta, POS, pagamenti online); l'elenco conosce i
+   NOMI e le date in cui li usi. Sta in ceraldi_stato_condiviso, riga
+   'fatture_conti': finché la riga non esiste vale CONTI_BASE, cioè quello che
+   fino alla v10.46.0 era scritto a mano nel codice (con Numia fermo al
+   14/09/2026, ultimo giorno d'uso). Un conto non si cancella mai: si smette
+   di usarlo (data «al») e si può riattivare. Ogni modifica resta nella storia
+   con il prima e il dopo, e si può rimettere com'era.
+   Campi interni (non si vedono): id = valore di movimenti_banca.banca (non
+   cambia mai, anche se cambi il nome); movimenti = dove stanno i suoi
+   movimenti ('banca' movimenti_banca, 'carta' movimenti_carta, 'paypal',
+   '' nessuno: gli incassi arrivano su un altro conto); archivio = tipo in
+   estratti_archivio (promemoria degli estratti); saldo = riga del saldo in
+   ceraldi_stato_condiviso; saldoDa = 'estratto' (letto dall'estratto) o
+   'mano' (lo scrivi tu). */
+var CONTI_KEY = 'fatture_conti';
+var CONTI_TIPI = {
+  conto:  { nome: 'Conto corrente',    ico: '🏦', spiega: 'Ricevi bonifici e paghi i fornitori' },
+  carta:  { nome: 'Carta',             ico: '💳', spiega: 'Carta di credito o di debito con cui paghi' },
+  pos:    { nome: 'POS',               ico: '📟', spiega: 'Incassi dai clienti con carta o telefono' },
+  online: { nome: 'Pagamenti online',  ico: '🌐', spiega: 'Per esempio PayPal' }
+};
+var CONTI_COLORI = ['#e0524b', '#2b6cd4', '#1c6e5a', '#b3541e', '#7a4fd0', '#0f7c8a', '#a8326e', '#5b6b1f'];
+var CONTI_BASE = [
+  { id: 'BPM',    nome: 'Banco BPM',  tipo: 'conto',  colore: '#e0524b', arrivo: 'estratto',   movimenti: 'banca',  archivio: 'banca', saldo: 'banca_saldo',       saldoDa: 'estratto', dal: '',           al: '' },
+  { id: 'SumUp',  nome: 'SumUp',      tipo: 'pos',    colore: '#2b6cd4', arrivo: 'estratto',   movimenti: 'banca',  archivio: 'sumup', saldo: 'banca_saldo_sumup', saldoDa: 'mano',     dal: '2026-08-01', al: '' },
+  { id: 'Nexi',   nome: 'Carta Nexi', tipo: 'carta',  colore: '#1c6e5a', arrivo: 'estratto',   movimenti: 'carta',  archivio: 'carta', saldo: '',                  saldoDa: '',         dal: '',           al: '' },
+  { id: 'PayPal', nome: 'PayPal',     tipo: 'online', colore: '#003087', arrivo: 'automatico', movimenti: 'paypal', archivio: '',      saldo: '',                  saldoDa: '',         dal: '',           al: '' },
+  { id: 'Numia',  nome: 'Numia',      tipo: 'pos',    colore: '#7a4fd0', arrivo: 'estratto',   movimenti: '',       archivio: 'numia', saldo: '',                  saldoDa: '',         dal: '',           al: '2026-09-14' }
+];
+var CONTI = { dati: null, caricato: false, inCarica: false, riprova: 0 };
+function contiIso(d){ d = d || new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function contiData(s){ s = String(s || '').slice(0, 10); return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : ''; }
+function contiNorm(c){
+  c = c || {};
+  return { id: String(c.id || ''), nome: String(c.nome || c.id || '').trim(), tipo: CONTI_TIPI[c.tipo] ? c.tipo : 'conto',
+    colore: /^#[0-9a-f]{6}$/i.test(c.colore || '') ? c.colore : '#8e8e93', arrivo: c.arrivo === 'automatico' ? 'automatico' : 'estratto',
+    movimenti: ({ banca: 1, carta: 1, paypal: 1 })[c.movimenti] ? c.movimenti : '', archivio: String(c.archivio || ''),
+    saldo: String(c.saldo || ''), saldoDa: c.saldoDa === 'estratto' ? 'estratto' : (c.saldo ? 'mano' : ''),
+    dal: contiData(c.dal), al: contiData(c.al) };
+}
+function contiTutti(){
+  if(!CONTI.caricato && !CONTI.inCarica && Date.now() >= CONTI.riprova){ try{ contiCarica(); }catch(e){} }
+  var L = (CONTI.dati && Array.isArray(CONTI.dati.conti) && CONTI.dati.conti.length) ? CONTI.dati.conti : CONTI_BASE;
+  return L.map(contiNorm);
+}
+function contoDi(id){ id = String(id || ''); var L = contiTutti(); for(var i = 0; i < L.length; i++){ if(L[i].id === id) return L[i]; } return null; }
+function contoNome(id){ var c = contoDi(id); return c ? c.nome : String(id || ''); }
+// Un conto è in uso in quel giorno? Un conto che non è nell'elenco conta come in uso
+// (meglio un controllo in più che un controllo perso).
+function contoAttivo(id, data){
+  var c = contoDi(id); if(!c) return true;
+  data = contiData(data) || contiIso();
+  if(c.dal && data < c.dal) return false;
+  if(c.al && data > c.al) return false;
+  return true;
+}
+function contiAttivi(data){ return contiTutti().filter(function(c){ return contoAttivo(c.id, data); }); }
+// conti i cui movimenti si riconciliano qui (banca e carta)
+function contiInRiconciliazione(){ return contiTutti().filter(function(c){ return c.movimenti === 'banca' || c.movimenti === 'carta'; }); }
+// conti con un saldo che entra nel fondo cassa: in uso oggi e con i movimenti in banca
+function contiConSaldo(){ return contiTutti().filter(function(c){ return c.movimenti === 'banca' && c.saldo && contoAttivo(c.id); }); }
+function contiPeriodo(c){
+  var g = function(d){ return d.slice(8, 10) + '/' + d.slice(5, 7) + '/' + d.slice(0, 4); };
+  if(c.dal && c.al) return 'dal ' + g(c.dal) + ' al ' + g(c.al);
+  if(c.al) return 'usato fino al ' + g(c.al);
+  if(c.dal) return 'in uso dal ' + g(c.dal);
+  return 'in uso';
+}
+async function contiCarica(){
+  if(CONTI.inCarica || typeof sbFetch !== 'function') return;
+  CONTI.inCarica = true;
+  try{
+    var r = await sbFetch('ceraldi_stato_condiviso?id=eq.' + CONTI_KEY + '&select=data');
+    CONTI.dati = (r && r[0] && r[0].data) || null; CONTI.caricato = true;
+  }catch(e){ CONTI.riprova = Date.now() + 30000; /* resta CONTI_BASE; si riprova fra 30 secondi */ }
+  CONTI.inCarica = false;
+  if(CONTI.caricato){ try{ contiAggiornaSchermate(); }catch(e){} }
+}
+// dopo un cambio dell'elenco ridisegna ciò che dipende dai conti
+function contiAggiornaSchermate(){
+  try{ if(typeof contiDisegnaBottoni === 'function') contiDisegnaBottoni(); }catch(e){}
+  try{ if(typeof RICV !== 'undefined'){ RICV.cassaMemo = null; RICV.memo = null; } }catch(e){}
+  try{ if(typeof RCASSA !== 'undefined' && typeof rcCarica === 'function'){ RCASSA.caricato = false; rcCarica(); } }catch(e){}
+  try{ var sec = document.getElementById('inc-banca'); if(sec && sec.offsetParent !== null && typeof renderRiconciliazione === 'function') renderRiconciliazione(); }catch(e){}
+}
+/* ── Impostazioni → Conti e incassi ── */
+var CT = { tipo: 'conto', arrivo: 'estratto' };
+function _ctGg(d){ d = contiData(d); return d ? d.slice(8, 10) + '/' + d.slice(5, 7) + '/' + d.slice(0, 4) : ''; }
+function _ctArrivo(c){ return c.arrivo === 'automatico' ? 'movimenti in automatico' : 'carichi tu l\'estratto'; }
+function _ctRigaSub(c){ return (CONTI_TIPI[c.tipo] || CONTI_TIPI.conto).nome + ' · ' + contiPeriodo(c) + ' · ' + _ctArrivo(c); }
+function _ctRender(body){
+  body = body || document.getElementById('impBody'); if(!body) return;
+  var L = contiTutti(), inUso = L.filter(function(c){ return contoAttivo(c.id); }), fermi = L.filter(function(c){ return !contoAttivo(c.id); });
+  var riga = function(c){ return _impRow((CONTI_TIPI[c.tipo] || CONTI_TIPI.conto).ico, esc(c.nome), esc(_ctRigaSub(c)), "_ctScheda(" + esc(JSON.stringify(c.id)).replace(/"/g, '&quot;') + ")"); };
+  var h = _impBack('Conti e incassi') + '<div id="ctLista" style="padding:4px 20px 24px">' +
+    '<div class="rc-nota" style="margin-top:0">Qui ci sono i conti, le carte e i POS che usi. L\'app li usa per la riconciliazione, il fondo cassa, i controlli di cassa e incassi e il promemoria degli estratti. Un conto non si cancella mai: se non lo usi più, tocca il suo nome e scegli «Smetti di usarlo».</div>' +
+    '<div class="imp-group-label">In uso (' + inUso.length + ')</div><div class="imp-group">' + (inUso.length ? inUso.map(riga).join('') : '<div style="padding:14px 16px;color:var(--ink3);font-size:14px">Nessun conto in uso</div>') + '</div>' +
+    (fermi.length ? '<div class="imp-group-label">Non più in uso (' + fermi.length + ')</div><div class="imp-group">' + fermi.map(riga).join('') + '</div>' : '') +
+    '<button class="sk-btn prim big" style="width:100%" onclick="_ctScheda(\'\')">＋ Aggiungi un conto, una carta o un POS</button>' +
+    _ctStoriaHtml() + '</div>';
+  body.innerHTML = h;
+  // prima apertura: l'elenco salvato arriva dal database, poi si ridisegna (solo se sei ancora qui)
+  if(!CONTI.caricato && !CONTI.inCarica) contiCarica().then(function(){ if(CONTI.caricato && document.getElementById('ctLista')) _ctRender(); });
+}
+function _ctScelta(gruppo, val, ico, titolo, spiega, attivo){
+  return '<button type="button" class="ct-sc' + (attivo ? ' on' : '') + '" data-g="' + gruppo + '" onclick="_ctScegli(\'' + gruppo + '\',\'' + val + '\',this)"><span class="ct-sc-i">' + ico + '</span><span class="ct-sc-t"><b>' + titolo + '</b><small>' + spiega + '</small></span></button>';
+}
+function _ctScegli(gruppo, val, el){
+  CT[gruppo] = val;
+  document.querySelectorAll('.ct-sc[data-g="' + gruppo + '"]').forEach(function(b){ b.classList.toggle('on', b === el); });
+}
+function _ctScheda(id){
+  var body = document.getElementById('impBody'); if(!body) return;
+  var nuovo = !id, c = nuovo ? contiNorm({ id: '', nome: '', tipo: 'conto', arrivo: 'estratto' }) : contoDi(id);
+  if(!c){ _ctRender(body); return; }
+  CT = { id: c.id, tipo: c.tipo, arrivo: c.arrivo };
+  var attivo = nuovo || contoAttivo(c.id), T = CONTI_TIPI[c.tipo] || CONTI_TIPI.conto;
+  var h = '<div class="imp-back" onclick="_ctRender()"><span class="imp-back-arrow">‹</span><span class="imp-back-label">' + (nuovo ? 'Nuovo conto' : esc(c.nome)) + '</span></div><div style="padding:4px 20px 24px">';
+  if(!nuovo && !attivo) h += '<div class="rc-nota" style="margin-top:0">Non più in uso: ' + esc(contiPeriodo(c)) + '. I suoi movimenti restano tutti. Lo riattivi con il pulsante in fondo.</div>';
+  h += '<label class="rc-lbl" for="ctNome">Come si chiama</label><input id="ctNome" class="rc-inp ct-inp" type="text" maxlength="40" autocomplete="off" placeholder="Per esempio Banca Sella" value="' + esc(c.nome) + '">';
+  h += '<label class="rc-lbl">Che cos\'è</label>';
+  if(nuovo){
+    h += '<div class="ct-scs">' + Object.keys(CONTI_TIPI).map(function(k){ var t = CONTI_TIPI[k]; return _ctScelta('tipo', k, t.ico, t.nome, t.spiega, k === c.tipo); }).join('') + '</div>';
+  } else {
+    h += '<div class="ct-fisso">' + T.ico + ' <b>' + T.nome + '</b><small>Non si cambia dopo la creazione. Se è sbagliato, smetti di usarlo e creane uno nuovo.</small></div>';
+  }
+  h += '<label class="rc-lbl">Come arrivano i movimenti</label><div class="ct-scs">' +
+    _ctScelta('arrivo', 'estratto', '📄', 'Carico io l\'estratto', 'Ogni mese ti ricordo se manca', c.arrivo === 'estratto') +
+    _ctScelta('arrivo', 'automatico', '🔄', 'Arrivano da soli', 'Nessun promemoria', c.arrivo === 'automatico') + '</div>';
+  h += '<label class="rc-lbl" for="ctDal">Lo uso dal</label><input id="ctDal" class="rc-inp ct-inp" type="date" value="' + esc(c.dal) + '"><div class="ct-aiuto">Lascia vuoto se lo usavi già prima di iniziare con l\'app.</div>';
+  if(!nuovo && c.al) h += '<label class="rc-lbl" for="ctAl">L\'ho usato fino al</label><input id="ctAl" class="rc-inp ct-inp" type="date" value="' + esc(c.al) + '"><div class="ct-aiuto">Ultimo giorno in cui l\'hai usato.</div>';
+  if(nuovo) h += '<div class="rc-nota" style="margin-top:12px">' + 'Un conto corrente nuovo compare subito nella riconciliazione e nel fondo cassa (il saldo lo scrivi tu). L\'importazione dei suoi estratti arriva con il prossimo aggiornamento.</div>';
+  h += '<button class="sk-btn prim big" style="width:100%;margin-top:14px" onclick="_ctSalva()">' + (nuovo ? 'Aggiungi' : 'Salva') + '</button>';
+  if(!nuovo && attivo){
+    var conSaldo = c.movimenti === 'banca' && c.saldo;
+    h += '<div id="ctSmetti" class="ct-smetti"><button class="sk-btn big" style="width:100%" onclick="document.getElementById(\'ctSmettiBox\').style.display=\'block\';this.style.display=\'none\'">Smetti di usarlo</button>' +
+      '<div id="ctSmettiBox" style="display:none"><label class="rc-lbl" for="ctUltimo">Ultimo giorno in cui l\'hai usato</label><input id="ctUltimo" class="rc-inp ct-inp" type="date" value="' + contiIso() + '">' +
+      '<div class="ct-aiuto">Dal giorno dopo non lo controllo più e non ti chiedo i suoi dati. I movimenti di prima restano tutti' + (conSaldo ? '; il suo saldo esce dal fondo cassa, quindi se ci sono ancora soldi spostali prima' : '') + '. Puoi sempre riattivarlo.</div>' +
+      '<button class="sk-btn big" style="width:100%;margin-top:10px;color:var(--red)" onclick="_ctSmetti()">Conferma: non lo uso più</button></div></div>';
+  }
+  if(!nuovo && !attivo) h += '<button class="sk-btn big" style="width:100%;margin-top:10px" onclick="_ctRiattiva()">Riattivalo: lo uso di nuovo</button>';
+  body.innerHTML = h + '</div>';
+}
+function _ctNuovoId(nome, L){
+  var base = String(nome).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9]+(.)?/g, function(x, a){ return a ? a.toUpperCase() : ''; }).replace(/^[^A-Za-z]+/, '').slice(0, 24) || 'Conto';
+  var id = base, n = 2, usati = {};
+  L.forEach(function(c){ usati[c.id.toLowerCase()] = 1; });
+  while(usati[id.toLowerCase()]) id = base + (n++);
+  return id;
+}
+function _ctChi(){ try{ return (window._authSess && _authSess.user && _authSess.user.email) || ''; }catch(e){ return ''; } }
+// Legge l'elenco aggiornato dal database, applica la modifica e lo riscrive con la sua voce di storia.
+async function contiSalva(modifica, voce){
+  var cur = null;
+  try{ var r = await sbFetch('ceraldi_stato_condiviso?id=eq.' + CONTI_KEY + '&select=data'); cur = (r && r[0] && r[0].data) || null; }
+  catch(e){ toast('❌ Non salvato: ' + (e.message || e), { forza: true }); return false; }
+  var primo = !(cur && Array.isArray(cur.conti) && cur.conti.length);
+  var lista = (primo ? CONTI_BASE : cur.conti).map(contiNorm);
+  var nuova; try{ nuova = modifica(lista); }catch(e){ toast('⚠️ ' + (e.message || e), { forza: true }); return false; }
+  if(!nuova) return false;
+  var ora = new Date().toISOString(), storia = (primo ? [] : (cur.storia || [])).slice();
+  if(primo) storia.push({ quando: ora, chi: _ctChi(), azione: 'iniziale', id: '', nome: '', prima: null, dopo: null });
+  voce.quando = ora; voce.chi = _ctChi(); storia.push(voce);
+  var dati = { versione: 1, conti: nuova, storia: storia.slice(-300) };
+  try{ await sbFetch('ceraldi_stato_condiviso?on_conflict=id', { method: 'POST', headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify({ id: CONTI_KEY, data: dati, updated_at: ora }) }); }
+  catch(e){ toast('❌ Non salvato: ' + (e.message || e), { forza: true }); return false; }
+  CONTI.dati = dati; CONTI.caricato = true;
+  try{ contiAggiornaSchermate(); }catch(e){}
+  return true;
+}
+function _ctLeggiForm(){
+  var g = function(id){ var e = document.getElementById(id); return e ? String(e.value || '').trim() : ''; };
+  return { nome: g('ctNome').replace(/\s+/g, ' '), dal: contiData(g('ctDal')), al: document.getElementById('ctAl') ? contiData(g('ctAl')) : null };
+}
+async function _ctSalva(){
+  var f = _ctLeggiForm(), id = CT.id;
+  if(!f.nome){ toast('⚠️ Scrivi come si chiama', { forza: true }); return; }
+  var al = f.al != null ? f.al : (id ? (contoDi(id) || {}).al : '');
+  if(f.dal && al && f.dal > al){ toast('⚠️ La data «dal» viene dopo l\'ultimo giorno d\'uso', { forza: true }); return; }
+  var voce = {}, nuovoId = '', uguale = false;
+  var ok = await contiSalva(function(L){
+    if(L.some(function(c){ return c.id !== id && c.nome.toLowerCase() === f.nome.toLowerCase(); })) throw new Error('C\'è già un conto con questo nome');
+    if(!id){
+      nuovoId = _ctNuovoId(f.nome, L);
+      var usati = L.map(function(c){ return c.colore; }), col = CONTI_COLORI.filter(function(x){ return usati.indexOf(x) < 0; })[0] || CONTI_COLORI[L.length % CONTI_COLORI.length];
+      var n = contiNorm({ id: nuovoId, nome: f.nome, tipo: CT.tipo, colore: col, arrivo: CT.arrivo, movimenti: CT.tipo === 'conto' ? 'banca' : '', archivio: nuovoId,
+        saldo: CT.tipo === 'conto' ? 'banca_saldo_' + nuovoId.toLowerCase() : '', saldoDa: 'mano', dal: f.dal, al: '' });
+      Object.assign(voce, { azione: 'aggiunto', id: nuovoId, nome: n.nome, prima: null, dopo: n });
+      return L.concat([n]);
+    }
+    var i = L.findIndex(function(c){ return c.id === id; }); if(i < 0) throw new Error('Conto non trovato');
+    var prima = L[i], dopo = contiNorm(Object.assign({}, prima, { nome: f.nome, arrivo: CT.arrivo, dal: f.dal, al: f.al != null ? f.al : prima.al }));
+    if(JSON.stringify(prima) === JSON.stringify(dopo)){ uguale = true; return null; }
+    Object.assign(voce, { azione: 'modificato', id: id, nome: dopo.nome, prima: prima, dopo: dopo });
+    L[i] = dopo; return L;
+  }, voce);
+  if(uguale){ toast('Nessuna modifica da salvare', { forza: true }); _ctRender(); return; }
+  if(ok){ toast('✓ ' + (id ? 'Salvato' : f.nome + ' aggiunto'), { forza: true }); _ctRender(); }
+}
+// la voce di storia la scrive contiSalva con la voce passata: qui la si completa dentro la modifica
+async function _ctCambia(id, cambia, azione){
+  var voce = { azione: azione, id: id };
+  var ok = await contiSalva(function(L){
+    var i = L.findIndex(function(c){ return c.id === id; }); if(i < 0) throw new Error('Conto non trovato');
+    var prima = L[i], dopo = contiNorm(cambia(Object.assign({}, prima)));
+    voce.nome = dopo.nome; voce.prima = prima; voce.dopo = dopo; L[i] = dopo; return L;
+  }, voce);
+  return ok;
+}
+async function _ctSmetti(){
+  var d = contiData((document.getElementById('ctUltimo') || {}).value), c = contoDi(CT.id);
+  if(!d){ toast('⚠️ Scegli l\'ultimo giorno in cui l\'hai usato', { forza: true }); return; }
+  if(c && c.dal && d < c.dal){ toast('⚠️ L\'ultimo giorno viene prima del primo giorno d\'uso', { forza: true }); return; }
+  if(await _ctCambia(CT.id, function(x){ x.al = d; return x; }, 'smesso')){ toast('✓ ' + contoNome(CT.id) + ': non più in uso dopo il ' + _ctGg(d), { forza: true }); _ctRender(); }
+}
+async function _ctRiattiva(){
+  if(await _ctCambia(CT.id, function(x){ x.al = ''; return x; }, 'riattivato')){ toast('✓ ' + contoNome(CT.id) + ' di nuovo in uso', { forza: true }); _ctRender(); }
+}
+function _ctHaMovimenti(id){
+  var b = typeof _bancaMovimenti !== 'undefined' ? _bancaMovimenti : [];
+  return b.some(function(m){ return m && m.banca === id; });
+}
+// Rimetti com'era: riporta il conto allo stato prima dell'ultima modifica (anche questa resta nella storia)
+async function _ctRipristina(idx){
+  var S = (CONTI.dati && CONTI.dati.storia) || [], v = S[idx]; if(!v || !v.id) return;
+  if(!v.prima && _ctHaMovimenti(v.id)){ toast('⚠️ ' + v.nome + ' ha già dei movimenti: non si toglie. Se non lo usi, smetti di usarlo.', { forza: true }); return; }
+  if(!confirm(v.prima ? 'Rimettere ' + v.nome + ' com\'era prima di questa modifica?' : 'Togliere ' + v.nome + ' dall\'elenco? Era stato aggiunto il ' + _ctGg(String(v.quando).slice(0, 10)) + ' e non ha movimenti.')) return;
+  var voce = { azione: v.prima ? 'ripristinato' : 'tolto', id: v.id, nome: v.nome };
+  var ok = await contiSalva(function(L){
+    var i = L.findIndex(function(c){ return c.id === v.id; }); if(i < 0) throw new Error('Conto non trovato');
+    voce.prima = L[i];
+    if(!v.prima){ voce.dopo = null; L.splice(i, 1); return L; }
+    voce.dopo = contiNorm(v.prima); L[i] = voce.dopo; return L;
+  }, voce);
+  if(ok){ toast('✓ Fatto: ' + v.nome + (v.prima ? ' è com\'era prima' : ' tolto'), { forza: true }); _ctRender(); }
+}
+function _ctDescrivi(v){
+  var g = _ctGg, p = v.prima || {}, d = v.dopo || {};
+  if(v.azione === 'iniziale') return 'Elenco creato con i conti che l\'app usava già';
+  if(v.azione === 'aggiunto') return '<b>' + esc(v.nome) + '</b>: aggiunto (' + esc((CONTI_TIPI[d.tipo] || {}).nome || '') + ')';
+  if(v.azione === 'tolto') return '<b>' + esc(v.nome) + '</b>: tolto dall\'elenco';
+  if(v.azione === 'smesso') return '<b>' + esc(v.nome) + '</b>: non più in uso, ultimo giorno ' + g(d.al);
+  if(v.azione === 'riattivato') return '<b>' + esc(v.nome) + '</b>: di nuovo in uso';
+  var cose = [];
+  if(p.nome !== d.nome) cose.push('nome «' + esc(p.nome) + '» → «' + esc(d.nome) + '»');
+  if(p.dal !== d.dal) cose.push('in uso dal ' + (g(p.dal) || '—') + ' → ' + (g(d.dal) || '—'));
+  if(p.al !== d.al) cose.push('ultimo giorno ' + (g(p.al) || '—') + ' → ' + (g(d.al) || '—'));
+  if(p.arrivo !== d.arrivo) cose.push(d.arrivo === 'automatico' ? 'movimenti in automatico' : 'carichi tu l\'estratto');
+  return '<b>' + esc(v.nome) + '</b>: ' + (v.azione === 'ripristinato' ? 'rimesso com\'era' + (cose.length ? ' (' + cose.join(', ') + ')' : '') : (cose.join(', ') || 'modificato'));
+}
+function _ctStoriaHtml(){
+  var S = (CONTI.dati && CONTI.dati.storia) || []; if(!S.length) return '';
+  var ultima = {}; S.forEach(function(v, i){ if(v.id) ultima[v.id] = i; });
+  var righe = S.map(function(v, i){ return { v: v, i: i }; }).reverse().slice(0, 30).map(function(x){
+    var v = x.v, q = new Date(v.quando), quando = isNaN(q) ? '' : q.toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric' }) + ' ' + q.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+    var puo = v.id && ultima[v.id] === x.i && v.azione !== 'iniziale' && (v.prima || v.azione === 'aggiunto');
+    return '<div class="ct-st"><div class="ct-st-m">' + _ctDescrivi(v) + '<small>' + esc(quando) + (v.chi ? ' · ' + esc(v.chi) : '') + '</small></div>' +
+      (puo ? '<button class="sk-btn" onclick="_ctRipristina(' + x.i + ')">Rimetti com\'era</button>' : '') + '</div>';
+  }).join('');
+  return '<details id="ctStoria" class="ct-storia"><summary>Storia delle modifiche (' + S.length + ')</summary>' + righe + '</details>';
+}
 // Estrae il numero assegno dalla descrizione di un movimento bancario tipo
 // "VOSTRO ASSEGNO N. 0208770762" — usata per compilare in automatico il numero
 // assegno sulla fattura quando la riconciliazione trova il movimento giusto,
@@ -14320,7 +14589,7 @@ function _chgRecalc(){
     // contrario. Se manca proprio Numia, lo si dice esplicitamente: si
     // può salvare comunque, e Numia si aggiunge anche più tardi dalla
     // riconciliazione quando arriva l'estratto banca.
-    const numiaVuoto = !(_pNum(gv('chgPosNumia')) > 0);
+    const numiaVuoto = !(_pNum(gv('chgPosNumia')) > 0) && contoAttivo('Numia', gv('chgDataInp'));
     const notaNumia = numiaVuoto ? '<br><span style="font-size:11px;color:var(--ink3)">Numia non ancora inserito — puoi salvare comunque, lo aggiungi anche più tardi dalla riconciliazione.</span>' : '';
     el.innerHTML = `⚠️ Differenza ${fmt(absDiff)} — ${verso}<br><span style="font-size:12px;font-weight:500">Corrispettivi ${fmt(totale)} · Cassa+POS ${fmt(incassatoTot)}</span>${notaNumia}`;
   }
@@ -14950,8 +15219,10 @@ async function renderIncLista(){
     // "un dato mancante da aspettare", è semplicemente completo così. Senza
     // questa distinzione ogni giorno pre-agosto restava per sempre etichettato
     // "solo Numia"/manca SumUp, un avviso che non si sarebbe mai risolto.
-    const _sumupAttivoDalGiorno = c.data >= '2026-08-01';
-    const soloUnaFonte = _sumupAttivoDalGiorno && ((totNumiaSolo>0) !== (totSumupSolo>0)); // XOR: esattamente una delle due, non zero né entrambe
+    // v10.47.0: le date d'uso di SumUp e Numia vengono da Impostazioni → Conti e incassi (prima
+    // SumUp «dal 01/08/2026» era scritto qui a mano). Un dato manca solo se quel giorno erano in uso tutti e due.
+    const _dueFontiInUso = contoAttivo('SumUp', c.data) && contoAttivo('Numia', c.data);
+    const soloUnaFonte = _dueFontiInUso && ((totNumiaSolo>0) !== (totSumupSolo>0)); // XOR: esattamente una delle due, non zero né entrambe
     // BUG TROVATO da Valerio (23/08): questa riga era scritta al contrario —
     // assegnava 'Numia' come "mancante" proprio quando era Numia ad AVERE il
     // dato (totNumiaSolo>0), risultato: badge e messaggio dicevano entrambi
@@ -19208,15 +19479,16 @@ function _fmtDataBreveEstratti(s){
 async function _renderEstrattiCaricatiBanca(){
   var wrap = document.getElementById('bancaEstrattiCaricati');
   if(!wrap) return;
-  var maxBPM, maxSumUp, pdfList;
-  try{
-    var rBPM = await sbFetch('movimenti_banca?banca=eq.BPM&select=data&order=data.desc&limit=1');
-    maxBPM = (Array.isArray(rBPM) && rBPM[0]) ? rBPM[0].data : null;
-  }catch(e){ maxBPM = null; }
-  try{
-    var rSumUp = await sbFetch('movimenti_banca?banca=eq.SumUp&select=data&order=data.desc&limit=1');
-    maxSumUp = (Array.isArray(rSumUp) && rSumUp[0]) ? rSumUp[0].data : null;
-  }catch(e){ maxSumUp = null; }
+  var pdfList;
+  // v10.47.0: una riga per ogni conto con i movimenti in banca (Impostazioni → Conti e incassi);
+  // una query da una riga per conto, come prima per BPM e SumUp
+  var contiB = contiTutti().filter(function(c){ return c.movimenti === 'banca'; });
+  var maxConto = {};
+  await Promise.all(contiB.map(async function(c){
+    try{ var r = await sbFetch('movimenti_banca?banca=eq.' + encodeURIComponent(c.id) + '&select=data&order=data.desc&limit=1'); maxConto[c.id] = (Array.isArray(r) && r[0]) ? r[0].data : null; }
+    catch(e){ maxConto[c.id] = null; }
+  }));
+  contiB = contiB.filter(function(c){ return contoAttivo(c.id) || maxConto[c.id]; });
   try{
     pdfList = await sbFetch('banca_estratti_pdf?select=id,periodo_da,periodo_a,file_name,quadratura_ok,caricato_il&order=periodo_a.desc');
   }catch(e){ pdfList = null; } // tabella non ancora creata — nessun errore visibile
@@ -19224,8 +19496,7 @@ async function _renderEstrattiCaricatiBanca(){
   var html = '<details style="background:var(--surface2);border-radius:10px;padding:10px 12px" open>';
   html += '<summary style="font-size:12px;font-weight:600;color:var(--ink2);cursor:pointer">📂 Estratti caricati</summary>';
   html += '<div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">';
-  html += '<div style="font-size:12px;color:var(--ink2)">📋 Lista movimenti BPM: '+(maxBPM?('importata fino al <b>'+_fmtDataBreveEstratti(maxBPM)+'</b>'):'<span style="color:var(--ink3)">nessuna importata</span>')+'</div>';
-  html += '<div style="font-size:12px;color:var(--ink2)">📋 Lista movimenti SumUp: '+(maxSumUp?('importata fino al <b>'+_fmtDataBreveEstratti(maxSumUp)+'</b>'):'<span style="color:var(--ink3)">nessuna importata</span>')+'</div>';
+  contiB.forEach(function(c){ var mx = maxConto[c.id]; html += '<div style="font-size:12px;color:var(--ink2)">📋 Lista movimenti '+esc(c.nome)+': '+(mx?('importata fino al <b>'+_fmtDataBreveEstratti(mx)+'</b>'):'<span style="color:var(--ink3)">nessuna importata</span>')+'</div>'; });
   if(Array.isArray(pdfList) && pdfList.length){
     html += '<div style="font-size:11px;font-weight:700;color:var(--ink3);text-transform:uppercase;letter-spacing:.5px;margin-top:6px">Copie PDF caricate ('+pdfList.length+')</div>';
     pdfList.forEach(function(r){
@@ -19247,9 +19518,7 @@ async function _renderEstrattiCaricatiBanca(){
   // già letti sopra per il pannello esteso, nessuna query in più.
   var statusEl = document.getElementById('bancaStatusLine');
   if(statusEl){
-    var parti = [];
-    if(maxBPM) parti.push('BPM al '+_fmtDataBreveEstratti(maxBPM));
-    if(maxSumUp) parti.push('SumUp al '+_fmtDataBreveEstratti(maxSumUp));
+    var parti = contiB.filter(function(c){ return maxConto[c.id]; }).map(function(c){ return c.nome + ' al ' + _fmtDataBreveEstratti(maxConto[c.id]); });
     statusEl.textContent = parti.length ? parti.join(' · ') : 'Importa estratto conto e abbina alle fatture pagate';
   }
 }
@@ -19568,17 +19837,33 @@ async function onSumUpBizCSVSelected(input){
 function _setBancaConto(conto){
   var campo = document.getElementById('bancaFiltroConto');
   if(campo) campo.value = conto;
-  var btnBPM = document.getElementById('bancaContoBtnBPM');
-  var btnSumUp = document.getElementById('bancaContoBtnSumUp');
-  var btnTutti = document.getElementById('bancaContoBtnTutti');
-  var btnNexi = document.getElementById('bancaContoBtnNexi');
-  if(btnNexi) { btnNexi.style.background = conto==='Nexi' ? '#1c6e5a' : 'transparent'; btnNexi.style.color = conto==='Nexi' ? '#fff' : 'var(--ink2)'; }
-  if(btnBPM) { btnBPM.style.background = conto==='BPM' ? 'var(--red)' : 'transparent'; btnBPM.style.color = conto==='BPM' ? '#fff' : 'var(--ink2)'; }
-  if(btnSumUp) { btnSumUp.style.background = conto==='SumUp' ? '#0066cc' : 'transparent'; btnSumUp.style.color = conto==='SumUp' ? '#fff' : 'var(--ink2)'; }
-  if(btnTutti) { btnTutti.style.background = conto==='' ? 'var(--ink3)' : 'transparent'; btnTutti.style.color = conto==='' ? '#fff' : 'var(--ink3)'; }
-  var avviso = document.getElementById('bancaAvvisoSumUp');
-  if(avviso) avviso.style.display = conto==='SumUp' ? 'block' : 'none';
+  contiEvidenziaBottoni(conto);
   renderRiconciliazione();
+}
+// v10.47.0: i pulsanti dei conti vengono da Impostazioni → Conti e incassi. Ci sono i conti
+// con movimenti in banca o carta che usi oggi, più quelli non più in uso che hanno movimenti
+// (per rivedere il passato). Gli id restano bancaContoBtn<id> (BPM, SumUp, Nexi come prima).
+function contiDisegnaBottoni(){
+  var box = document.getElementById('bancaContiBtns'); if(!box) return;
+  var conMov = {};
+  try{ (typeof _bancaMovimenti !== 'undefined' ? _bancaMovimenti : []).forEach(function(m){ if(m) conMov[m.banca || 'BPM'] = 1; }); }catch(e){}
+  try{ if(typeof _cartaMovimenti !== 'undefined' && _cartaMovimenti.length) contiTutti().forEach(function(c){ if(c.movimenti === 'carta') conMov[c.id] = 1; }); }catch(e){}
+  var L = contiInRiconciliazione().filter(function(c){ return contoAttivo(c.id) || conMov[c.id]; });
+  var h = '<button id="bancaContoBtnTutti" class="rb-conto" onclick="_setBancaConto(\'\')">Tutti</button>' + L.map(function(c){
+    return '<button id="bancaContoBtn' + esc(c.id) + '" class="rb-conto" data-conto="' + esc(c.id) + '" onclick="_setBancaConto(' + esc(JSON.stringify(c.id)).replace(/"/g, '&quot;') + ')"><i class="rb-conto-dot" style="background:' + c.colore + '"></i>' + esc(c.nome) + (contoAttivo(c.id) ? '' : ' <small>(non più in uso)</small>') + '</button>';
+  }).join('');
+  if(box.innerHTML !== h) box.innerHTML = h;
+  contiEvidenziaBottoni((document.getElementById('bancaFiltroConto') || {}).value || '');
+}
+function contiEvidenziaBottoni(conto){
+  document.querySelectorAll('#bancaContiBtns .rb-conto').forEach(function(b){ var on = (b.getAttribute('data-conto') || '') === conto; b.classList.toggle('attivo', on); b.style.background = on ? 'var(--ink)' : 'transparent'; b.style.color = on ? 'var(--surface)' : 'var(--ink2)'; });
+  // l'accredito di un POS sul suo conto è già al netto delle commissioni
+  var c = conto ? contoDi(conto) : null, avviso = document.getElementById('bancaAvvisoSumUp');
+  if(avviso){
+    var mostra = !!(c && c.tipo === 'pos' && c.movimenti === 'banca');
+    avviso.style.display = mostra ? 'block' : 'none';
+    if(mostra) avviso.innerHTML = '⚠️ L\'accredito di ' + esc(c.nome) + ' che vedi qui è già <b>al netto delle commissioni</b>: non è il totale lordo delle vendite POS, ma le vendite meno la commissione trattenuta da ' + esc(c.nome) + ' prima di accreditare sul conto. Non confrontarlo direttamente con l\'incasso POS lordo di Cassa → Oggi.';
+  }
 }
 
 // ── RIDISEGNO RICONCILIAZIONE (15/09, richiesto da Valerio: "troppi
@@ -19736,7 +20021,7 @@ function renderRiconciliazione(){
     try{ ricvRender(); return; }
     catch(_rvE){ console.warn('riconciliazione semplice:', _rvE); if(typeof _registraErrore==='function') _registraErrore('js','Riconciliazione semplice: '+(_rvE && _rvE.message || _rvE)); RICV.soloClassica = true; if(typeof ricvAggiornaTorna === 'function') ricvAggiornaTorna(false); }
   }
-  if(!_soloVer && (document.getElementById('bancaFiltroConto')||{}).value === 'Nexi'){ document.getElementById('bancaFiltroConto').value = ''; }
+  if(!_soloVer && ((contoDi((document.getElementById('bancaFiltroConto')||{}).value) || {}).movimenti === 'carta')){ document.getElementById('bancaFiltroConto').value = ''; }
   var mese = (document.getElementById('bancaMese')||{}).value||'';
   if(!_bancaMovimenti.length){
     wrap.innerHTML = '<div style="text-align:center;padding:24px;color:var(--ink3);font-size:13px">📥 Tocca "Importa" qui sopra per caricare il primo estratto</div>';
@@ -21023,9 +21308,14 @@ function renderRiconciliazione(){
     // può darsi solo che quel periodo non sia ancora stato importato.
     var _cop = window._bancaCopertura;
     var _zeroSicuro = !!(_cop && _cop.min && _cop.max && data >= _cop.min && _giorniTra(data, _cop.max) >= 7);
+    // v10.47.0 (Valerio, 20/11/2026: «Numia non li uso più dal 15 settembre»): nei giorni in cui
+    // Numia non è in uso (Impostazioni → Conti e incassi) non si chiede nulla: vale zero, come un
+    // giorno senza vendite Numia. Se però un dato Numia c'è (a mano o in banca) si controlla come sempre.
+    var _numiaInUso = contoAttivo('Numia', data);
+    if(!_numiaInUso) _zeroSicuro = true;
     if(numiaManuale!=null && numiaBanca!=null && Math.abs(numiaManuale-numiaBanca)>0.50){
       posManutenzioneNumia.push({data:data, tipo:'conflitto', numiaManuale:numiaManuale, numiaBanca:numiaBanca, sumup:sumup, fiscale:fiscale, chiusura:ch});
-    } else if(numiaManuale==null && numiaBanca==null && ch){
+    } else if(numiaManuale==null && numiaBanca==null && ch && _numiaInUso){
       if(_zeroSicuro){
         // Estratto conto BPM presente e già oltre il margine di sicurezza,
         // nessuna riga Numia trovata per questo giorno → Numia non
@@ -31648,12 +31938,22 @@ function _accAvvisa(){
 // che periodo copre, quando è stato caricato e il file originale
 // conservato su Supabase. Più il promemoria mensile di quelli mancanti.
 // ══════════════════════════════════════════════════════════════════
-var _ES_TIPI = [
-  { k:'banca', ico:'🏦', n:'Estratto conto Banco BPM', sub:'movimenti del conto' },
-  { k:'carta', ico:'💳', n:'Estratto carta Nexi',      sub:'spese con la carta di credito' },
-  { k:'numia', ico:'🧾', n:'Incassi POS Numia',        sub:'transazioni del POS' },
-  { k:'sumup', ico:'📲', n:'Incassi SumUp',            sub:'transazioni e accrediti SumUp' }
-];
+// v10.47.0: i tipi di estratto vengono da Impostazioni → Conti e incassi (prima erano
+// scritti qui a mano). Un conto entra nel promemoria se il suo estratto lo carichi tu, e
+// i mesi mancanti si contano solo nelle date in cui lo usavi (Numia: fino al 14/09/2026).
+// Un conto non più in uso resta in elenco solo se ha già estratti in archivio.
+var _ES_NOMI = {
+  conto:  function(c){ return { ico:'🏦', n:'Estratto conto '+c.nome, sub:'movimenti del conto' }; },
+  carta:  function(c){ return { ico:'💳', n:'Estratto '+(/^carta\b/i.test(c.nome) ? 'carta'+c.nome.slice(5) : 'carta '+c.nome), sub:'spese con la carta' }; },
+  pos:    function(c){ return { ico:'🧾', n:'Incassi '+c.nome, sub:'transazioni del POS' }; },
+  online: function(c){ return { ico:'🌐', n:'Movimenti '+c.nome, sub:'pagamenti online' }; }
+};
+function _esTipi(){
+  return contiTutti().filter(function(c){ return c.archivio; }).map(function(c){
+    var t = (_ES_NOMI[c.tipo] || _ES_NOMI.conto)(c);
+    return { k:c.archivio, ico:t.ico, n:t.n, sub:t.sub, conto:c };
+  }).filter(function(t){ return contoAttivo(t.conto.id) || _esDi(t.k).length; });
+}
 var _esRighe = null;
 
 function _esMeseEt(ym){
@@ -31694,7 +31994,15 @@ function _esMancanti(tipo){
   var righe=_esDi(tipo); if(!righe.length) return [];
   var coperti=_esCoperti(tipo), mesi=Object.keys(coperti).sort();
   if(!mesi.length) return [];
-  return _esMesiTra(mesi[0], _esMesePrec()).filter(function(m){ return !coperti[m]; });
+  // v10.47.0: solo i mesi in cui il conto era in uso, e niente promemoria se i movimenti arrivano da soli
+  var c=contiTutti().filter(function(x){ return x.archivio===tipo; })[0];
+  if(c && c.arrivo==='automatico') return [];
+  var fine=_esMesePrec();
+  if(c && c.al && c.al.slice(0,7)<fine) fine=c.al.slice(0,7);
+  var inizio=mesi[0];
+  if(c && c.dal && c.dal.slice(0,7)>inizio) inizio=c.dal.slice(0,7);
+  if(inizio>fine) return [];
+  return _esMesiTra(inizio, fine).filter(function(m){ return !coperti[m]; });
 }
 function _esUltimo(tipo){
   var r=_esDi(tipo);
@@ -31766,15 +32074,16 @@ function _esRenderCard(){
   var box=document.getElementById('esCard'); if(!box) return;
   if(_esRighe===null){ box.innerHTML='<div class="es-riga"><span class="es-ico">📚</span><div class="es-main"><b>Estratti caricati</b><span>carico…</span></div></div>'; return; }
   var mancTot=0;
-  var righe=_ES_TIPI.map(function(t){
+  var righe=_esTipi().map(function(t){
     var u=_esUltimo(t.k), manc=_esMancanti(t.k);
     mancTot+=manc.length;
     var stato, cls;
     if(!u){ stato='mai importato'; cls='es-neutro'; }
     else if(manc.length){ stato='manca '+(manc.length===1?_esMeseEt(manc[0]):manc.length+' mesi'); cls='es-manca'; }
+    else if(!contoAttivo(t.conto.id)){ stato='non più in uso'; cls='es-neutro'; }
     else { stato='in regola'; cls='es-ok'; }
     var ult=u ? ('ultimo: '+(u.periodo_a?_esMeseEt(_esMeseDi(u.periodo_a)):'—')) : 'nessun file in archivio';
-    return '<div class="es-riga"><span class="es-ico">'+t.ico+'</span><div class="es-main"><b>'+t.n+'</b><span>'+ult+' · '+_esDi(t.k).length+' in archivio</span></div><em class="es-tag '+cls+'">'+stato+'</em></div>';
+    return '<div class="es-riga"><span class="es-ico">'+t.ico+'</span><div class="es-main"><b>'+esc(t.n)+'</b><span>'+ult+' · '+_esDi(t.k).length+' in archivio</span></div><em class="es-tag '+cls+'">'+stato+'</em></div>';
   }).join('');
   box.innerHTML='<div class="es-hd"><div><b>📚 Estratti caricati</b><span>'+(mancTot?mancTot+' da recuperare':'tutto aggiornato')+'</span></div><button class="btn btn-s es-b" onclick="_esApri()">Apri archivio</button></div>'+righe;
 }
@@ -31798,9 +32107,9 @@ function _esApri(){
 function _esRenderArchivio(){
   var b=document.getElementById('esBody'); if(!b) return;
   var h='';
-  _ES_TIPI.forEach(function(t){
+  _esTipi().forEach(function(t){
     var righe=_esDi(t.k), manc=_esMancanti(t.k);
-    h+='<div class="es-sez"><span>'+t.ico+' '+t.n+'</span><em>'+t.sub+'</em></div>';
+    h+='<div class="es-sez"><span>'+t.ico+' '+esc(t.n)+'</span><em>'+t.sub+(contoAttivo(t.conto.id)?'':' · '+esc(contiPeriodo(t.conto)))+'</em></div>';
     if(manc.length){
       h+='<div class="es-alert"><b>Da recuperare:</b> '+manc.map(_esMeseEt).join(', ')+'</div>';
     }
@@ -31831,7 +32140,7 @@ function _esRenderArchivio(){
 function _esPromemoria(){
   var mese=_esMesePrec(), chiave='fatture_es_avviso_'+mese;
   try{ if(localStorage.getItem(chiave)) return; }catch(e){}
-  var mancanti=_ES_TIPI.filter(function(t){ return _esMancanti(t.k).length; });
+  var mancanti=_esTipi().filter(function(t){ return _esMancanti(t.k).length; });
   if(!mancanti.length) return;
   try{ localStorage.setItem(chiave,'1'); }catch(e){}
   var nomi=mancanti.map(function(t){ return t.n.replace('Estratto conto ','').replace('Estratto ',''); }).join(', ');
@@ -36964,7 +37273,7 @@ function ricvVistaAttiva(){ try{ return localStorage.getItem('ceraldi_ric_vista'
 function ricvUsaClassica(si){
   try{ localStorage.setItem('ceraldi_ric_vista', si ? 'classica' : 'nuova'); }catch(e){}
   RICV.soloClassica = false;
-  var cf = document.getElementById('bancaFiltroConto'); if(si && cf && cf.value === 'Nexi' && typeof _setBancaConto === 'function'){ _setBancaConto(''); return; }
+  var cf = document.getElementById('bancaFiltroConto'); if(si && cf && (contoDi(cf.value) || {}).movimenti === 'carta' && typeof _setBancaConto === 'function'){ _setBancaConto(''); return; }
   if(typeof renderRiconciliazione === 'function') renderRiconciliazione();
 }
 function ricvSetGruppo(k){ RICV.gruppo = k; RICV.mostra = 40; RICV.cercaG = k; ricvRender(); var v = document.getElementById('ricvLista'); if(v && v.scrollIntoView) v.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
@@ -36978,12 +37287,9 @@ function ricvChip(liv){
 function ricvRender(){
   var wrap = document.getElementById('bancaContenuto'); if(!wrap) return;
   if(!RICV.ctx && !RICV.inCarica) ricvCaricaContesto().then(function(){ ricvRender(); });
-  // pulsanti del conto: tutti e quattro, quello scelto evidenziato
-  try{
-    var cv = (document.getElementById('bancaFiltroConto') || {}).value || '';
-    [['bancaContoBtnBPM', 'BPM'], ['bancaContoBtnSumUp', 'SumUp'], ['bancaContoBtnNexi', 'Nexi'], ['bancaContoBtnTutti', '']].forEach(function(p){ var b = document.getElementById(p[0]); if(!b) return; var on = cv === p[1]; b.classList.toggle('attivo', on); b.style.background = on ? 'var(--ink)' : 'transparent'; b.style.color = on ? 'var(--surface)' : 'var(--ink2)'; });
-  }catch(e){}
-  if(!ricvTuttiMovimenti().length){ wrap.innerHTML = '<div id="ricvVista"><div class="rv-vuoto">📥 Tocca «Importa» qui sopra per caricare il primo estratto conto (Banco BPM, SumUp o carta).</div></div>'; return; }
+  // pulsanti dei conti (Impostazioni → Conti e incassi), quello scelto evidenziato
+  try{ contiDisegnaBottoni(); }catch(e){}
+  if(!ricvTuttiMovimenti().length){ wrap.innerHTML = '<div id="ricvVista"><div class="rv-vuoto">📥 Tocca «Importa» qui sopra per caricare il primo estratto conto (' + esc(contiInRiconciliazione().filter(function(c){ return contoAttivo(c.id); }).map(function(c){ return c.nome; }).join(', ') || 'banca o carta') + ').</div></div>'; return; }
   var C = ricvCalcola(), F = ricvFiltri();
   var nel = [], fuori = { conferma: 0, sistemare: 0, capire: 0 };
   Object.keys(C.stati).forEach(function(k){ var S = C.stati[k], gv = ricvGruppoVisto(S); if(ricvNelFiltro(S.M, F)) nel.push(S); else if(fuori[gv] != null && (!F.conto || S.M.conto === F.conto)) fuori[gv]++; });
@@ -38102,20 +38408,24 @@ function ricvPrevHtml(){
     (P.suAttivo || P.unito ? '' : boxSU) + (P.unito ? '<div class="gr-nota">Saldo SumUp: ' + fmt(P.SU.saldo) + ' al ' + ricGg(P.SU.al) + ' · <a href="#" onclick="event.preventDefault();window._ceSaldoSU=null;_ceRender()">cambia</a></div>' : '') +
     '<details class="gr-det"><summary>Vedi come tabella</summary>' + tab + '</details></div>';
 }
-async function ricvSalvaSaldoSU(){
-  var el = document.getElementById('ceSaldoSU'), v = typeof _ceNumero === 'function' ? _ceNumero(el && el.value) : parseFloat(String(el && el.value).replace(',', '.'));
-  if(!isFinite(v)){ toast('Scrivi il saldo, es. 4.250,00', { forza: true }); return; }
+async function ricvSalvaSaldoSU(){ return ricvSalvaSaldoConto('SumUp', 'ceSaldoSU'); }
+// v10.47.0: il saldo scritto a mano, per qualunque conto con saldoDa «mano» (prima solo SumUp)
+async function ricvSalvaSaldoConto(id, inputId){
+  var c = contoDi(id); if(!c || !c.saldo) return false;
+  var el = document.getElementById(inputId), v = typeof _ceNumero === 'function' ? _ceNumero(el && el.value) : parseFloat(String(el && el.value).replace(',', '.'));
+  if(!isFinite(v)){ toast('Scrivi il saldo, es. 4.250,00', { forza: true }); return false; }
   var oggi = ricvIso(new Date());
   // Stima PRIMA di scrivere il nuovo saldo, per mostrare lo scarto col numero reale
-  var stima = null; try{ stima = rcSaldoAttuale(window._ceSaldoSU, 'SumUp'); }catch(e){}
+  var stima = null; try{ stima = rcSaldoAttuale(rcSnap(c.saldo), c.id); }catch(e){}
   // Movimenti di oggi già presenti ora: sono già nel saldo che leggi. Quelli che arriveranno dopo si sommano.
-  var inclusi = (typeof _bancaMovimenti !== 'undefined' ? _bancaMovimenti : []).filter(function(m){ return m && (m.banca || 'BPM') === 'SumUp' && String(m.data || '').slice(0, 10) === oggi; }).map(function(m){ return m.id; });
+  var inclusi = (typeof _bancaMovimenti !== 'undefined' ? _bancaMovimenti : []).filter(function(m){ return m && (m.banca || 'BPM') === c.id && String(m.data || '').slice(0, 10) === oggi; }).map(function(m){ return m.id; });
   var d = { saldo: Math.round(v * 100) / 100, al: oggi, salvato_il: new Date().toISOString(), inclusi: inclusi };
   if(stima) d.scarto = Math.round((d.saldo - stima.saldo) * 100) / 100;
-  window._ceSaldoSU = d;
-  try{ await sbFetch('ceraldi_stato_condiviso?on_conflict=id', { method: 'POST', headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify({ id: 'banca_saldo_sumup', data: d, updated_at: new Date().toISOString() }) }); toast(d.scarto != null && Math.abs(d.scarto) >= 0.5 ? '✓ Saldo salvato. Lo scarto con la stima era ' + fmt(d.scarto) + ': controlla se manca qualche movimento' : '✓ Saldo SumUp salvato (la stima tornava)', { forza: true }); }
+  rcSnapScrivi(c.saldo, d);
+  try{ await sbFetch('ceraldi_stato_condiviso?on_conflict=id', { method: 'POST', headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify({ id: c.saldo, data: d, updated_at: new Date().toISOString() }) }); toast(d.scarto != null && Math.abs(d.scarto) >= 0.5 ? '✓ Saldo salvato. Lo scarto con la stima era ' + fmt(d.scarto) + ': controlla se manca qualche movimento' : '✓ Saldo ' + c.nome + ' salvato' + (stima ? ' (la stima tornava)' : ''), { forza: true }); }
   catch(e){ toast('⚠️ Salvato solo su questo dispositivo', { forza: true }); }
   if(typeof _ceRender === 'function') _ceRender();
+  return true;
 }
 async function ricvCaricaSaldoSU(){ try{ var r = await sbFetch('ceraldi_stato_condiviso?id=eq.banca_saldo_sumup&select=data'); if(r && r[0] && r[0].data) window._ceSaldoSU = r[0].data; }catch(e){} }
 (function(){
@@ -38944,11 +39254,12 @@ var RCASSA = { ini: null, caricato: false, inCarica: false };
 async function rcCarica(){
   if(RCASSA.inCarica) return; RCASSA.inCarica = true;
   try{
-    var r = await sbFetch('ceraldi_stato_condiviso?id=in.(cassa_fondo_iniziale,banca_saldo,banca_saldo_sumup)&select=id,data');
+    var chiavi = ['cassa_fondo_iniziale', 'banca_saldo', 'banca_saldo_sumup'];
+    contiTutti().forEach(function(c){ if(c.saldo && /^[a-z0-9_]+$/.test(c.saldo) && chiavi.indexOf(c.saldo) < 0) chiavi.push(c.saldo); });
+    var r = await sbFetch('ceraldi_stato_condiviso?id=in.(' + chiavi.join(',') + ')&select=id,data');
     (r || []).forEach(function(x){
       if(x.id === 'cassa_fondo_iniziale' && x.data) RCASSA.ini = x.data;
-      if(x.id === 'banca_saldo' && x.data && typeof x.data.saldo === 'number') window._ceSaldo = x.data;
-      if(x.id === 'banca_saldo_sumup' && x.data && typeof x.data.saldo === 'number') window._ceSaldoSU = x.data;
+      else if(x.data && typeof x.data.saldo === 'number') rcSnapScrivi(x.id, x.data);
     });
     RCASSA.caricato = true;
   }catch(e){}
@@ -39007,9 +39318,11 @@ function rcCalcola(){
     if(vb.some(function(x){ return Math.abs(x.v - imp) <= 0.005 && Math.abs((new Date(x.d) - new Date(d)) / 86400000) <= 5; })) return;
     R.versApp += imp; R.nVA++; });
   R.contanti = (+ini.importo || 0) + R.incassi - R.pagate - R.versBanca - R.versApp;
+  // v10.47.0: un saldo per ogni conto in uso (Impostazioni → Conti e incassi)
+  R.conti = contiConSaldo().map(function(c){ return { c: c, S: rcSaldoAttuale(rcSnap(c.saldo), c.id) }; });
   R.bpm = rcSaldoAttuale(window._ceSaldo, 'BPM');
   R.su = rcSaldoAttuale(window._ceSaldoSU, 'SumUp');
-  R.totale = R.contanti + (R.bpm ? R.bpm.saldo : 0) + (R.su ? R.su.saldo : 0);
+  R.totale = R.contanti + R.conti.reduce(function(t, x){ return t + (x.S ? x.S.saldo : 0); }, 0);
   ['incassi', 'pagate', 'versBanca', 'versApp', 'contanti', 'totale'].forEach(function(k){ R[k] = Math.round(R[k] * 100) / 100; });
   return R;
 }
@@ -39021,15 +39334,13 @@ aggiornaSaldoCassa = function(){
   var R = rcCalcola();
   el('saldoCassaValore').textContent = fmt(R.totale);
   el('saldoCassaValore').style.color = R.totale >= 0 ? '#fff' : '#ff6b6b';
-  var manca = [!R.bpm ? 'Banco BPM' : '', !R.su ? 'SumUp' : ''].filter(Boolean);
-  if(el('saldoCassaSotto')) el('saldoCassaSotto').textContent = manca.length ? 'Contanti' + (R.bpm ? ' + Banco BPM' : '') + (R.su ? ' + SumUp' : '') + ' · manca il saldo di ' + manca.join(' e ') : 'Contanti + Banco BPM + SumUp';
+  var manca = R.conti.filter(function(x){ return !x.S; }).map(function(x){ return x.c.nome; });
+  var _rcE = function(a){ return a.length > 1 ? a.slice(0, -1).join(', ') + ' e ' + a[a.length - 1] : a.join(''); };
+  if(el('saldoCassaSotto')) el('saldoCassaSotto').textContent = ['Contanti'].concat(R.conti.filter(function(x){ return x.S; }).map(function(x){ return x.c.nome; })).join(' + ') + (manca.length ? ' · manca il saldo di ' + _rcE(manca) : '');
+  rcDisegnaConti(R);
   if(el('saldoCassaData')) el('saldoCassaData').textContent = 'dati ufficiali · dal ' + rcGg(R.da);
   el('saldoCassaContanti').textContent = fmt(R.contanti); el('saldoCassaContanti').style.color = R.contanti < 0 ? '#ff6b6b' : '';
   if(el('saldoCassaContantiN')) el('saldoCassaContantiN').textContent = R.contanti < 0 ? 'negativo: tocca per capire' : 'tocca per il conto';
-  el('saldoCassaBpm').textContent = R.bpm ? fmt(R.bpm.saldo) : '—';
-  if(el('saldoCassaBpmN')) el('saldoCassaBpmN').textContent = R.bpm ? (R.bpm.stimato ? 'stima al ' + rcGg(R.bpm.al) + ' · dall\'estratto del ' + rcGg(R.bpm.baseAl) : 'estratto al ' + rcGg(R.bpm.al)) : 'carica l\'estratto';
-  el('saldoCassaSumUp').textContent = R.su ? fmt(R.su.saldo) : 'Inserisci';
-  if(el('saldoCassaSumUpN')) el('saldoCassaSumUpN').textContent = R.su ? (R.su.stimato ? 'stima al ' + rcGg(R.su.al) + ' · tocca per correggere' : 'al ' + rcGg(R.su.al) + ' · tocca per aggiornare') : 'tocca per scriverlo';
   el('saldoCassaIni').textContent = fmt(+R.ini.importo || 0);
   if(el('saldoCassaIniN')) el('saldoCassaIniN').textContent = R.ini.predefinito ? 'da impostare · tocca' : 'al ' + rcGg(R.da);
 };
@@ -39046,7 +39357,7 @@ function rcApriDettaglio(){
     '<div class="rc-tot"><span>Contanti in cassa</span><b class="' + (R.contanti < 0 ? 'neg' : '') + '">' + fmt(R.contanti) + '</b></div></div>';
   if(R.contanti < 0) h += '<div class="rc-nota ko">Un saldo di contanti negativo non è possibile: manca un\'entrata. Di solito è il fondo iniziale (i contanti che c\'erano in cassa il ' + rcGg(R.da) + ') oppure qualche chiusura di cassa non registrata.</div>';
   var _rcDa = function(S){ return S.stimato ? ' (' + fmt(S.saldo) + ': saldo di ' + fmt(S.base) + ' del ' + rcGg(S.baseAl) + ' più ' + S.n + (S.n === 1 ? ' movimento' : ' movimenti') + ' fino al ' + rcGg(S.al) + ')' : ' (' + fmt(S.saldo) + ' al ' + rcGg(S.al) + ')'; };
-  h += '<div class="rc-nota">Il totale del fondo cassa somma i contanti, il saldo di Banco BPM' + (R.bpm ? _rcDa(R.bpm) : ' (non ancora caricato)') + ' e quello di SumUp' + (R.su ? _rcDa(R.su) : ' (da inserire)') + '. I saldi dei conti sono il numero scritto più i movimenti arrivati dopo: se non coincide con quello che vedi in banca, scrivi il saldo vero e da lì riparte.</div>';
+  h += '<div class="rc-nota">Il totale del fondo cassa somma i contanti' + R.conti.map(function(x){ return ', il saldo di ' + esc(x.c.nome) + (x.S ? _rcDa(x.S) : (x.c.saldoDa === 'estratto' ? ' (non ancora caricato)' : ' (da inserire)')); }).join('') + '. I saldi dei conti sono il numero scritto più i movimenti arrivati dopo: se non coincide con quello che vedi in banca, scrivi il saldo vero e da lì riparte.</div>';
   h += '<button class="sk-btn prim big" style="width:100%" onclick="pnChiudi(\'rcFoglio\');rcModificaIniziale()">Modifica il fondo iniziale</button>';
   var mo = pnFoglio('rcFoglio', { titolo: 'Contanti in cassa', sotto: 'Solo dati ufficiali: chiusure, fatture ed estratti conto', z: 330 });
   mo.querySelector('.pn-sh-bd').innerHTML = h;
@@ -39069,15 +39380,40 @@ async function rcSalvaIniziale(){
   catch(e){ RCASSA.ini = prima; toast('❌ Non salvato: ' + (e.message || e), { forza: true }); return; }
   pnChiudi('rcFoglio'); aggiornaSaldoCassa();
 }
-function rcChiediSumUp(){
-  var R = rcCalcola();
-  var mo = pnFoglio('rcFoglio', { titolo: 'Saldo SumUp', sotto: 'Lo trovi nell\'app SumUp, alla voce Conto', z: 330 });
-  var _suNota = R.su && R.su.stimato ? '<div class="rc-nota" style="margin-top:0">L\'app stima oggi <b>' + fmt(R.su.saldo) + '</b>: l\'ultimo saldo scritto (' + fmt(R.su.base) + ' il ' + rcGg(R.su.baseAl) + ') più ' + R.su.n + ' movimenti SumUp arrivati dopo, fino al ' + rcGg(R.su.al) + '. Se in SumUp vedi un altro numero, scrivi quello.</div>' : '';
-  mo.querySelector('.pn-sh-bd').innerHTML = _suNota + '<label class="rc-lbl">Saldo di oggi (€)</label><input id="ceSaldoSU" type="text" inputmode="decimal" placeholder="Quello che vedi in SumUp" class="rc-inp" value="">' +
-    '<div class="rc-nota">I movimenti di oggi già presenti qui si considerano dentro il saldo; quelli che arrivano dopo vengono sommati. Se in SumUp ne vedi di oggi non ancora importati, aspetta l\'import prima di scrivere il saldo.</div>' +
-    '<button class="sk-btn prim big" style="width:100%;margin-top:12px" onclick="rcSalvaSumUp()">Salva</button>';
+function rcChiediSumUp(){ rcChiediSaldo('SumUp'); }
+// v10.47.0: stesso foglio per ogni conto il cui saldo scrivi tu (SumUp, o un conto aggiunto in Impostazioni)
+function rcChiediSaldo(id){
+  var c = contoDi(id); if(!c || !c.saldo) return;
+  var S = rcSaldoAttuale(rcSnap(c.saldo), c.id), n = esc(c.nome);
+  var mo = pnFoglio('rcFoglio', { titolo: 'Saldo ' + c.nome, sotto: c.id === 'SumUp' ? 'Lo trovi nell\'app SumUp, alla voce Conto' : 'Lo trovi nell\'app o nel sito di ' + c.nome, z: 330 });
+  var _nota = S && S.stimato ? '<div class="rc-nota" style="margin-top:0">L\'app stima oggi <b>' + fmt(S.saldo) + '</b>: l\'ultimo saldo scritto (' + fmt(S.base) + ' il ' + rcGg(S.baseAl) + ') più ' + S.n + ' movimenti di ' + n + ' arrivati dopo, fino al ' + rcGg(S.al) + '. Se in ' + n + ' vedi un altro numero, scrivi quello.</div>' : '';
+  mo.querySelector('.pn-sh-bd').innerHTML = _nota + '<label class="rc-lbl">Saldo di oggi (€)</label><input id="ceSaldoConto" type="text" inputmode="decimal" placeholder="Quello che vedi in ' + n + '" class="rc-inp" value="">' +
+    '<div class="rc-nota">I movimenti di oggi già presenti qui si considerano dentro il saldo; quelli che arrivano dopo vengono sommati. Se in ' + n + ' ne vedi di oggi non ancora importati, aspetta l\'import prima di scrivere il saldo.</div>' +
+    '<button class="sk-btn prim big" style="width:100%;margin-top:12px" onclick="rcSalvaSaldo(' + esc(JSON.stringify(c.id)).replace(/"/g, '&quot;') + ')">Salva</button>';
 }
-async function rcSalvaSumUp(){ if(typeof ricvSalvaSaldoSU === 'function') await ricvSalvaSaldoSU(); pnChiudi('rcFoglio'); aggiornaSaldoCassa(); }
+async function rcSalvaSaldo(id){ var ok = await ricvSalvaSaldoConto(id, 'ceSaldoConto'); if(ok){ pnChiudi('rcFoglio'); aggiornaSaldoCassa(); } }
+async function rcSalvaSumUp(){ return rcSalvaSaldo('SumUp'); }
+// dove stanno i saldi in memoria: BPM e SumUp nelle variabili di sempre (le usa anche la previsione)
+// sul riquadro scuro del fondo cassa i colori dei conti si schiariscono (come i puntini di prima)
+function rcChiaro(hex){ var n = parseInt(String(hex).slice(1), 16); if(!isFinite(n)) return '#8e8e93'; var m = function(x){ return Math.round(x + (255 - x) * 0.4); }; return 'rgb(' + m(n >> 16 & 255) + ',' + m(n >> 8 & 255) + ',' + m(n & 255) + ')'; }
+function rcSnap(chiave){ return chiave === 'banca_saldo' ? window._ceSaldo : (chiave === 'banca_saldo_sumup' ? window._ceSaldoSU : (window._ceSaldoConti || {})[chiave]); }
+function rcSnapScrivi(chiave, d){ if(chiave === 'banca_saldo') window._ceSaldo = d; else if(chiave === 'banca_saldo_sumup') window._ceSaldoSU = d; else { window._ceSaldoConti = window._ceSaldoConti || {}; window._ceSaldoConti[chiave] = d; } }
+// i riquadri dei conti nel fondo cassa
+function rcDisegnaConti(R){
+  var box = document.getElementById('saldoCassaConti'); if(!box) return;
+  var h = R.conti.map(function(x){
+    var c = x.c, S = x.S, js = esc(JSON.stringify(c.id)).replace(/"/g, '&quot;');
+    var tocca = c.saldoDa === 'estratto' ? "goTab('incassi',document.querySelector('.tab-item:nth-child(4)'));setTimeout(function(){setIncTab('banca',document.getElementById('inctab-banca'));_setBancaConto(" + js + ");},200)" : 'rcChiediSaldo(' + js + ')';
+    var v = S ? fmt(S.saldo) : (c.saldoDa === 'estratto' ? '—' : 'Inserisci');
+    var sotto = c.saldoDa === 'estratto'
+      ? (S ? (S.stimato ? 'stima al ' + rcGg(S.al) + ' · dall\'estratto del ' + rcGg(S.baseAl) : 'estratto al ' + rcGg(S.al)) : 'carica l\'estratto')
+      : (S ? (S.stimato ? 'stima al ' + rcGg(S.al) + ' · tocca per correggere' : 'al ' + rcGg(S.al) + ' · tocca per aggiornare') : 'tocca per scriverlo');
+    var col = rcChiaro(c.colore);
+    return '<div class="ds-cassa-tile" onclick="' + tocca + '"><div class="ds-cassa-lbl"><i style="background:' + col + ';box-shadow:0 0 6px ' + col + '"></i>' + esc(c.nome) + '</div>' +
+      '<div class="hero-num ds-cassa-v">' + v + '</div><div class="rc-tile-n">' + esc(sotto) + '</div></div>';
+  }).join('');
+  if(box.innerHTML !== h) box.innerHTML = h;
+}
 
 /* ── navigazione: porta alla riconciliazione, sul gruppo giusto, tutti i mesi ── */
 function ricvVaiA(gruppo){
@@ -41808,6 +42144,29 @@ html[data-theme="dark"] .rv-g-cassa{color:#b59cff}
 .sk-riga>.sk-riga-m{flex:1 1 190px;min-width:0}
 .sk-riga>.sk-btn,.sk-riga>.rv-st-az{flex:0 1 auto;max-width:100%;white-space:normal}
 .sk-riga-m b,.sk-riga-m small{overflow-wrap:anywhere}
+/* Fondo cassa: i riquadri restano dentro la scheda anche con testi lunghi (v10.47.0; prima la colonna destra usciva dal bordo) */
+.ds-cassa-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.ds-cassa-tile{min-width:0}
+.ds-cassa-tile .ds-cassa-lbl{overflow-wrap:anywhere}
+.ds-cassa-tile .rc-tile-n{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.3}
+.ds-cassa-tile .ds-cassa-v{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Impostazioni → Conti e incassi (v10.47.0) */
+.ct-inp{color:var(--ink);-webkit-appearance:none;min-height:46px}
+.ct-scs{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.ct-sc{display:flex;align-items:flex-start;gap:10px;text-align:left;border:1.5px solid var(--ds-hair,var(--sep));background:var(--surface);color:var(--ink);border-radius:14px;padding:11px 12px;font:inherit;cursor:pointer;min-height:56px}
+.ct-sc.on{border-color:var(--blue);background:var(--blue-light)}
+.ct-sc-i{font-size:20px;line-height:1.1}
+.ct-sc-t{display:flex;flex-direction:column;gap:2px;min-width:0}
+.ct-sc-t b{font-size:14.5px}.ct-sc-t small{font-size:12.5px;color:var(--ink3);line-height:1.3}
+.ct-fisso{background:var(--surface2);border-radius:12px;padding:11px 12px;font-size:15px}
+.ct-fisso small{display:block;font-size:12.5px;color:var(--ink3);margin-top:3px;line-height:1.35}
+.ct-aiuto{font-size:12.5px;color:var(--ink3);margin-top:5px;line-height:1.35}
+.ct-smetti{margin-top:10px}
+.ct-storia{margin-top:20px;background:var(--surface2);border-radius:12px;padding:10px 12px}
+.ct-storia summary{font-size:14px;font-weight:700;color:var(--ink2);cursor:pointer;padding:4px 0}
+.ct-st{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 0;border-top:1px solid var(--sep);font-size:14px;line-height:1.35}
+.ct-st-m{flex:1 1 190px;min-width:0;overflow-wrap:anywhere}.ct-st-m small{display:block;font-size:12px;color:var(--ink3);margin-top:2px}
+.ct-st .sk-btn{flex:0 1 auto;min-width:0;padding:8px 12px;font-size:13px}
 /* «Scegli tu» */
 .rsc-top{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
 .rsc-cerca{width:100%;box-sizing:border-box;padding:12px 14px;border:1px solid var(--ds-hair,var(--sep));border-radius:12px;background:var(--surface);font:inherit;font-size:15px;color:var(--ink);margin-bottom:8px}
