@@ -93,7 +93,7 @@ window.addEventListener('unhandledrejection', function(e){
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js" crossorigin="anonymous"></script>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 :root{
   --bg:#F2F2F7;--surface:#FFF;--surface2:#F2F2F7;--surface3:#E5E5EA;
   --ink:#000;--ink2:#3C3C43;--ink3:#8E8E93;--sep:#C6C6C8;
@@ -590,7 +590,7 @@ function avvisoCreditoIA(){
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.44.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.45.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -1324,7 +1324,7 @@ html[data-theme="dark"] .reg-import-link{border-color:rgba(255,255,255,.08)}
        di filtro esistente è stata toccata. -->
   <div id="listaBannerVerifica" style="display:none;margin-bottom:10px;padding:10px 12px;border-radius:10px;background:var(--blue-light,#EAF4FF);border:1px solid var(--blue);font-size:12.5px;color:var(--ink);display:flex;align-items:center;gap:8px;cursor:pointer" onclick="_vaiAVerificaPagamenti()">
     <span style="font-size:16px">🏦</span>
-    <span style="flex:1">Queste fatture si possono confermare con un tocco in <b>Riconciliazione bancaria → Da fare</b>, se l'estratto conto è già stato caricato.</span>
+    <span style="flex:1">Queste fatture si possono confermare con un tocco in <b>Cassa → Riconciliazione → Da confermare</b>, se l'estratto conto è già stato caricato.</span>
     <span style="color:var(--blue);font-weight:700">Vai →</span>
   </div>
   <div id="listaEl"></div>
@@ -1578,7 +1578,7 @@ html[data-theme="dark"] .reg-import-link{border-color:rgba(255,255,255,.08)}
       <div id="bancaStatStrip" style="display:flex;border:1px solid var(--sep);border-radius:12px;overflow:hidden;margin-bottom:10px">
         <div style="flex:1;padding:9px 6px;text-align:center;border-right:1px solid var(--sep)"><div style="font-size:10px;color:var(--ink3);font-weight:600">ENTRATE</div><div id="bancaStatEnt" style="font-size:14px;font-weight:700;color:#1a7a3a;margin-top:2px">+€0,00</div></div>
         <div style="flex:1;padding:9px 6px;text-align:center;border-right:1px solid var(--sep)"><div style="font-size:10px;color:var(--ink3);font-weight:600">USCITE</div><div id="bancaStatUsc" style="font-size:14px;font-weight:700;color:var(--red);margin-top:2px">−€0,00</div></div>
-        <div style="flex:1;padding:9px 6px;text-align:center"><div style="font-size:10px;color:var(--ink3);font-weight:600">DA FARE</div><div id="bancaStatFare" style="font-size:14px;font-weight:700;color:#b36a00;margin-top:2px">0</div></div>
+        <div style="flex:1;padding:9px 6px;text-align:center"><div id="bancaStatFareLbl" style="font-size:10px;color:var(--ink3);font-weight:600">DA FARE</div><div id="bancaStatFare" style="font-size:14px;font-weight:700;color:#b36a00;margin-top:2px">0</div></div>
       </div>
 
       <!-- RIDISEGNO 15/09→16/09 (richiesto da Valerio, "riconciliazione confusionaria
@@ -2673,7 +2673,7 @@ var _AI_CAMPO_LABEL = {
   parz_pagato: 'Importo già pagato',
   note: 'Note'
 };
-var _AI_STATO_LABEL = {da_pagare:'Da pagare', parziale:'Pagamento parziale', pagata:'Pagata'};
+var _AI_STATO_LABEL = {da_pagare:'Da pagare', parziale:'Pagata in parte', pagata:'Pagata'};
 
 function _aiFmtData(d){
   if(!d) return '—';
@@ -5146,6 +5146,12 @@ function goTab(tab,btn){
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   document.querySelectorAll('.tab-item').forEach(b=>b.classList.remove('active'));
   document.getElementById('view-'+tab).classList.add('active');
+  // v10.45.0 (audit P1.1): il pulsante della barra si ricava dal nome della
+  // sezione. Prima chi chiamava goTab lo passava «a mano» per posizione: dalla
+  // Home non se ne accendeva nessuno, dal riquadro Banco BPM si accendeva Riepilogo.
+  if(!btn || String(btn.getAttribute && btn.getAttribute('onclick') || '').indexOf("'"+tab+"'") < 0){
+    btn = document.querySelector('.tab-bar .tab-item[onclick*="\''+tab+'\'"]') || btn;
+  }
   if(btn) btn.classList.add('active');
   if(tab==='scan') _homeEntrata();
   if(tab==='lista') renderLista();
@@ -5903,8 +5909,12 @@ function aggiornaHeroCard(){
   const totaleMese = fattureMese.reduce((s,f)=>s+(f.importo||0),0);
   const oggi = ora.toISOString().slice(0,10);
   // 19/09: le note di credito non si pagano (sono un credito) — escluse dai conteggi
-  const daPagare = fatture.filter(f=>(f.stato==='da_pagare'||f.stato==='parziale')&&f.tipo!=='ddt'&&f.tipo!=='nota_credito'&&contaInDaPagare(f)).length;
-  const scadute = fatture.filter(f=>(f.stato==='da_pagare'||f.stato==='parziale')&&f.tipo!=='ddt'&&f.tipo!=='nota_credito'&&f.scadenza&&f.scadenza<oggi&&contaInDaPagare(f)).length;
+  // v10.45.0 (audit P0.1): i numeri della Home sono quelli dei filtri del Registro
+  // che si aprono toccandoli (prima «Scadute» guardava solo la scadenza della
+  // fattura e ignorava le rate).
+  var _cntPreset = function(k){ var ctx = pnCtxDate(); return pnConIndici(function(){ return fatture.filter(function(f){ return pnFiltraPreset(f, k, ctx.oggi, ctx); }).length; }); };
+  const daPagare = (typeof pnFiltraPreset==='function') ? _cntPreset('da_pagare') : fatture.filter(f=>(f.stato==='da_pagare'||f.stato==='parziale')&&f.tipo!=='ddt'&&f.tipo!=='nota_credito'&&contaInDaPagare(f)).length;
+  const scadute = (typeof pnFiltraPreset==='function') ? _cntPreset('scadute') : fatture.filter(f=>(f.stato==='da_pagare'||f.stato==='parziale')&&f.tipo!=='ddt'&&f.tipo!=='nota_credito'&&f.scadenza&&f.scadenza<oggi&&contaInDaPagare(f)).length;
   const set = (id,val) => { const el=document.getElementById(id); if(el) el.textContent=val; };
   // 19/09: i numeri ora "scorrono" fino al valore (stessi identici valori di
   // prima, cambia solo come ci arrivano) — vedi _heroConta più sotto.
@@ -7369,7 +7379,21 @@ function closeMo(){
 // ── HELPERS ──
 function oggi(){return new Date().toISOString().split('T')[0];}
 var _fmtNF = null;
-function fmt(n){ if(!_fmtNF){ try{ _fmtNF = new Intl.NumberFormat('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2}); }catch(e){ _fmtNF = { format: function(x){ return x.toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2}); } }; } } return '\u20ac '+_fmtNF.format(n||0); }
+// v10.45.0 (audit leggibilit\u00e0 P1.8): in italiano Intl non mette il punto delle
+// migliaia sulle cifre da 4 (\u20ac 8762,45 accanto a \u20ac 23.996,10). Ora sempre il punto,
+// e il meno sempre davanti al simbolo (-\u20ac 7.696,40), in tutta l'app. Trattino
+// normale, non il segno tipografico: i PDF (jsPDF) non hanno quel carattere.
+function fmt(n){
+  if(!_fmtNF){
+    try{
+      var nf = new Intl.NumberFormat('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2,useGrouping:'always'});
+      if(nf.format(1000).indexOf('.') < 0){ var base = nf; nf = { format: function(x){ return base.format(x).replace(/^(\d)(\d{3})(?=,)/, '$1.$2'); } }; }
+      _fmtNF = nf;
+    }catch(e){ _fmtNF = { format: function(x){ return x.toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2}).replace(/^(\d)(\d{3})(?=,)/, '$1.$2'); } }; }
+  }
+  var v = +n || 0;
+  return (v < -0.004 ? '-' : '') + '\u20ac ' + _fmtNF.format(Math.abs(v));
+}
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 // Estrae il numero assegno dalla descrizione di un movimento bancario tipo
 // "VOSTRO ASSEGNO N. 0208770762" — usata per compilare in automatico il numero
@@ -7503,7 +7527,10 @@ function toast(msg, opts){
   if(!sembraErrore && !opts.forza) return;
   const t=document.getElementById('toast');
   t.textContent=msg; t.classList.add('on');
-  clearTimeout(tT); tT=setTimeout(()=>t.classList.remove('on'),2800);
+  // v10.45.0 (audit P0.8): «durata» veniva ignorata e anche un errore lungo
+  // spariva dopo 2,8 s. Ora: durata se indicata, altrimenti più tempo agli errori.
+  var ms = (+opts.durata > 0) ? +opts.durata : (sembraErrore ? Math.min(9000, 4000 + String(msg).length * 40) : 2800);
+  clearTimeout(tT); tT=setTimeout(()=>t.classList.remove('on'),ms);
 }
 
 // ── TIPO DOCUMENTO ──
@@ -7737,7 +7764,7 @@ async function _agganciaDiretto(ddtId, numFattura){
   fatture[idx].fattNum = numFattura;
   const _r4431=await dbUpdate(fatture[idx]); if(_r4431&&_r4431[0])_updateCacheRow(_r4431[0]);
   renderLista();
-  toast('✅ DDT agganciato alla fattura N° '+numFattura+'!');
+  toast('✅ DDT agganciato alla fattura N° '+numFattura+'!', {forza:true});
   // Aggiorna anche la fattura con il numDdt
   const ddt = fatture[idx];
   const fatt = fatture.find(f=>f.tipo==='fattura' && (f.numero||'')===(numFattura||'') && f.fornitore===ddt.fornitore);
@@ -9250,7 +9277,7 @@ function renderPagDefault(){
     let stStrVal = val.stato;
     if(stStrVal && typeof stStrVal === 'object') stStrVal = stStrVal.stato || 'da_pagare';
     const pagStr = (pagIco[pagStrVal]||'') + ' ' + (pagStrVal||'—');
-    const stStr = (statoIco[stStrVal]||'') + ' ' + (stStrVal==='pagata'?'Pagata':stStrVal==='da_pagare'?'Da pagare':'Parziale');
+    const stStr = (statoIco[stStrVal]||'') + ' ' + (stStrVal==='pagata'?'Pagata':stStrVal==='da_pagare'?'Da pagare':'Pagata in parte');
     return `
     <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;padding:10px 12px;background:var(--surface2);border-radius:var(--radius-sm);margin-bottom:6px">
       <div style="flex:1;min-width:0">
@@ -9723,7 +9750,7 @@ async function abdAggancia(movId, data, importo, descrizione){
       importo, confermato: true,
       descrizione_movimento: descrizione, data_movimento: data
     })});
-    toast('✓ Bonifico assegnato al dipendente');
+    toast('✓ Bonifico assegnato al dipendente', {forza:true});
     abdCerca();
   }catch(e){
     toast('⚠️ Errore: '+String(e.message||e).slice(0,60));
@@ -9809,7 +9836,7 @@ async function _confermaRiconciliaStipendioSingolo(){
       descrizione_movimento: mov.descrizione, data_movimento: mov.data
     })});
     const ov = document.getElementById('rssOv'); if(ov) ov.remove();
-    toast('✓ Riconciliato — visibile anche in Ceraldi Presenze');
+    toast('✓ Riconciliato — visibile anche in Ceraldi Presenze', {forza:true});
     await caricaMovimentiBanca();
   }catch(e){
     toast('⚠️ Errore: '+String(e.message||e).slice(0,60));
@@ -9907,7 +9934,7 @@ async function applicaPagDefaultFornitore(forn){
         }
       }
       renderLista();
-      toast('✅ '+coinvolte.length+' fattura'+(coinvolte.length>1?'e':'')+' aggiornata'+(coinvolte.length>1?'e':'')+'!');
+      toast('✅ '+coinvolte.length+' fattura'+(coinvolte.length>1?'e':'')+' aggiornata'+(coinvolte.length>1?'e':'')+'!', {forza:true});
     }
   );
 }
@@ -11732,7 +11759,7 @@ function _generaPdfRegistrazione(f){
   const df=f.data?new Date(f.data).toLocaleDateString('it-IT',{day:'2-digit',month:'long',year:'numeric'}):'—';
   const _PAGLAB={contanti:'Contanti',bonifico:'Bonifico',assegno:'Assegno',carta:'Carta',sdd:'Addebito diretto (SDD)',riba:'Ri.Ba.',paypal:'PayPal'};
   const pag=_PAGLAB[f.pagamento]||f.pagamento||'—';
-  const stato={pagata:'Pagata',da_pagare:'Da pagare',parziale:'Parziale'}[f.stato||'pagata']||'—';
+  const stato={pagata:'Pagata',da_pagare:'Da pagare',parziale:'Pagata in parte'}[f.stato||'pagata']||'—';
   const tipo=f.tipo==='ddt'?'DDT':'Fattura';
   const _dIt=(d)=>{ if(!d) return ''; const t=new Date(String(d).slice(0,10)); return isNaN(t)?String(d):t.toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'}); };
 
@@ -13928,7 +13955,7 @@ async function salvaVersamento(){
   }
   aggiornaSaldoCassa();
   renderVersamenti();
-  toast('✓ Versamento salvato');
+  toast('✓ Versamento salvato', {forza:true});
 }
 
 // Versamento con doppia fonte contemporanea (23/08, secondo giro dopo
@@ -15734,7 +15761,7 @@ async function _esportaXlsxPeriodo(fatt, chMese, versMese, meseLbl, filename, so
   const r2 = fattOrd.map(f=>{
     const aliq = f.ivaBreakdown ? Object.keys(f.ivaBreakdown).sort((a,b)=>parseInt(b)-parseInt(a)).join('/') + '%' : '';
     const tipoLbl = f.tipo==='nota_credito'?'Nota di credito':(f.tipo==='ddt'?'DDT':'Fattura');
-    const statoLbl = f.stato==='da_pagare'?'Da pagare':(f.stato==='parziale'?'Parziale':'Pagata');
+    const statoLbl = f.stato==='da_pagare'?'Da pagare':(f.stato==='parziale'?'Pagata in parte':'Pagata');
     return [
       f.data || '', f.fornitore || '', f.numero || '', tipoLbl,
       f.importo || 0, f.totaleImponibile || '', f.totaleImposta || '',
@@ -16266,22 +16293,28 @@ function _injectCashflow(){
 function _aggiornaCashflow(){
   if(typeof fatture==='undefined' || !Array.isArray(fatture)) return;
   const oggi=new Date(); oggi.setHours(0,0,0,0);
-  let s30=0,s60=0,s90=0,n30=0;
-  fatture.forEach(f=>{
-    if(f.stato!=='da_pagare' && f.stato!=='parziale') return;
-    if(!f.scadenza) return;
-    const d=new Date(f.scadenza+'T12:00:00');
-    const diff=Math.round((d-oggi)/86400000);
-    const resto = (f.stato==='parziale') ? Math.max(0, (f.importo||0)-(f.parzPagato||0)) : (f.importo||0);
-    if(diff<=30){ s30+=resto; n30++; }
-    if(diff<=60) s60+=resto;
-    if(diff<=90) s90+=resto;
-  });
+  // v10.45.0 (audit P0.1): stessa regola del Registro (pnAperto): residuo vero,
+  // date delle rate, note di credito, «conta dal». Prima un calcolo a parte dava
+  // cifre diverse dal Registro. Le scadute restano nei 30 giorni (vanno pagate subito).
+  if(typeof pnAperto!=='function' || typeof pnConIndici!=='function') return;
+  let s30=0,s60=0,s90=0,n30=0,senza=0;
+  pnConIndici(function(){ fatture.forEach(f=>{
+    const A = pnAperto(f); if(!A) return;
+    if(!A.scadenze.length){ senza += A.residuo; return; }
+    let in30=false;
+    A.scadenze.forEach(s=>{
+      const diff=Math.round((new Date(s.data+'T12:00:00')-oggi)/86400000);
+      if(diff<=30){ s30+=s.residuo; in30=true; }
+      if(diff<=60) s60+=s.residuo;
+      if(diff<=90) s90+=s.residuo;
+    });
+    if(in30) n30++;
+  }); });
   const e30=document.getElementById('cf30'); if(e30) e30.textContent=fmt(s30);
   const e60=document.getElementById('cf60'); if(e60) e60.textContent=fmt(s60);
   const e90=document.getElementById('cf90'); if(e90) e90.textContent=fmt(s90);
   const det=document.getElementById('cfDetail');
-  if(det) det.innerHTML = n30>0 ? `📌 <strong>${n30}</strong> fattur${n30===1?'a':'e'} da pagare nei prossimi 30 giorni` : '✓ Nessuna scadenza imminente';
+  if(det) det.innerHTML = (n30>0 ? `📌 <strong>${n30}</strong> fattur${n30===1?'a':'e'} da pagare entro 30 giorni (scadute comprese)` : '✓ Nessuna scadenza imminente') + (senza>0.009 ? ` · senza scadenza: ${fmt(senza)}` : '');
 }
 
 // Aggiorna cashflow quando la lista cambia
@@ -17712,7 +17745,7 @@ async function _abbinaCarta(movId, fattId){
   try{
     if(typeof dbUpdate==='function') await dbUpdate(f);
     await salvaMovimentoCarta(m);
-    toast('✓ Abbinato: '+(f.fornitore||''));
+    toast('✓ Abbinato: '+(f.fornitore||''), {forza:true});
   }catch(e){
     console.warn('_abbinaCarta:', e);
     alert('⚠️ Errore nel salvare l\'abbinamento: '+(e.message||e));
@@ -18055,7 +18088,7 @@ async function _abbinaPaypalFattureMultiple(tx, fattIds){
     catch(e){ console.warn('_abbinaPaypalFattureMultiple:', e); errori.push(f.fornitore||f.id); }
   }
   if(errori.length) alert('⚠️ Errore nel salvare l\'abbinamento per: '+errori.join(', '));
-  else toast('✓ Abbinato'+(fattIds.length>1?' a '+fattIds.length+' fatture':''));
+  else toast('✓ Abbinato'+(fattIds.length>1?' a '+fattIds.length+' fatture':''), {forza:true});
   renderRiconciliazionePaypal();
 }
 
@@ -18078,7 +18111,7 @@ async function _abbinaPaypalTransazioniMultiple(txArray, fattId){
   _impostaPagamentoDaRiconciliazione(f, 'sdd');
   try{
     if(typeof dbUpdate==='function') await dbUpdate(f);
-    toast('✓ '+txArray.length+' transazioni abbinate a '+(f.fornitore||''));
+    toast('✓ '+txArray.length+' transazioni abbinate a '+(f.fornitore||''), {forza:true});
   }catch(e){
     console.warn('_abbinaPaypalTransazioniMultiple:', e);
     alert('⚠️ Errore nel salvare l\'abbinamento: '+(e.message||e));
@@ -19725,6 +19758,8 @@ function _regolaNuovaFattura(fornitore, numero, dataFattura){
   var sc=_dataAddebitoAttesa(fornitore, numero, dataFattura); return sc ? {pagamento:'sdd', stato:'da_pagare', scadenza:sc} : null;
 }
 
+// v10.45.0 (audit P1.8): date gg/mm/aaaa anche nella riconciliazione classica
+function _ricGgC(d){ d = String(d || ''); return /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(8, 10) + '/' + d.slice(5, 7) + '/' + d.slice(0, 4) : d; }
 function renderRiconciliazione(){
   var _rcMandatiMappa = null; try{ _rcMandatiMappa = (typeof _rcMappaMandati==='function') ? _rcMappaMandati() : null; }catch(e){}
   window._rcMMcache = _rcMandatiMappa;
@@ -20697,7 +20732,7 @@ function renderRiconciliazione(){
         _paypalCandidati.forEach(function(fc){
           daConfermare.push({mov:m, fatt:fc, score:40,
             isAssegno:false, isBonifico:false, numAssStr:'',
-            avviso: '💰 PayPal non mostra il vero beneficiario in causale — importo e data ('+fc.data+') compatibili con questa fattura, ma verifica manualmente.'
+            avviso: '💰 PayPal non mostra il vero beneficiario in causale — importo e data ('+_ricGgC(fc.data)+') compatibili con questa fattura, ma verifica manualmente.'
               + (_ambiguoPP ? ' ⚠️ Attenzione: '+_paypalCandidati.length+' fatture diverse hanno importo/data compatibili.' : '')});
         });
       } else {
@@ -21159,7 +21194,7 @@ function renderRiconciliazione(){
         sbFetch('chiusure_giornaliere?id=eq.'+c.id, {method:'PATCH', headers:Object.assign({}, SB_H, {'Prefer':'return=minimal'}), body: JSON.stringify({pos_sumup_recuperato:null, pos_numia_recuperato:null, recupero_da_giorno:null, updated_at:c.updated_at})})
           .then(function(){
             if(typeof salvaChiusureLocale==='function') salvaChiusureLocale();
-            toast('🧹 Doppione rimosso: il recupero del '+giornoRec+' nella chiusura del '+c.data+' era un duplicato ('+_motivoPul+')');
+            toast('🧹 Doppione rimosso: il recupero del '+giornoRec+' nella chiusura del '+_ricGgC(c.data)+' era un duplicato ('+_motivoPul+')');
           })
           .catch(function(e){ delete window._recuperiAutoFatti[_keyPul]; });
       }
@@ -21262,7 +21297,7 @@ function renderRiconciliazione(){
       window._versamentiBancaPending = nuoviVers;
       nuoviVers.forEach(function(v, i){
         htmlVerifiche += '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid var(--sep);font-size:13px">';
-        htmlVerifiche += '<div><div style="font-weight:600">'+v.data+'</div><div style="font-size:11px;color:var(--ink3)">Versamento contanti</div></div>';
+        htmlVerifiche += '<div><div style="font-weight:600">'+_ricGgC(v.data)+'</div><div style="font-size:11px;color:var(--ink3)">Versamento contanti</div></div>';
         htmlVerifiche += '<div style="display:flex;align-items:center;gap:10px">';
         htmlVerifiche += '<span style="font-weight:700;color:#1a7a3a">+'+fmt(v.importo)+'</span>';
         htmlVerifiche += '<button onclick="_aggiungiVersamento('+i+')" style="padding:5px 10px;border:1px solid var(--blue);border-radius:6px;background:transparent;color:var(--blue);font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">+</button>';
@@ -21324,7 +21359,7 @@ function renderRiconciliazione(){
     window._posManutenzioneNumia = posManutenzioneNumia;
     posManutenzioneNumia.forEach(function(p, i){
       htmlVerifiche += '<div style="padding:9px 0;border-top:1px solid var(--sep);font-size:13px">';
-      htmlVerifiche += '<div style="font-weight:600;margin-bottom:4px">'+p.data+'</div>';
+      htmlVerifiche += '<div style="font-weight:600;margin-bottom:4px">'+_ricGgC(p.data)+'</div>';
       if (window._numiaCsvPerGiornoDB && window._numiaCsvPerGiornoDB[p.data] != null) {
         htmlVerifiche += '<div style="font-size:10.5px;color:var(--ink3);margin-bottom:4px">📇 Estratto CSV Numia: <b>'+fmt(window._numiaCsvPerGiornoDB[p.data])+'</b>'+(Math.abs(window._numiaCsvPerGiornoDB[p.data]-(window._numiaPerGiornoDB[p.data]||0))>0.50?' — diverso dalla banca, da capire perché':'')+'</div>';
       }
@@ -21377,7 +21412,7 @@ function renderRiconciliazione(){
     posScostamentoFiscale.forEach(function(p){
       var col = p.scostamento>0 ? '#1a7a3a' : 'var(--red)';
       htmlVerifiche += '<div style="padding:8px 0;border-top:1px solid var(--sep);font-size:12px">';
-      htmlVerifiche += '<div style="font-weight:600;margin-bottom:2px">'+p.data+'</div>';
+      htmlVerifiche += '<div style="font-weight:600;margin-bottom:2px">'+_ricGgC(p.data)+'</div>';
       htmlVerifiche += '<div style="color:var(--ink3);display:flex;flex-wrap:wrap;gap:10px">';
       htmlVerifiche += '<span>📠 Fiscale: <b>'+fmt(p.fiscale)+'</b></span>';
       htmlVerifiche += '<span>Numia'+(p.fonteNumia==='manuale'?' (a mano)':(p.fonteNumia==='banca'?' (da BPM)':' (non usato, confermato)'))+': <b>'+fmt(p.numia)+'</b></span>';
@@ -21422,7 +21457,7 @@ function renderRiconciliazione(){
       }
       htmlVerifiche += '<div style="padding:10px 0;border-top:1px solid var(--sep);font-size:13px">';
       htmlVerifiche += '<div style="display:flex;justify-content:space-between;align-items:flex-start">';
-      htmlVerifiche += '<div style="flex:1"><div style="font-weight:600">'+p.data+'</div>';
+      htmlVerifiche += '<div style="flex:1"><div style="font-weight:600">'+_ricGgC(p.data)+'</div>';
       htmlVerifiche += '<div style="font-size:11px;margin-top:3px;display:flex;flex-wrap:wrap;gap:10px">';
       htmlVerifiche += '<span>📠 Fiscale (quello scritto in chiusura): <b>'+fmt(p.posFiscale)+'</b></span>';
       htmlVerifiche += '</div>';
@@ -21636,7 +21671,7 @@ function renderRiconciliazione(){
       htmlConferma += '<div style="padding:10px 0;border-top:1px solid var(--sep)">';
       htmlConferma += '<div style="font-size:12px;font-weight:600;margin-bottom:6px">'+esc(f.fornitore||'')+' N°'+esc(f.numero||'')+'</div>';
       htmlConferma += '<div style="font-size:11px;color:var(--ink3);margin-bottom:2px">Avevi segnato: '+esc(dataManuale)+' · '+fmt(impManuale)+'</div>';
-      htmlConferma += '<div style="font-size:11px;color:var(--ink);margin-bottom:2px">Nell\'estratto: <b>'+m.data+'</b> · <b>'+fmt(Math.abs(m.importo))+'</b>'+(dataDiversa?' <span style="color:var(--blue);font-weight:600">← data reale diversa</span>':'')+'</div>';
+      htmlConferma += '<div style="font-size:11px;color:var(--ink);margin-bottom:2px">Nell\'estratto: <b>'+_ricGgC(m.data)+'</b> · <b>'+fmt(Math.abs(m.importo))+'</b>'+(dataDiversa?' <span style="color:var(--blue);font-weight:600">← data reale diversa</span>':'')+'</div>';
       htmlConferma += '<div style="font-size:10.5px;color:var(--ink3);margin-bottom:6px">'+esc(m.descrizione||'')+'</div>';
       htmlConferma += '<div style="font-size:11px;color:var(--blue);background:var(--blue-light);border-radius:6px;padding:5px 8px;margin-bottom:8px;display:inline-block">✓ '+esc(d.motivo)+'</div>';
       htmlConferma += '<div style="display:flex;gap:6px">';
@@ -21685,7 +21720,7 @@ function renderRiconciliazione(){
         // di più fatture (già segnate pagate a mano o ancora aperte) sì.
         if(d.isCombo){
           hh += '<div style="padding:10px 0;border-top:1px solid var(--sep)">';
-          hh += '<div style="font-size:11px;color:var(--ink3);margin-bottom:4px">'+m.data+' · <b>'+fmt(Math.abs(m.importo))+'</b>'
+          hh += '<div style="font-size:11px;color:var(--ink3);margin-bottom:4px">'+_ricGgC(m.data)+' · <b>'+fmt(Math.abs(m.importo))+'</b>'
             +' <span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:99px;background:'+((m.banca||'BPM')==='SumUp'?'#0066cc':'var(--red)')+';color:#fff">'+esc(m.banca||'BPM')+'</span></div>';
           hh += '<div style="font-size:11px;font-weight:500;line-height:1.4;margin-bottom:6px;word-break:break-word;white-space:pre-wrap;color:var(--ink)">'+esc(m.descrizione||'')+'</div>';
           if(d.avviso) hh += '<div style="font-size:11px;color:#b36a00;background:#fff8ec;border:1px solid rgba(179,106,0,.25);border-radius:6px;padding:6px 8px;margin-bottom:8px">'+esc(d.avviso)+'</div>';
@@ -21694,7 +21729,7 @@ function renderRiconciliazione(){
             // un movimento a PIÙ fatture, si decideva leggendo solo una riga
             // di testo (21/09, richiesta di Valerio).
             hh += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">'
-              + '<div style="font-size:11px;color:var(--blue);flex:1;min-width:0">↓ <b>'+esc(fc.fornitore||'')+'</b> N°'+esc(fc.numero||'')+' del '+fc.data+' ('+fmt(fc.importo||0)+')'+(fc.stato==='pagata'?' <span style="color:#1a7a3a">· già segnata pagata</span>':'')+'</div>'
+              + '<div style="font-size:11px;color:var(--blue);flex:1;min-width:0">↓ <b>'+esc(fc.fornitore||'')+'</b> N°'+esc(fc.numero||'')+' del '+_ricGgC(fc.data)+' ('+fmt(fc.importo||0)+')'+(fc.stato==='pagata'?' <span style="color:#1a7a3a">· già segnata pagata</span>':'')+'</div>'
               + _btnXml(fc,'mini')
               + '</div>';
           });
@@ -21707,7 +21742,7 @@ function renderRiconciliazione(){
         var f = d.fatt;
         var hasDoc = (f.fatturaAllegata&&f.fatturaAllegata.length>0)||(f.xmlGithubPath&&f.xmlGithubPath.length>0)||(f.source==='aruba')||f.hasAllegata;
         hh += '<div style="padding:10px 0;border-top:1px solid var(--sep)">';
-        hh += '<div style="font-size:11px;color:var(--ink3);margin-bottom:4px">'+m.data+' · <b>'+fmt(Math.abs(m.importo))+'</b>'
+        hh += '<div style="font-size:11px;color:var(--ink3);margin-bottom:4px">'+_ricGgC(m.data)+' · <b>'+fmt(Math.abs(m.importo))+'</b>'
           +' <span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:99px;background:'+((m.banca||'BPM')==='SumUp'?'#0066cc':'var(--red)')+';color:#fff">'+esc(m.banca||'BPM')+'</span></div>';
         hh += '<div style="font-size:11px;font-weight:500;line-height:1.4;margin-bottom:6px;word-break:break-word;white-space:pre-wrap;color:var(--ink)">'+esc(m.descrizione||'')+'</div>';
         // 20/09 (caso DISTILLERIE CAMEL): il confronto guardava il totale della
@@ -21718,7 +21753,7 @@ function renderRiconciliazione(){
         var _restoCF = (typeof residuoFattura==='function') ? residuoFattura(f) : _nettoCF;
         var _rifCF = _restoCF>0.01 ? _restoCF : _nettoCF;
         var _diffCF = Math.abs(Math.abs(m.importo)-_rifCF);
-        hh += '<div style="font-size:11px;color:var(--blue);margin-bottom:4px">↓ <b>'+esc(f.fornitore||'')+'</b> N°'+esc(f.numero||'')+' del '+f.data+' ('+fmt(_lordoCF)+
+        hh += '<div style="font-size:11px;color:var(--blue);margin-bottom:4px">↓ <b>'+esc(f.fornitore||'')+'</b> N°'+esc(f.numero||'')+' del '+_ricGgC(f.data)+' ('+fmt(_lordoCF)+
           (Math.abs(_lordoCF-_nettoCF)>0.01 ? ' · nota di credito \u2212'+fmt(_lordoCF-_nettoCF) : '')+
           (Math.abs(_rifCF-_lordoCF)>0.01 ? ' · da pagare <b>'+fmt(_rifCF)+'</b>' : '')+')</div>';
         if(_diffCF>0.50) hh += '<div style="font-size:11px;font-weight:700;color:var(--red);margin-bottom:8px">⚠️ Importo diverso: banca '+fmt(Math.abs(m.importo))+' vs da pagare '+fmt(_rifCF)+' — differenza '+fmt(_diffCF)+'</div>';
@@ -21818,11 +21853,15 @@ function renderRiconciliazione(){
       htmlClassificare += '<div style="padding:10px 0;border-top:1px solid var(--sep);display:flex;gap:8px">';
       htmlClassificare += '<input type="checkbox" data-mid="'+esc(m.id)+'" '+(_bancaSelIds.has(m.id)?'checked':'')+' onchange="_toggleSelBanca(\''+esc(m.id)+'\')" style="width:20px;height:20px;flex-shrink:0;margin-top:2px">';
       htmlClassificare += '<div style="flex:1;min-width:0">';
-      htmlClassificare += '<div style="font-size:11px;color:var(--ink3);margin-bottom:2px">'+m.data+' · <b>'+fmt(Math.abs(m.importo))+'</b>'+(m.sottotipo?' · '+m.sottotipo:'')+' · '+esc(m._catLabelClass||'')+'</div>';
-      htmlClassificare += '<div style="font-size:11px;font-weight:500;line-height:1.4;word-break:break-word;white-space:pre-wrap;color:var(--ink);margin-bottom:8px">'+esc(m.descrizione||'')+'</div>';
+      // v10.45.0 (audit P1.8/P1.10): data gg/mm/aaaa, prima il nome pulito del beneficiario, poi il testo della banca
+      var _benCl = (typeof pnLeggiBanca === 'function') ? pnLeggiBanca(m.descrizione).beneficiario : '';
+      htmlClassificare += '<div style="font-size:11px;color:var(--ink3);margin-bottom:2px">'+(typeof ricGg === 'function' ? ricGg(m.data) : m.data)+' · <b>'+fmt(Math.abs(m.importo))+'</b>'+(m.sottotipo?' · '+m.sottotipo:'')+' · '+esc(m._catLabelClass||'')+'</div>';
+      if(_benCl) htmlClassificare += '<div style="font-size:14px;font-weight:700;line-height:1.3;color:var(--ink);margin-bottom:2px">'+esc(_benCl)+'</div>';
+      htmlClassificare += '<div style="font-size:11px;font-weight:500;line-height:1.4;word-break:break-word;white-space:pre-wrap;color:'+(_benCl?'var(--ink2)':'var(--ink)')+';margin-bottom:8px">'+esc(m.descrizione||'')+'</div>';
       htmlClassificare += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
       htmlClassificare += '<button onclick="_cercaFatturaPerMovimento('+origIdx+')" style="flex:1;min-width:100px;padding:7px 10px;border:1px solid var(--blue);border-radius:6px;background:var(--blue-light);color:var(--blue);font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">🔍 Cerca fattura</button>';
-      htmlClassificare += '<button onclick="_spostaCategoriaMov(\''+esc(m.id)+'\',\'stipendio\')" style="padding:7px 10px;border:1px solid #6b46c1;border-radius:6px;background:#f0ebfd;color:#6b46c1;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">💼 Forse stipendio</button>';
+      // v10.45.0 (audit P1.10): «Forse stipendio» solo sui bonifici in uscita (non su carte, POS, entrate)
+      if((+m.importo) < 0 && /bonific|favore|vs\.?\s*disp/i.test((m.sottotipo||'')+' '+(m.descrizione||''))) htmlClassificare += '<button onclick="_spostaCategoriaMov(\''+esc(m.id)+'\',\'stipendio\')" style="padding:7px 10px;border:1px solid #6b46c1;border-radius:6px;background:#f0ebfd;color:#6b46c1;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">💼 Forse stipendio</button>';
       htmlClassificare += _mnBtn(m);
       htmlClassificare += '<button onclick="_segnaIgnora('+origIdx+')" style="padding:7px 10px;border:1px solid var(--sep);border-radius:6px;background:var(--surface);color:var(--ink3);font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">Ignora</button>';
       htmlClassificare += '</div></div></div>';
@@ -21842,7 +21881,7 @@ function renderRiconciliazione(){
     nonAbbinatiAltroScartato.forEach(function(m){
       htmlScartati += '<div style="padding:7px 0;border-top:1px solid var(--sep);display:flex;justify-content:space-between;align-items:flex-start;gap:8px">';
       htmlScartati += '<div style="flex:1;min-width:0">';
-      htmlScartati += '<div style="font-size:11px;color:var(--ink3)">'+m.data+' · <b>'+fmt(Math.abs(m.importo))+'</b>'+(m.sottotipo?' · <i>'+m.sottotipo+'</i>':'')+'</div>';
+      htmlScartati += '<div style="font-size:11px;color:var(--ink3)">'+_ricGgC(m.data)+' · <b>'+fmt(Math.abs(m.importo))+'</b>'+(m.sottotipo?' · <i>'+m.sottotipo+'</i>':'')+'</div>';
       htmlScartati += '<div style="font-size:11px;color:var(--ink2);word-break:break-word;line-height:1.3">'+esc(m.descrizione||'')+'</div>';
       htmlScartati += '</div>';
       htmlScartati += '<div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">';
@@ -21860,7 +21899,7 @@ function renderRiconciliazione(){
     htmlScartati += '<div style="font-size:13px;font-weight:700;color:var(--ink3);margin-bottom:10px">🙈 Ignorati manualmente ('+ignorati.length+')</div>';
     ignorati.forEach(function(m, i){
       htmlScartati += '<div style="padding:10px 0;border-top:1px solid var(--sep)">';
-      htmlScartati += '<div style="font-size:11px;color:var(--ink3);margin-bottom:2px">'+m.data+' · <b>'+fmt(Math.abs(m.importo))+'</b>'+(m.sottotipo?' · '+m.sottotipo:'')+'</div>';
+      htmlScartati += '<div style="font-size:11px;color:var(--ink3);margin-bottom:2px">'+_ricGgC(m.data)+' · <b>'+fmt(Math.abs(m.importo))+'</b>'+(m.sottotipo?' · '+m.sottotipo:'')+'</div>';
       htmlScartati += '<div style="font-size:11px;color:var(--ink2);word-break:break-word;line-height:1.3;margin-bottom:8px">'+esc(m.descrizione||'')+'</div>';
       htmlScartati += '<button onclick="_ripristinaIgnorato('+i+')" style="padding:7px 10px;border:1px solid var(--blue);border-radius:6px;background:var(--blue-light);color:var(--blue);font-family:inherit;font-size:11px;font-weight:600;cursor:pointer">↩️ Ripristina</button>';
       htmlScartati += '</div>';
@@ -21885,7 +21924,7 @@ function renderRiconciliazione(){
       var stato = _mappaStip[m.id];
       htmlStipendi += '<div style="padding:7px 0;border-top:1px solid var(--sep);display:flex;justify-content:space-between;align-items:flex-start;gap:8px">';
       htmlStipendi += '<div style="flex:1;min-width:0">';
-      htmlStipendi += '<div style="font-size:11px;color:var(--ink3)">'+m.data+' · <b>'+fmt(Math.abs(m.importo))+'</b>'+(m.sottotipo?' · <i>'+m.sottotipo+'</i>':'')+'</div>';
+      htmlStipendi += '<div style="font-size:11px;color:var(--ink3)">'+_ricGgC(m.data)+' · <b>'+fmt(Math.abs(m.importo))+'</b>'+(m.sottotipo?' · <i>'+m.sottotipo+'</i>':'')+'</div>';
       htmlStipendi += '<div style="font-size:11px;color:var(--ink2);word-break:break-word;line-height:1.3">'+esc(m.descrizione||'')+'</div>';
       htmlStipendi += stato
         ? '<div style="font-size:11px;color:#1a7a3a;font-weight:700;margin-top:3px">✅ Riconciliato — '+esc(stato.nome)+' · '+MESI_LBL_PN[stato.mese]+' '+stato.anno+(stato.fonte==='portafoglio'?' (dal portafoglio)':'')+'</div>'
@@ -22000,7 +22039,7 @@ function renderRiconciliazione(){
       stato = '<span onclick="apriCambioAbbinamentoMov(\''+esc(m.id)+'\')" style="font-size:10px;background:var(--green-light);color:#1a7a3a;padding:2px 6px;border-radius:99px;font-weight:600;cursor:pointer;text-decoration:underline">↑ '+(m.sottotipo||'Entrata')+' · 🔍</span>';
     }
     htmlTutti += '<div style="padding:10px 14px;border-bottom:1px solid var(--sep)"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">';
-    htmlTutti += '<div style="flex:1;min-width:0"><div style="font-size:12px;color:var(--ink3);margin-bottom:2px">'+m.data+' · <span style="color:var(--ink3)">'+esc(m._catLabel||'')+'</span></div>';
+    htmlTutti += '<div style="flex:1;min-width:0"><div style="font-size:12px;color:var(--ink3);margin-bottom:2px">'+_ricGgC(m.data)+' · <span style="color:var(--ink3)">'+esc(m._catLabel||'')+'</span></div>';
     htmlTutti += '<div style="font-size:13px;font-weight:500;word-break:break-word;white-space:normal;line-height:1.35">'+esc(m.descrizione||'—')+'</div>';
     htmlTutti += '<div style="margin-top:4px">'+stato+'</div></div>';
     htmlTutti += '<div style="font-size:14px;font-weight:700;color:'+col+';flex-shrink:0">'+segno+fmt(Math.abs(m.importo))+'</div>';
@@ -22057,6 +22096,7 @@ function renderRiconciliazione(){
   var elEnt = document.getElementById('bancaStatEnt');
   var elUsc = document.getElementById('bancaStatUsc');
   var elFare = document.getElementById('bancaStatFare');
+  try{ var _elFL = document.getElementById('bancaStatFareLbl'); if(_elFL) _elFL.textContent = 'DA FARE'; }catch(_e){}
   if(elEnt) elEnt.textContent = '+'+fmt(totEnt);
   if(elUsc) elUsc.textContent = '−'+fmt(totUsc);
   if(elFare) elFare.textContent = (daConfermare.length+nonAbbinatiVis.length+nonAbbinatiStipendio.length+datiVerificaManuale.length);
@@ -23629,7 +23669,7 @@ async function _segnaIgnora(idx){
     return;
   }
   nonAbb.splice(idx, 1);
-  toast('✓ Movimento ignorato — lo trovi in "Ignorati", ripristinabile in ogni momento');
+  toast('✓ Movimento ignorato — lo trovi in "Ignorati", ripristinabile in ogni momento', {forza:true});
   var _sy = window.pageYOffset || document.documentElement.scrollTop || 0;
   renderRiconciliazione();
   setTimeout(function(){ window.scrollTo(0, _sy); }, 30);
@@ -23665,7 +23705,7 @@ async function _aggiungiVersamento(idx){
     }catch(e){ console.warn('SB versamento:', e); }
   }
   if(_reconReport) _reconReport.versamentiAggiunti.push({data:v.data, importo:v.importo});
-  toast('✓ Versamento aggiunto: '+fmt(v.importo));
+  toast('✓ Versamento aggiunto: '+fmt(v.importo), {forza:true});
   renderRiconciliazione();
   if(typeof aggiornaSaldoCassa==='function') aggiornaSaldoCassa();
 }
@@ -23692,7 +23732,7 @@ async function _aggiungiTuttiVersamenti(){
     if(_reconReport) _reconReport.versamentiAggiunti.push({data:v.data, importo:v.importo});
   }
   if(typeof salvaVersamenti==='function') salvaVersamenti();
-  toast('✓ '+pend.length+' versamenti aggiunti');
+  toast('✓ '+pend.length+' versamenti aggiunti', {forza:true});
   renderRiconciliazione();
   if(typeof aggiornaSaldoCassa==='function') aggiornaSaldoCassa();
   // Mostra report a fine operazione massiva
@@ -24190,7 +24230,7 @@ function _confermaPagamento(idx, conferma){
       localStorage.setItem('ceraldi_recon_appreso', JSON.stringify(app));
     }catch(e){}
     salvaMovimentoBanca(d.mov).catch(function(e){console.warn('salvaMovimentoBanca:',e);}); // persiste abbinamento su Supabase
-    toast('✓ Abbinato: '+(d.fatt.fornitore||''));
+    toast('✓ Abbinato: '+(d.fatt.fornitore||''), {forza:true});
   } else {
     delete d.mov._matchProbabile;
     // Salva rifiuto: non proporre più QUESTA fattura per QUESTA descrizione.
@@ -24668,7 +24708,7 @@ function _confermaAbbinatoAuto(idx, giusto){
     d.mov.fatturaId = d.fatt.id;
     d.mov.fatturaLabel = (d.fatt.fornitore||'') + ' N°' + (d.fatt.numero||'');
     salvaMovimentoBanca(d.mov).catch(function(e){console.warn('salvaMovimentoBanca:',e);});
-    toast('✓ Confermato: '+(d.fatt.fornitore||''));
+    toast('✓ Confermato: '+(d.fatt.fornitore||''), {forza:true});
   } else {
     // Sbagliato: esclude DAVVERO questa coppia dai prossimi ricalcoli —
     // prima non bastava, la stessa fattura veniva riproposta identica al render successivo.
@@ -26059,7 +26099,7 @@ async function _anStaccaDaPagamento(fid, mid){
     await _anSistemaLatoMovimento(mid, f);
     _anTogliDaFattura(f, mid);
     await dbUpdate(f);
-    toast('✓ Tolta dal pagamento · ora è '+({da_pagare:'da pagare', parziale:'parziale', pagata:'pagata'}[f.stato]||f.stato));
+    toast('✓ Tolta dal pagamento · ora è '+({da_pagare:'da pagare', parziale:'parziale', pagata:'pagata'}[f.stato]||f.stato), {forza:true});
   }catch(e){
     toast('❌ Non riuscito, nulla è stato perso: riprova ('+String(e.message||e).slice(0,50)+')');
     if(typeof _registraErrore==='function') _registraErrore('database','Stacca da pagamento: '+(e.message||e));
@@ -26090,7 +26130,7 @@ async function _anSpostaSuPagamento(fid, midVecchio, midNuovo){
     f.stato = st.stato; f.parzPagato = st.pagato;
     if(st.stato === 'pagata') f.dataPagamento = nuovo.data;
     await dbUpdate(f);
-    toast('✓ Spostata sul pagamento del '+_anData(nuovo.data));
+    toast('✓ Spostata sul pagamento del '+_anData(nuovo.data), {forza:true});
   }catch(e){
     toast('❌ Non riuscito: riprova ('+String(e.message||e).slice(0,50)+')');
     if(typeof _registraErrore==='function') _registraErrore('database','Sposta su pagamento: '+(e.message||e));
@@ -26134,7 +26174,7 @@ async function _anTogliCollegamentoSparito(fid, mid){
   try{
     _anTogliDaFattura(f, mid);
     await dbUpdate(f);
-    toast('✓ Collegamento tolto');
+    toast('✓ Collegamento tolto', {forza:true});
   }catch(e){ toast('❌ Non riuscito: riprova ('+String(e.message||e).slice(0,50)+')'); }
   await _anDopoAzionePagamento();
 }
@@ -26443,7 +26483,7 @@ async function _anCollegaTrovato(mid, fidsCsv){
     } else {
       if(!(await _applicaGruppoRiconciliazione(fs, [mv], {}))){ await _anDopoAzionePagamento(); return; } // l'avviso d'errore l'ha già dato
     }
-    toast('✓ Collegat'+(fs.length === 1 ? 'a' : 'e')+' al pagamento del '+_anData(mv.data));
+    toast('✓ Collegat'+(fs.length === 1 ? 'a' : 'e')+' al pagamento del '+_anData(mv.data), {forza:true});
   }catch(e){
     toast('❌ Non riuscito, nulla è stato perso: riprova ('+String(e.message||e).slice(0,50)+')');
     if(typeof _registraErrore==='function') _registraErrore('database','Collega pagamento trovato: '+(e.message||e));
@@ -26457,7 +26497,7 @@ async function _anSegnaContanti(fid){
   try{
     f.pagamento = 'contanti'; f.pagamentoOrigine = 'manuale'; f.pagamentoImpostatoIl = new Date().toISOString();
     await dbUpdate(f);
-    toast('✓ Segnata pagata in contanti');
+    toast('✓ Segnata pagata in contanti', {forza:true});
   }catch(e){ toast('❌ Non riuscito: riprova ('+String(e.message||e).slice(0,50)+')'); }
   await _anDopoAzionePagamento();
 }
@@ -26472,7 +26512,7 @@ async function _anRimettiDaPagare(fid){
     f.dataPagamento = ''; f.riconciliata = false;
     f.pagamentoOrigine = 'manuale'; f.pagamentoImpostatoIl = new Date().toISOString();
     await dbUpdate(f);
-    toast('✓ Rimessa da pagare');
+    toast('✓ Rimessa da pagare', {forza:true});
   }catch(e){ toast('❌ Non riuscito: riprova ('+String(e.message||e).slice(0,50)+')'); }
   await _anDopoAzionePagamento();
 }
@@ -26628,7 +26668,7 @@ async function _anAggiornaHome(forza){
 
 // ── Anomalie: foglio con l'elenco completo ──
 function _anRigaFattura(f){
-  var st={pagata:'Pagata', da_pagare:'Da pagare', parziale:'Parziale'}[f.stato]||f.stato||'';
+  var st={pagata:'Pagata', da_pagare:'Da pagare', parziale:'Pagata in parte'}[f.stato]||f.stato||'';
   var _ico = f.tipo==='nota_credito' ? '🧾' : (f.tipo==='ddt' ? '📦' : '📄');
   var _tip = f.tipo==='nota_credito' ? 'Nota di credito · ' : (f.tipo==='ddt' ? 'DDT · ' : '');
   return '<div class="an-row-wrap"><button class="an-row" data-fid="'+esc(String(f.id))+'" onclick="_anApriFattura(this.dataset.fid)">'+
@@ -26663,7 +26703,7 @@ function _anSceltaDoppione(a){
   var A=a.fatture[0], B=a.fatture[1], pa=_anPuntiDoc(A,B,a), pb=_anPuntiDoc(B,A,a);
   var consigliata = pa.p===pb.p ? null : (pa.p>pb.p ? String(A.id) : String(B.id));
   var card=function(f, P, altro){
-    var st={pagata:'Pagata', da_pagare:'Da pagare', parziale:'Parziale'}[f.stato]||'';
+    var st={pagata:'Pagata', da_pagare:'Da pagare', parziale:'Pagata in parte'}[f.stato]||'';
     var cons=consigliata===String(f.id);
     return '<div class="an-scelta'+(cons?' an-scelta-ok':'')+'">'+
       (cons?'<div class="an-cons">Consigliata: '+esc(P.perche.join(', '))+'</div>':'')+
@@ -26737,7 +26777,7 @@ async function _anScollegaMov(mid, ignora){
 }
 function _anHtmlVoce(a, ignorata){
   var cls={alta:'an-g-alta', media:'an-g-media', bassa:'an-g-bassa'}[a.gravita];
-  var lab={alta:'Importante', media:'Da verificare', bassa:'Da confermare'}[a.gravita];
+  var lab={alta:'Importante', media:'Da controllare', bassa:'Minore'}[a.gravita];
   return '<div class="an-item'+(ignorata?' an-item-ign':'')+'">'+
     '<div class="an-item-hd"><span class="an-pill '+cls+'">'+lab+'</span><span class="an-item-t">'+esc(a.titolo)+'</span></div>'+
     '<div class="an-item-txt">'+esc(a.testo)+'</div>'+
@@ -26778,7 +26818,7 @@ function _anRenderFoglio(){
   var html='';
   if(!attive.length) html+='<div class="an-vuoto"><div style="font-size:38px">✅</div><b>Nessuna anomalia</b><span>Il registro è in ordine: nessun doppione, nessun pagamento doppio, nessun bonifico collegato alla fattura sbagliata.</span></div>';
   html+=sez('Da controllare subito', alte.length+'', alte);
-  html+=sez('Da verificare', medie.length+'', medie);
+  html+=sez('Da controllare', medie.length+'', medie);
   html+=sez('Probabilmente a posto', basse.length+'', basse);
   if(ignorate.length){
     html+='<details class="an-det"><summary>Segnate come "non è un problema" ('+ignorate.length+')</summary>'+ignorate.map(function(a){ return _anHtmlVoce(a,true); }).join('')+'</details>';
@@ -27044,7 +27084,7 @@ function _crRender(){
     box.innerHTML='<div class="cr-vuoto"><div style="font-size:34px">🔍</div><b>Nessun risultato per «'+esc(q)+'»</b><span>'+(r._tipo==='importo'?'Nessuna fattura, movimento o chiusura con questo importo esatto.':(r._tipo==='data'?'Nessun dato registrato in questo giorno.':'Prova con meno parole o solo una parte del nome.'))+'</span></div>'+_crProd;
     return;
   }
-  var stato={pagata:'Pagata', da_pagare:'Da pagare', parziale:'Parziale'};
+  var stato={pagata:'Pagata', da_pagare:'Da pagare', parziale:'Pagata in parte'};
   var sez=function(titolo, arr, max, riga, chiave){
     if(!arr.length) return '';
     var tutti = window._crEspansi && window._crEspansi[chiave];
@@ -27317,7 +27357,7 @@ var _ST_LABEL = {
 var _ST_TECNICI = ['pagamento_origine','pagamento_impostato_il','pec_verificata','pec_id','source','xml_github_path','fattura_allegata_name','incompleta','iva_breakdown','created_at'];
 function _stValore(k, v){
   if(v===null || v===undefined || v==='') return '—';
-  if(k==='stato') return ({da_pagare:'Da pagare', parziale:'Parziale', pagata:'Pagata'})[v]||v;
+  if(k==='stato') return ({da_pagare:'Da pagare', parziale:'Pagata in parte', pagata:'Pagata'})[v]||v;
   if(k==='riconciliata' || k==='pec_verificata') return v ? 'Sì' : 'No';
   if(k==='importo' || k==='parz_pagato' || k==='totale_imponibile' || k==='totale_imposta') return fmt(+v);
   if(k==='data' || k==='scadenza' || k==='data_pagamento' || k==='bon_data') return _anData(v);
@@ -27490,7 +27530,7 @@ function _sfRender(){
     '<button class="btn btn-p" style="margin-top:12px;padding:12px;font-size:14px" onclick="_sfSalva()">Salva</button>'+
     (senzaScad.length ? '<div class="sf-hint">'+senzaScad.length+' fattur'+(senzaScad.length===1?'a aperta è':'e aperte sono')+' senza scadenza.'+(giorni!==''?' <button class="sf-link" onclick="_sfApplicaScadenze()">Calcola la scadenza con questi termini ›</button>':' Imposta i giorni e salva per calcolarla.')+'</div>' : '')+
   '</div>';
-  var stati={pagata:'Pagata', da_pagare:'Da pagare', parziale:'Parziale'};
+  var stati={pagata:'Pagata', da_pagare:'Da pagare', parziale:'Pagata in parte'};
   var righe=F.slice(0,8).map(function(f){
     var isNc=f.tipo==='nota_credito';
     return '<button class="cr-row" data-id="'+esc(String(f.id))+'" onclick="_sfApriFattura(this.dataset.id)"><span class="cr-main"><b>N° '+esc(f.numero||'—')+(isNc?' · nota di credito':'')+'</b><span>'+_anData(f.data)+(isNc?'':' · <em class="cr-st cr-st-'+f.stato+'">'+(stati[f.stato]||'')+'</em>')+(f.fornitore!==nome?' · come «'+esc(f.fornitore)+'»':'')+'</span></span><span class="cr-imp">'+fmt(f.importo)+'</span></button>';
@@ -27797,13 +27837,13 @@ async function _bfPaga(nome, modo, dataScelta){
   }
   try{ save(fatture); }catch(e){}
   renderLista(); if(typeof aggiornaAlertBanner==='function') aggiornaAlertBanner(); if(typeof aggiornaHeroCard==='function') aggiornaHeroCard();
-  toast('✓ '+ok+' fattur'+(ok===1?'a segnata':'e segnate')+' come pagat'+(ok===1?'a':'e'));
+  toast('✓ '+ok+' fattur'+(ok===1?'a segnata':'e segnate')+' come pagat'+(ok===1?'a':'e'), {forza:true});
   _bfRender();
 }
 async function _bfDavveroAperte(nome){
   var lista=_bfSelezionate(nome); if(!lista.length) return;
   await _bfSalvaOk(lista.map(function(f){ return f.id; }), true);
-  toast('✓ Restano da pagare, tolte da questo elenco');
+  toast('✓ Restano da pagare, tolte da questo elenco', {forza:true});
   _bfRender();
 }
 async function _bfRipristinaTutte(){
@@ -27956,7 +27996,7 @@ function _rcConfermaSicuri(){
     if(idx < 0) return;
     try{ _confermaPagamento(idx, true); fatti++; }catch(e){ console.warn('conferma blocco', e); }
   });
-  toast('✓ Confermati '+fatti+' abbinamenti');
+  toast('✓ Confermati '+fatti+' abbinamenti', {forza:true});
 }
 document.addEventListener('DOMContentLoaded', function(){ setTimeout(_rcCarica, 6000); });
 
@@ -29915,7 +29955,7 @@ function _ecElencoRighe(o){
     var cat=_ecContoCosto(f);
     var tr=_ecTraccia(f);
     return {f:f, tr:tr, data:f.data, num:f.numero||'', tipo:nc?'Nota di credito':'Fattura', forn:f.fornitore||'', piva:f.piva||'', cat:cat==='c_nc'?'Da classificare':_ceLabel(cat.slice(2)),
-      imp:imp, iva:iva, al:al.join(' '), tot:tot, stato:({pagata:'Pagata',da_pagare:'Da pagare',parziale:'Parziale'})[statoX]||statoX||'', anom:anom, anomTxt:_ecAnomalieTesto(anom), metodo:f.pagamento||'', dataPag:f.dataPagamento||'',
+      imp:imp, iva:iva, al:al.join(' '), tot:tot, stato:({pagata:'Pagata',da_pagare:'Da pagare',parziale:'Pagata in parte'})[statoX]||statoX||'', anom:anom, anomTxt:_ecAnomalieTesto(anom), metodo:f.pagamento||'', dataPag:f.dataPagamento||'',
       pagato:pag, res:res, scad:f.scadenza||'', rit:rit>0?rit:null, banca:mv.length?('sì · '+mv.map(function(m){ return _ecGg(m.data); }).join(', ')):(f.riconciliata?'sì':''), xml:B?'sì':'no', doc:(typeof _docHaFile==='function'&&_docHaFile(f))?'sì':'no', note:f.note||''};
   }).sort(function(a,b){ return String(a.data).localeCompare(String(b.data)); });
 }
@@ -33924,7 +33964,39 @@ function pnLeggiBanca(desc){
   if((m = s.match(/FAVORE\s+(.+?)(?:\s+-\s+ADD\.\w+(?:\s+-\s+(.*))?)?$/i))){ out.beneficiario = m[1].trim(); out.causale = (m[2] || '').trim(); }
   else if((m = s.match(/^(.+?)\s+IT\d{2}[A-Z]\d{10}[0-9A-Z]{12}\s+[—-]\s+(.*)$/i))){ out.beneficiario = m[1].trim(); out.causale = m[2].trim(); }
   if(!out.assegno && (m = s.match(/ASSEGNO\s+N\.?\s*(\d{6,})/i))) out.assegno = m[1];
+  // v10.45.0 (audit P1.7): Banco BPM scrive «… FAVORE Nome NOTPROVIDE - causale»:
+  // il codice tecnico non è parte del nome, e quello che segue è la causale.
+  var nb = out.beneficiario.split(/\s+NOT\s*PROVIDE?D?\b\s*-?\s*/i);
+  if(nb.length > 1){ out.beneficiario = nb[0].trim(); if(!out.causale) out.causale = nb.slice(1).join(' ').trim(); }
   return out;
+}
+// v10.45.0 (audit P0.2/P0.3): una sola regola per dire se il pagamento di una
+// fattura si vede in banca. La usano riga del registro, scheda e filtro
+// «Pagamento da confermare», così non si contraddicono più.
+//  'banca'    = c'è un movimento di banca o carta collegato (o è segnata riconciliata)
+//  'attesa'   = pagata con un metodo bancario ma il movimento non è ancora collegato
+//  'contanti' = pagata con contanti registrati in Prima Nota
+function pnInBanca(f, pag){
+  if(!f || f.tipo === 'nota_credito' || f.tipo === 'ddt') return '';
+  pag = pag || pnPagamenti(f);
+  if(f.riconciliata || pag.some(function(p){ return p.tipo === 'banca' || p.tipo === 'carta'; })) return 'banca';
+  if(/^(bonifico|assegno|carta|sdd|rid)$/i.test(f.pagamento || '')) return 'attesa';
+  if(pag.some(function(p){ return p.tipo === 'contanti'; })) return 'contanti';
+  return '';
+}
+function pnInBancaChip(f, pag){
+  var b = pnInBanca(f, pag);
+  return b === 'banca' ? ['ok', 'In banca ✓'] : b === 'attesa' ? ['warn', 'Da confermare in banca'] : null;
+}
+// v10.45.0 (audit P0.1): UNA regola per «da pagare» e «scaduto», usata da
+// Registro, Riepilogo e Uscite pianificate. È quella del Registro: residuo dal
+// motore dei conti (scConti), scadenze e rate da scScadenze, solo documenti
+// contati da «contiDal». null = niente da pagare.
+function pnAperto(f){
+  if(!f || f.tipo === 'ddt' || f.tipo === 'nota_credito' || f.deletedAt || f.deleted_at) return null;
+  var st = scStato(f); if(st === 'pagata' || st === 'annullata' || !contaInDaPagare(f)) return null;
+  var C = scConti(f, fatture);
+  return { f: f, residuo: C.residuo > 0.009 ? C.residuo : 0, scadenze: scScadenze(f, fatture).filter(function(x){ return !x.pagata; }) };
 }
 function pnPagamenti(f){ var _l = _pnPagamentiBase(f), _g = pnSenzaDettaglio(f); if(_g) _l = _l.concat([{ tipo: 'manuale', senzaDettaglio: true, movId: null, data: '', importo: _g, conto: pnMetodo(f.pagamento) || '', metodo: f.pagamento || '' }]); return _l; }
 function _pnPagamentiBase(f){
@@ -33958,7 +34030,9 @@ function pnEsito(f, C, pag){
   var piu = attesa.length ? ' ' + (attesa.length === 1 ? 'Un pagamento registrato a mano aspetta' : attesa.length + ' pagamenti registrati a mano aspettano') + ' il movimento in banca.' : '';
   var arr = R && R.arrot ? ' Differenza di ' + fmt(Math.abs(R.arrot)) + ' considerata arrotondamento.' : '';
   var rimb = R && R.ncRimb > 0.009 ? ' La nota di credito arrivata dopo il pagamento va incassata: ' + fmt(R.ncRimb) + ' da farsi rimborsare.' : '';
-  if(C.stato === 'pagata') return Object.assign(r, { tono: attesa.length ? 'info' : 'ok', t: 'I conti tornano', s: 'Pagati ' + fmt(Math.max(0, trovato)) + (C.ncTot > 0.009 ? ' + note di credito ' + fmt(C.ncTot) : '') + ' su ' + fmt(C.lordo) + '.' + arr + rimb + piu });
+  // v10.45.0 (audit P0.3): se nessun pagamento si vede ancora in banca non è «i conti tornano»
+  var nessunoInBanca = attesa.length && !pag.some(function(p){ return p.tipo === 'banca' || p.tipo === 'carta' || p.tipo === 'contanti'; });
+  if(C.stato === 'pagata') return Object.assign(r, { tono: attesa.length ? 'info' : 'ok', t: nessunoInBanca ? 'Pagata, manca il movimento in banca' : 'I conti tornano', s: 'Pagati ' + fmt(Math.max(0, trovato)) + (C.ncTot > 0.009 ? ' + note di credito ' + fmt(C.ncTot) : '') + ' su ' + fmt(C.lordo) + '.' + arr + rimb + piu });
   if(C.stato === 'parziale') return Object.assign(r, { tono: 'warn', t: 'Mancano ' + fmt(C.residuo), s: 'Pagati ' + fmt(C.pagato) + ' su ' + fmt(C.dovuto) + '.' + piu });
   return Object.assign(r, { tono: 'warn', t: 'Risultano pagamenti per ' + fmt(trovato), s: 'Ma non coprono ancora nulla del dovuto: controlla i movimenti collegati.' });
 }
@@ -34184,7 +34258,9 @@ function _pnDisegnaSchedaVero(){
   // ── testata
   h += '<div class="sk-testa"><div class="sk-forn">' + esc(f.fornitore || '—') + '</div>' +
     '<div class="sk-sub">' + esc(pnTipo(f)) + (f.numero ? ' n° ' + esc(f.numero) : '') + ' del ' + esc(pnData(f.data, true)) + (f.piva ? ' · P.IVA ' + esc(f.piva) : '') + '</div>' +
-    '<div class="sk-imp-r"><div class="sk-imp' + (isNc ? ' neg' : '') + '">' + (isNc ? '−' : '') + fmt(Math.abs(f.importo || 0)) + '</div>' + pnChip(chip) + '</div>';
+    '<div class="sk-imp-r"><div class="sk-imp' + (isNc ? ' neg' : '') + '">' + (isNc ? '−' : '') + fmt(Math.abs(f.importo || 0)) + '</div>' +
+    // v10.45.0 (audit P0.3): accanto a «Pagata» si vede subito se la banca lo conferma
+    (function(){ var cb = (!isNc && !isDdt && C.stato === 'pagata') ? pnInBancaChip(f) : null; return cb ? '<div class="sk-chips">' + pnChip(chip) + pnChip(cb) + '</div>' : pnChip(chip); })() + '</div>';
   if(f.incompleta && f.incompleta.length) h += '<div class="sk-avviso ko">Mancano: ' + esc(f.incompleta.join(', ')) + '. Completala con Modifica.</div>';
   var az = [];
   az.push('<button class="sk-az prim" onclick="pnModifica(' + pnIdJs(f.id) + ')"><span>✏️</span>Modifica</button>');
@@ -34199,10 +34275,17 @@ function _pnDisegnaSchedaVero(){
     // ── pagamento
     var frase;
     if(C.stato === 'pagata') frase = 'Pagata' + (f.dataPagamento ? ' il ' + pnGg(f.dataPagamento) : '') + (f.pagamento ? ' · ' + pnMetodo(f.pagamento).toLowerCase() : '') + (f.contoPagamento ? ' (' + esc(f.contoPagamento) + ')' : '');
-    else if(prox) { var g = scGiorni(oggi, prox.data); frase = 'Da pagare ' + fmt(C.residuo) + ' · ' + (g < 0 ? 'scaduta ' + pnQuando(g) : 'scade ' + pnQuando(g)) + (prox.tot > 1 ? ' (rata ' + prox.n + ' di ' + prox.tot + ')' : ''); }
+    else if(prox) {
+      // v10.45.0 (audit P1.4): con le rate si dice cosa scade e quando, e a parte quanto resta in tutto
+      var g = scGiorni(oggi, prox.data), quando = (g < 0 ? 'scaduta ' + pnQuando(g) : 'scade ' + pnQuando(g));
+      if(prox.tot > 1 || prox.residuo < C.residuo - 0.009) frase = (prox.tot > 1 ? (prox.saldo ? 'Saldo' : 'Rata ' + prox.n + ' di ' + prox.tot) : 'Prossima scadenza') + ': ' + fmt(prox.residuo) + ' · ' + quando + ' (' + pnGg(prox.data) + ')';
+      else frase = 'Da pagare ' + fmt(C.residuo) + ' · ' + quando;
+    }
     else frase = 'Da pagare ' + fmt(C.residuo) + ' · nessuna scadenza';
     var p = '<div class="sk-frase ' + chip[0] + '">' + frase + '</div>';
-    if(C.stato === 'parziale' || (C.ncTot && C.stato !== 'pagata')){
+    var conBarra = C.stato === 'parziale' || (C.ncTot && C.stato !== 'pagata');
+    if(prox && !conBarra && C.residuo - prox.residuo > 0.009) p += '<div class="sk-bar-l"><span>In tutto restano ' + fmt(C.residuo) + '</span></div>';
+    if(conBarra){
       var pct = C.dovuto ? Math.min(100, Math.round(C.pagato / C.dovuto * 100)) : 0;
       p += '<div class="sk-bar"><i style="width:' + pct + '%"></i></div><div class="sk-bar-l"><span>Pagati ' + fmt(C.pagato) + '</span><span>Restano ' + fmt(C.residuo) + '</span></div>';
     }
@@ -34263,7 +34346,9 @@ function pnScadenzeHtml(f, C){
     var g = scGiorni(oggi, s.data), cl = s.pagata ? 'ok' : g < 0 ? 'ko' : g <= 7 ? 'warn' : 'nd';
     var stato = s.pagata ? 'Pagata' : (g < 0 ? 'Scaduta ' + pnQuando(g) : 'Scade ' + pnQuando(g));
     var cosa = (s.tot > 1 ? (s.saldo ? 'Saldo' : 'Rata ' + s.n + ' di ' + s.tot) : 'Scadenza') + (s.metodo ? ' · ' + pnMetodo(s.metodo).toLowerCase() : '') + (s.assegno ? ' n° ' + s.assegno : '');
-    return '<div class="pr-it ' + cl + '"><i></i><div class="pr-m"><b>' + pnGg(s.data) + '</b><small>' + esc(cosa) + '</small></div><div class="pr-v"><b>' + fmt(s.importo) + '</b><small>' + esc(stato) + (!s.pagata && s.residuo < s.importo - 0.01 ? ' · resta ' + fmt(s.residuo) : '') + '</small></div></div>';
+    return '<div class="pr-it ' + cl + '"><i></i><div class="pr-m"><b>' + pnGg(s.data) + '</b><small>' + esc(cosa) + '</small></div><div class="pr-v">' +
+      // v10.45.0 (audit P1.4): in grande quello che resta da pagare, l'importo intero sotto
+      (!s.pagata && s.residuo < s.importo - 0.01 ? '<b>' + fmt(s.residuo) + '</b><small>' + esc(stato) + ' · su ' + fmt(s.importo) + '</small>' : '<b>' + fmt(s.importo) + '</b><small>' + esc(stato) + '</small>') + '</div></div>';
   }).join('') + '</div>';
   if(C.stato !== 'pagata'){
     var ant = scAnticipo(f, A), propria = f.avvisoGiorni != null;
@@ -34599,7 +34684,8 @@ function pnFiltraPreset(f, preset, oggi, ctx){
     case 'sopra_500': return Math.abs(f.importo || 0) > 500;
     case 'ddt_aperti': return f.tipo === 'ddt' && !f.fattNum;
     case 'incomplete': return !!(f.incompleta && f.incompleta.length);
-    case 'danonriconc': return pag && st === 'pagata' && !f.riconciliata && /^(bonifico|assegno|carta|sdd)$/i.test(f.pagamento || '');
+    // v10.45.0: stessa regola della riga e della scheda (pnInBanca)
+    case 'danonriconc': return pag && st === 'pagata' && !f.riconciliata && /^(bonifico|assegno|carta|sdd|rid)$/i.test(f.pagamento || '') && pnInBanca(f) === 'attesa';
     case 'nc_da_usare': return f.tipo === 'nota_credito' && scNcCredito(f) > 0.01;
     case 'contanti_anno': return f.pagamento === 'contanti' && d.slice(0, 4) === oggi.slice(0, 4);
     default: return true;
@@ -34650,7 +34736,7 @@ function _renderListaVero(){
     if(f.tipo === 'ddt') return;
     if(f.tipo === 'nota_credito'){ T.nc += Math.abs(f.importo || 0); return; }
     T.doc += Math.abs(f.importo || 0);
-    if(scStato(f) !== 'pagata' && contaInDaPagare(f)){ var C = scConti(f, fatture); if(C.residuo > 0.009){ T.resta += C.residuo; T.nRes++; } scScadenze(f, fatture).forEach(function(x){ if(!x.pagata && x.data < oggi){ T.scaduto += x.residuo; T.nScad++; } }); }
+    var A = pnAperto(f); if(A){ if(A.residuo){ T.resta += A.residuo; T.nRes++; } A.scadenze.forEach(function(x){ if(x.data < oggi){ T.scaduto += x.residuo; T.nScad++; } }); }
   });
   var cnt = document.getElementById('listaCount');
   if(cnt) cnt.innerHTML = '<div class="rg-riass"><span><b>' + filt.length + '</b> ' + (filt.length === 1 ? 'documento' : 'documenti') + ' · totale <b>' + fmt(T.doc - T.nc) + '</b>' + (T.nc ? ' (note di credito −' + fmt(T.nc) + ')' : '') + '</span></div><div class="rg-tot">' +
@@ -34701,13 +34787,20 @@ function pnRiga(f, oggi){
     if(lib > 0.01) az = '<button class="rg-az" onclick="event.stopPropagation();apriCollegaNC(' + pnIdJs(f.id) + ')">Usa</button>'; }
   else if(isDdt){ info = f.fattNum ? 'Fattura n° ' + f.fattNum : ''; infoCl = ''; if(!f.fattNum) az = '<button class="rg-az" onclick="event.stopPropagation();openEditDdt(' + pnIdJs(f.id) + ')">Aggancia</button>'; }
   else if(st !== 'pagata'){
-    if(prox){ var g = scGiorni(oggi, prox.data); info = (g < 0 ? 'Scaduta ' + pnQuando(g) : g === 0 ? 'Scade oggi' : g <= 30 ? 'Scade ' + pnQuando(g) : 'Scade il ' + pnGg(prox.data)) + (prox.tot > 1 ? ' · rata ' + prox.n + '/' + prox.tot : ''); infoCl = g < 0 ? 'ko' : g <= 7 ? 'warn' : ''; }
-    if(C.residuo < C.lordo - 0.009) info += (info ? ' · ' : '') + 'resta ' + fmt(C.residuo);
+    // v10.45.0 (audit P0.4/P1.5): la rata con il suo importo, e quanto è già pagato e quanto resta
+    if(prox){ var g = scGiorni(oggi, prox.data), qd = (g < 0 ? 'Scaduta ' + pnQuando(g) : g === 0 ? 'Scade oggi' : g <= 30 ? 'Scade ' + pnQuando(g) : 'Scade il ' + pnGg(prox.data));
+      info = prox.tot > 1 ? (prox.saldo ? 'Saldo' : 'Rata ' + prox.n + '/' + prox.tot) + ' di ' + fmt(prox.residuo) + ' · ' + qd.charAt(0).toLowerCase() + qd.slice(1) : qd;
+      infoCl = g < 0 ? 'ko' : g <= 7 ? 'warn' : ''; }
+    if(C.pagato > 0.009) info += (info ? ' · ' : '') + 'pagati ' + fmt(C.pagato) + ', restano ' + fmt(C.residuo);
+    else if(C.residuo < C.lordo - 0.009) info += (info ? ' · ' : '') + 'restano ' + fmt(C.residuo);
     az = '<button class="rg-az" onclick="event.stopPropagation();pnRegistraPagamento(' + pnIdJs(f.id) + ')">Paga</button>';
   } else {
     var pag = pnPagamenti(f), E = pnEsito(f, C, pag);
     // 11/10: niente «Pagata · Pagata» (l'etichetta lo dice già): qui solo quello che aggiunge
-    info = [f.dataPagamento ? 'il ' + pnGg(f.dataPagamento) : '', f.riconciliata || pag.length ? 'in banca ✓' : (/^(bonifico|assegno|carta|sdd)$/i.test(f.pagamento || '') ? 'da confermare in banca' : '')].filter(Boolean).join(' · ');
+    // v10.45.0 (audit P0.2/P0.3): «in banca ✓» solo se un movimento di banca o carta c'è davvero
+    var inB = pnInBanca(f, pag);
+    info = [f.dataPagamento ? 'il ' + pnGg(f.dataPagamento) : '', inB === 'banca' ? 'in banca ✓' : inB === 'attesa' ? 'da confermare in banca' : inB === 'contanti' ? 'contanti dalla cassa' : ''].filter(Boolean).join(' · ');
+    infoCl = inB === 'banca' ? 'ok' : inB === 'attesa' ? 'warn' : '';
     if(E.tono === 'ko'){ info = '⚠️ ' + E.t; infoCl = 'ko'; }
   }
   var stripe = chip[0], sel = (typeof _selIds !== 'undefined' && _selIds.has(f.id));
@@ -35395,7 +35488,7 @@ async function ricSpostaSuFattura(ncId, movId, fid){
   await salvaMovimentoBanca(m); try{ _salvaBancaLocale(); }catch(e){}
   await dbUpdate(n); await dbUpdate(f);
   await ricAllineaDoc(f, { muto: true });
-  toast('✓ Movimento spostato sulla fattura n° ' + (f.numero || '—')); ricRidisegna();
+  toast('✓ Movimento spostato sulla fattura n° ' + (f.numero || '—'), {forza:true}); ricRidisegna();
 }
 
 /* ── Riallineamento della copia salvata (stato, pagato) dalle prove ── */
@@ -35429,7 +35522,7 @@ async function ricAllineaDoc(f, opz){
   if(a.nuovo.stato === 'pagata' && f.riconciliazione && f.riconciliazione.movId) f.riconciliata = true;
   ricInvalida();
   await dbUpdate(f);
-  if(!opz.muto) toast('✓ Conti di ' + (f.fornitore || '') + ' n° ' + (f.numero || '') + ' sistemati');
+  if(!opz.muto) toast('✓ Conti di ' + (f.fornitore || '') + ' n° ' + (f.numero || '') + ' sistemati', {forza:true});
   return true;
 }
 // Dopo un cambio sulle note di credito: riallinea le fatture toccate (vecchie e nuove)
@@ -36124,7 +36217,7 @@ function ricvChi(M, idx){
   var testoNome = b || (d.match(/sdd\s*(?:core|b2b)\s*:\s*\S+\s+(.+)$/i) || [])[1] || (d.match(/bon\.?\s*da\s+(.+)$/i) || [])[1] || (M.fonte === 'carta' || /^Carta$/.test(M.sottotipo) ? d : '');
   if(testoNome){
     var k = ricChiaveNome(testoNome);
-    if(k && I.nomeTok[k]){ var fkN = ricvPiu(I.nomeTok[k]); if(ricvMax(I.nomeTok[k]) >= 0.6) dai(fkN, 30, 'nome «' + ricvBello(testoNome).slice(0, 30) + '»'); }
+    if(k && I.nomeTok[k]){ var fkN = ricvPiu(I.nomeTok[k]); if(ricvMax(I.nomeTok[k]) >= 0.6) dai(fkN, 30, 'nome «' + ricvBello(ricvPulisciNome(testoNome) || testoNome).slice(0, 30) + '»'); }
   }
   if(M.fonte === 'carta' || /^Carta$/.test(M.sottotipo)){
     var ks = ricParole(d).map(function(w){ return w.slice(0, 5); });
@@ -36850,7 +36943,8 @@ function ricvSetGruppo(k){ RICV.gruppo = k; RICV.mostra = 40; RICV.cercaG = k; r
 function ricvApriCat(c){ RICV.aperte[c] = !RICV.aperte[c]; ricvRender(); }
 function ricvJs(s){ return esc(JSON.stringify(String(s))).replace(/"/g, '&quot;'); }
 function ricvChip(liv){
-  var m = { certo: ['ok', 'sicuro'], probabile: ['info', 'probabile'], possibile: ['warn', 'da verificare'] }[liv];
+  // v10.45.0 (audit P1.2): affidabilità della proposta con parole proprie (prima «da verificare» voleva dire tre cose)
+  var m = { certo: ['ok', 'sicura'], probabile: ['info', 'probabile'], possibile: ['warn', 'dubbia'] }[liv];
   return m ? '<span class="pn-chip ' + m[0] + '">' + m[1] + '</span>' : '';
 }
 function ricvRender(){
@@ -36880,7 +36974,7 @@ function ricvRender(){
   else RICV.cercaG = null;
   var pct = Math.round((per.fatto.length + per.non.length) / tot * 100);
   var ent = nel.filter(function(S){ return S.M.importo > 0; }).reduce(function(s, S){ return s + S.M.importo; }, 0), usc = nel.filter(function(S){ return S.M.importo < 0; }).reduce(function(s, S){ return s - S.M.importo; }, 0);
-  try{ var e1 = document.getElementById('bancaStatEnt'), e2 = document.getElementById('bancaStatUsc'), e3 = document.getElementById('bancaStatFare'); if(e1) e1.textContent = '+' + fmt(ent); if(e2) e2.textContent = '−' + fmt(usc); if(e3) e3.textContent = n.conferma + n.sistemare + n.capire; }catch(e){}
+  try{ var e1 = document.getElementById('bancaStatEnt'), e2 = document.getElementById('bancaStatUsc'), e3 = document.getElementById('bancaStatFare'); if(e1) e1.textContent = '+' + fmt(ent); if(e2) e2.textContent = '−' + fmt(usc); if(e3) e3.textContent = n.conferma + n.sistemare + n.capire; var e3l = document.getElementById('bancaStatFareLbl'); if(e3l) e3l.textContent = 'DA DECIDERE'; }catch(e){}
 
   var h = '<div id="ricvVista">';
   if(RICV.annulla.length) h += '<button class="rv-annulla" onclick="ricvAnnulla()">↩︎ Annulla: ' + esc(RICV.annulla[RICV.annulla.length - 1].t) + '</button>';
@@ -36960,10 +37054,17 @@ function ricvRiga(S, compatta){
   var P = S.proposte && S.proposte[0];
   var docsBox = function(docs, chip){ return '<div class="rv-doc">' + docs.slice(0, 4).map(function(x){ return ricvEstremi(x.f, { quota: x.quota, dataMov: M.data }); }).join('') + (docs.length > 4 ? '<span>+ altri ' + (docs.length - 4) + '</span>' : '') + (chip || '') + '</div>'; };
   if(P && P.stip) h += '<div class="rv-doc"><span><b>Stipendio</b> ' + esc(P.stip.nome) + ' · ' + esc(ricvMeseNome(P.stip.mese, P.stip.anno)) + '</span>' + ricvChip(P.livello) + '</div>';
-  else if(P) h += docsBox(P.docs, ricvChip(P.livello));
+  else if(P) h += docsBox(P.docs);
   else if(S.docs && S.docs.length) h += docsBox(S.docs);
-  var testo = P ? P.motivi.join(' · ') : (S.avvisi && S.avvisi[0] ? S.avvisi[0].t + ' — ' + S.avvisi[0].s : S.perche);
-  h += '<div class="rv-perche">' + esc(testo || '') + '</div>';
+  // v10.45.0 (audit P1.6): affidabilità in testa, i 2 motivi più forti (gli avvisi sempre), il resto nel dettaglio
+  var testo = P ? P.motivi.join(' · ') : (S.avvisi && S.avvisi[0] ? S.avvisi[0].t + ' — ' + S.avvisi[0].s : S.perche), piu = '';
+  if(P && !P.stip){
+    var _mot = P.motivi || [], _all = function(t){ return /^⚠️|^Attenzione|^Non torna|decidi tu/i.test(t); }, _alt = _mot.filter(function(t){ return !_all(t); });
+    var _vis = _mot.filter(function(t){ return _all(t) || _alt.indexOf(t) < 2; }), _nA = _mot.length - _vis.length;
+    testo = _vis.join(' · ');
+    if(_nA > 0) piu = ' <button class="rv-piu" onclick="ricvApri(' + k + ')">+ altri ' + _nA + (_nA === 1 ? ' motivo' : ' motivi') + '</button>';
+  }
+  h += '<div class="rv-perche">' + (P && !P.stip ? ricvChip(P.livello) + ' ' : '') + esc(testo || '') + piu + '</div>';
   var az = '';
   if(S.gruppo === 'conferma' && P) az = '<button class="sk-btn prim" onclick="ricvConfermaProposta(' + k + ',0)">' + (P.stip ? 'Collega a ' + esc(P.stip.nome.split(' ')[0]) : P.spostaDa ? 'Sposta qui la nota' : P.rimborso ? 'Collega il rimborso' : (P.docs.length > 1 ? 'Conferma le ' + P.docs.length : 'Conferma')) + '</button><button class="sk-btn" onclick="ricvRifiuta(' + k + ',0)">Non è questa</button>';
   else if(S.gruppo === 'sistemare' && S.avvisi && S.avvisi.some(function(a){ return a.cod === 'meta'; })) az = '<button class="sk-btn prim" onclick="ricvSistemaMeta(' + k + ')">Sistema</button>';
@@ -37069,7 +37170,9 @@ function ricvApri(key){
   if(S.proposte && S.proposte.length){
     h += pnSez(S.proposte.length === 1 ? 'Ho trovato' : 'Ho trovato ' + S.proposte.length + ' possibilità', S.proposte.map(function(P, i){
       if(P.stip) return '<div class="ric-prop ' + P.livello + '"><div class="ric-prop-h"><div><b>' + esc('Stipendio di ' + P.stip.nome) + '</b><small>' + esc(ricvMeseNome(P.stip.mese, P.stip.anno) + ' · ' + fmt(P.stip.importo)) + '</small></div>' + ricvChip(P.livello) + '</div><ul class="ric-motivi">' + P.motivi.map(function(t){ return '<li>' + esc(t) + '</li>'; }).join('') + '</ul><div class="sk-btns"><button class="sk-btn prim sm" onclick="ricvConfermaProposta(' + k + ',' + i + ')">Collega in Presenze</button><button class="sk-btn sm" onclick="ricvRifiuta(' + k + ',' + i + ')">Non è lui</button></div></div>';
-      return '<div class="ric-prop ' + P.livello + '"><div class="ric-prop-h"><div><b>' + esc(P.docs.length > 1 ? P.docs.length + ' documenti di ' + ricvBello(P.docs[0].f.fornitore || '') : (P.docs[0].f.tipo === 'nota_credito' ? 'Rimborso della nota n° ' : 'Fattura n° ') + (P.docs[0].f.numero || '—') + ' · ' + ricvBello(P.docs[0].f.fornitore || '')) + '</b><small>' + P.docs.map(function(x){ return 'n° ' + esc(x.f.numero || '—') + ' ' + fmt(Math.abs(x.quota)); }).join(' + ') + '</small></div>' + ricvChip(P.livello) + '</div>' + '<div class="rv-doc">' + P.docs.map(function(x){ return ricvEstremi(x.f, { quota: x.quota, dataMov: M.data }); }).join('') + '</div>' +
+      return '<div class="ric-prop ' + P.livello + '"><div class="ric-prop-h"><div><b>' + esc(P.docs.length > 1 ? P.docs.length + ' documenti di ' + ricvBello(P.docs[0].f.fornitore || '') : (P.docs[0].f.tipo === 'nota_credito' ? 'Rimborso della nota · ' : '') + ricvBello(P.docs[0].f.fornitore || '')) + '</b>' +
+        // v10.45.0 (audit P1.6): con un solo documento numero e importo stanno già nel riquadro sotto
+        (P.docs.length > 1 ? '<small>' + P.docs.map(function(x){ return 'n° ' + esc(x.f.numero || '—') + ' ' + fmt(Math.abs(x.quota)); }).join(' + ') + '</small>' : '') + '</div>' + ricvChip(P.livello) + '</div>' + '<div class="rv-doc">' + P.docs.map(function(x){ return ricvEstremi(x.f, { quota: x.quota, dataMov: M.data }); }).join('') + '</div>' +
         '<ul class="ric-motivi">' + P.motivi.map(function(t){ return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>' +
         '<div class="sk-btns"><button class="sk-btn prim sm" onclick="ricvConfermaProposta(' + k + ',' + i + ')">' + (P.spostaDa ? 'Sposta qui la nota' : P.rimborso ? 'Collega il rimborso' : 'Conferma') + '</button><button class="sk-btn sm" onclick="ricvRifiuta(' + k + ',' + i + ')">Non è questa</button></div></div>';
     }).join(''));
@@ -37789,8 +37892,16 @@ function ricdRender(){
   // da pagare: quello che manca davvero, e quanto è già scaduto
   var dovuto = 0, scaduto = 0, nScad = 0, prossimi = 0, vecchio = 0, nVecchie = 0;
   try{
-    var idx = ricIndice(), ap = ricvAperti(idx), fra15 = new Date(); fra15.setDate(fra15.getDate() + 15); var fra15K = ricvIso(fra15), m60 = new Date(); m60.setDate(m60.getDate() - 60); var meno60K = ricvIso(m60);
-    Object.keys(ap.bis).forEach(function(fid){ var f = idx.doc[fid]; if(!f || f.tipo !== 'fattura' || scStato(f) === 'pagata' || !contaInDaPagare(f)) return; var v = ap.bis[fid]; dovuto += v; var sk = String(f.scadenza || '').slice(0, 10); if(sk && sk < meno60K){ vecchio += v; nVecchie++; } else if(sk && sk < oggiK){ scaduto += v; nScad++; } else if(sk && sk <= fra15K) prossimi += v; });
+    var fra15 = new Date(); fra15.setDate(fra15.getDate() + 15); var fra15K = ricvIso(fra15), m60 = new Date(); m60.setDate(m60.getDate() - 60); var meno60K = ricvIso(m60);
+    // v10.45.0 (audit P0.1): stessa regola del Registro (pnAperto): prima qui si
+    // usava un altro calcolo e «Da pagare» dava una cifra diversa. Lo scaduto
+    // segue le date delle rate, non solo la scadenza della fattura.
+    pnConIndici(function(){ (fatture || []).forEach(function(f){
+      var A = pnAperto(f); if(!A) return; dovuto += A.residuo;
+      var vecchia = false, scad = false;
+      A.scadenze.forEach(function(s){ if(s.data < meno60K){ vecchio += s.residuo; vecchia = true; } else if(s.data < oggiK){ scaduto += s.residuo; scad = true; } else if(s.data <= fra15K) prossimi += s.residuo; });
+      if(vecchia) nVecchie++; if(scad) nScad++;
+    }); });
   }catch(e){}
   var nConf = 0, nSist = 0;
   try{ var C = ricvCalcola(); Object.keys(C.stati).forEach(function(k){ var g = C.stati[k].gruppo; if(g === 'conferma') nConf++; else if(g === 'sistemare') nSist++; }); nSist += C.docItems.length; }catch(e){}
@@ -38088,7 +38199,7 @@ async function ppImpostaSaldo(movId){
     var righe = await sbFetch('paypal_transazioni?id=in.(' + ids.map(encodeURIComponent).join(',') + ')&select=id,data,importo') || [];
     if(!righe.length){ toast('⚠️ Sincronizza prima il mese in Cassa → PayPal'); return; }
     await sbFetch('paypal_transazioni', { method: 'POST', headers: Object.assign({}, SB_H, { 'Prefer': 'resolution=merge-duplicates,return=minimal' }), body: JSON.stringify(righe.map(function(r){ return { id: r.id, data: r.data, importo: r.importo, addebito_tipo: 'saldo', addebito_id: null, addebito_confermato: true, updated_at: new Date().toISOString() }; })) });
-    toast('✓ Segnato: pagato con il saldo PayPal');
+    toast('✓ Segnato: pagato con il saldo PayPal', {forza:true});
     _movSchedaApri(movId);
   }catch(e){ toast('❌ Non riuscito: ' + (e.message || e)); }
 }
@@ -38164,7 +38275,7 @@ async function _xmlUsaImporto(fid, tot){
   if(!ok){ toast('❌ Non riuscito'); return; }
   f.importo = tot;
   _XMLC.lista = (_XMLC.lista || []).filter(function(x){ return String(x.id) !== String(fid); });
-  toast('✓ Importo aggiornato');
+  toast('✓ Importo aggiornato', {forza:true});
   try{ ricDatiCambiati(); await _anAggiornaHome(true); _anRenderFoglio(); }catch(e){}
 }
 /* ── Doppioni di addebito (07/11) ───────────────────────────────────────
@@ -38214,7 +38325,7 @@ async function dopAutoRisolvi(){
 }
 function ricvSddApriMov(key){ try{ _anChiudi(); }catch(e){} ricvVaiA(null); setTimeout(function(){ try{ ricvApri(key); }catch(e){} }, 500); }
 function ricvSddVoceHtml(a, ignorata){
-  var cls = { alta: 'an-g-alta', media: 'an-g-media', bassa: 'an-g-bassa' }[a.gravita], lab = { alta: 'Importante', media: 'Da verificare', bassa: 'Da fare' }[a.gravita];
+  var cls = { alta: 'an-g-alta', media: 'an-g-media', bassa: 'an-g-bassa' }[a.gravita], lab = { alta: 'Importante', media: 'Da controllare', bassa: 'Minore' }[a.gravita];
   var movRiga = function(m){ var key = ricMovKey(m.id); return '<button class="an-row" data-k="' + esc(key) + '" onclick="ricvSddApriMov(this.dataset.k)"><span class="an-row-ico">🏦</span><span class="an-row-main"><b>' + _anData(m.data) + ' · ' + fmt(Math.abs(m.importo || 0)) + '</b><span>' + esc(String(m.descrizione || '').slice(0, 110)) + '</span></span><span class="an-row-chev">›</span></button>'; };
   var righe = (a.fatture || []).map(_anRigaFattura).join('') + (a.movs || (a.mov ? [a.mov] : [])).map(movRiga).join('');
   var azione = a.tipo === 'sdd_estratto' ? '<button class="an-fix" style="margin-top:10px;width:100%;padding:11px" onclick="_anChiudi();ricvVaiA(null)">Vai alla riconciliazione per caricarlo</button>' : '';
@@ -38728,7 +38839,7 @@ var RICV_AN_BANCA = /^(beneficiario|pagamento_.*|riferimenti_disallineati|pagata
   _anHtmlVoce = function(a, ignorata){
     if(a && (/^sdd_/.test(a.tipo || '') || a.tipo === 'xml_altro')) return ricvSddVoceHtml(a, ignorata);
     if(!a || a.tipo !== 'riconciliazione') return orig.apply(this, arguments);
-    var cls = { alta: 'an-g-alta', media: 'an-g-media', bassa: 'an-g-bassa' }[a.gravita], lab = { alta: 'Importante', media: 'Da verificare', bassa: 'Da confermare' }[a.gravita];
+    var cls = { alta: 'an-g-alta', media: 'an-g-media', bassa: 'an-g-bassa' }[a.gravita], lab = { alta: 'Importante', media: 'Da controllare', bassa: 'Minore' }[a.gravita];
     return '<div class="an-item' + (ignorata ? ' an-item-ign' : '') + '"><div class="an-item-hd"><span class="an-pill ' + cls + '">' + lab + '</span><span class="an-item-t">' + esc(a.titolo) + '</span></div>' +
       '<div class="an-item-txt">' + esc(a.testo) + '</div>' +
       '<button class="an-fix" style="margin-top:10px;width:100%;padding:11px" onclick="ricvVaiA(\'sistemare\')">Apri la riconciliazione</button></div>';
@@ -41279,6 +41390,89 @@ async function _fgImporta(id, btn){
 }
 
 setTimeout(function(){ try{ _fgCardRiepilogo(false).then(function(){ var av = _fgAvvisi(); if(av.length) toast('📨 Autofattura ' + _fgFrase(av[0].giorni) + ': ' + (av[0].r.fornitore || 'fornitore estero') + (av.length > 1 ? ' (+' + (av.length - 1) + ')' : ''), { forza: true }); }); }catch(e){} }, 5000);
+</script>
+
+<style>
+/* ══════════════════════════════════════════════════════════════════════════
+   REVISIONE LEGGIBILITÀ v10.45.0 (20/11/2026, audit approvato da Valerio)
+   Sta in fondo al file apposta: vince sugli stili precedenti senza riscriverli.
+   Solo aspetto: nessun id, dato o calcolo cambia qui. Per tornare indietro
+   basta togliere questo blocco (e lo script subito sotto).
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* P0.6 — modalità chiara: grigio secondario ed etichette di stato leggibili
+   (contrasto almeno 4,5:1; prima 3,26:1 su bianco e 2,92:1 sul fondo grigio).
+   La modalità scura era già a posto e non cambia. */
+html:not([data-theme="dark"]){--ink3:#6C6C70;--pn-ok:#1a7a3a;--pn-warn:#9a5300;--pn-info:#0060df;--pn-ko:#d70015}
+
+/* P0.4 — riga del registro: la terza riga va a capo (massimo 2 righe) invece
+   di tagliare «restano …» con i puntini */
+.rg-l3{align-items:flex-start}
+.rg-info{white-space:normal!important;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-overflow:clip!important;line-height:1.35;padding-top:2px}
+.rg-info.ok{color:var(--pn-ok);font-weight:600}
+
+/* P0.3 — scheda: «Pagata» e accanto lo stato in banca */
+.sk-chips{display:flex;flex-direction:column;align-items:flex-end;gap:5px}
+
+/* P0.7 — Riconciliazione: intestazione e scelta del conto (queste classi non
+   avevano nessuno stile). I colori di ogni conto restano quelli di prima. */
+.rb-hd{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:2px}
+.rb-hd-t{font-size:17px;font-weight:700;letter-spacing:-.2px}
+.rb-menu{display:none}   /* doppione del «⋯» nella fila Importa · Periodo · Filtri */
+.rb-conti{display:flex;flex-wrap:wrap;gap:3px;background:var(--surface2);border-radius:12px;padding:3px;margin:0 0 12px}
+.rb-conto{flex:1 1 auto;min-height:40px;border:none;border-radius:9px;background:transparent;color:var(--ink2);font:inherit;font-size:12.5px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:4px;padding:0 7px;cursor:pointer;white-space:nowrap}
+.rb-conto-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;display:inline-block}
+
+/* P0.8 — messaggio a comparsa: va a capo, mai fuori dallo schermo */
+.toast{white-space:normal!important;width:max-content;max-width:calc(100vw - 32px);box-sizing:border-box;text-align:center;line-height:1.35;border-radius:16px!important}
+
+/* P0.5 — assistente: si toglie di mezzo mentre scorri verso il basso */
+#aiAssistBtn{transition:transform .3s var(--ease-ios,ease),opacity .2s!important}
+#aiAssistBtn.fab-via{transform:translateY(130px) scale(.7)!important;opacity:0!important;pointer-events:none}
+
+/* P1.6 — proposte: affidabilità in testa ai motivi, link agli altri motivi */
+.rv-perche .pn-chip{margin-right:4px;vertical-align:1px}
+.rv-piu{border:none;background:none;color:var(--blue);font:inherit;font-weight:700;padding:8px 2px;margin:-8px 0;cursor:pointer}
+
+/* P1.9 — aree di tocco di almeno 40 px, senza cambiare l'aspetto */
+.rg-az{position:relative}
+.rg-az::after{content:'';position:absolute;inset:-9px -4px}
+#listaCount button{padding:10px 4px!important;margin:-10px 0!important}
+.rg-ord select{min-height:36px}
+#incgrpsub-quot .chip{min-height:40px}
+.ric-pill,.ric-iconbtn{min-height:40px}
+.rv-az{gap:12px}
+#_reconTabBody button{min-height:36px}
+
+/* P1.10 — riconciliazione classica: niente testi sotto i 12 px */
+#bancaContenuto [style*="font-size:10px"],#bancaContenuto [style*="font-size:10.5px"],
+#bancaContenuto [style*="font-size:11px"],#bancaContenuto [style*="font-size:11.5px"]{font-size:12px!important}
+#bancaStatStrip div>div:first-child{font-size:11.5px!important}
+
+/* P2.2 — etichette maiuscole minuscole: un po' più grandi e più chiare */
+.rg-tot small,.rg-tot span{font-size:11.5px}
+.rc-imp small{font-size:11px}
+.hero-lbl{font-size:11px;color:rgba(255,255,255,.66)}
+.hero-stat-lbl{font-size:10.5px;color:rgba(255,255,255,.7)}
+.hero-eyebrow-l{font-size:11px;color:rgba(255,255,255,.66)}
+.ds-cassa-lbl{font-size:11px;color:rgba(255,255,255,.7)}
+
+/* P2.4 — sui telefoni la versione va sotto il nome, non sotto i pulsanti */
+@media (max-width:460px){.ios-header .hdr-row p .app-ver{display:table;margin:3px 0 0}}
+</style>
+<script>
+/* v10.45.0 (audit P0.5): il pulsante dell'assistente copriva gli importi a destra.
+   Scorrendo verso il basso si nasconde, risalendo torna. */
+(function(){
+  var y0 = 0, b = null;
+  window.addEventListener('scroll', function(){
+    b = b || document.getElementById('aiAssistBtn'); if(!b) return;
+    var y = window.pageYOffset || document.documentElement.scrollTop || 0;
+    if(y > y0 + 6 && y > 80) b.classList.add('fab-via');
+    else if(y < y0 - 6 || y <= 80) b.classList.remove('fab-via');
+    y0 = y;
+  }, { passive: true });
+})();
 </script>
 
 </body>
