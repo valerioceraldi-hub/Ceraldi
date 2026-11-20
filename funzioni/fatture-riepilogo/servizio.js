@@ -1,6 +1,6 @@
 // FATTURE-RIEPILOGO — logica del servizio (riepilogo Telegram del lunedì e avvisi di pagamento del mattino).
 // Generato dal sorgente TypeScript della funzione; il punto d'ingresso sul server la importa da un COMMIT FISSATO
-// e le passa createClient e il token del bot (che non stanno mai nel repo pubblico).
+// e le passa createClient. Il token del bot sta in app_segreti ('tg_token_riepilogo'), mai nel codice (21/11/2026).
 // 21/10/2026: da pagare e scadute contano solo le fatture dalla data scelta in app (contiDal, di base 01/01/2026).
 const G = globalThis.__ceraldiRiepilogo || {};
 const createClient = G.createClient;
@@ -9,7 +9,15 @@ import { rcoTok, rcoCalcola, rcoProponi, rcoAvvisi, rcoFrase } from "./ricorrenz
 const SB_URL = Deno.env.get("SUPABASE_URL");
 const SB_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 const ANON = Deno.env.get("SUPABASE_ANON_KEY");
-const TG_TOKEN = Deno.env.get("TG_TOKEN_RIEPILOGO") ?? G.TG;
+// 21/11/2026: il token del bot si legge dalla cassaforte app_segreti al momento dell'invio
+// (il segreto TG_TOKEN_RIEPILOGO del server, se c'è, ha la precedenza). Prima era scritto nel codice.
+async function tokenBot() {
+  const env = Deno.env.get("TG_TOKEN_RIEPILOGO");
+  if (env) return env;
+  const db = createClient(SB_URL, SB_KEY);
+  const { data } = await db.from("app_segreti").select("valore").eq("chiave", "tg_token_riepilogo").maybeSingle();
+  return data && data.valore || "";
+}
 const CHAT_DEFAULT = "5441779658";
 const KEY = "fatture_riepilogo_cfg";
 const LINK_APP = "https://valerioceraldi-hub.github.io/Ceraldi/Primanota.html#scadenze";
@@ -400,6 +408,8 @@ Deno.serve(async (req) => {
       return J({ inviato: false, motivo: "inviato da poco", testo });
     }
     const chat = cfg.chat_id || CHAT_DEFAULT;
+    const TG_TOKEN = await tokenBot();
+    if (!TG_TOKEN) return J({ inviato: false, errore: "Token del bot mancante in app_segreti (tg_token_riepilogo)" }, 500);
     const tg = await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
