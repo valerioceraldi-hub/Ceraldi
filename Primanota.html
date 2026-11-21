@@ -590,7 +590,7 @@ function avvisoCreditoIA(){
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.52.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.53.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -23226,229 +23226,174 @@ function _cfMultiplo(){
     if(ld) ld.innerHTML=_buildFattureLista();
   };
 
+  // ── «Abbina a più fatture» (v10.53.0, 21/11/2026) ──
+  // Stessa grafica del resto dell'app (foglio dal basso, righe chiare), data/numero/importo/stato e «Vedi XML»
+  // SEMPRE visibili, quota = quello che resta da pagare, mai di più. Il salvataggio passa dal motore unico (ricvCollega):
+  // quote vere, stato dalle prove, regola al centesimo, e «Annulla».
+  var _cents = function(x){ return Math.round((+x || 0) * 100); };
+  function _baseF(f){ return f.stato === 'pagata' ? Math.abs(nettoFattura(f)) : residuoFattura(f); }   // quanto questo pagamento può coprire
+  function _giaDa(f){
+    var k = ricMovKey(m.id), st = (f.riconciliazioneStorico || []).concat(f.riconciliazione ? [f.riconciliazione] : []);
+    return st.filter(function(x){ return x && x.movId != null && ricMovKey(x.movId) !== k; })[0] || null;
+  }
+  function _chipStato(f){
+    var c = f.stato === 'pagata' ? ['Pagata', 'var(--green-light)', '#1a7a3a'] : (f.stato === 'parziale' ? ['Pagata in parte', '#FFF3E0', '#b36a00'] : ['Da pagare', 'var(--red-light, #FDECEA)', 'var(--red)']);
+    return '<span style="font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:99px;background:' + c[1] + ';color:' + c[2] + ';white-space:nowrap">' + c[0] + '</span>';
+  }
+  function _datiF(f){ return 'N° ' + esc(f.numero || '—') + ' · del ' + _anData(f.data) + ' · <b>' + fmt(Math.abs(f.importo || 0)) + '</b>'; }
+
   function _buildFattureLista(){
     var restrittoAlFornitore = soloFornitore && fornitoreDefault && !filtro;
     var lista = fatture.filter(function(f){
-      if(f.tipo==='ddt') return false;
-      if(selezionate.find(function(x){return x.fatt.id===f.id;})) return false;
-      if(restrittoAlFornitore) return (f.fornitore||'').trim()===fornitoreDefault;
+      if(f.tipo === 'ddt' || f.tipo === 'nota_credito' || f.stato === 'annullata') return false;
+      if(selezionate.find(function(x){ return x.fatt.id === f.id; })) return false;
+      if(restrittoAlFornitore) return (f.fornitore || '').trim() === fornitoreDefault;
       if(!filtro) return true;
-      var q=filtro.toLowerCase();
-      return (f.fornitore||'').toLowerCase().indexOf(q)>=0
-          || (f.numero||'').toLowerCase().indexOf(q)>=0
-          || (f.data||'').indexOf(q)>=0;
-    }).sort(function(a,b){return (b.data||'').localeCompare(a.data||'');});
-    var titoloLista = restrittoAlFornitore ? (esc(fornitoreDefault).toUpperCase()+' ('+lista.length+')') : ('TUTTE LE FATTURE ('+lista.length+')');
-    var lh='<div style="font-size:11px;color:var(--ink3);font-weight:600;margin-bottom:6px">'+titoloLista+'</div>';
-    if(!lista.length){ lh+='<div style="text-align:center;padding:16px;color:var(--ink3);font-size:13px">Nessuna fattura trovata</div>'; }
-    else {
-      lista.forEach(function(f){
-        var fid=String(f.id).replace(/'/g,'');
-        var statoCol=f.stato==='pagata'?'#1a7a3a':(f.stato==='parziale'?'#b36a00':'var(--red)');
-        var movAltrove = f.stato==='pagata' ? (_bancaMovimenti||[]).find(function(x){ return x.fatturaId===f.id && x.abbinata; }) : null;
-        lh+='<div style="display:flex;justify-content:space-between;align-items:center;padding:8px;border:1px solid var(--sep);border-radius:8px;margin-bottom:6px">';
-        lh+='<div style="flex:1;min-width:0">';
-        lh+='<div style="font-size:12px;font-weight:600">'+esc(f.fornitore||'—')+'</div>';
-        lh+='<div style="font-size:11px;color:var(--ink3)">N°'+esc(f.numero||'—')+' · '+f.data+' · <span style="color:'+statoCol+'">'+f.stato+'</span>'+(movAltrove?' · <span style="color:#b36a00;font-weight:700">🔗 già abbinata al '+esc(movAltrove.data||'')+'</span>':'')+'</div>';
-        lh+='</div>';
-        lh+='<div style="display:flex;align-items:center;gap:8px;flex-shrink:0">';
-        lh+='<div style="font-size:13px;font-weight:700">'+fmt(f.importo||0)+'</div>';
-        lh+='<button onclick="_cfMultiAdd(\''+fid+'\')" style="padding:6px 12px;border:1px solid var(--blue);border-radius:6px;background:var(--blue-light);color:var(--blue);font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">+</button>';
-        lh+='</div></div>';
-      });
-    }
+      var q = filtro.toLowerCase();
+      return (f.fornitore || '').toLowerCase().indexOf(q) >= 0 || (f.numero || '').toLowerCase().indexOf(q) >= 0 || (f.data || '').indexOf(q) >= 0 || _anData(f.data).indexOf(q) >= 0;
+    }).sort(function(a, b){ return (b.data || '').localeCompare(a.data || ''); });
+    var titoloLista = restrittoAlFornitore ? (esc(fornitoreDefault) + ' · ' + lista.length + ' fatture') : ('Tutte le fatture · ' + lista.length);
+    var lh = '<div style="font-size:12px;color:var(--ink3);font-weight:700;margin:2px 2px 8px">' + titoloLista + '</div>';
+    if(!lista.length){ lh += '<div style="text-align:center;padding:18px;color:var(--ink3);font-size:13px">Nessuna fattura trovata. Prova a cercare per fornitore, numero o data.</div>'; return lh; }
+    lista.forEach(function(f){
+      var fid = String(f.id).replace(/'/g, ''), base = _baseF(f), altro = _giaDa(f);
+      var bloccata = (f.stato === 'pagata' && altro) || base <= 0.009;
+      var nota, notaCol = 'var(--ink3)';
+      if(f.stato === 'pagata' && altro){ nota = 'Già pagata col movimento del ' + _anData(altro.data) + ' (' + fmt(Math.abs(altro.importo || 0)) + '). Per usarla qui, scollegala prima.'; notaCol = '#b36a00'; }
+      else if(base <= 0.009){ nota = 'Già coperta dai movimenti collegati: non resta nulla da pagare.'; }
+      else if(f.stato === 'pagata'){ nota = 'Segnata pagata senza movimento di banca (' + esc(f.pagamento || 'senza metodo') + '): collegandola, questo movimento diventa la prova del pagamento.'; notaCol = '#b36a00'; }
+      else { nota = 'Resta da pagare ' + fmt(base); }
+      lh += '<div style="border:1px solid var(--sep);border-radius:12px;padding:10px 12px;margin-bottom:8px;background:var(--surface)' + (bloccata ? ';opacity:.7' : '') + '">'
+        + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div style="font-size:13.5px;font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis">' + esc(f.fornitore || '—') + '</div>' + _chipStato(f) + '</div>'
+        + '<div style="font-size:12.5px;color:var(--ink2);margin-top:3px">' + _datiF(f) + '</div>'
+        + '<div style="font-size:12px;color:' + notaCol + ';margin-top:3px">' + nota + '</div>'
+        + '<div style="display:flex;gap:8px;align-items:center;margin-top:8px">'
+        + (bloccata ? '' : '<button onclick="_cfMultiAdd(\'' + fid + '\')" style="flex:1;padding:9px;border:none;border-radius:10px;background:var(--blue);color:#fff;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer">+ Aggiungi</button>')
+        + (_haXml(f) ? '<div class="xml-inline" style="flex-shrink:0">' + _btnXml(f, 'mini') + '</div>' : '')
+        + '</div></div>';
+    });
     return lh;
   }
 
-  function _updateDynamic(){
-    var totSel = selezionate.reduce(function(s,x){return s+(x.importoPagato||0);},0);
-    var rimanente = imp - totSel;
-    var movimentoCoperto = Math.abs(totSel - imp) < 0.01;
-    // FIX (23/08, segnalato da Valerio con screenshot): "Pareggio!" verificava
-    // solo che la somma assegnata coprisse il MOVIMENTO — non controllava se
-    // ogni singola fattura coinvolta fosse davvero coperta per intero. Un
-    // movimento da 977,38€ assegnato tutto a UNA fattura da 1516,34€
-    // mostrava "✓ Pareggio! €0,00" (rassicurante, verde) quando in realtà
-    // quella fattura restava scoperta di 538,96€ — un pareggio del
-    // movimento non è un pareggio della fattura, sono due cose diverse.
-    var fattureParziali = selezionate.filter(function(x){
-      return (x.importoPagato||0) < (x.fatt.importo||0)-0.009;
-    });
-    var pareggio = movimentoCoperto && fattureParziali.length===0;
-    var saldoColor = pareggio ? '#1a7a3a' : (rimanente<0 ? 'var(--red)' : (fattureParziali.length ? '#b36a00' : '#b36a00'));
-    var saldoLabel;
-    if(pareggio){
-      saldoLabel = '\u2713 Pareggio!';
-    } else if(rimanente<0){
-      saldoLabel = 'Eccesso '+fmt(Math.abs(rimanente));
-    } else if(!movimentoCoperto){
-      saldoLabel = 'Rimanente '+fmt(rimanente);
-    } else {
-      // Movimento interamente assegnato, ma una o più fatture restano scoperte
-      var residuoTot = fattureParziali.reduce(function(s,x){ return s+((x.fatt.importo||0)-(x.importoPagato||0)); },0);
-      saldoLabel = '\u26a0\ufe0f Movimento assegnato, ma '+fattureParziali.length+' fattur'+(fattureParziali.length>1?'e restano':'a resta')+' PARZIALE — manca '+fmt(residuoTot);
-    }
+  function _stato(){
+    var tot = _cents(imp), sel = selezionate.reduce(function(s, x){ return s + _cents(x.importoPagato); }, 0), resto = tot - sel;
+    var oltre = selezionate.filter(function(x){ return _cents(x.importoPagato) > _cents(_baseF(x.fatt)); });
+    return { tot: tot, sel: sel, resto: resto, oltre: oltre };
+  }
 
+  function _updateDynamic(){
+    var S = _stato(), rimanente = S.resto / 100;
+    var tuttoSuFatture = S.resto === 0;
+    var parziali = selezionate.filter(function(x){ return _cents(x.importoPagato) < _cents(_baseF(x.fatt)); });
+    var col, titolo, riga;
+    if(S.resto < 0){ col = 'var(--red)'; titolo = 'Troppo: ' + fmt(Math.abs(rimanente)) + ' in più del movimento'; riga = 'Riduci una quota: il movimento non può coprire più di quanto vale.'; }
+    else if(S.oltre.length){ col = 'var(--red)'; titolo = 'Una quota supera quello che resta da pagare'; riga = 'Riduci la quota della fattura in rosso.'; }
+    else if(tuttoSuFatture && !parziali.length){ col = 'var(--green)'; titolo = '✓ Torna al centesimo'; riga = 'Tutto il movimento è assegnato e le fatture sono saldate.'; }
+    else if(tuttoSuFatture){ col = '#b36a00'; titolo = 'Movimento assegnato'; riga = parziali.length + (parziali.length > 1 ? ' fatture restano' : ' fattura resta') + ' pagata in parte: mancherà il resto.'; }
+    else { col = '#b36a00'; titolo = 'Restano ' + fmt(rimanente) + ' del movimento'; riga = 'Aggiungi altre fatture, oppure conferma: la parte che resta senza fattura si potrà collegare dopo.'; }
     var saldoBox = document.getElementById('_cfMultiSaldo');
     if(saldoBox){
-      saldoBox.style.background = pareggio ? 'var(--green)' : 'var(--surface)';
-      saldoBox.style.borderColor = pareggio ? 'var(--green)' : saldoColor;
-      saldoBox.innerHTML = '<div style="font-size:11px;font-weight:700;color:'+(pareggio?'#fff':saldoColor)+';text-transform:uppercase;letter-spacing:.5px">'+saldoLabel+'</div>'
-        +'<div style="font-size:20px;font-weight:800;color:'+(pareggio?'#fff':saldoColor)+'">'+fmt(Math.abs(pareggio?0:(movimentoCoperto?0:rimanente)))+'</div>';
+      saldoBox.style.borderColor = col; saldoBox.style.background = 'var(--surface)';
+      saldoBox.innerHTML = '<div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:800;color:' + col + '">' + titolo + '</div><div style="font-size:12px;color:var(--ink3);margin-top:2px">' + riga + '</div></div>'
+        + '<div style="text-align:right;flex-shrink:0;margin-left:10px"><div style="font-size:11px;color:var(--ink3)">Assegnati</div><div style="font-size:15px;font-weight:800">' + fmt(S.sel / 100) + '</div><div style="font-size:11px;color:var(--ink3)">su ' + fmt(S.tot / 100) + '</div></div>';
     }
-
     var selDiv = document.getElementById('_cfMultiSel');
     if(selDiv){
-      if(!selezionate.length){ selDiv.innerHTML=''; }
+      if(!selezionate.length){ selDiv.innerHTML = ''; }
       else {
-        var sh='<div style="background:var(--green-light);border-radius:8px;padding:10px;margin-bottom:10px">';
-        sh+='<div style="font-size:11px;font-weight:700;color:#1a7a3a;margin-bottom:6px">\u2713 Selezionate ('+selezionate.length+') \u2014 tot. '+fmt(totSel)+'</div>';
-        selezionate.forEach(function(x,si){
-          sh+='<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-top:1px solid rgba(0,0,0,.08)">';
-          sh+='<div style="font-size:11px;flex:1;min-width:0"><b>'+esc(x.fatt.fornitore||'')+'</b> N\xb0'+esc(x.fatt.numero||'')+'<br><span style="color:var(--ink3)">'+x.fatt.data+' \xb7 tot. '+fmt(x.fatt.importo||0)+'</span></div>';
-          sh+='<div style="display:flex;align-items:center;gap:6px;flex-shrink:0">';
-          sh+='<input type="number" step="0.01" value="'+x.importoPagato.toFixed(2)+'" onchange="_cfMultiSetImp('+si+',this.value)" style="width:75px;padding:5px;border:1px solid var(--sep);border-radius:4px;font-size:12px;text-align:right">';
-          sh+='<button onclick="_cfMultiRemove('+si+')" style="padding:4px 8px;border:1px solid var(--red);border-radius:4px;background:transparent;color:var(--red);font-size:11px;cursor:pointer">\u2715</button>';
-          sh+='</div></div>';
+        var sh = '<div style="font-size:12px;color:var(--ink3);font-weight:700;margin:2px 2px 8px">Scelte · ' + selezionate.length + '</div>';
+        selezionate.forEach(function(x, si){
+          var base = _baseF(x.fatt), troppo = _cents(x.importoPagato) > _cents(base), dopo = Math.max(0, _cents(base) - _cents(x.importoPagato)) / 100;
+          sh += '<div style="border:1.5px solid ' + (troppo ? 'var(--red)' : 'var(--green)') + ';border-radius:12px;padding:10px 12px;margin-bottom:8px;background:var(--surface)">'
+            + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div style="font-size:13.5px;font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis">' + esc(x.fatt.fornitore || '—') + '</div>' + _chipStato(x.fatt) + '</div>'
+            + '<div style="font-size:12.5px;color:var(--ink2);margin-top:3px">' + _datiF(x.fatt) + '</div>'
+            + '<div style="font-size:12px;color:' + (troppo ? 'var(--red)' : 'var(--ink3)') + ';margin-top:3px">' + (troppo ? 'Massimo ' + fmt(base) + ' (quello che resta da pagare)' : 'Da pagare prima di questo movimento: ' + fmt(base) + (dopo > 0.009 ? ' · resterà ' + fmt(dopo) : ' · sarà saldata')) + '</div>'
+            + '<div style="display:flex;align-items:center;gap:8px;margin-top:8px">'
+            + '<label style="font-size:12px;color:var(--ink3);flex-shrink:0">Quota</label>'
+            + '<input type="number" inputmode="decimal" step="0.01" value="' + (+x.importoPagato).toFixed(2) + '" onchange="_cfMultiSetImp(' + si + ',this.value)" style="flex:1;min-width:0;padding:8px 10px;border:1.5px solid ' + (troppo ? 'var(--red)' : 'var(--sep)') + ';border-radius:10px;font-size:14px;font-weight:700;text-align:right;font-family:inherit;background:var(--bg)">'
+            + (_haXml(x.fatt) ? '<div class="xml-inline" style="flex-shrink:0">' + _btnXml(x.fatt, 'mini') + '</div>' : '')
+            + '<button onclick="_cfMultiRemove(' + si + ')" style="flex-shrink:0;width:34px;height:34px;border:1px solid var(--sep);border-radius:10px;background:var(--surface2);color:var(--red);font-size:14px;cursor:pointer">✕</button>'
+            + '</div></div>';
         });
-        sh+='</div>';
-        selDiv.innerHTML=sh;
+        selDiv.innerHTML = sh;
       }
     }
-
     var btnConf = document.getElementById('_cfMultiBtn');
     if(btnConf){
-      if(selezionate.length){
-        btnConf.style.display='block';
-        btnConf.style.background = pareggio ? 'var(--green)' : 'var(--orange)';
-        btnConf.textContent = pareggio ? '\u2713 Conferma abbinamento' : (movimentoCoperto ? '\u26a0\ufe0f Conferma (lascerà fatture parziali)' : '\u26a0\ufe0f Conferma (importo non coperto)');
-      } else { btnConf.style.display='none'; }
+      var blocca = S.resto < 0 || S.oltre.length > 0;
+      btnConf.style.display = selezionate.length ? 'block' : 'none';
+      btnConf.disabled = blocca;
+      btnConf.style.background = blocca ? 'var(--sep)' : (tuttoSuFatture && !parziali.length ? 'var(--green)' : 'var(--orange)');
+      btnConf.style.cursor = blocca ? 'not-allowed' : 'pointer';
+      btnConf.textContent = blocca ? 'Correggi le quote per confermare' : (tuttoSuFatture && !parziali.length ? '✓ Conferma: torna al centesimo' : (tuttoSuFatture ? '⚠️ Conferma (alcune fatture restano in parte da pagare)' : '⚠️ Conferma (restano ' + fmt(rimanente) + ' senza fattura)'));
     }
-
     var listaDiv = document.getElementById('_cfMultiLista');
     if(listaDiv) listaDiv.innerHTML = _buildFattureLista();
   }
 
-  // Prima apertura: costruisce struttura fissa
   function _buildOverlay(){
-    var hh='<div style="background:#fff;border-radius:16px 16px 0 0;padding:16px;width:100%;max-height:88vh;overflow-y:auto;font-family:inherit">';
-    hh+='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:3px">';
-    hh+='<div style="font-size:15px;font-weight:700">Abbina a pi\xf9 fatture</div>';
-    hh+='<button onclick="document.getElementById(\'_cfMultiOv\').remove()" style="background:var(--surface2);border:none;border-radius:99px;width:30px;height:30px;font-size:17px;cursor:pointer;flex-shrink:0;margin-left:8px">&#215;</button>';
-    hh+='</div>';
-    hh+='<div style="font-size:12px;color:var(--ink3);margin-bottom:10px">Movimento banca: <b>'+fmt(imp)+'</b> del '+m.data+'</div>';
-    // Box saldo — aggiornato dinamicamente
-    hh+='<div id="_cfMultiSaldo" style="border:2px solid #b36a00;border-radius:10px;padding:10px 14px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center">';
-    hh+='<div style="font-size:11px;font-weight:700;color:#b36a00;text-transform:uppercase">Rimanente '+fmt(imp)+'</div>';
-    hh+='<div style="font-size:20px;font-weight:800;color:#b36a00">'+fmt(imp)+'</div>';
-    hh+='</div>';
-    // Contenitore selezionate
-    hh+='<div id="_cfMultiSel"></div>';
-    // Bottone conferma
-    hh+='<button id="_cfMultiBtn" onclick="_cfMultiConferma()" style="display:none;width:100%;padding:11px;border:none;border-radius:8px;background:var(--orange);color:#fff;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;margin-bottom:10px"></button>';
-    // FIX 28/09: pulsante per allargare/restringere la lista al fornitore
-    // indovinato — presente solo quando ne è stato individuato uno.
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:99999;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px)';
+    var hh = '<div style="background:var(--bg);border-radius:20px 20px 0 0;width:100%;max-width:520px;max-height:90vh;display:flex;flex-direction:column;animation:slideUp .3s cubic-bezier(.32,.72,0,1)">';
+    hh += '<div style="padding:16px 20px 10px;border-bottom:1px solid var(--sep);display:flex;align-items:flex-start;justify-content:space-between;flex-shrink:0">'
+      + '<div style="min-width:0"><div style="font-size:17px;font-weight:700">🔗 Collega a più fatture</div>'
+      + '<div style="font-size:12.5px;color:var(--ink2);margin-top:3px">Movimento del <b>' + _anData(m.data) + '</b> · <b>' + fmt(imp) + '</b></div>'
+      + '<div style="font-size:11.5px;color:var(--ink3);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(String(m.descrizione || '').slice(0, 90)) + '</div></div>'
+      + '<button onclick="document.getElementById(\'_cfMultiOv\').remove()" style="background:var(--surface2);border:none;border-radius:99px;width:32px;height:32px;font-size:18px;cursor:pointer;flex-shrink:0;margin-left:8px">&#215;</button></div>';
+    hh += '<div style="overflow-y:auto;padding:12px 16px 16px;flex:1">';
+    hh += '<div style="font-size:12.5px;color:var(--ink3);margin-bottom:10px">Scegli le fatture che questo pagamento copre. Ognuna prende al massimo quello che le resta da pagare, e il totale deve tornare al centesimo.</div>';
+    hh += '<div id="_cfMultiSaldo" style="border:2px solid #b36a00;border-radius:12px;padding:10px 14px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center"></div>';
+    hh += '<div id="_cfMultiSel"></div>';
+    hh += '<button id="_cfMultiBtn" onclick="_cfMultiConferma()" style="display:none;width:100%;padding:13px;border:none;border-radius:12px;background:var(--orange);color:#fff;font-family:inherit;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:14px">Conferma</button>';
     if(fornitoreDefault){
-      hh+='<div class="cf-guess cf-guess-blu">📍 '+esc(_guessMulti.motivo)+'</div>';
-      hh+='<button id="_cfMultiToggleForn" class="cf-toggle-forn" onclick="_cfMultiToggleFornitore()">'+(soloFornitore?('📍 Solo '+esc(fornitoreDefault)+' — mostra tutti i fornitori'):('👁 Tutti i fornitori — torna a solo '+esc(fornitoreDefault)))+'</button>';
+      hh += '<div class="cf-guess cf-guess-blu">📍 ' + esc(_guessMulti.motivo) + '</div>';
+      hh += '<button id="_cfMultiToggleForn" class="cf-toggle-forn" onclick="_cfMultiToggleFornitore()">' + (soloFornitore ? ('📍 Solo ' + esc(fornitoreDefault) + ' — mostra tutti i fornitori') : ('👁 Tutti i fornitori — torna a solo ' + esc(fornitoreDefault))) + '</button>';
     }
-    // Campo ricerca — NON ricostruito ad ogni update
-    hh+='<input id="_cfMultiSearch" type="text" placeholder="Cerca fornitore, numero, data..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid var(--sep);border-radius:8px;font-family:inherit;font-size:13px;margin-bottom:10px;outline:none">';
-    // Lista fatture — aggiornata dinamicamente
-    hh+='<div id="_cfMultiLista">'+_buildFattureLista()+'</div>';
-    hh+='<button onclick="document.getElementById(\'_cfMultiOv\').remove()" style="width:100%;padding:9px;border:1px solid var(--sep);border-radius:8px;background:var(--surface);color:var(--ink3);font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;margin-top:6px">Annulla</button>';
-    hh+='</div>';
-    overlay.innerHTML=hh;
-    // Evento ricerca: aggiorna solo lista, NON ricostruisce l'input
-    var inp=document.getElementById('_cfMultiSearch');
-    if(inp) inp.addEventListener('input', function(){ filtro=this.value; var ld=document.getElementById('_cfMultiLista'); if(ld) ld.innerHTML=_buildFattureLista(); });
+    hh += '<input id="_cfMultiSearch" type="text" placeholder="🔍 Cerca fornitore, numero o data…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" style="width:100%;box-sizing:border-box;padding:10px 14px;border:1.5px solid var(--sep);border-radius:99px;font-size:14px;font-family:inherit;margin:8px 0 10px;background:var(--surface)">';
+    hh += '<div id="_cfMultiLista"></div>';
+    hh += '</div></div>';
+    overlay.innerHTML = hh;
+    var inp = document.getElementById('_cfMultiSearch');
+    if(inp) inp.addEventListener('input', function(){ filtro = this.value; var ld = document.getElementById('_cfMultiLista'); if(ld) ld.innerHTML = _buildFattureLista(); });
+    overlay.onclick = function(e){ if(e.target === overlay) overlay.remove(); };
+    _updateDynamic();
   }
 
   window._cfMultiAdd = function(fid){
-    var f=fatture.find(function(x){return String(x.id)===String(fid);});
+    var f = fatture.find(function(x){ return String(x.id) === String(fid); });
     if(!f) return;
-    // RICHIESTA DI VALERIO (09/08): un bonifico spesso è un acconto forfettario
-    // su più fatture, non una somma esatta calcolata a mano — quando l'importo
-    // del bonifico sta per esaurirsi, la fattura appena aggiunta prende
-    // automaticamente solo la parte residua (pagamento parziale) invece del
-    // suo intero importo. Così un bonifico da 995,95€ su 6 fatture si
-    // distribuisce da solo: le prime coperte per intero, l'ultima raggiunta
-    // dai soldi resta "parziale" — pronta per essere saldata da un bonifico
-    // futuro con la stessa identica logica (fattura già parzialmente pagata,
-    // basta riaprirla e completare il resto).
-    var totBonifico = Math.abs(m.importo||0);
-    var totGiaSel = selezionate.reduce(function(s,x){return s+(x.importoPagato||0);},0);
-    var rimasto = Math.round((totBonifico - totGiaSel)*100)/100;
-    if(rimasto <= 0){
-      toast('⚠️ Il bonifico è già interamente distribuito — riduci o rimuovi un\'altra fattura prima di aggiungerne una nuova');
-      return;
-    }
-    var daAssegnare = Math.min(f.importo||0, rimasto);
-    selezionate.push({fatt:f, importoPagato: daAssegnare});
+    // Un bonifico spesso è un acconto su più fatture: la fattura appena aggiunta prende al massimo
+    // QUELLO CHE LE RESTA DA PAGARE (non l'importo intero) e al massimo quello che resta del movimento.
+    var rimasto = _stato().resto / 100;
+    if(rimasto <= 0.004){ toast('⚠️ Il movimento è già tutto assegnato: riduci o togli una fattura prima di aggiungerne un\'altra'); return; }
+    var base = _baseF(f);
+    if(base <= 0.009){ toast('⚠️ Questa fattura non ha nulla da pagare'); return; }
+    selezionate.push({ fatt: f, importoPagato: Math.round(Math.min(base, rimasto) * 100) / 100 });
     _updateDynamic();
   };
-  window._cfMultiRemove=function(si){ selezionate.splice(si,1); _updateDynamic(); };
-  window._cfMultiSetImp=function(si,v){ selezionate[si].importoPagato=parseFloat(v)||0; _updateDynamic(); };
-  window._cfMultiConferma=async function(){
+  window._cfMultiRemove = function(si){ selezionate.splice(si, 1); _updateDynamic(); };
+  window._cfMultiSetImp = function(si, v){
+    var q = Math.round((parseFloat(String(v).replace(',', '.')) || 0) * 100) / 100;
+    selezionate[si].importoPagato = Math.max(0, q);   // se supera il residuo resta visibile in rosso e il tasto si blocca
+    _updateDynamic();
+  };
+  window._cfMultiConferma = async function(){
     if(!selezionate.length) return;
-    if(!_legacyQuadra(m, selezionate.map(function(x){ return { f: x.fatt, quota: x.importoPagato }; }))) return;
+    var S = _stato();
+    if(S.resto < 0 || S.oltre.length){ toast('❌ Correggi le quote: il totale deve tornare al centesimo e nessuna fattura può prendere più di quanto le resta da pagare', { forza: true }); return; }
     var btnConf = document.getElementById('_cfMultiBtn');
-    if(btnConf){ btnConf.textContent='Salvataggio in corso…'; btnConf.disabled=true; }
-    var errori = [];
-    for(var si=0; si<selezionate.length; si++){
-      var x = selezionate[si];
-      var f=x.fatt, impPag=x.importoPagato;
-      // FIX 06/09 (segnalato da Valerio: fattura VANDEMOORTELE 8528021612,
-      // "pagato" 117,42€ invece dei 58,71€ reali — esattamente il doppio). Se
-      // questa fattura ha GIÀ registrato questo identico movimento (stesso
-      // movId) come ultima riconciliazione, l'importo è già stato sommato
-      // una volta: sommarlo di nuovo qui lo raddoppia. Capita se questa
-      // conferma viene richiamata due volte sullo stesso abbinamento (doppio
-      // tocco, un nuovo tentativo dopo un errore di rete che in realtà era
-      // già andato a buon fine).
-      var giaApplicatoQui = f.riconciliazione && f.riconciliazione.movId === m.id;
-      var isParz = Math.abs((f.importo||0)-impPag)>0.009;
-      _impostaDatiRiconciliazione(f, m, isParz, impPag);
-      f.riconciliata = true;
-      // FIX v2 (stesso giorno, trovato testando davvero il caso A2000
-      // Costruzioni): quando impPag copre esattamente il residuo di una
-      // fattura GIÀ parziale, isParz risultava false (confrontato con
-      // l'importo pieno, non col residuo) e finiva nel ramo "paga da zero",
-      // perdendo il parzPagato precedente. Ora si somma sempre (a meno che
-      // sia lo stesso movimento già applicato) e lo stato si decide dal
-      // totale, niente più casi limite da inseguire uno per uno.
-      if(!giaApplicatoQui) f.parzPagato = Math.round(((f.parzPagato||0) + _pnQuotaNuova(f, impPag, m.id)) * 100) / 100;
-      f.stato = (f.parzPagato >= (f.importo||0) - 0.009) ? 'pagata' : 'parziale';
-      if(f.stato==='pagata') f.dataPagamento=m.data;
-      _impostaPagamentoDaRiconciliazione(f, 'bonifico');
-      // Salvataggi uno alla volta e ATTESI — prima partivano tutti insieme
-      // senza aspettare né controllare l'esito, e con più fatture insieme
-      // capitava che una o più aggiornassero il collegamento ma non lo stato
-      // (rimanendo "da pagare" nonostante il riquadro di riconciliazione).
-      try{
-        if(typeof dbUpdate==='function') await dbUpdate(f);
-      }catch(e){
-        errori.push((f.numero||f.fornitore||'fattura')+': '+(e.message||'').slice(0,50));
-      }
-    }
-    m.abbinata=true;
-    m.fatturaId=selezionate[0].fatt.id;
-    m.fatturaLabel=selezionate.map(function(x){return (x.fatt.fornitore||'')+' N\xb0'+(x.fatt.numero||'');}).join(', ');
-    try{ await salvaMovimentoBanca(m); }catch(e){ errori.push('movimento: '+(e.message||'').slice(0,50)); }
+    if(btnConf){ btnConf.textContent = 'Salvataggio in corso…'; btnConf.disabled = true; }
+    // un solo modo di salvare (come «Collega» e i gruppi): quote vere, stato dalle prove, regola al centesimo, Annulla
+    var docs = selezionate.map(function(x){ return { f: x.fatt, quota: Math.round(x.importoPagato * 100) / 100 }; }).filter(function(d){ return d.quota > 0.009; });
+    var ok = false;
+    try{ ok = await ricvCollega(ricMovKey(m.id), docs, {}); }catch(e){ toast('❌ Non salvato: ' + (e.message || e), { forza: true }); }
+    if(!ok){ _updateDynamic(); return; }   // nessun dato cambiato: la schermata resta com'era
     overlay.remove();
-    if(errori.length){
-      alert('⚠️ Attenzione: '+errori.length+' salvataggio/i non riuscito/i:\n\n'+errori.join('\n')+'\n\nRiprova ad abbinare quelle rimaste.');
-    } else {
-      toast('\u2713 Abbinato a '+selezionate.length+' fatture');
-    }
-    // Preserva scroll PAGINA (su iOS Safari il body scrolla, non il div)
     var _sy = window.pageYOffset || document.documentElement.scrollTop || 0;
     renderRiconciliazione();
     setTimeout(function(){ window.scrollTo(0, _sy); }, 30);
   };
 
   _buildOverlay();
-  if(selezionate.length) _updateDynamic();
 }
 // FIX 02/09 (segnalato da Valerio: fatture con "pagamento: bonifico" ma
 // riconciliate con SDD/carta/PayPal — dati che si contraddicono, "non fanno
@@ -33783,6 +33728,7 @@ html[data-theme="dark"] .sf-hint{color:var(--orange)}
 .fonte-via{background:var(--surface3);color:var(--ink3);margin-left:4px}
 .btn-xml{border:1px solid var(--sep);background:var(--surface);color:var(--ink2);border-radius:9px;padding:6px 10px;font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap}
 .btn-xml:active{background:var(--surface2)}
+.xml-inline .btn-xml-mini{margin:0;display:inline-block;padding:9px 10px;font-size:12px}
 .btn-xml-mini{padding:4px 9px;font-size:11.5px;margin:6px 0 0 auto;display:block}
 .an-row-wrap{display:flex;align-items:center;gap:6px}
 .an-row-wrap .an-row{flex:1;min-width:0}
