@@ -590,7 +590,7 @@ function avvisoCreditoIA(){
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.47.1</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.48.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -31447,6 +31447,13 @@ function _authRender(){
          '<span>Ora serve il via libera di un amministratore, che riceve la tua richiesta dentro l\'app e sceglie cosa puoi vedere. Ti conviene avvisarlo.</span></div>' +
          '<button class="ag-btn ag-pri" onclick="_authEntra()">Ho ricevuto il via libera, entra</button>' +
          '<button class="ag-link" onclick="_authEsci(true)">Esci</button>';
+  } else if(S.vista === 'invito'){
+    var inv = S.inv || {};
+    h += '<div class="ag-nota">' + (inv.nome ? 'Ciao ' + esc(String(inv.nome).split(' ')[0]) + ', sei' : 'Sei') + ' stato invitato a Fatture con accesso <b>' + (inv.livello === 'lettura' ? 'in sola lettura' : 'completo') + '</b>. Scrivi l\'email a cui hai ricevuto l\'invito: ti mando un codice per confermarla.</div>' +
+         '<label class="ag-lbl" for="agEmail">Email</label>' +
+         '<input id="agEmail" class="ag-in" type="email" autocomplete="email" inputmode="email" value="' + esc(S.email) + '" oninput="_authStato.email=this.value" placeholder="nome@esempio.it">' +
+         '<button class="ag-btn ag-pri" onclick="_authInvitoCodice()"' + (S.attesa ? ' disabled' : '') + '>' + (S.attesa ? 'Invio…' : 'Ricevi il codice') + '</button>' +
+         '<button class="ag-link" onclick="_authStato.vista=\'login\';_authStato.msg=\'\';_authRender()">Ho già un account: accedi</button>';
   } else if(S.vista === 'richiesta'){
     // FIX 23/09 (audit punto 3 — segnalato da Valerio: un utente riusciva a
     // completare la registrazione senza tutti i dati/consensi necessari).
@@ -31473,7 +31480,7 @@ function _authRender(){
     var em = (_authSess && _authSess.user && _authSess.user.email) || '';
     h += '<div class="ag-neg"><b>Questo account non ha accesso a Fatture.</b>' +
          '<span>' + esc(em) + '</span>' +
-         '<span>Fatture è riservata agli amministratori. Se pensi sia un errore, chiedi a Valerio di controllare il tuo profilo in Presenze.</span></div>' +
+         '<span>' + esc(S.msgInvito || 'Fatture è su invito. Chiedi a un amministratore di invitarti: riceverai un link da aprire.') + '</span></div>' +
          '<button class="ag-btn ag-sec" onclick="_authEsci(true)">Esci e usa un altro account</button>';
   } else {
     h += '<button class="ag-btn ag-google" onclick="_authGoogle()"' + (g === false ? ' disabled' : '') + '>' +
@@ -31500,7 +31507,7 @@ function _authRender(){
            '<button class="ag-btn ag-pri" onclick="_authVerificaCodice()"' + (S.attesa ? ' disabled' : '') + '>' + (S.attesa ? 'Verifica…' : 'Verifica ed entra') + '</button>' +
            '<button class="ag-link" onclick="_authStato.codiceInviato=false;_authRender()">Non è arrivato? Invia di nuovo</button>';
     }
-    if(S.vista === 'login') h += '<button class="ag-link" style="margin-top:2px" onclick="_authStato.vista=\'richiesta\';_authStato.msg=\'\';_authRender()">Non hai ancora l\'accesso? Richiedilo</button>';
+    if(S.vista === 'login') h += '<div class="ag-nota" style="margin-top:6px">Fatture è su invito: se non hai ancora l\'accesso, chiedi a un amministratore di invitarti.</div>';
   }
   h += '<div class="ag-msg" role="status" aria-live="polite">' + esc(S.msg || '') + '</div></div>';
   el.innerHTML = h;
@@ -31558,6 +31565,7 @@ var _authAppAvviata = false;
 async function _authEntra(){
   _authMostra('caricamento');
   try{
+    await _invitoAccetta();
     var acc = await _authControllaAccesso();
     if(!acc.ok){ _authMostra(acc.stato === 'in_attesa' ? 'attesa' : 'negato'); return; }
   }catch(e){
@@ -31781,28 +31789,151 @@ function _authRigaImpostazioni(){
   return h + '</div>';
 }
 
-/* ── Link di invito (v10.32.0) ─────────────────────────────────────────
-   L'admin manda un link: chi lo apre trova già pronto il modulo
-   «Richiedi l'accesso» (con il nome scritto, se l'hai indicato).
-   Il link non dà nessun permesso da solo: la persona conferma la sua
-   email con un codice e resta in attesa finché non la abiliti tu da
-   Utenti e accessi. Così il link può girare su WhatsApp senza rischi. */
+/* ── Inviti su link (v10.48.0) ─────────────────────────────────────────
+   Fatture è su invito. L'admin crea un invito (email, livello completo o
+   sola lettura, scadenza): la persona apre il link, scrive la stessa email,
+   conferma col codice e entra solo in Fatture. Il token vive nel database
+   (ceraldi_inviti): vale una volta, per quell'email, e si può annullare. */
+var _INV_KEY = 'fatture_invito_tok';
 function _invitoDaLink(){
   try{
-    var q = new URLSearchParams(location.search); if(q.get('richiedi') !== '1') return false;
-    var n = (q.get('nome') || '').trim().slice(0, 80); if(n && !_authStato.nome) _authStato.nome = n;
+    var q = new URLSearchParams(location.search), t = String(q.get('invito') || '').replace(/[^a-fA-F0-9]/g, '').slice(0, 80);
+    if(!t) return false;
+    localStorage.setItem(_INV_KEY, t);
     history.replaceState(null, '', location.pathname);
     return true;
   }catch(e){ return false; }
 }
-function linkInvito(nome){ return location.origin + location.pathname + '?richiedi=1' + (nome ? '&nome=' + encodeURIComponent(nome) : ''); }
-async function invitaPersona(){
-  var nome = await Promise.resolve(window.prompt('Nome e cognome della persona da invitare (facoltativo: lo troverà già scritto)', ''));
-  if(nome === null) return; nome = String(nome).trim();
-  var url = linkInvito(nome), testo = 'Ciao' + (nome ? ' ' + nome.split(' ')[0] : '') + ', per usare Ceraldi Fatture di Caffetteria Ceraldi apri questo link, compila i tuoi dati e tocca «Richiedi l\'accesso». Ti abilito io appena arriva la richiesta.';
+function linkInvito(tok){ return location.origin + location.pathname + '?invito=' + encodeURIComponent(tok); }
+async function _invitoCarica(){
+  var t = ''; try{ t = localStorage.getItem(_INV_KEY) || ''; }catch(e){}
+  if(!t) return null;
+  try{
+    var r = await fetch(SB_URL + '/rest/v1/rpc/ceraldi_invito_info', { method: 'POST', headers: { apikey: SB_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ p_token: t }) });
+    if(!r.ok) return null;
+    var j = await r.json(); _authStato.inv = j && j.valido ? j : null;
+    if(!_authStato.inv){ try{ localStorage.removeItem(_INV_KEY); }catch(e){} }
+    return _authStato.inv;
+  }catch(e){ return null; }
+}
+async function _invitoAccetta(){
+  var t = ''; try{ t = localStorage.getItem(_INV_KEY) || ''; }catch(e){}
+  if(!t) return null;
+  try{
+    var r = await fetch(SB_URL + '/rest/v1/rpc/ceraldi_invito_accetta', { method: 'POST', headers: Object.assign({}, SB_H), body: JSON.stringify({ p_token: t }) });
+    if(!r.ok) return null; // rete o altro: riprova al prossimo ingresso
+    var j = await r.json();
+    try{ localStorage.removeItem(_INV_KEY); }catch(e){}
+    _authStato.msgInvito = (j && j.ok) ? '' : ('Invito non usato: ' + ((j && j.motivo) || 'errore') + '. Chiedi un nuovo invito.');
+    return j;
+  }catch(e){ return null; }
+}
+async function _authInvitoCodice(){
+  var em = _authEmailValida(); if(!em) return;
+  _authStato.attesa = true; _authStato.msg = ''; _authRender();
+  try{
+    var inv = _authStato.inv || {};
+    await _authPost('otp?redirect_to=' + encodeURIComponent(_authRedirect()), { email: em, create_user: true, data: { nome: inv.nome || '', origine: 'invito_fatture' } });
+    _authStato.codiceInviato = true; _authStato.attesa = false; _authStato.modo = 'codice'; _authStato.vista = 'login';
+    _authStato.msg = 'Ti ho mandato un codice a ' + em + ' per confermare l\'indirizzo.';
+    _authRender();
+  }catch(e){ _authStato.attesa = false; _authStato.msg = _authErrore(e); _authRender(); }
+}
+function _invData(t){ if(!t) return ''; var d = new Date(t); return ('0' + d.getDate()).slice(-2) + '/' + ('0' + (d.getMonth() + 1)).slice(-2) + '/' + d.getFullYear(); }
+function _invOra(t){ var d = new Date(t); return _invData(t) + ' ' + ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2); }
+async function _invElenco(){
+  var r = await fetch(SB_URL + '/rest/v1/ceraldi_inviti?select=id,token,livello,email,nome,creato_il,scadenza,usato_il,annullato_il&order=creato_il.desc&limit=30', { headers: Object.assign({}, SB_H) });
+  if(!r.ok) throw new Error('HTTP ' + r.status);
+  _accStato.inviti = await r.json();
+}
+async function _invCondividi(tok, nome, liv, scad){
+  var url = linkInvito(tok), testo = 'Ciao' + (nome ? ' ' + String(nome).split(' ')[0] : '') + ', ti ho invitato a Ceraldi Fatture (accesso ' + (liv === 'lettura' ? 'in sola lettura' : 'completo') + '). Apri il link, scrivi questa email e inserisci il codice che ricevi. Vale fino al ' + _invData(scad) + '.';
   if(navigator.share){ try{ await navigator.share({ title: 'Invito a Ceraldi Fatture', text: testo, url: url }); return; }catch(e){ if(e && e.name === 'AbortError') return; } }
   try{ await navigator.clipboard.writeText(testo + '\n' + url); toast('Link di invito copiato: incollalo su WhatsApp o in un SMS'); }
   catch(e){ window.prompt('Copia il link di invito', url); }
+}
+async function _accInvitaCrea(){
+  var f = _accStato.inv || (_accStato.inv = { nome: '', email: '', livello: 'completo' });
+  var em = String(f.email || '').trim().toLowerCase();
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ _accStato.msg = 'Scrivi un\'email valida: l\'invito vale solo per quell\'indirizzo.'; _accRender(); return; }
+  _accStato.msg = 'Creo l\'invito…'; _accRender();
+  try{
+    var r = await fetch(SB_URL + '/rest/v1/rpc/ceraldi_invito_crea', { method: 'POST', headers: Object.assign({}, SB_H),
+      body: JSON.stringify({ p_app: 'fatture', p_livello: f.livello === 'lettura' ? 'lettura' : 'completo', p_email: em, p_nome: f.nome || '', p_giorni: 7 }) });
+    if(!r.ok){ var t = await r.text(); throw new Error(t.slice(0, 140)); }
+    var j = await r.json();
+    var liv = f.livello, nome = f.nome;
+    _accStato.inv = { nome: '', email: '', livello: 'completo' }; _accStato.invAperto = false;
+    await _invElenco();
+    _accStato.msg = '✓ Invito creato, valido fino al ' + _invData(j.scadenza); _accRender();
+    _invCondividi(j.token, nome, liv, j.scadenza);
+  }catch(e){ _accStato.msg = 'Invito non creato: ' + e.message; _accRender(); }
+}
+async function _accInvitoAnnulla(id){
+  if(!confirm('Annullare questo invito? Il link smette di funzionare.')) return;
+  try{
+    var r = await fetch(SB_URL + '/rest/v1/rpc/ceraldi_invito_annulla', { method: 'POST', headers: Object.assign({}, SB_H), body: JSON.stringify({ p_id: id }) });
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    await _invElenco(); _accStato.msg = 'Invito annullato'; _accRender();
+  }catch(e){ _accStato.msg = 'Non annullato: ' + e.message; _accRender(); }
+}
+function _accInvitoCopia(id){
+  var i = (_accStato.inviti || []).find(function(x){ return x.id === id; }); if(i) _invCondividi(i.token, i.nome, i.livello, i.scadenza);
+}
+function _accInvitiHtml(){
+  var f = _accStato.inv || { nome: '', email: '', livello: 'completo' };
+  var h = '<div class="acc-sez">Inviti a Fatture</div>';
+  if(!_accStato.invAperto){
+    h += '<div class="acc-azioni" style="margin:0 0 10px"><button class="acc-b acc-b-pri" onclick="_accStato.invAperto=true;_accRender()">🔗 Invita una persona</button></div>';
+  } else {
+    h += '<div class="acc-card"><div class="acc-nota" style="margin:0 0 8px">La persona entra solo in Fatture, con questa email, entro 7 giorni. Gli altri accessi non cambiano.</div>' +
+      '<div class="acc-lbl">Nome (facoltativo)</div><input style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--sep);border-radius:10px;background:var(--surface2);color:var(--ink);font:inherit;font-size:16px" type="text" value="' + esc(f.nome) + '" oninput="_accStato.inv.nome=this.value" placeholder="Mario Rossi">' +
+      '<div class="acc-lbl" style="margin-top:8px">Email *</div><input style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--sep);border-radius:10px;background:var(--surface2);color:var(--ink);font:inherit;font-size:16px" type="email" inputmode="email" value="' + esc(f.email) + '" oninput="_accStato.inv.email=this.value" placeholder="nome@esempio.it">' +
+      '<div class="acc-lbl" style="margin-top:8px">Cosa può fare</div><div class="acc-prof">' +
+      '<button class="acc-chip' + (f.livello !== 'lettura' ? ' on' : '') + '" onclick="_accStato.inv.livello=\'completo\';_accRender()">Completo</button>' +
+      '<button class="acc-chip' + (f.livello === 'lettura' ? ' on' : '') + '" onclick="_accStato.inv.livello=\'lettura\';_accRender()">Solo lettura</button></div>' +
+      '<div class="acc-azioni"><button class="acc-b acc-b-pri" onclick="_accInvitaCrea()">Crea invito e condividi</button>' +
+      '<button class="acc-b" onclick="_accStato.invAperto=false;_accRender()">Chiudi</button></div></div>';
+  }
+  var lista = _accStato.inviti || [];
+  if(!lista.length) h += '<div class="acc-nota">Nessun invito creato.</div>';
+  lista.forEach(function(i){
+    var stato = i.usato_il ? 'Usato il ' + _invData(i.usato_il) : i.annullato_il ? 'Annullato' : (new Date(i.scadenza) < new Date() ? 'Scaduto' : 'In attesa · fino al ' + _invData(i.scadenza));
+    var vivo = !i.usato_il && !i.annullato_il && new Date(i.scadenza) >= new Date();
+    h += '<div class="acc-card"><div class="acc-riga1"><div class="acc-nome">' + esc(i.nome || i.email) + '</div><span class="acc-tag ' + (vivo ? 'acc-att' : i.usato_il ? 'acc-ok' : 'acc-no') + '">' + (i.livello === 'lettura' ? 'Lettura' : 'Completo') + '</span></div>' +
+      '<div class="acc-mail">' + esc(i.email || '') + '</div><div class="acc-perm">' + esc(stato) + '</div>' +
+      (vivo ? '<div class="acc-azioni"><button class="acc-b" onclick="_accInvitoCopia(\'' + i.id + '\')">Condividi di nuovo</button><button class="acc-b acc-b-dan" onclick="_accInvitoAnnulla(\'' + i.id + '\')">Annulla</button></div>' : '') + '</div>';
+  });
+  return h;
+}
+async function _accStoricoCarica(){
+  var r = await fetch(SB_URL + '/rest/v1/ceraldi_accessi_storico?select=quando,chi,email,azione,prima,dopo&order=quando.desc&limit=40', { headers: Object.assign({}, SB_H) });
+  if(!r.ok) throw new Error('HTTP ' + r.status);
+  _accStato.storico = await r.json();
+}
+function _accStoricoHtml(){
+  var h = '<div class="acc-sez" style="margin-top:22px">Storico accessi</div>';
+  if(!_accStato.storicoAperto) return h + '<div class="acc-azioni"><button class="acc-b" onclick="_accStoricoApri()">🕘 Mostra chi ha cambiato cosa</button></div>';
+  var nomi = {}; _accStato.righe.forEach(function(x){ nomi[x.id] = x.nome || x.email; });
+  var L = _accStato.storico || [];
+  if(!L.length) return h + '<div class="acc-nota">Ancora nessun cambiamento registrato.</div>';
+  L.forEach(function(e){
+    var d = '';
+    if(e.azione === 'modificato'){
+      var a = (e.prima || {}), b = (e.dopo || {}), v = [];
+      if(a.stato !== b.stato) v.push('stato ' + a.stato + ' → ' + b.stato);
+      if(a.ruolo !== b.ruolo) v.push('ruolo ' + a.ruolo + ' → ' + b.ruolo);
+      _ACC_APP.forEach(function(x){ var p = (a.permessi || {})[x.k] || '—', q = (b.permessi || {})[x.k] || '—'; if(p !== q) v.push(x.n + ': ' + p + ' → ' + q); });
+      d = v.join('; ');
+    } else if(e.azione === 'creato'){ d = 'stato ' + ((e.dopo || {}).stato || ''); }
+    h += '<div class="acc-card"><div class="acc-riga1"><div class="acc-nome">' + esc(e.email || '') + '</div><span class="acc-tag">' + esc(e.azione) + '</span></div>' +
+      '<div class="acc-perm">' + esc(_invOra(e.quando)) + ' · da ' + esc(e.chi ? (nomi[e.chi] || 'un amministratore') : 'sistema') + (d ? '<br>' + esc(d) : '') + '</div></div>';
+  });
+  return h;
+}
+function _accStoricoApri(){
+  _accStato.storicoAperto = true; _accRender();
+  _accStoricoCarica().then(_accRender).catch(function(e){ _accStato.msg = 'Non riesco a leggere lo storico: ' + e.message; _accRender(); });
 }
 async function _authAvvio(){
   _authMostra('caricamento');
@@ -31812,7 +31943,12 @@ async function _authAvvio(){
   if(daInd && daInd.errore){ _authMostra('login', 'Accesso non riuscito: ' + daInd.errore); return; }
   var s = _authSess || _authLeggi();
   var invitato = _invitoDaLink();
-  if(!s || !s.access_token){ _authMostra(invitato ? 'richiesta' : 'login'); return; }
+  var inv = await _invitoCarica();
+  if(!s || !s.access_token){
+    if(inv) _authMostra('invito');
+    else _authMostra('login', invitato ? 'Questo invito non è valido o è scaduto: chiedine uno nuovo a un amministratore.' : '');
+    return;
+  }
   _authApplica(s);
   await _authPronto();
   if(!_authSess){ return; } // rinnovo rifiutato: la schermata di accesso è già visibile
@@ -31850,7 +31986,7 @@ function _accLivello(app){ var p = (_authSess && _authSess.acc && _authSess.acc.
 function _accSoloLettura(){ return _accLivello('fatture') === 'lettura'; }
 function _accSonoAdmin(){ return !!(_authSess && _authSess.acc && _authSess.acc.ruolo === 'admin' && _authSess.acc.stato === 'attivo'); }
 
-var _accStato = { righe: [], caricate: false, msg: '', apertura: null, filtro: 'tutti' };
+var _accStato = { righe: [], caricate: false, msg: '', apertura: null, filtro: 'tutti', inv: { nome: '', email: '', livello: 'completo' }, inviti: [], invAperto: false, storico: [], storicoAperto: false };
 
 async function _accCarica(){
   var r = await fetch(SB_URL + '/rest/v1/ceraldi_accessi?select=*&order=stato.asc,richiesto_il.desc', { headers: Object.assign({}, SB_H) });
@@ -31874,7 +32010,7 @@ function _accEtichettaStato(s){
 }
 function _accRiassunto(r){
   var p = r.permessi || {}, v = [];
-  _ACC_APP.forEach(function(a){ if(p[a.k]) v.push(a.n + (p[a.k] === 'lettura' ? ' (lettura)' : p[a.k] === 'proprio' ? ' (proprie)' : '')); });
+  _ACC_APP.forEach(function(a){ if(p[a.k] && p[a.k] !== 'nessuno') v.push(a.n + (p[a.k] === 'lettura' ? ' (lettura)' : p[a.k] === 'proprio' ? ' (proprie)' : '')); });
   return v.length ? v.join(' · ') : 'Nessun permesso';
 }
 function _accQuando(t){
@@ -31891,7 +32027,7 @@ function _accApri(){
   _accStato.msg = '';
   _accRender();
   if(!_accStato.caricate){
-    _accCarica().then(_accRender).catch(function(e){ _accStato.msg = 'Non riesco a leggere la lista: ' + e.message; _accRender(); });
+    _accCarica().then(function(){ return _invElenco().catch(function(){}); }).then(_accRender).catch(function(e){ _accStato.msg = 'Non riesco a leggere la lista: ' + e.message; _accRender(); });
   }
 }
 function _accChiudi(){ var el = document.getElementById('accPanel'); if(el) el.remove(); if(typeof _impRenderHome === 'function' && document.getElementById('impBody')) _impRenderHome(); }
@@ -31906,13 +32042,14 @@ function _accRender(){
   if(!_accStato.caricate){
     h += '<div class="acc-vuoto"><div class="fa-spin"></div><span>Carico…</span></div>';
   } else {
-    h += '<div class="acc-azioni" style="margin:0 0 14px"><button class="acc-b acc-b-pri" onclick="invitaPersona()">🔗 Invita una persona</button></div>';
+    h += _accInvitiHtml();
     h += '<div class="acc-sez">Richieste di accesso' + (attesa.length ? ' · ' + attesa.length : '') + '</div>';
-    if(!attesa.length) h += '<div class="acc-nota">Nessuna richiesta in sospeso. Chi vuole accedere apre l\'app, preme "Richiedi l\'accesso" e compare qui.</div>';
+    if(!attesa.length) h += '<div class="acc-nota">Nessuna richiesta in sospeso.</div>';
     attesa.forEach(function(r){ h += _accCard(r, true); });
     h += '<div class="acc-sez" style="margin-top:22px">Persone con un account</div>';
     if(!altri.length) h += '<div class="acc-nota">Nessuno, per ora.</div>';
     altri.forEach(function(r){ h += _accCard(r, false); });
+    h += _accStoricoHtml();
   }
   h += '</div><div class="acc-msg" role="status" aria-live="polite">' + esc(_accStato.msg || '') + '</div></div>';
   el.innerHTML = h;
@@ -31941,7 +32078,7 @@ function _accCard(r, nuova){
     var prof = _ACC_PROFILI[r.profilo];
     if(prof) h += '<div class="acc-nota" style="margin:2px 0 10px">' + esc(prof.d) + '</div>';
     _ACC_APP.forEach(function(a){
-      var liv = (r.permessi || {})[a.k] || '';
+      var liv = (r.permessi || {})[a.k] || ''; if(liv === 'nessuno') liv = '';
       h += '<div class="acc-app"><div><div class="acc-app-n">' + a.n + '</div><div class="acc-app-d">' + a.d + '</div></div><div class="acc-liv">';
       _ACC_LIV.forEach(function(l){
         var sel = (liv === l.k) || (l.k === 'completo' && liv === 'proprio');
@@ -31967,7 +32104,9 @@ function _accProfilo(id, k){
 function _accPermesso(id, app, liv){
   var r = _accTrova(id); if(!r) return;
   r.permessi = r.permessi || {};
-  if(liv) r.permessi[app] = (r.permessi[app] === 'proprio' && liv === 'completo') ? 'proprio' : liv; else delete r.permessi[app];
+  if(liv) r.permessi[app] = (r.permessi[app] === 'proprio' && liv === 'completo') ? 'proprio' : liv;
+  else if(app === 'fatture') r.permessi[app] = 'nessuno'; // chiave esplicita: senza, un admin di Presenze rientrerebbe da solo
+  else delete r.permessi[app];
   r.profilo = 'personalizzato';
   _accRender();
 }
@@ -31977,6 +32116,7 @@ async function _accDecidi(id, stato){
   if(stato === 'rifiutato' && !confirm('Rifiutare la richiesta di ' + (r.nome || r.email) + '?')) return;
   if(stato === 'bloccato' && !confirm('Bloccare l\'accesso a ' + (r.nome || r.email) + '? Non entrerà più da nessun dispositivo.')) return;
   if(stato === 'attivo' && !Object.keys(r.permessi || {}).length && !confirm('Nessun permesso assegnato: la persona entrerà senza poter vedere niente. Continuare?')) return;
+  r.permessi = r.permessi || {}; if(!r.permessi.fatture) r.permessi.fatture = 'nessuno';
   _accStato.msg = 'Salvo…'; _accRender();
   try{
     await _accSalva(id, { stato: stato, ruolo: r.ruolo || 'utente', profilo: r.profilo || null, permessi: r.permessi || {},
