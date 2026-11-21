@@ -590,7 +590,7 @@ function avvisoCreditoIA(){
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.48.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.49.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -25284,12 +25284,15 @@ async function _controlloIntegritaRiconciliazioni(){
       var m = movById[movId];
       if(!m) return; // movimento non in movimenti_banca (es. Nexi/PayPal) — non verificabile con questo criterio
       var claimants = perMovId[movId];
-      var somma = claimants.reduce(function(s,f){
-        var imp = (f.riconciliazione && typeof f.riconciliazione.importo==='number') ? f.riconciliazione.importo : Math.abs(f.importo||0);
-        return s+imp;
-      },0);
-      var totMov = Math.abs(m.importo||0);
-      if(Math.abs(somma-totMov) > 0.50) gruppiFantasma.push({m:m, claimants:claimants, somma:somma, totMov:totMov});
+      // v10.49.0 (21/11/2026): prima qui si sommava l'importo scritto su ogni fattura, che nei vecchi pagamenti
+      // di gruppo (assegno SIRO) è l'intero movimento ripetuto: falso allarme. Ora il conto lo fa il motore della
+      // riconciliazione (ricIndice → quoteMov), lo stesso che usano le altre schermate.
+      var qm = (typeof ricIndice === 'function' && typeof ricMovKey === 'function') ? ricIndice().quoteMov[ricMovKey(movId)] : null;
+      if(!qm || qm.totale == null) return;
+      var cNc = ricIndice().ncTot || {};
+      var servono = claimants.reduce(function(s,f){ return f.tipo==='nota_credito' ? s : s + Math.max(0, Math.abs(f.importo||0) - (cNc[String(f.id)]||0)); },0);
+      var libero = qm.libero, scoperto = servono - qm.assegnato;
+      if(libero > 0.50 || scoperto > 0.50) gruppiFantasma.push({m:m, claimants:claimants, totMov:qm.totale, coperto:qm.assegnato, libero:libero, scoperto:scoperto, servono:servono});
     });
 
     // FIX 18/09 (richiesta esplicita di Valerio): oltre a segnalare l'anomalia,
@@ -25317,15 +25320,16 @@ async function _controlloIntegritaRiconciliazioni(){
     var html = '';
     if(gruppiFantasma.length){
       html += '<div style="background:#fdecea;border:1.5px solid var(--red);border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:var(--ink2);line-height:1.5">';
-      html += '<b style="color:var(--red)">⚠️ '+gruppiFantasma.length+' '+(gruppiFantasma.length===1?'movimento':'movimenti')+' con un totale che non torna</b> — una o più fatture agganciate a quel movimento portano probabilmente ancora il riferimento di un abbinamento poi cambiato (come nel caso CARPINO). <b>Tocca una riga per aprire e correggere quella fattura.</b>';
+      html += '<b style="color:var(--red)">⚠️ '+gruppiFantasma.length+' '+(gruppiFantasma.length===1?'pagamento':'pagamenti')+' in banca con le fatture che non quadrano</b> — la somma delle fatture collegate non è uguale a quanto è stato pagato. Sotto ogni riquadro trovi la differenza e cosa può essere. <b>Tocca una fattura per aprirla e correggere il collegamento.</b>';
       html += '</div>';
       for(var _gi=0; _gi<gruppiFantasma.length; _gi++){
         var g = gruppiFantasma[_gi];
-        var diff = g.somma - g.totMov;
         html += '<div style="border-left:3px solid var(--red);background:var(--surface2);border-radius:10px;padding:10px 12px;margin-bottom:10px">';
         html += '<div style="font-size:13px;font-weight:700">Movimento del '+fmtDataIntegrita(g.m.data)+' — '+fmt(g.totMov)+'</div>';
-        html += '<div style="font-size:11px;color:var(--ink3);margin-bottom:2px">Assegnato ufficialmente a: '+esc(g.m.fattura_label||'—')+'</div>';
-        html += '<div style="font-size:11px;color:var(--red);font-weight:600;margin-bottom:4px">'+g.claimants.length+' fattur'+(g.claimants.length===1?'a lo rivendica':'e lo rivendicano')+' per un totale di '+fmt(g.somma)+' ('+(diff>0?'+':'')+fmt(diff)+' rispetto al movimento)</div>';
+        html += '<div style="font-size:11px;color:var(--ink3);margin-bottom:2px">Collegato a '+g.claimants.length+' fattur'+(g.claimants.length===1?'a':'e')+'</div>';
+        html += '<div style="font-size:12px;color:var(--red);font-weight:600;margin-bottom:4px;line-height:1.45">'+(g.scoperto>0.50 && !(g.libero>0.50)
+          ? 'In banca hai pagato '+fmt(g.totMov)+', ma le fatture collegate valgono '+fmt(g.servono)+': mancano '+fmt(g.scoperto)+' di pagamento. Probabilmente una fattura è collegata qui per errore.'
+          : 'In banca hai pagato '+fmt(g.totMov)+'. Le fatture collegate ne coprono '+fmt(g.coperto)+'. Restano '+fmt(g.libero)+' senza fattura: se era un pagamento di più fatture, forse ne manca una da registrare (o è collegata a un altro movimento).')+'</div>';
         for(var _ci=0; _ci<g.claimants.length; _ci++){
           var f = g.claimants[_ci];
           html += '<div class="_integritaMovRiga" data-movid="'+esc(g.m.id)+'" style="font-size:12px;color:var(--blue);padding:3px 0;cursor:pointer;text-decoration:underline dotted;font-weight:600">· '+esc((f.fornitore||'')+(f.numero?' N°'+f.numero:''))+' — '+fmt(f.importo||0)+' →</div>';
@@ -33825,7 +33829,12 @@ body.pn-foglio-aperto #aiAssistBtn,body.pn-foglio-aperto #scriptableBtn,body:has
 .rv-g b{font-size:22px;font-weight:800;letter-spacing:-.4px;color:var(--ink);line-height:1.15}
 .rv-g small{font-size:11.5px;color:var(--ink3);line-height:1.3}
 .rv-g-conferma{color:var(--rv-info)}.rv-g-sistemare{color:var(--rv-ko)}.rv-g-capire{color:var(--rv-warn)}.rv-g-non{color:var(--ink2)}.rv-g-fatto{color:var(--rv-ok)}
-.rv-g-fatto{grid-column:1/-1;flex-direction:row;align-items:center;gap:10px}
+.rv-g-fatto,.rv-g-tutti{grid-column:1/-1;flex-direction:row;align-items:center;gap:10px}
+.rv-g-tutti{color:var(--ink2)}.rv-g-tutti b{font-size:17px;margin-left:auto;order:2}.rv-g-tutti small{order:1}
+.rv-vedi-tutti{display:block;width:100%;margin:2px 0 12px;padding:11px 12px;border:1.5px solid var(--sep);background:var(--surface2);color:var(--blue);border-radius:12px;font:inherit;font-size:13.5px;font-weight:700;cursor:pointer;text-align:center}
+.rv-vedi-tutti.on{background:var(--blue);color:#fff;border-color:var(--blue)}
+.rv-stato{display:inline-block;margin:0 0 4px;padding:1px 8px;border-radius:99px;font-size:10.5px;font-weight:700;background:rgba(120,120,128,.14);color:var(--ink2)}
+.rv-stato-fatto{background:rgba(52,199,89,.16);color:#1a7a3a}.rv-stato-sistemare{background:rgba(255,59,48,.14);color:#c4281c}.rv-stato-capire{background:rgba(255,149,0,.16);color:#b26200}.rv-stato-conferma{background:rgba(0,122,255,.14);color:#0a5fd0}
 .rv-g-fatto b{font-size:17px;margin-left:auto;order:2}.rv-g-fatto small{order:1}
 .rv-altrove{width:100%;text-align:left;border:none;background:var(--pn-info-bg);color:var(--pn-info);font:inherit;font-size:12.5px;font-weight:600;line-height:1.4;padding:9px 12px;border-radius:12px;margin-bottom:10px;cursor:pointer}
 .rv-lista-h{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin:6px 2px 8px}
@@ -36520,8 +36529,10 @@ var RICV_GRUPPI = [
   { k: 'sistemare', t: 'Da sistemare', s: 'Qualcosa non torna', c: 'ko' },
   { k: 'capire', t: 'Da capire', s: 'Nessun documento trovato', c: 'warn' },
   { k: 'cassa', t: 'Cassa e incassi', s: 'POS, versamenti, chiusure', c: 'info' },
-  { k: 'fatto', t: 'A posto', s: 'Collegati o spiegati', c: 'ok' }
+  { k: 'fatto', t: 'A posto', s: 'Collegati o spiegati', c: 'ok' },
+  { k: 'tutti', t: 'Tutti i movimenti', s: 'Da fare e a posto, insieme', c: 'info' }
 ];
+var RICV_STATO_NOME = { conferma: 'Da confermare', sistemare: 'Da sistemare', capire: 'Da capire', cassa: 'Cassa e incassi', fatto: 'A posto' };
 function ricvGruppoVisto(S){
   if(!S || S.gruppo !== 'non') return S ? S.gruppo : 'capire';
   if(S.daPresenze) return 'conferma';
@@ -37547,7 +37558,7 @@ function ricvRender(){
   // v10.47.0: i controlli di cassa (POS e versamenti contro le chiusure) contano per un conto solo se su quel
   // conto arrivano incassi o versamenti; con «Tutti» contano sempre. Così un conto nuovo non eredita 30 avvisi non suoi.
   if(F.conto && !per.cassa.length) VER = { html: '', n: 0 };
-  var n = { conferma: per.conferma.length, sistemare: per.sistemare.length + docSist.length, capire: per.capire.length, cassa: VER.n, fatto: per.fatto.length + per.spiegati.length };
+  var n = { conferma: per.conferma.length, sistemare: per.sistemare.length + docSist.length, capire: per.capire.length, cassa: VER.n, fatto: per.fatto.length + per.spiegati.length, tutti: nel.length };
   if(!RICV.gruppo) RICV.gruppo = n.conferma ? 'conferma' : (n.sistemare ? 'sistemare' : (n.capire ? 'capire' : 'fatto'));
   var g = RICV.gruppo, tot = nel.length || 1;
   // 20/11/2026: cercando, l'elenco mostra TUTTO ciò che hai trovato, di qualunque gruppo
@@ -37579,6 +37590,7 @@ function ricvRender(){
     '<div class="rv-barra" aria-hidden="true">' + [['fatto', chiusi], ['conferma', per.conferma.length], ['capire', per.capire.length], ['sistemare', per.sistemare.length], ['cassa', VER.n ? per.cassa.length : 0]].map(function(x){ return x[1] ? '<i class="rv-b-' + x[0] + '" style="flex:' + x[1] + '"></i>' : ''; }).join('') + '</div>' +
     '<div class="rv-sit"><span>Entrati <b class="in">+' + fmt(ent) + '</b></span><span>Usciti <b>' + fmt(usc) + '</b></span></div>' +
     '</div>';
+  h += '<button class="rv-vedi-tutti' + (g === 'tutti' ? ' on' : '') + '" onclick="ricvSetGruppo(\'' + (g === 'tutti' ? 'fatto' : 'tutti') + '\')">' + (g === 'tutti' ? 'Torna a «A posto»' : 'Vedi tutti i movimenti, anche quelli già a posto (' + nel.length + ')') + '</button>';
   h += '<div class="rv-oppure">Oppure scegli tu cosa guardare</div>';
   h += '<div class="rv-gruppi">' + RICV_GRUPPI.map(function(G){
     return '<button class="rv-g rv-g-' + G.k + (G.k === g ? ' on' : '') + '" onclick="ricvSetGruppo(\'' + G.k + '\')" aria-pressed="' + (G.k === g) + '"><span class="rv-g-t"><i></i>' + G.t + '</span><b>' + n[G.k] + '</b><small>' + G.s + '</small></button>';
@@ -37588,7 +37600,7 @@ function ricvRender(){
 
   h += '<div id="ricvLista" class="rv-lista">';
   var G = RICV_GRUPPI.find(function(x){ return x.k === g; }) || { t: 'Risultati della ricerca' };
-  h += '<div class="rv-lista-h"><h3>' + G.t + '</h3>' + ({ trovati: '<small>in tutti i mesi e i gruppi</small>', conferma: '<small>il più sicuro in cima</small>', sistemare: '<small>una decisione per riga</small>', capire: '<small>manca il documento?</small>', non: '<small>raggruppati da soli</small>', fatto: '<small>collegati o spiegati, niente da fare</small>', cassa: '<small>POS e versamenti contro le chiusure</small>' })[g] + '</div>';
+  h += '<div class="rv-lista-h"><h3>' + G.t + '</h3>' + ({ trovati: '<small>in tutti i mesi e i gruppi</small>', tutti: '<small>del periodo, dal più recente</small>', conferma: '<small>il più sicuro in cima</small>', sistemare: '<small>una decisione per riga</small>', capire: '<small>manca il documento?</small>', non: '<small>raggruppati da soli</small>', fatto: '<small>collegati o spiegati, niente da fare</small>', cassa: '<small>POS e versamenti contro le chiusure</small>' })[g] + '</div>';
   if(g === 'conferma'){
     var _eStip = function(S){ return S.daPresenze || (S.proposte[0] && S.proposte[0].stip); };
     var confDoc = per.conferma.filter(function(S){ return !_eStip(S); }), confSt = per.conferma.filter(_eStip);
@@ -37634,7 +37646,8 @@ function ricvRender(){
       if(per.cassa.length) h += '<div class="rv-sub-h">Movimenti di incasso e versamento <small>' + per.cassa.length + '</small></div>' + htmlCat(per.cassa);
       else h += '<div class="rv-vuoto">Nessun incasso POS o versamento in questo periodo.</div>';
     }
-  } else if(g === 'trovati'){
+  } else if(g === 'trovati' || g === 'tutti'){
+    RICV.mostraStato = (g === 'tutti');
     h += nel.length ? ricvRighe(nel) : '<div class="rv-vuoto">Nessun movimento trovato in nessun mese. Controlla l\'importo o il testo.</div>';
   } else {
     h += ricvRighe(per[g]);
@@ -37642,6 +37655,7 @@ function ricvRender(){
   h += '</div>';
   h += '<div class="rv-piede"><button onclick="ricvAutoReport()">🤖 Collegati in automatico</button><button onclick="ricRileggiSumUp()">Rileggi estratti SumUp</button><button onclick="ricvUsaClassica(true)">Vista classica (vecchia, sparisce a fine dicembre)</button></div>';
   h += '</div>';
+  RICV.mostraStato = false;
   // 21/10/2026 (Valerio: «apro "Stipendi da collegare" e dopo qualche secondo si chiude»):
   // l'elenco si ridisegna da solo quando arrivano dati nuovi (sincronizzazione, altri
   // dispositivi). Le sezioni a tendina restano aperte o chiuse come le hai lasciate.
@@ -37662,6 +37676,7 @@ function ricvRighe(L, compatte){
 function ricvRiga(S, compatta){
   var M = S.M, k = ricvJs(M.key), entra = M.importo > 0;
   var h = '<div class="rv-riga rv-' + S.gruppo + (S.liv ? ' rv-' + S.liv : '') + '">';
+  if(RICV.mostraStato){ var _gv = ricvGruppoVisto(S); h += '<span class="rv-stato rv-stato-' + _gv + '">' + esc(RICV_STATO_NOME[_gv] || '') + '</span>'; }
   h += '<button class="rv-riga-m" onclick="ricvApri(' + k + ')"><span class="rv-r1"><b>' + esc(S.titolo || '—') + '</b><em class="' + (entra ? 'in' : '') + '">' + (entra ? '+' : '−') + fmt(Math.abs(M.importo)) + '</em></span><small>' + ricGg(M.data) + ' · ' + esc(M.conto) + ' · ' + esc(RICV_TIPO_NOME[S.tipo] || 'movimento') + '</small></button>';
   if(compatta){ h += '<div class="rv-perche">' + esc(S.perche || '') + '</div></div>'; return h; }
   var P = S.proposte && S.proposte[0];
