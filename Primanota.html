@@ -590,7 +590,7 @@ function avvisoCreditoIA(){
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.50.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.51.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -25196,7 +25196,7 @@ function _mostraReportRiconciliazione(){
 // Prima ogni apertura rifaceva da capo la ricerca (e l'uscita involontaria faceva perdere tutto). Ora l'elenco
 // dei movimenti letti resta in memoria e in sessionStorage (si perde solo uscendo davvero dall'app), la scheda
 // riparte dalla stessa posizione, e dopo ogni scelta si rilegge solo il movimento toccato.
-var _INTEG = { movs: null, quando: 0, scroll: 0, cand: {}, desc: {}, chiavi: [] };
+var _INTEG = { movs: null, quando: 0, scroll: 0, cand: {}, desc: {}, chiavi: [], attivo: false, undo: [] };
 function _integSalva(){ try{ sessionStorage.setItem('ceraldi_integ', JSON.stringify({ movs: _INTEG.movs, quando: _INTEG.quando, scroll: _INTEG.scroll })); }catch(e){} }
 function _integRipristina(){
   if(_INTEG.movs) return true;
@@ -25245,7 +25245,97 @@ function _integClassifica(movById){
   return out;
 }
 // Scheda → apre il selettore e, quando si esce da lì (con o senza scelta), RIAPRE il controllo aggiornato nello stesso punto.
+
+// ── ANTEPRIMA + ANNULLA per le scelte fatte dal Controllo integrità ──
+// Il selettore vecchio applica subito. Qui lo si avvolge (solo mentre si è nel controllo):
+// 1) mostra COSA cambierà e chiede conferma; 2) prima di scrivere fa una foto di fatture e
+// movimenti toccati; 3) dopo la scelta offre "Annulla", che rimette tutto com'era
+// (stessa foto/ripristino usati dal motore nuovo: ricvFotoDoc / ricvFotoMov / ricvRipristina).
+var _INTEG_ORIG = {};
+function _integD(s){ var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || '')); return m ? m[3] + '/' + m[2] + '/' + m[1] : String(s || ''); }
+function _integDescF(f){ return f ? ((f.fornitore || '?') + ' N° ' + (f.numero || '?') + ' del ' + _integD(f.data) + ' · ' + fmt(Math.abs(f.importo || 0)) + ' € · ' + (f.stato === 'pagata' ? 'pagata' : (f.stato === 'parziale' ? 'pagata in parte' : 'da pagare'))) : ''; }
+function _integConferma(titolo, righe){
+  return new Promise(function(res){
+    var o = document.createElement('div');
+    o.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px';
+    var h = '<div style="background:var(--bg);border-radius:16px;max-width:460px;width:100%;max-height:85vh;overflow:auto;padding:18px">'
+      + '<div style="font-size:16px;font-weight:700;margin-bottom:10px">' + esc(titolo) + '</div>';
+    righe.forEach(function(r){ h += '<div style="font-size:13px;line-height:1.45;margin-bottom:8px;padding:8px 10px;border-radius:10px;background:var(--surface2)"><b>' + esc(r[0]) + '</b><br>' + esc(r[1]) + '</div>'; });
+    h += '<div style="font-size:12px;color:var(--ink3);margin:6px 0 12px">Dopo potrai annullare con un tocco: tutto torna com\'era.</div>'
+      + '<div style="display:flex;gap:8px"><button id="integCfNo" style="flex:1;padding:12px;border-radius:12px;border:1px solid var(--sep);background:var(--surface2);font-family:inherit;font-weight:600;font-size:14px">Non cambiare</button>'
+      + '<button id="integCfSi" style="flex:1;padding:12px;border-radius:12px;border:none;background:var(--red);color:#fff;font-family:inherit;font-weight:700;font-size:14px">Conferma</button></div></div>';
+    o.innerHTML = h; document.body.appendChild(o);
+    function fine(v){ try{ document.body.removeChild(o); }catch(e){} res(v); }
+    o.querySelector('#integCfNo').onclick = function(){ fine(false); };
+    o.querySelector('#integCfSi').onclick = function(){ fine(true); };
+  });
+}
+// Foto COMPLETA dell'oggetto (non solo i campi che oggi conosciamo): così l'Annulla non lascia mai
+// resti di campi aggiunti da una scelta (bonData, bonRif, _classificaManuale, _rifiutati...).
+function _integClona(o){ return JSON.parse(JSON.stringify(o)); }
+function _integRimetti(o, foto){
+  Object.keys(o).forEach(function(k){ if(!(k in foto)) delete o[k]; });
+  var c = _integClona(foto); Object.keys(c).forEach(function(k){ o[k] = c[k]; });
+}
+function _integFotoMovObj(m){
+  var R = null; try{ R = ricvTrovaRaw(ricMovKey(m.id)); }catch(e){}
+  return R ? { id: m.id, fonte: R.fonte, ogg: _integClona(R.m) } : null;
+}
+function _integInstallaProtezione(){
+  var def = {
+    _applicaCambioAbbinamento: function(a){ return { mov: a[0], vecchia: a[1], nuove: a[2] ? [a[2]] : [], altro: a[3] || null }; },
+    _applicaCambioAbbinamentoMultiplo: function(a){ return { mov: a[0], vecchia: a[1], nuove: a[2] || [], altro: null }; },
+    _rimandaADaClassificare: function(a){ return { mov: a[0], vecchia: a[1], nuove: [], altro: null }; }
+  };
+  Object.keys(def).forEach(function(nome){
+    if(_INTEG_ORIG[nome]) return;
+    var orig = window[nome]; if(typeof orig !== 'function') return;
+    _INTEG_ORIG[nome] = orig;
+    window[nome] = async function(){
+      var args = arguments, self = this;
+      if(!_INTEG.attivo) return orig.apply(self, args);
+      var d = def[nome](args), mov = d.mov; if(!mov) return orig.apply(self, args);
+      var docs = {}, add = function(f){ if(f && f.id != null) docs[String(f.id)] = f; };
+      add(d.vecchia); d.nuove.forEach(add);
+      var altroF = d.altro && d.altro.fatturaId != null ? pnF(d.altro.fatturaId) : null; add(altroF);
+      var righe = [['Il movimento', _integD(mov.data) + ' · ' + fmt(Math.abs(mov.importo || 0)) + ' € · ' + String(mov.descrizione || '').slice(0, 70)]];
+      if(d.nuove.length) d.nuove.forEach(function(f){ righe.push(['Verrà collegato a', _integDescF(pnF(f.id) || f)]); });
+      else righe.push(['Verrà messo in', '«Da classificare»: nessuna fattura collegata.']);
+      if(d.vecchia && d.vecchia.id != null) righe.push(['Verrà scollegato da', _integDescF(pnF(d.vecchia.id) || d.vecchia) + '. Se era segnata pagata da questo movimento, torna «da pagare».']);
+      if(d.altro) righe.push(['L\'altro movimento', _integD(d.altro.data) + ' · ' + fmt(Math.abs(d.altro.importo || 0)) + ' € resterà senza fattura (finora era collegato a ' + (altroF ? _integDescF(altroF) : 'questa fattura') + ').']);
+      var ok = await _integConferma('Cosa cambierà', righe);
+      if(!ok){ toast('Nessuna modifica fatta', { forza: true }); return; }
+      var foto = { docs: Object.keys(docs).map(function(k){ var o = pnF(k) || docs[k]; return { id: o.id, ogg: _integClona(o) }; }), movs: [_integFotoMovObj(mov)].concat(d.altro ? [_integFotoMovObj(d.altro)] : []).filter(Boolean), rif: mov._rifiutati ? mov._rifiutati.slice() : null, rifRaw: null };
+      try{ foto.rifRaw = localStorage.getItem('ceraldi_recon_rifiutati'); }catch(e){}
+      var r = await orig.apply(self, args);
+      _INTEG.undo.push({ t: (d.nuove.length ? 'collegamento ' : 'spostamento ') + _integD(mov.data) + ' · ' + fmt(Math.abs(mov.importo || 0)) + ' €', foto: foto, ids: [mov.id].concat(d.altro ? [d.altro.id] : []) });
+      if(_INTEG.undo.length > 10) _INTEG.undo.shift();
+      return r;
+    };
+  });
+}
+async function _integAnnulla(){
+  var u = _INTEG.undo.pop(); if(!u) return;
+  try{
+    var f = u.foto;
+    for(var i = 0; i < f.docs.length; i++){
+      var d = f.docs[i], o = pnF(d.id); if(!o) continue;
+      _integRimetti(o, d.ogg); await dbUpdate(o);
+    }
+    for(var j = 0; j < f.movs.length; j++){
+      var mf = f.movs[j], R = ricvTrovaRaw(ricMovKey(mf.id)); if(!R) continue;
+      _integRimetti(R.m, mf.ogg);
+      if(R.fonte === 'banca'){ await salvaMovimentoBanca(R.m); try{ _salvaBancaLocale(); }catch(e){} } else await salvaMovimentoCarta(R.m);
+    }
+    try{ if(f.rifRaw == null) localStorage.removeItem('ceraldi_recon_rifiutati'); else localStorage.setItem('ceraldi_recon_rifiutati', f.rifRaw); }catch(e){}
+    try{ ricInvalida(); RICV.memo = null; }catch(e){}
+    toast('↩️ Annullato: ' + u.t, { forza: true });
+  }catch(e){ toast('❌ Non riesco ad annullare: ' + (e.message || e), { forza: true }); }
+  try{ await ricvCaricaContesto(true); }catch(e){}
+  _integRiapri(u.ids);
+}
 function _integApriConRitorno(movId, tocc){
+  _integInstallaProtezione(); _INTEG.attivo = true;
   var body = document.getElementById('integritaBody');
   _INTEG.scroll = body ? body.scrollTop : 0; _integSalva();
   var prima = new Set(Array.prototype.slice.call(document.body.children));
@@ -25257,10 +25347,10 @@ function _integApriConRitorno(movId, tocc){
     if(aperti.length){ visto = true; }
     else if(visto || Date.now() - inizio > 15000){
       // il selettore è stato chiuso (con o senza scelta) oppure non si è mai aperto (errore): in entrambi i casi si torna qui
-      clearInterval(window._integRitornoTimer); window._integRitornoTimer = null;
+      clearInterval(window._integRitornoTimer); window._integRitornoTimer = null; _INTEG.attivo = false;
       _integRiapri(tocc && tocc.length ? tocc : [movId]);
     }
-    if(window._integRitornoTimer && Date.now() - inizio > 30 * 60 * 1000){ clearInterval(window._integRitornoTimer); window._integRitornoTimer = null; }
+    if(window._integRitornoTimer && Date.now() - inizio > 30 * 60 * 1000){ clearInterval(window._integRitornoTimer); window._integRitornoTimer = null; _INTEG.attivo = false; }
   }, 200);
 }
 async function _integRiapri(ids){
@@ -25400,7 +25490,7 @@ async function _controlloIntegritaRiconciliazioni(opz){
 
     var html = '';
     var _ora = new Date(_INTEG.quando || Date.now()).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
-    html += '<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--ink3);margin-bottom:10px"><span>Controllo delle ' + _ora + '</span><button id="integAgg" style="background:var(--surface2);border:1px solid var(--sep);border-radius:99px;padding:5px 12px;font-family:inherit;font-size:11px;font-weight:600;color:var(--ink2);cursor:pointer">↻ Aggiorna dal database</button></div>';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--ink3);margin-bottom:10px"><span>Controllo delle ' + _ora + '</span>' + (_INTEG.undo.length ? '<button id="integUndo" style="background:#FFF3E0;border:1px solid #F0B27A;border-radius:99px;padding:5px 12px;font-family:inherit;font-size:11px;font-weight:700;color:#A04000;cursor:pointer">↩️ Annulla: ' + esc(_INTEG.undo[_INTEG.undo.length-1].t) + '</button>' : '') + '<button id="integAgg" style="background:var(--surface2);border:1px solid var(--sep);border-radius:99px;padding:5px 12px;font-family:inherit;font-size:11px;font-weight:600;color:var(--ink2);cursor:pointer">↻ Aggiorna dal database</button></div>';
     _INTEG.chiavi = trovati.map(function(t){ return t.tipo + '|' + t.m.id; });
     if(trovati.length){
       html += '<div style="background:var(--surface2);border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:var(--ink2);line-height:1.5">';
@@ -25549,6 +25639,7 @@ async function _controlloIntegritaRiconciliazioni(opz){
       el.onclick = function(e){ e.stopPropagation(); var t = el.getAttribute('data-tocc'); _integApriConRitorno(el.getAttribute('data-movid'), t ? t.split('||') : null); };
     });
     var _corpo = document.getElementById('integritaBody'); if(_corpo) _corpo.scrollTop = _INTEG.scroll || 0;
+    var _un = document.getElementById('integUndo'); if(_un) _un.onclick = function(){ try{ document.body.removeChild(ov); }catch(e){} _integAnnulla(); };
     var _agg = document.getElementById('integAgg'); if(_agg) _agg.onclick = function(){ try{ document.body.removeChild(ov); }catch(e){} _controlloIntegritaRiconciliazioni({ ricalcola: true }); };
     var chiudi = function(){ try{ _INTEG.scroll = _corpo ? _corpo.scrollTop : 0; _integSalva(); }catch(e){} try{ document.body.removeChild(ov); }catch(e){} };
     document.getElementById('integritaClose').onclick = chiudi;
