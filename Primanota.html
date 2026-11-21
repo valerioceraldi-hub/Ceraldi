@@ -590,7 +590,7 @@ function avvisoCreditoIA(){
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.49.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.51.0</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -25192,6 +25192,186 @@ function _mostraReportRiconciliazione(){
   ov.onclick = function(e){ if(e.target === ov) chiudi(); };
 }
 
+// ── CONTROLLO INTEGRITÀ: il lavoro fatto resta (21/11/2026) ──
+// Prima ogni apertura rifaceva da capo la ricerca (e l'uscita involontaria faceva perdere tutto). Ora l'elenco
+// dei movimenti letti resta in memoria e in sessionStorage (si perde solo uscendo davvero dall'app), la scheda
+// riparte dalla stessa posizione, e dopo ogni scelta si rilegge solo il movimento toccato.
+var _INTEG = { movs: null, quando: 0, scroll: 0, cand: {}, desc: {}, chiavi: [], attivo: false, undo: [] };
+function _integSalva(){ try{ sessionStorage.setItem('ceraldi_integ', JSON.stringify({ movs: _INTEG.movs, quando: _INTEG.quando, scroll: _INTEG.scroll })); }catch(e){} }
+function _integRipristina(){
+  if(_INTEG.movs) return true;
+  try{ var x = JSON.parse(sessionStorage.getItem('ceraldi_integ') || 'null'); if(x && Array.isArray(x.movs)){ _INTEG.movs = x.movs; _INTEG.quando = x.quando || 0; _INTEG.scroll = x.scroll || 0; return true; } }catch(e){}
+  return false;
+}
+function _integQ(ids){ return encodeURIComponent(ids.map(function(x){ return '"' + String(x).replace(/"/g, '') + '"'; }).join(',')); }
+// Dopo una scelta: rilegge SOLO i movimenti toccati (poche righe), non tutto.
+async function _integAggiornaMovs(ids){
+  ids = (ids || []).filter(Boolean); if(!ids.length || !_INTEG.movs) return;
+  var rows = await sbFetch('movimenti_banca?id=in.(' + _integQ(ids) + ')&select=id,data,importo,fattura_id,fattura_label,abbinata') || [];
+  _INTEG.movs = _INTEG.movs.filter(function(m){ return ids.indexOf(m.id) < 0; }).concat(rows.filter(function(r){ return r.abbinata && r.fattura_id; }));
+  ids.forEach(function(id){ delete _INTEG.desc[id]; });
+  _integSalva();
+}
+async function _integCaricaDescrizioni(trovati){
+  var servono = [];
+  trovati.forEach(function(t){ if(!_INTEG.desc[t.m.id] && servono.indexOf(t.m.id) < 0) servono.push(t.m.id); });
+  if(!servono.length) return;
+  try{
+    var rows = await sbFetch('movimenti_banca?id=in.(' + _integQ(servono) + ')&select=id,descrizione,banca') || [];
+    rows.forEach(function(r){ _INTEG.desc[r.id] = { d: r.descrizione || '', b: r.banca || '' }; });
+  }catch(e){ console.warn('integrità: descrizioni non lette', e); }
+}
+// IL CLASSIFICATORE: nessun conto proprio, solo ciò che dice il motore dei conti (ricIndice: legami dichiarati e quote).
+// Provato in Node sui casi reali del 21/11/2026 (pagamenti divisi, acconti, rimborsi, assegni di gruppo, SIRO, Amazon, Leasys).
+function _integClassifica(movById){
+  var idx = ricIndice(), TOL = 0.02, out = [];
+  var isNc = function(l){ var f = idx.doc[l.fid]; return !!f && f.tipo === 'nota_credito'; };
+  var isFt = function(l){ var f = idx.doc[l.fid]; return !!f && f.tipo !== 'nota_credito'; };
+  Object.keys(idx.link).forEach(function(key){
+    var m = movById[key]; if(!m) return;
+    var q = idx.quoteMov[key]; if(!q || q.totale == null) return;
+    var L = idx.link[key], nc = L.filter(isNc), ft = L.filter(isFt), tot = Math.abs(+m.importo || 0);
+    if((+m.importo || 0) > 0){ if(ft.length) out.push({ tipo: 'entrata_su_fattura', m: m, ft: ft, nc: nc }); return; }   // incasso di rimborso: a posto
+    if(nc.length && !ft.length){ out.push({ tipo: 'nc_su_uscita', m: m, ft: [], nc: nc, q: q }); return; }
+    // vecchio formato dei pagamenti di gruppo: l'importo INTERO scritto su ogni fattura. Lì contano le quote del motore.
+    var ripetuto = ft.length > 1 && ft.every(function(l){ return l.dich >= tot - TOL; });
+    var quotaDi = function(fid){ var d = q.docs.filter(function(x){ return String(x.fid) === String(fid); })[0]; return d ? d.quota : 0; };
+    var buchi = ripetuto ? [] : ft.filter(function(l){ return l.forza >= 2 && (l.dich - quotaDi(l.fid)) > TOL; });
+    var dich = ripetuto ? tot : ricR2(ft.reduce(function(s, l){ return s + l.dich; }, 0));
+    if(buchi.length && q.libero <= TOL) out.push({ tipo: 'troppe_fatture', m: m, ft: ft, nc: nc, q: q, dich: dich });
+    else if(q.libero > TOL) out.push({ tipo: 'soldi_liberi', m: m, ft: ft, nc: nc, q: q });
+  });
+  out.sort(function(a, b){ return String(b.m.data || '').localeCompare(String(a.m.data || '')); });
+  return out;
+}
+// Scheda → apre il selettore e, quando si esce da lì (con o senza scelta), RIAPRE il controllo aggiornato nello stesso punto.
+
+// ── ANTEPRIMA + ANNULLA per le scelte fatte dal Controllo integrità ──
+// Il selettore vecchio applica subito. Qui lo si avvolge (solo mentre si è nel controllo):
+// 1) mostra COSA cambierà e chiede conferma; 2) prima di scrivere fa una foto di fatture e
+// movimenti toccati; 3) dopo la scelta offre "Annulla", che rimette tutto com'era
+// (stessa foto/ripristino usati dal motore nuovo: ricvFotoDoc / ricvFotoMov / ricvRipristina).
+var _INTEG_ORIG = {};
+function _integD(s){ var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || '')); return m ? m[3] + '/' + m[2] + '/' + m[1] : String(s || ''); }
+function _integDescF(f){ return f ? ((f.fornitore || '?') + ' N° ' + (f.numero || '?') + ' del ' + _integD(f.data) + ' · ' + fmt(Math.abs(f.importo || 0)) + ' € · ' + (f.stato === 'pagata' ? 'pagata' : (f.stato === 'parziale' ? 'pagata in parte' : 'da pagare'))) : ''; }
+function _integConferma(titolo, righe){
+  return new Promise(function(res){
+    var o = document.createElement('div');
+    o.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px';
+    var h = '<div style="background:var(--bg);border-radius:16px;max-width:460px;width:100%;max-height:85vh;overflow:auto;padding:18px">'
+      + '<div style="font-size:16px;font-weight:700;margin-bottom:10px">' + esc(titolo) + '</div>';
+    righe.forEach(function(r){ h += '<div style="font-size:13px;line-height:1.45;margin-bottom:8px;padding:8px 10px;border-radius:10px;background:var(--surface2)"><b>' + esc(r[0]) + '</b><br>' + esc(r[1]) + '</div>'; });
+    h += '<div style="font-size:12px;color:var(--ink3);margin:6px 0 12px">Dopo potrai annullare con un tocco: tutto torna com\'era.</div>'
+      + '<div style="display:flex;gap:8px"><button id="integCfNo" style="flex:1;padding:12px;border-radius:12px;border:1px solid var(--sep);background:var(--surface2);font-family:inherit;font-weight:600;font-size:14px">Non cambiare</button>'
+      + '<button id="integCfSi" style="flex:1;padding:12px;border-radius:12px;border:none;background:var(--red);color:#fff;font-family:inherit;font-weight:700;font-size:14px">Conferma</button></div></div>';
+    o.innerHTML = h; document.body.appendChild(o);
+    function fine(v){ try{ document.body.removeChild(o); }catch(e){} res(v); }
+    o.querySelector('#integCfNo').onclick = function(){ fine(false); };
+    o.querySelector('#integCfSi').onclick = function(){ fine(true); };
+  });
+}
+// Foto COMPLETA dell'oggetto (non solo i campi che oggi conosciamo): così l'Annulla non lascia mai
+// resti di campi aggiunti da una scelta (bonData, bonRif, _classificaManuale, _rifiutati...).
+function _integClona(o){ return JSON.parse(JSON.stringify(o)); }
+function _integRimetti(o, foto){
+  Object.keys(o).forEach(function(k){ if(!(k in foto)) delete o[k]; });
+  var c = _integClona(foto); Object.keys(c).forEach(function(k){ o[k] = c[k]; });
+}
+function _integFotoMovObj(m){
+  var R = null; try{ R = ricvTrovaRaw(ricMovKey(m.id)); }catch(e){}
+  return R ? { id: m.id, fonte: R.fonte, ogg: _integClona(R.m) } : null;
+}
+function _integInstallaProtezione(){
+  var def = {
+    _applicaCambioAbbinamento: function(a){ return { mov: a[0], vecchia: a[1], nuove: a[2] ? [a[2]] : [], altro: a[3] || null }; },
+    _applicaCambioAbbinamentoMultiplo: function(a){ return { mov: a[0], vecchia: a[1], nuove: a[2] || [], altro: null }; },
+    _rimandaADaClassificare: function(a){ return { mov: a[0], vecchia: a[1], nuove: [], altro: null }; }
+  };
+  Object.keys(def).forEach(function(nome){
+    if(_INTEG_ORIG[nome]) return;
+    var orig = window[nome]; if(typeof orig !== 'function') return;
+    _INTEG_ORIG[nome] = orig;
+    window[nome] = async function(){
+      var args = arguments, self = this;
+      if(!_INTEG.attivo) return orig.apply(self, args);
+      var d = def[nome](args), mov = d.mov; if(!mov) return orig.apply(self, args);
+      var docs = {}, add = function(f){ if(f && f.id != null) docs[String(f.id)] = f; };
+      add(d.vecchia); d.nuove.forEach(add);
+      var altroF = d.altro && d.altro.fatturaId != null ? pnF(d.altro.fatturaId) : null; add(altroF);
+      var righe = [['Il movimento', _integD(mov.data) + ' · ' + fmt(Math.abs(mov.importo || 0)) + ' € · ' + String(mov.descrizione || '').slice(0, 70)]];
+      if(d.nuove.length) d.nuove.forEach(function(f){ righe.push(['Verrà collegato a', _integDescF(pnF(f.id) || f)]); });
+      else righe.push(['Verrà messo in', '«Da classificare»: nessuna fattura collegata.']);
+      if(d.vecchia && d.vecchia.id != null) righe.push(['Verrà scollegato da', _integDescF(pnF(d.vecchia.id) || d.vecchia) + '. Se era segnata pagata da questo movimento, torna «da pagare».']);
+      if(d.altro) righe.push(['L\'altro movimento', _integD(d.altro.data) + ' · ' + fmt(Math.abs(d.altro.importo || 0)) + ' € resterà senza fattura (finora era collegato a ' + (altroF ? _integDescF(altroF) : 'questa fattura') + ').']);
+      var ok = await _integConferma('Cosa cambierà', righe);
+      if(!ok){ toast('Nessuna modifica fatta', { forza: true }); return; }
+      var foto = { docs: Object.keys(docs).map(function(k){ var o = pnF(k) || docs[k]; return { id: o.id, ogg: _integClona(o) }; }), movs: [_integFotoMovObj(mov)].concat(d.altro ? [_integFotoMovObj(d.altro)] : []).filter(Boolean), rif: mov._rifiutati ? mov._rifiutati.slice() : null, rifRaw: null };
+      try{ foto.rifRaw = localStorage.getItem('ceraldi_recon_rifiutati'); }catch(e){}
+      var r = await orig.apply(self, args);
+      _INTEG.undo.push({ t: (d.nuove.length ? 'collegamento ' : 'spostamento ') + _integD(mov.data) + ' · ' + fmt(Math.abs(mov.importo || 0)) + ' €', foto: foto, ids: [mov.id].concat(d.altro ? [d.altro.id] : []) });
+      if(_INTEG.undo.length > 10) _INTEG.undo.shift();
+      return r;
+    };
+  });
+}
+async function _integAnnulla(){
+  var u = _INTEG.undo.pop(); if(!u) return;
+  try{
+    var f = u.foto;
+    for(var i = 0; i < f.docs.length; i++){
+      var d = f.docs[i], o = pnF(d.id); if(!o) continue;
+      _integRimetti(o, d.ogg); await dbUpdate(o);
+    }
+    for(var j = 0; j < f.movs.length; j++){
+      var mf = f.movs[j], R = ricvTrovaRaw(ricMovKey(mf.id)); if(!R) continue;
+      _integRimetti(R.m, mf.ogg);
+      if(R.fonte === 'banca'){ await salvaMovimentoBanca(R.m); try{ _salvaBancaLocale(); }catch(e){} } else await salvaMovimentoCarta(R.m);
+    }
+    try{ if(f.rifRaw == null) localStorage.removeItem('ceraldi_recon_rifiutati'); else localStorage.setItem('ceraldi_recon_rifiutati', f.rifRaw); }catch(e){}
+    try{ ricInvalida(); RICV.memo = null; }catch(e){}
+    toast('↩️ Annullato: ' + u.t, { forza: true });
+  }catch(e){ toast('❌ Non riesco ad annullare: ' + (e.message || e), { forza: true }); }
+  try{ await ricvCaricaContesto(true); }catch(e){}
+  _integRiapri(u.ids);
+}
+function _integApriConRitorno(movId, tocc){
+  _integInstallaProtezione(); _INTEG.attivo = true;
+  var body = document.getElementById('integritaBody');
+  _INTEG.scroll = body ? body.scrollTop : 0; _integSalva();
+  var prima = new Set(Array.prototype.slice.call(document.body.children));
+  _apriDaControlloIntegrita(movId);
+  if(window._integRitornoTimer) clearInterval(window._integRitornoTimer);
+  var inizio = Date.now(), visto = false;
+  window._integRitornoTimer = setInterval(function(){
+    var aperti = _anOverlayAperti(prima);
+    if(aperti.length){ visto = true; }
+    else if(visto || Date.now() - inizio > 15000){
+      // il selettore è stato chiuso (con o senza scelta) oppure non si è mai aperto (errore): in entrambi i casi si torna qui
+      clearInterval(window._integRitornoTimer); window._integRitornoTimer = null; _INTEG.attivo = false;
+      _integRiapri(tocc && tocc.length ? tocc : [movId]);
+    }
+    if(window._integRitornoTimer && Date.now() - inizio > 30 * 60 * 1000){ clearInterval(window._integRitornoTimer); window._integRitornoTimer = null; _INTEG.attivo = false; }
+  }, 200);
+}
+async function _integRiapri(ids){
+  var prima = (_INTEG.chiavi || []).slice();
+  try{ await _integAggiornaMovs(ids); }catch(e){ console.warn('integrità: aggiornamento parziale non riuscito', e); }
+  try{ if(typeof ricInvalida === 'function') ricInvalida(); }catch(e){}
+  await _controlloIntegritaRiconciliazioni({});
+  var dopo = _INTEG.chiavi || [], sistemati = prima.filter(function(k){ return dopo.indexOf(k) < 0; }).length;
+  if(sistemati) toast('✓ ' + (sistemati === 1 ? 'Una voce sistemata' : sistemati + ' voci sistemate') + ' · ne restano ' + dopo.length, { forza: true });
+}
+var _INTEG_TESTI = {
+  troppe_fatture: { titolo: 'Più fatture di quante il pagamento ne possa coprire',
+    perche: 'Un pagamento non può coprire più di quanto vale. Di solito succede quando un collegamento è stato fatto per errore (fatture già pagate in un altro modo, o collegate due volte), oppure quando il pagamento è stato fatto in più movimenti e ne manca uno. La causale qui sotto dice a quale fattura si riferisce.' },
+  nc_su_uscita: { titolo: 'Una nota di credito risulta pagata con un addebito',
+    perche: 'Una nota di credito è un credito: non si paga, riduce quello che devi. Questo movimento è un\'uscita dal conto: di solito paga la fattura originale. Il rimborso della nota, se c\'è stato, è un\'entrata a parte.' },
+  soldi_liberi: { titolo: 'Soldi usciti senza una fattura',
+    perche: 'Può essere una commissione o un bollo, una fattura ancora da registrare, oppure parte di un pagamento di più fatture che manca.' },
+  entrata_su_fattura: { titolo: 'Un incasso è collegato a una fattura',
+    perche: 'Un incasso (soldi entrati) di solito è un rimborso e va collegato a una nota di credito, non a una fattura da pagare.' }
+};
+
 // ── CONTROLLO INTEGRITÀ RICONCILIAZIONI (06/08) ──
 // Interroga Supabase per intero (sbFetchAll, non solo i movimenti già in
 // memoria) e cerca fatture con PIÙ DI UN movimento bancario agganciato.
@@ -25204,10 +25384,16 @@ function _mostraReportRiconciliazione(){
 //  - "da verificare": la somma NON coincide (es. supera l'importo, o un
 //    singolo movimento già copre l'intera fattura e ce n'è un altro in più)
 //    → probabile errore, come i casi già trovati.
-async function _controlloIntegritaRiconciliazioni(){
-  toast('⏳ Controllo in corso...');
+async function _controlloIntegritaRiconciliazioni(opz){
+  opz = opz || {};
+  var daCache = !opz.ricalcola && _integRipristina();
+  if(!daCache) toast('⏳ Controllo in corso...');
   try{
-    var movimenti = await sbFetchAll('movimenti_banca?abbinata=eq.true&select=id,data,importo,fattura_id,fattura_label');
+    if(!daCache){
+      _INTEG.movs = await sbFetchAll('movimenti_banca?abbinata=eq.true&select=id,data,importo,fattura_id,fattura_label,abbinata');
+      _INTEG.quando = Date.now(); _INTEG.cand = {}; _INTEG.desc = {}; _INTEG.scroll = 0; _integSalva();
+    }
+    var movimenti = _INTEG.movs;
     var perFattura = {};
     movimenti.forEach(function(m){
       if(!m.fattura_id) return;
@@ -25274,26 +25460,11 @@ async function _controlloIntegritaRiconciliazioni(){
     // tolleranza di 0,50€ già usata sopra per la rateizzazione.
     var movById = {};
     movimenti.forEach(function(m){ movById[m.id] = m; });
-    var perMovId = {};
-    (typeof fatture!=='undefined' ? fatture : []).forEach(function(f){
-      if(!f.riconciliata || !f.riconciliazione || !f.riconciliazione.movId) return;
-      (perMovId[f.riconciliazione.movId] = perMovId[f.riconciliazione.movId] || []).push(f);
-    });
-    var gruppiFantasma = [];
-    Object.keys(perMovId).forEach(function(movId){
-      var m = movById[movId];
-      if(!m) return; // movimento non in movimenti_banca (es. Nexi/PayPal) — non verificabile con questo criterio
-      var claimants = perMovId[movId];
-      // v10.49.0 (21/11/2026): prima qui si sommava l'importo scritto su ogni fattura, che nei vecchi pagamenti
-      // di gruppo (assegno SIRO) è l'intero movimento ripetuto: falso allarme. Ora il conto lo fa il motore della
-      // riconciliazione (ricIndice → quoteMov), lo stesso che usano le altre schermate.
-      var qm = (typeof ricIndice === 'function' && typeof ricMovKey === 'function') ? ricIndice().quoteMov[ricMovKey(movId)] : null;
-      if(!qm || qm.totale == null) return;
-      var cNc = ricIndice().ncTot || {};
-      var servono = claimants.reduce(function(s,f){ return f.tipo==='nota_credito' ? s : s + Math.max(0, Math.abs(f.importo||0) - (cNc[String(f.id)]||0)); },0);
-      var libero = qm.libero, scoperto = servono - qm.assegnato;
-      if(libero > 0.50 || scoperto > 0.50) gruppiFantasma.push({m:m, claimants:claimants, totMov:qm.totale, coperto:qm.assegnato, libero:libero, scoperto:scoperto, servono:servono});
-    });
+    // v10.50.0 (21/11/2026): prima qui si confrontava il totale delle fatture con UN solo movimento: dava falsi allarmi
+    // su acconti, pagamenti divisi in due movimenti e rimborsi di note di credito (verificato sui dati reali).
+    // Ora il giudizio viene solo dal motore dei conti, che guarda tutti i movimenti di ogni fattura.
+    var trovati = _integClassifica(movById);
+    await _integCaricaDescrizioni(trovati);
 
     // FIX 18/09 (richiesta esplicita di Valerio): oltre a segnalare l'anomalia,
     // per ogni fattura coinvolta si cercano anche eventuali movimenti bancari
@@ -25302,7 +25473,7 @@ async function _controlloIntegritaRiconciliazioni(){
     // per quella fattura, mostrato come suggerimento. Non si applica MAI da
     // solo: resta sempre Valerio a scegliere toccando la riga, come per tutto
     // il resto di questo pannello.
-    var _candidatiCache = {};
+    var _candidatiCache = _INTEG.cand;
     async function _cercaCandidatiEsattiImporto(importoAbs, escludiMovId){
       var key = importoAbs.toFixed(2);
       if(_candidatiCache[key]) return _candidatiCache[key];
@@ -25318,43 +25489,63 @@ async function _controlloIntegritaRiconciliazioni(){
     }
 
     var html = '';
-    if(gruppiFantasma.length){
-      html += '<div style="background:#fdecea;border:1.5px solid var(--red);border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:var(--ink2);line-height:1.5">';
-      html += '<b style="color:var(--red)">⚠️ '+gruppiFantasma.length+' '+(gruppiFantasma.length===1?'pagamento':'pagamenti')+' in banca con le fatture che non quadrano</b> — la somma delle fatture collegate non è uguale a quanto è stato pagato. Sotto ogni riquadro trovi la differenza e cosa può essere. <b>Tocca una fattura per aprirla e correggere il collegamento.</b>';
+    var _ora = new Date(_INTEG.quando || Date.now()).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--ink3);margin-bottom:10px"><span>Controllo delle ' + _ora + '</span>' + (_INTEG.undo.length ? '<button id="integUndo" style="background:#FFF3E0;border:1px solid #F0B27A;border-radius:99px;padding:5px 12px;font-family:inherit;font-size:11px;font-weight:700;color:#A04000;cursor:pointer">↩️ Annulla: ' + esc(_INTEG.undo[_INTEG.undo.length-1].t) + '</button>' : '') + '<button id="integAgg" style="background:var(--surface2);border:1px solid var(--sep);border-radius:99px;padding:5px 12px;font-family:inherit;font-size:11px;font-weight:600;color:var(--ink2);cursor:pointer">↻ Aggiorna dal database</button></div>';
+    _INTEG.chiavi = trovati.map(function(t){ return t.tipo + '|' + t.m.id; });
+    if(trovati.length){
+      html += '<div style="background:var(--surface2);border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:var(--ink2);line-height:1.5">';
+      html += '<b>' + trovati.length + (trovati.length === 1 ? ' pagamento da controllare.' : ' pagamenti da controllare.') + '</b> Ogni riquadro dice cosa non torna e perché. Toccando una riga si apre la scelta; quando esci da lì torni qui, nello stesso punto, con l\'elenco già aggiornato.';
       html += '</div>';
-      for(var _gi=0; _gi<gruppiFantasma.length; _gi++){
-        var g = gruppiFantasma[_gi];
-        html += '<div style="border-left:3px solid var(--red);background:var(--surface2);border-radius:10px;padding:10px 12px;margin-bottom:10px">';
-        html += '<div style="font-size:13px;font-weight:700">Movimento del '+fmtDataIntegrita(g.m.data)+' — '+fmt(g.totMov)+'</div>';
-        html += '<div style="font-size:11px;color:var(--ink3);margin-bottom:2px">Collegato a '+g.claimants.length+' fattur'+(g.claimants.length===1?'a':'e')+'</div>';
-        html += '<div style="font-size:12px;color:var(--red);font-weight:600;margin-bottom:4px;line-height:1.45">'+(g.scoperto>0.50 && !(g.libero>0.50)
-          ? 'In banca hai pagato '+fmt(g.totMov)+', ma le fatture collegate valgono '+fmt(g.servono)+': mancano '+fmt(g.scoperto)+' di pagamento. Probabilmente una fattura è collegata qui per errore.'
-          : 'In banca hai pagato '+fmt(g.totMov)+'. Le fatture collegate ne coprono '+fmt(g.coperto)+'. Restano '+fmt(g.libero)+' senza fattura: se era un pagamento di più fatture, forse ne manca una da registrare (o è collegata a un altro movimento).')+'</div>';
-        for(var _ci=0; _ci<g.claimants.length; _ci++){
-          var f = g.claimants[_ci];
-          html += '<div class="_integritaMovRiga" data-movid="'+esc(g.m.id)+'" style="font-size:12px;color:var(--blue);padding:3px 0;cursor:pointer;text-decoration:underline dotted;font-weight:600">· '+esc((f.fornitore||'')+(f.numero?' N°'+f.numero:''))+' — '+fmt(f.importo||0)+' →</div>';
-          // Suggerimenti: altri movimenti con lo stesso importo esatto di QUESTA
-          // fattura, diversi da quello già rivendicato — possibili abbinamenti
-          // più corretti, mai applicati da soli.
-          var candidati = await _cercaCandidatiEsattiImporto(Math.abs(f.importo||0), g.m.id);
-          var candidatiUtili = (candidati||[]).filter(function(c){ return c.id !== g.m.id; });
-          if(candidatiUtili.length){
-            html += '<div style="margin:2px 0 6px 12px;padding:4px 8px;border-left:2px solid var(--sep)">';
-            html += '<div style="font-size:10px;color:var(--ink3);margin-bottom:2px">Possibile abbinamento esatto per questa fattura:</div>';
-            candidatiUtili.forEach(function(c){
-              var occupato = c.abbinata && c.fattura_id!=null;
-              html += '<div class="_integritaMovRiga" data-movid="'+esc(c.id)+'" style="font-size:11px;color:'+(occupato?'var(--orange)':'#1a7a3a')+';padding:2px 0;cursor:pointer;text-decoration:underline dotted;font-weight:600">'
-                + (occupato?'⚠️ ':'✓ ') + fmtDataIntegrita(c.data)+' — '+fmt(Math.abs(c.importo||0))
-                + (occupato ? ' (già assegnato a: '+esc(c.fattura_label||'altra fattura')+')' : ' (libero)') + ' →</div>';
+      for(var _ti = 0; _ti < trovati.length; _ti++){
+        var T = trovati[_ti], TX = _INTEG_TESTI[T.tipo], de = _INTEG.desc[T.m.id] || { d: '', b: '' };
+        var tocc = [T.m.id];
+        T.ft.concat(T.nc || []).forEach(function(l){ var ff = ricIndice().doc[l.fid]; if(ff && ff.riconciliazione && ff.riconciliazione.movId && tocc.indexOf(ff.riconciliazione.movId) < 0) tocc.push(ff.riconciliazione.movId); });
+        var totM = Math.abs(+T.m.importo || 0);
+        var frase = '';
+        if(T.tipo === 'troppe_fatture') frase = 'In banca hai pagato ' + fmt(totM) + ', ma ' + T.ft.length + ' fatture dicono di essere state pagate con questo movimento, per ' + fmt(T.dich) + ' in tutto (' + fmt(ricR2(T.dich - totM)) + ' in più).';
+        else if(T.tipo === 'nc_su_uscita') frase = 'Questo addebito di ' + fmt(totM) + ' è collegato a una nota di credito.';
+        else if(T.tipo === 'soldi_liberi') frase = 'In banca hai pagato ' + fmt(totM) + '. Le fatture collegate ne coprono ' + fmt(T.q.assegnato) + '. Restano ' + fmt(T.q.libero) + ' senza fattura.';
+        else frase = 'Questo incasso di ' + fmt(totM) + ' è collegato a una fattura.';
+        html += '<div style="border-left:3px solid var(--red);background:var(--surface2);border-radius:10px;padding:10px 12px;margin-bottom:12px">';
+        html += '<div style="font-size:13px;font-weight:700;margin-bottom:2px">' + esc(TX.titolo) + '</div>';
+        html += '<div style="font-size:12px;color:var(--ink2);margin-bottom:2px">Movimento del <b>' + fmtDataIntegrita(T.m.data) + '</b> · <b>' + fmt(totM) + '</b>' + (de.b ? ' · ' + esc(de.b) : '') + '</div>';
+        if(de.d) html += '<div style="font-size:11px;color:var(--ink3);margin-bottom:6px;line-height:1.35">Causale in banca: «' + esc(de.d.slice(0, 160)) + '»</div>';
+        html += '<div style="font-size:12.5px;color:var(--red);font-weight:600;line-height:1.45;margin-bottom:6px">' + esc(frase) + '</div>';
+        html += '<div style="font-size:11.5px;color:var(--ink2);line-height:1.5;margin-bottom:8px"><b>Perché succede:</b> ' + esc(TX.perche) + '</div>';
+        var righe = T.ft.concat(T.nc || []);
+        if(righe.length) html += '<div style="font-size:10.5px;font-weight:700;color:var(--ink3);text-transform:uppercase;letter-spacing:.4px;margin:4px 0 2px">' + (T.tipo === 'nc_su_uscita' ? 'Nota di credito collegata' : 'Fatture collegate a questo movimento') + '</div>';
+        for(var _ri = 0; _ri < righe.length; _ri++){
+          var l = righe[_ri], f = ricIndice().doc[l.fid]; if(!f) continue;
+          var stF = scStato(f), stTxt = stF === 'pagata' ? 'pagata' : (stF === 'parziale' ? 'pagata in parte' : 'da pagare');
+          var citata = f.numero && de.d && de.d.indexOf(String(f.numero)) >= 0, indicata = String(T.m.fattura_id) === String(f.id);
+          html += '<div class="_integritaMovRiga" data-movid="' + esc(T.m.id) + '" data-tocc="' + esc(tocc.join('||')) + '" style="padding:6px 0;border-top:1px solid var(--sep);cursor:pointer">';
+          html += '<div style="font-size:12.5px;font-weight:600;color:var(--blue)">' + esc((f.fornitore || '').replace(/\s+/g, ' ').trim()) + ' · N° ' + esc(f.numero || '—') + ' →</div>';
+          html += '<div style="font-size:11.5px;color:var(--ink2)">Fattura del ' + fmtDataIntegrita(f.data) + ' · ' + fmt(Math.abs(f.importo || 0)) + ' · ' + stTxt + (l.dich && T.tipo !== 'nc_su_uscita' ? ' · dice di aver pagato ' + fmt(l.dich) + ' con questo movimento' : '') + '</div>';
+          if(citata || indicata) html += '<div style="font-size:11px;color:#1a7a3a;font-weight:600">' + (citata ? '✓ Il numero è scritto nella causale' : '') + (citata && indicata ? ' · ' : '') + (indicata ? '✓ Il movimento punta a questa fattura' : '') + '</div>';
+          if(!citata && !indicata && T.tipo === 'troppe_fatture') html += '<div style="font-size:11px;color:var(--ink3)">Nessun riferimento a questa fattura nel movimento</div>';
+          // Suggerimenti: stesso importo, verso giusto (fattura = uscita, nota di credito = entrata), non prima della fattura
+          var cands = (T.tipo === 'troppe_fatture' && (citata || indicata)) ? [] : (await _cercaCandidatiEsattiImporto(Math.abs(f.importo || 0), T.m.id) || []);
+          cands = cands.filter(function(c){
+            if(c.id === T.m.id) return false;
+            var uscita = (+c.importo || 0) < 0;
+            if(f.tipo === 'nota_credito' ? uscita : !uscita) return false;
+            if(f.data && c.data && _giorniTra(c.data, f.data) > 25) return false;
+            return true;
+          });
+          if(cands.length){
+            html += '<div style="margin:4px 0 0 10px;padding:2px 8px;border-left:2px solid var(--sep)"><div style="font-size:10.5px;color:var(--ink3)">Movimenti con lo stesso importo e verso giusto:</div>';
+            cands.forEach(function(c){
+              var occ = c.abbinata && c.fattura_id != null;
+              html += '<div class="_integritaMovRiga" data-movid="' + esc(c.id) + '" data-tocc="' + esc(tocc.concat([c.id]).join('||')) + '" style="font-size:11.5px;color:' + (occ ? 'var(--orange)' : '#1a7a3a') + ';padding:2px 0;cursor:pointer;font-weight:600">' + (occ ? '⚠️ ' : '✓ ') + fmtDataIntegrita(c.data) + ' · ' + fmt(Math.abs(c.importo || 0)) + (occ ? ' (già usato da: ' + esc(c.fattura_label || 'altra fattura') + ')' : ' (libero)') + ' →</div>';
             });
             html += '</div>';
           }
+          html += '</div>';
         }
         html += '</div>';
       }
-    }
-    if(!gruppiFantasma.length){
-      html += '<div style="text-align:center;padding:8px 24px 4px;color:var(--ink3);font-size:12px">✓ Nessun movimento con totale fuori quadratura.</div>';
+    } else {
+      html += '<div style="text-align:center;padding:8px 24px 4px;color:var(--ink3);font-size:12px">✓ Nessun pagamento con conti che non tornano.</div>';
     }
 
     // ═══ RENDERING: fatture riconciliate con movimento sospetto (data/descrizione) ═══
@@ -25426,6 +25617,7 @@ async function _controlloIntegritaRiconciliazioni(){
       });
     }
 
+    try{ var _vecchio = document.getElementById('integritaOverlay'); if(_vecchio) _vecchio.remove(); }catch(e){}
     var ov = document.createElement('div');
     ov.id = 'integritaOverlay';
     ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:800;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);padding:14px';
@@ -25434,7 +25626,7 @@ async function _controlloIntegritaRiconciliazioni(){
       + '<div style="font-size:16px;font-weight:700">🔍 Controllo integrità</div>'
       + '<button id="integritaClose" style="background:transparent;border:none;font-size:22px;color:var(--ink3);cursor:pointer;padding:0;line-height:1">×</button>'
       + '</div>'
-      + '<div style="overflow-y:auto;padding:16px 18px;flex:1">'+html+'</div>'
+      + '<div id="integritaBody" style="overflow-y:auto;padding:16px 18px;flex:1">'+html+'</div>'
       + '<div style="padding:12px 18px;border-top:1px solid var(--sep)">'
       + '<button id="integritaOk" style="width:100%;padding:11px;border:none;border-radius:10px;background:var(--ink);color:var(--surface);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer">Chiudi</button>'
       + '</div>'
@@ -25444,9 +25636,12 @@ async function _controlloIntegritaRiconciliazioni(){
     // il picker "Cambia abbinamento" su quel movimento/fattura, per rivedere
     // o correggere la scelta senza dover cercare a mano (richiesto 07/08).
     Array.prototype.forEach.call(ov.querySelectorAll('._integritaMovRiga'), function(el){
-      el.onclick = function(){ _apriDaControlloIntegrita(el.getAttribute('data-movid')); };
+      el.onclick = function(e){ e.stopPropagation(); var t = el.getAttribute('data-tocc'); _integApriConRitorno(el.getAttribute('data-movid'), t ? t.split('||') : null); };
     });
-    var chiudi = function(){ try{ document.body.removeChild(ov); }catch(e){} };
+    var _corpo = document.getElementById('integritaBody'); if(_corpo) _corpo.scrollTop = _INTEG.scroll || 0;
+    var _un = document.getElementById('integUndo'); if(_un) _un.onclick = function(){ try{ document.body.removeChild(ov); }catch(e){} _integAnnulla(); };
+    var _agg = document.getElementById('integAgg'); if(_agg) _agg.onclick = function(){ try{ document.body.removeChild(ov); }catch(e){} _controlloIntegritaRiconciliazioni({ ricalcola: true }); };
+    var chiudi = function(){ try{ _INTEG.scroll = _corpo ? _corpo.scrollTop : 0; _integSalva(); }catch(e){} try{ document.body.removeChild(ov); }catch(e){} };
     document.getElementById('integritaClose').onclick = chiudi;
     document.getElementById('integritaOk').onclick = chiudi;
     ov.onclick = function(e){ if(e.target === ov) chiudi(); };
@@ -35628,7 +35823,7 @@ function ricIndice(){
     });
     var assegnato = ricR2(L.reduce(function(s, l){ var f = c.doc[l.fid]; return s + (f && f.tipo !== 'nota_credito' ? (l.quota || 0) : 0); }, 0));
     var nette = ricR2(L.reduce(function(s, l){ return s + (l.netta ? (l.negativo || 0) : 0); }, 0));
-    c.quoteMov[key] = { totale: A, assegnato: entrata ? ricR2(L.reduce(function(s, l){ return s + (l.quota || 0); }, 0)) : assegnato, nette: nette, libero: A != null ? ricR2(Math.max(0, A + nette - assegnato)) : null, docs: L.filter(function(l){ return l.quota > 0.009; }).map(function(l){ return { fid: l.fid, quota: l.quota, dedotta: !!l.dedotta }; }) };
+    c.quoteMov[key] = { totale: A, assegnato: entrata ? ricR2(L.reduce(function(s, l){ return s + (l.quota || 0); }, 0)) : assegnato, nette: nette, libero: A != null ? ricR2(Math.max(0, A + nette - (entrata ? ricR2(L.reduce(function(s, l){ return s + (l.quota || 0); }, 0)) : assegnato))) : null, docs: L.filter(function(l){ return l.quota > 0.009; }).map(function(l){ return { fid: l.fid, quota: l.quota, dedotta: !!l.dedotta }; }) };
     var condiviso = L.filter(function(l){ return l.quota > 0.009; }).length > 1;
     L.forEach(function(l){
       var f = c.doc[l.fid]; if(!f) return;
