@@ -3426,7 +3426,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     <button class="hdr-btn" id="tb-back" style="display:none" aria-label="Indietro"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
     <div class="tb-titles">
       <h1 id="tb-title">Presenze</h1>
-      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v78</span></p>
+      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v79</span></p>
     </div>
     <span class="topbar-badge" id="role-badge"></span>
     <div class="hdr-actions">
@@ -27301,6 +27301,7 @@ function _attivaGestureVdoc() {
 
 function chiudiVisualizzatoreDoc() {
   closeSheet('sh-visualizzaDoc');
+  _condCache = { path: '', file: null };
   _vdocPdfDoc = null;
   _vdocSoloPagina = null;
 }
@@ -27314,8 +27315,16 @@ function chiudiVisualizzatoreDoc() {
 // vero allegato dall'altra parte, non un link che scade), poi ripiega
 // su un link condivisibile, poi sulla copia negli appunti se il
 // dispositivo non supporta affatto la condivisione nativa (desktop).
+// File già scaricato per la condivisione. Su iPhone il pannello Condividi si apre solo
+// subito dopo il tocco: se il download ha fatto scadere il permesso, il file resta qui
+// pronto e al secondo tocco si condivide senza attese.
+let _condCache = { path: '', file: null };
 async function condividiFile(path, nome, isImg) {
   if (!path) { toast('Condivisione non disponibile per questa anteprima'); return; }
+  if (_condCache.path === path && _condCache.file) {
+    try { await navigator.share({ files: [_condCache.file], title: nome || 'Documento' }); return; }
+    catch(e) { if (e && e.name === 'AbortError') return; _condCache = { path: '', file: null }; }
+  }
   try {
     // Link più lungo (1 ora) di quello usato solo per visualizzare (5 min):
     // chi riceve la condivisione potrebbe aprirla dopo un po'.
@@ -27327,8 +27336,12 @@ async function condividiFile(path, nome, isImg) {
       const blob = await resp.blob();
       const file = new File([blob], nome || 'documento', { type: blob.type || (isImg ? 'image/jpeg' : 'application/pdf') });
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], title: nome || 'Documento' });
-        return;
+        try { await navigator.share({ files: [file], title: nome || 'Documento' }); return; }
+        catch(e) {
+          if (e && e.name === 'AbortError') return;
+          if (e && e.name === 'NotAllowedError') { _condCache = { path, file }; toast('📎 File pronto: tocca di nuovo ⬆️ per condividerlo'); return; }
+          throw e;
+        }
       }
     } catch(e) { /* se il download/condivisione file fallisce, prova col link sotto */ }
     if (navigator.share) {
