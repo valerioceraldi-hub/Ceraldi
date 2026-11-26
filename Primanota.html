@@ -36789,15 +36789,15 @@ function ricRileggiSumUpUnaVolta(){
    ══════════════════════════════════════════════════════════════════════ */
 var RICV = { ctx: null, inCarica: false, gruppo: null, mostra: 40, annulla: [], aperte: {}, memo: null, soloClassica: false, detAperti: {} };
 var RICV_CAT = {
-  stipendio: ['Stipendi e compensi', 'cedolino'], tributo: ['Tasse, contributi e multe', 'tributo'], cliente: ['Incassi da clienti', 'altro'], commissione: ['Commissioni e spese bancarie', 'commissione'],
-  giroconto: ['Giroconti tra i tuoi conti', 'giroconto'], finanziamento_soci: ['Soci: finanziamenti e rimborsi', 'finanziamento_soci'], mutuo: ['Mutuo e prestiti', 'altro'],
+  stipendio: ['Stipendi e compensi', 'cedolino'], tributo: ['Tasse, contributi, multe e verbali', 'tributo'], cliente: ['Incassi da clienti', 'altro'], commissione: ['Commissioni e spese bancarie', 'commissione'],
+  giroconto: ['Giroconti tra i tuoi conti', 'giroconto'], finanziamento_soci: ['Soci: finanziamenti e rimborsi', 'finanziamento_soci'], dividendi: ['Dividendi e utili ai soci', 'altro'], mutuo: ['Mutuo e prestiti', 'altro'],
   carta: ['Saldo della carta di credito', 'altro'], paypal: ['PayPal (si collega nella sezione PayPal)', 'altro'], incasso: ['Incassi POS', 'altro'],
   versamento: ['Versamenti di contanti', 'altro'], restituzione: ['Pagamenti restituiti', 'altro'], rimborso_spese: ['Rimborsi spese', 'rimborso_spese'],
   legale: ['Spese legali e transazioni', 'altro'], archivio: ['Prima dell\'archivio fatture', 'fuori_periodo'], assicurazione: ['Assicurazioni e sinistri', 'altro'], altro: ['Altro, senza fattura', 'altro'], ignorato: ['Esclusi a mano', 'altro']
 };
 // categorie «deboli»: possono comunque avere una fattura (PayPal, avvocato, assicurazione): prima si cerca la fattura
 var RICV_DEBOLI = { stipendio: 1, paypal: 1, legale: 1, assicurazione: 1 };
-var RICV_CAT_ORDINE = ['cliente', 'stipendio', 'tributo', 'mutuo', 'giroconto', 'finanziamento_soci', 'commissione', 'carta', 'paypal', 'incasso', 'versamento', 'restituzione', 'rimborso_spese', 'legale', 'assicurazione', 'altro', 'archivio', 'ignorato'];
+var RICV_CAT_ORDINE = ['cliente', 'stipendio', 'tributo', 'mutuo', 'giroconto', 'finanziamento_soci', 'dividendi', 'commissione', 'carta', 'paypal', 'incasso', 'versamento', 'restituzione', 'rimborso_spese', 'legale', 'assicurazione', 'altro', 'archivio', 'ignorato'];
 /* v10.46.0 — RICONCILIAZIONE UNICA. Cinque gruppi, ognuno con un compito chiaro:
    tre gruppi «da fare», le verifiche di cassa (prima solo nella vista classica) e
    «A posto», che contiene SOLO cose chiuse. «Non sono fatture» non è più un gruppo:
@@ -37581,6 +37581,7 @@ async function ricvRipristina(fotoDocs, fotoMov){
 function ricvPushAnnulla(etichetta, fn){ RICV.annulla.push({ t: etichetta, fn: fn }); if(RICV.annulla.length > 20) RICV.annulla.shift(); }
 async function ricvAnnulla(){
   var u = RICV.annulla.pop(); if(!u) return;
+  if(typeof RG !== 'undefined') RG.fermo = null;   // annullato: la domanda torna com'era
   try{ await u.fn(); toast('↩️ Annullato: ' + u.t, { forza: true }); }catch(e){ toast('❌ Non riesco ad annullare: ' + (e.message || e), { forza: true }); }
   await ricvCaricaContesto(true); ricvRidisegna();
 }
@@ -37677,7 +37678,7 @@ async function ricvCollega(key, docs, opz){
 async function ricvConfermaProposta(key, i){
   var S = ricvCalcola().stati[key]; if(!S || !S.proposte[i]) return;
   var P = S.proposte[i], prima = RICV.annulla.length;
-  if(P.stip){ var okS = await ricvCollegaStipendio(key, P.stip); if(okS){ pnChiudi('ricvMov'); ricvRidisegna(); } return; }
+  if(P.stip){ var okS = await ricvCollegaStipendio(key, P.stip); if(okS){ pnChiudi('ricvMov'); ricvRidisegna(); } return !!okS; }
   var ok = await ricvCollega(key, P.docs, { muto: !!P.spostaDa });
   if(ok && P.spostaDa){
     // la nota era collegata per errore a un'uscita: tolgo quel collegamento (un solo «Annulla» per tutto)
@@ -37687,6 +37688,7 @@ async function ricvConfermaProposta(key, i){
     toast('✓ Nota spostata sul rimborso', { forza: true });
   }
   if(ok){ pnChiudi('ricvMov'); ricvRidisegna(); }
+  return !!ok;
 }
 // acconto: collega il movimento a una fattura aperta per l'importo del movimento
 async function ricvCollegaAcconto(key, fid){
@@ -37729,7 +37731,7 @@ async function ricvRifiuta(key, i){
     var at = S.proposte[i].stip.attesa;
     try{ var rs = await sbFetch('ric_collegamenti', { method: 'POST', headers: { 'Prefer': 'return=representation' }, body: JSON.stringify({ ambito: 'banca', movimento_id: String(M.id), movimento_fonte: 'banca', movimento_data: M.data || null, evento_tipo: 'cedolino', evento_ref: 'stip:' + at.id, importo: Math.abs(M.importo), livello: 'proposta', origine: 'manuale', stato: 'rifiutato', motivi: ['stipendio proposto e rifiutato in Fatture'] }) });
       if(rs && rs[0] && rs[0].id) ids.push(rs[0].id); if(RICV.ctx) RICV.ctx.rif[String(M.id) + '|stip:' + at.id] = (rs && rs[0] && rs[0].id) || 1; }
-    catch(e){ toast('❌ Non salvato: ' + (e.message || e), { forza: true }); return; }
+    catch(e){ toast('❌ Non salvato: ' + (e.message || e), { forza: true }); return false; }
   }
   for(var j = 0; j < S.proposte[i].docs.length; j++){
     var f = S.proposte[i].docs[j].f;
@@ -37737,12 +37739,13 @@ async function ricvRifiuta(key, i){
       var r = await sbFetch('ric_collegamenti', { method: 'POST', headers: { 'Prefer': 'return=representation' }, body: JSON.stringify({ ambito: 'fatture', movimento_id: String(M.id), movimento_fonte: M.fonte === 'carta' ? 'carta' : 'banca', movimento_data: M.data || null, evento_tipo: 'fattura', evento_ref: String(f.id), importo: Math.abs(M.importo), livello: 'proposta', origine: 'manuale', stato: 'rifiutato', motivi: ['proposta rifiutata in Fatture'] }) });
       if(r && r[0] && r[0].id) ids.push(r[0].id);
       if(RICV.ctx) RICV.ctx.rif[String(M.id) + '|' + f.id] = (r && r[0] && r[0].id) || 1;
-    }catch(e){ toast('❌ Non salvato: ' + (e.message || e), { forza: true }); return; }
+    }catch(e){ toast('❌ Non salvato: ' + (e.message || e), { forza: true }); return false; }
   }
   RICV.memo = null;
   ricvPushAnnulla('scarto della proposta', async function(){ for(var k = 0; k < ids.length; k++) await sbFetch('ric_collegamenti?id=eq.' + ids[k], { method: 'PATCH', headers: { 'Prefer': 'return=minimal' }, body: JSON.stringify({ stato: 'annullato' }) }); });
   toast('Ok, non lo propongo più', { forza: true });
   ricvRidisegna(); if(document.getElementById('ricvMov')) ricvApri(key);
+  return true;
 }
 // Scollega un movimento da tutti i suoi documenti (o da uno)
 async function ricvScollega(key, fid){
@@ -37810,7 +37813,7 @@ async function ricvSegnaCategoria(key, cat, ricorda){
   var body = { ambito: 'banca', movimento_id: String(M.id), movimento_fonte: M.fonte === 'carta' ? 'carta' : 'banca', movimento_data: M.data || null, evento_tipo: def[1], importo: Math.abs(M.importo), livello: 'manuale', origine: 'manuale', stato: 'attivo', motivi: ['categoria:' + cat, def[0]] };
   var id = null;
   try{ var r = await sbFetch('ric_collegamenti', { method: 'POST', headers: { 'Prefer': 'return=representation' }, body: JSON.stringify(body) }); id = r && r[0] && r[0].id; }
-  catch(e){ toast('❌ Non salvato: ' + (e.message || e), { forza: true }); return; }
+  catch(e){ toast('❌ Non salvato: ' + (e.message || e), { forza: true }); return false; }
   if(RICV.ctx) RICV.ctx.cat[String(M.id)] = { cat: cat, id: id, origine: 'manuale', motivi: body.motivi };
   var benef = ricBeneficiario({ descrizione: M.descrizione }), bn = benef ? _rcNorm(benef) : '', regolePrima = null;
   if(ricorda && bn){
@@ -37829,7 +37832,8 @@ async function ricvSegnaCategoria(key, cat, ricorda){
     if(regolePrima){ await sbFetch('ceraldi_stato_condiviso?on_conflict=id', { method: 'POST', headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify({ id: 'ric_regole_categorie', data: { regole: regolePrima }, updated_at: new Date().toISOString() }) }); if(RICV.ctx) RICV.ctx.regole = regolePrima; }
   });
   toast('✓ ' + def[0] + (ricorda && bn ? ' · anche per i prossimi bonifici a ' + ricvBello(benef) : ''), { forza: true });
-  pnChiudi('ricvMov'); ricvRidisegna();
+  pnChiudi('ricvStip'); pnChiudi('ricvMov'); ricvRidisegna();
+  return true;
 }
 async function ricvTogliCategoria(key){
   var c = RICV.ctx && RICV.ctx.cat[String((ricvTrovaRaw(key) || {}).m ? ricvTrovaRaw(key).m.id : key)];
@@ -38177,12 +38181,9 @@ function ricvApri(key){
   else { var _qL = (ricIndice().quoteMov[key] || {}).libero || 0; if(_qL > RIC.ARROT) az.push('<button class="sk-btn" onclick="ricvScegli(' + k + ')">Aggiungi fatture per i ' + fmt(_qL) + ' che restano</button>'); }
   if(az.length) h += '<div class="sk-btns">' + az.join('') + '</div>';
   if(!S.docs || !S.docs.length){
-    var opz = entra ? ['cliente', 'giroconto', 'finanziamento_soci', 'restituzione', 'legale', 'altro'] : ['tributo', 'giroconto', 'finanziamento_soci', 'commissione', 'mutuo', 'legale', 'assicurazione', 'rimborso_spese', 'altro'];
-    var b = ricBeneficiario({ descrizione: M.descrizione });
     var conProp = S.proposte && S.proposte.length;
-    if(conProp) h += '<details class="rv-det rv-det-cat"><summary><b>Non è una fattura?</b><small>Segnalo come stipendio, tassa, giroconto…</small></summary>';
-    h += (conProp ? '' : '<section class="sk-sez"><div class="sk-sez-t">Non è una fattura?</div>') + '<div class="rv-cats">' + opz.map(function(c){ return '<button class="rv-catb' + (S.cat === c ? ' on' : '') + '" onclick="ricvSegnaCategoria(' + k + ',\'' + c + '\',document.getElementById(\'ricvRicorda\') && document.getElementById(\'ricvRicorda\').checked)">' + esc(RICV_CAT[c][0]) + '</button>'; }).join('') + '</div>' +
-      (b ? '<label class="rv-ricorda"><input type="checkbox" id="ricvRicorda"> Fai lo stesso con i prossimi movimenti a «' + esc(ricvBello(b)) + '»</label>' : '') + (conProp ? '</details>' : '</section>');
+    if(conProp) h += '<details class="rv-det rv-det-cat"><summary><b>Non è una fattura?</b><small>Segnalo come stipendio, soci, dividendi, verbali, giroconto…</small></summary>';
+    h += (conProp ? '' : '<section class="sk-sez"><div class="sk-sez-t">Non è una fattura? Cos\'è?</div>') + ricvCosaE(S, k, 'scheda') + (conProp ? '</details>' : '</section>');
   }
   h += ricvStoriaHtml(S, k);
   mo.querySelector('.pn-sh-bd').innerHTML = h;
@@ -38234,7 +38235,28 @@ function ricvStoriaHtml(S, k){
    azioni di sempre (con Annulla e Scollega), poi passa da sola alla successiva.
    Ordine: prima le proposte sicure, poi probabili, dubbie, stipendi, cose che non
    tornano e infine i pagamenti senza fattura trovata. «Salta» non cambia nulla. */
-var RG = { salta: {}, fatti: 0 };
+var RG = { salta: {}, fatti: 0, fermo: null };
+// «Allora cos'è?»: un solo elenco, per «Una alla volta» e per la scheda del movimento
+var RICV_COSA_E = { uscita: ['finanziamento_soci', 'dividendi', 'tributo', 'giroconto', 'mutuo', 'commissione', 'legale', 'assicurazione', 'rimborso_spese', 'altro'], entrata: ['cliente', 'finanziamento_soci', 'giroconto', 'restituzione', 'legale', 'altro'] };
+function ricvCosaE(S, k, dove){
+  var M = S.M, entra = M.importo > 0, guida = dove === 'guida', idR = guida ? 'rgRicorda' : 'ricvRicorda', b = ricBeneficiario({ descrizione: M.descrizione });
+  var h = '<div class="rv-cats">';
+  if(!entra && M.fonte === 'banca') h += '<button class="rv-catb' + (S.cat === 'stipendio' ? ' on' : '') + '" onclick="ricvStipApri(' + k + ')">Stipendio (scegli chi e il mese)</button>';
+  h += RICV_COSA_E[entra ? 'entrata' : 'uscita'].map(function(c){
+    var fai = 'ricvSegnaCategoria(' + k + ',\'' + c + '\',(document.getElementById(\'' + idR + '\')||{}).checked)';
+    return '<button class="rv-catb' + (S.cat === c ? ' on' : '') + '" onclick="' + (guida ? 'ricvGuidaFai(function(){ return ' + fai + '; })' : fai) + '">' + esc(RICV_CAT[c][0]) + '</button>';
+  }).join('') + '</div>';
+  if(b) h += '<label class="rv-ricorda"><input type="checkbox" id="' + idR + '"> Fai lo stesso con i prossimi movimenti a «' + esc(ricvBello(b)) + '»</label>';
+  return h;
+}
+function ricvStipApri(key){
+  var S = ricvCalcola().stati[key]; if(!S) return;
+  var gia = document.getElementById('ricvStDip');   // la scheda del movimento ha già la scelta: la mostro lì
+  if(gia && !(gia.closest && gia.closest('#ricvStip'))){ gia.parentNode.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+  var mo = pnFoglio('ricvStip', { titolo: 'Di chi è lo stipendio?', sotto: fmt(Math.abs(S.M.importo)) + ' · ' + ricGg(S.M.data), alto: true, z: 345 });
+  mo.querySelector('.pn-sh-bd').innerHTML = ricvStipSezione(S, ricvJs(key)) + '<div class="sk-btns"><button class="sk-btn" onclick="ricvSegnaCategoria(' + ricvJs(key) + ',\'stipendio\',false)">Segnalo solo come stipendio, senza persona</button></div>';
+}
+async function ricvGuidaNo(key){ if(await ricvRifiuta(key, 0)) RG.fermo = key; ricvGuidaDisegna(); }
 function ricvDaFare(){
   var C = ricvCalcola(), F = ricvFiltri(), L = [];
   Object.keys(C.stati).forEach(function(k){ var S = C.stati[k]; if(!ricvNelFiltro(S.M, F)) return; var g = ricvGruppoVisto(S); if(g === 'conferma' || g === 'sistemare' || g === 'capire') L.push(S); });
@@ -38242,12 +38264,16 @@ function ricvDaFare(){
   L.sort(function(a, b){ return peso(a) - peso(b) || String(b.M.data).localeCompare(String(a.M.data)); });
   return L;
 }
-function ricvGuida(){ RG = { salta: {}, fatti: 0, tot: ricvDaFare().length }; pnFoglio('ricvGuida', { titolo: 'Una alla volta', alto: true, z: 335 }); ricvGuidaDisegna(); }
-function ricvGuidaSalta(key){ RG.salta[key] = 1; ricvGuidaDisegna(); }
-async function ricvGuidaFai(fn){ try{ await fn(); RG.fatti++; }catch(e){ console.warn(e); } ricvGuidaDisegna(); }
+function ricvGuida(){ RG = { salta: {}, fatti: 0, fermo: null, tot: ricvDaFare().length }; pnFoglio('ricvGuida', { titolo: 'Una alla volta', alto: true, z: 335 }); ricvGuidaDisegna(); }
+function ricvGuidaSalta(key){ RG.salta[key] = 1; RG.fermo = null; ricvGuidaDisegna(); }
+async function ricvGuidaFai(fn){ try{ if(await fn() !== false){ RG.fatti++; RG.fermo = null; } }catch(e){ console.warn(e); } ricvGuidaDisegna(); }
 function ricvGuidaDisegna(){
   var mo = document.getElementById('ricvGuida'); if(!mo) return;
-  var L = ricvDaFare(), resto = L.filter(function(S){ return !RG.salta[S.M.key]; }), S = resto[0], bd = mo.querySelector('.pn-sh-bd');
+  var L = ricvDaFare(), fermo = RG.fermo ? ricvCalcola().stati[RG.fermo] : null;
+  // il movimento a cui hai risposto «No» resta in primo piano finché non dici cos'è (o lo salti)
+  if(fermo && ((fermo.docs && fermo.docs.length) || (RICV.ctx && (RICV.ctx.stip[String(fermo.M.id)] || RICV.ctx.cat[String(fermo.M.id)])))){ RG.fermo = null; fermo = null; }
+  if(fermo && !L.some(function(x){ return x.M.key === fermo.M.key; })) L.push(fermo);
+  var resto = L.filter(function(S){ return !RG.salta[S.M.key]; }), S = fermo || resto[0], bd = mo.querySelector('.pn-sh-bd');
   var tit = mo.querySelector('.pn-sh-t small'); var sotto = L.length ? (L.length === 1 ? 'Ne resta 1' : 'Ne restano ' + L.length) : 'Finito';
   if(tit) tit.textContent = sotto; else { var t = mo.querySelector('.pn-sh-t'); if(t) t.insertAdjacentHTML('beforeend', '<small>' + sotto + '</small>'); }
   var annulla = RICV.annulla.length ? '<button class="rv-annulla" onclick="ricvAnnulla()">↩︎ Annulla l\'ultima: ' + esc(RICV.annulla[RICV.annulla.length - 1].t) + '</button>' : '';
@@ -38265,35 +38291,32 @@ function ricvGuidaDisegna(){
   var nSalt = L.length - resto.length, tot = RG.fatti + L.length;
   var h = annulla + '<div class="gd-pos">' + (RG.fatti + nSalt + 1) + ' di ' + tot + '</div>';
   h += '<div class="gd-frase">' + (entra ? 'Il ' + ricGg(M.data) + ' sono entrati ' + quanto + ' da «' + chi + '»' : 'Il ' + ricGg(M.data) + ' hai pagato ' + quanto + ' a «' + chi + '»') + ' <span>(' + conto + ')</span></div>';
-  var bott = [];
+  var bott = [], cosa = !!fermo, sotto = '';
   if(g === 'conferma' && P && P.stip){
     h += '<div class="gd-dom">È lo stipendio di <b>' + esc(P.stip.nome) + '</b> di ' + esc(ricvMeseNome(P.stip.mese, P.stip.anno)) + '?</div>';
     bott.push('<button class="sk-btn prim big" onclick="ricvGuidaFai(function(){ return ricvConfermaProposta(' + k + ',0); })">✓ Sì</button>');
-    bott.push('<button class="sk-btn big" onclick="ricvGuidaFai(function(){ return ricvRifiuta(' + k + ',0); })">✗ No</button>');
+    bott.push('<button class="sk-btn big" onclick="ricvGuidaNo(' + k + ')">✗ No</button>');
   } else if(g === 'conferma' && P){
     h += '<div class="gd-dom">' + (P.docs.length > 1 ? 'Paga queste ' + P.docs.length + ' fatture?' : P.rimborso ? 'È il rimborso di questa nota di credito?' : 'È il pagamento di questa fattura?') + '</div>';
     h += '<div class="rv-doc">' + P.docs.slice(0, 4).map(function(x){ return ricvEstremi(x.f, { quota: x.quota, dataMov: M.data }); }).join('') + '</div>';
     h += '<div class="gd-perche">' + ricvChip(P.livello) + ' ' + esc((P.motivi || []).slice(0, 2).join(' · ')) + '</div>';
     bott.push('<button class="sk-btn prim big" onclick="ricvGuidaFai(function(){ return ricvConfermaProposta(' + k + ',0); })">✓ Sì, è ' + (P.docs.length > 1 ? 'così' : 'lei') + '</button>');
-    bott.push('<button class="sk-btn big" onclick="ricvGuidaFai(function(){ return ricvRifiuta(' + k + ',0); })">✗ No, non è ' + (P.docs.length > 1 ? 'così' : 'lei') + '</button>');
+    bott.push('<button class="sk-btn big" onclick="ricvGuidaNo(' + k + ')">✗ No, non è ' + (P.docs.length > 1 ? 'così' : 'lei') + '</button>');
     bott.push('<button class="sk-btn big" onclick="ricvScegli(' + k + ')">La cerco io</button>');
-  } else if(S.daPresenze){
-    h += '<div class="gd-dom">Sembra uno stipendio. Di chi e di che mese?</div>';
-    bott.push('<button class="sk-btn prim big" onclick="ricvApri(' + k + ')">Scegli dipendente e mese</button>');
   } else if(g === 'sistemare'){
-    var a = (S.avvisi || [])[0] || {};
+    var a = (S.avvisi || [])[0] || S.senza || {};
     h += '<div class="gd-dom">Qui qualcosa non torna.</div><div class="gd-perche"><b>' + esc(a.t || '') + '</b><br>' + esc(a.s || S.perche || '') + '</div>';
     bott.push('<button class="sk-btn prim big" onclick="ricvApri(' + k + ')">Guardiamolo insieme</button>');
   } else {
-    h += '<div class="gd-dom">' + (entra ? 'Non so cos\'è questa entrata. Cos\'è?' : 'Non ho trovato la fattura. Cos\'è questo pagamento?') + '</div>';
-    if(!entra) bott.push('<button class="sk-btn prim big" onclick="ricvScegli(' + k + ')">È una fattura: la cerco io</button>');
-    else bott.push('<button class="sk-btn prim big" onclick="ricvScegli(' + k + ')">È un rimborso: cerco la nota di credito</button>');
-    var opz = entra ? ['cliente', 'giroconto', 'finanziamento_soci', 'restituzione', 'altro'] : ['tributo', 'commissione', 'giroconto', 'finanziamento_soci', 'mutuo', 'rimborso_spese', 'altro'];
-    h += '<div class="gd-cat-t">Non è una fattura? Tocca cos\'è:</div><div class="rv-cats">' + opz.map(function(c){ return '<button class="rv-catb" onclick="ricvGuidaFai(function(){ return ricvSegnaCategoria(' + k + ',\'' + c + '\',(document.getElementById(\'rgRicorda\')||{}).checked); })">' + esc((RICV_CAT[c] || [c])[0]) + '</button>'; }).join('') + '</div>' +
-      (ricBeneficiario({ descrizione: M.descrizione }) ? '<label class="rv-ricorda"><input type="checkbox" id="rgRicorda"> Fai lo stesso le prossime volte con «' + esc(ricvBello(ricBeneficiario({ descrizione: M.descrizione }))) + '»</label>' : '');
+    var stip = S.daPresenze && !fermo;
+    h += '<div class="gd-dom">' + (fermo ? 'Va bene. Allora cos\'è?' : stip ? 'Sembra uno stipendio. Di chi e di che mese?' : entra ? 'Non so cos\'è questa entrata. Cos\'è?' : 'Non ho trovato la fattura. Cos\'è questo pagamento?') + '</div>';
+    if(stip) bott.push('<button class="sk-btn prim big" onclick="ricvStipApri(' + k + ')">Scegli dipendente e mese</button>');
+    bott.push('<button class="sk-btn' + (stip ? '' : ' prim') + ' big" onclick="ricvScegli(' + k + ')">' + (entra ? 'È un rimborso: cerco la nota di credito' : 'È una fattura: la cerco io') + '</button>');
+    cosa = true;
   }
+  if(cosa) sotto = '<div class="gd-cat-t">' + (g === 'conferma' && P ? 'Oppure dimmi cos\'è:' : 'Non è una fattura? Tocca cos\'è:') + '</div>' + ricvCosaE(S, k, 'guida');
   bott.push('<button class="sk-btn big gd-salta" onclick="ricvGuidaSalta(' + k + ')">Non lo so, salta</button>');
-  h += '<div class="gd-az">' + bott.join('') + '</div><button class="gd-dett" onclick="ricvApri(' + k + ')">Vedi tutti i dettagli ›</button>';
+  h += '<div class="gd-az">' + bott.join('') + '</div>' + sotto + '<button class="gd-dett" onclick="ricvApri(' + k + ')">Vedi tutti i dettagli ›</button>';
   bd.innerHTML = h; bd.scrollTop = 0;
 }
 
@@ -38717,8 +38740,9 @@ function ricvStipProposte(M, ctx){
     if(cands.length === 1){ punti += 15; motivi.push('Nessun altro pagamento atteso con questo importo'); }
     out.push({ stip: { dip: o.dip, nome: p.nome, anno: o.anno, mese: o.mese, importo: imp, fonte: o.fonte, attesa: o }, docs: [], punti: punti, identita: identita, motivi: motivi });
   });
-  // nessun importo atteso: ma la causale dice il nome del dipendente
-  if(!out.length){
+  // nessun importo atteso: ma la causale dice il nome del dipendente (non se hai già risposto «No»)
+  var scartato = !!(ctx.rif && Object.keys(ctx.rif).some(function(x){ return x.indexOf(String(M.id) + '|stip:') === 0; }));
+  if(!out.length && !scartato){
     var chi = ricvStipChi(M, P);
     if(chi){
       var p = P.prof[chi.dip], m = ricvStipMeseProbabile(M, P, chi.dip), gia = P.pbs.filter(function(b){ return b.dipendente_id === chi.dip && b.anno_riferimento === m.anno && b.mese_riferimento === m.mese && String(b.movimento_banca_id) !== String(M.id); });
@@ -38797,14 +38821,14 @@ async function ricvStipManuale(key){
   if(!mm){ toast('Scegli il mese', { forza: true }); return; }
   var p = RICV.ctx && RICV.ctx.paghe && RICV.ctx.paghe.prof[dip];
   var ok = await ricvCollegaStipendio(key, { dip: dip, nome: p ? p.nome : 'dipendente', anno: +mm.slice(0, 4), mese: +mm.slice(5, 7) });
-  if(ok){ pnChiudi('ricvMov'); ricvRidisegna(); }
+  if(ok){ pnChiudi('ricvStip'); pnChiudi('ricvMov'); ricvRidisegna(); }
 }
 function ricvStipScegli(id){ var s = document.getElementById('ricvStDip'); if(s) s.value = id; document.querySelectorAll('.rv-dip').forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-id') === id); }); }
 function ricvStipMese(v){ var s = document.getElementById('ricvStMese'); if(s) s.value = v; document.querySelectorAll('.rv-mese').forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-m') === v); }); }
 // sezione del foglio: «Collega in Presenze»
 function ricvStipSezione(S, k){
   var P = RICV.ctx && RICV.ctx.paghe, M = S.M;
-  if(!P || !P.ok) return pnSez('Collega in Presenze', '<div class="sk-nota">Solo l\'amministratore vede i dati di Presenze. Da qui puoi comunque segnarlo come stipendio.</div><div class="sk-btns"><button class="sk-btn" onclick="pnChiudi(\'ricvMov\');apriRiconciliaStipendioSingolo(' + ricvJs(M.id) + ',' + ricvJs(M.data) + ',' + Math.abs(M.importo) + ',' + ricvJs(M.descrizione) + ')">Scegli il dipendente</button></div>');
+  if(!P || !P.ok) return pnSez('Collega in Presenze', '<div class="sk-nota">Solo l\'amministratore vede i dati di Presenze. Da qui puoi comunque segnarlo come stipendio.</div><div class="sk-btns"><button class="sk-btn" onclick="pnChiudi(\'ricvStip\');pnChiudi(\'ricvMov\');apriRiconciliaStipendioSingolo(' + ricvJs(M.id) + ',' + ricvJs(M.data) + ',' + Math.abs(M.importo) + ',' + ricvJs(M.descrizione) + ')">Scegli il dipendente</button></div>');
   var d = ' ' + M.descrizione.toLowerCase().replace(/[^a-zà-ù0-9 ]/g, ' ') + ' ', imp = Math.abs(M.importo);
   // chi: prima chi è citato, poi chi ha attese o pagamenti vicini a questo importo
   var vicino = {};
@@ -38892,7 +38916,7 @@ function ricvPrevisione(){
       else if(S.cat === 'finanziamento_soci') sociIn += M.importo;     // non si prevedono: si dicono
       return;
     }
-    if(/^(giroconto|finanziamento_soci|restituzione|legale|archivio)$/.test(S.cat || '')) return;
+    if(/^(giroconto|finanziamento_soci|dividendi|restituzione|legale|archivio)$/.test(S.cat || '')) return;
     var sr = ricvSerieDi(S);
     if(!sr){ if(rec) fornTot += -M.importo; return; }
     var x = serie[sr.k] = serie[sr.k] || { k: sr.k, t: sr.t, agg: !!sr.agg, sdd: !!sr.sdd, mesi: {}, giorni: [], ultimi: [] };
@@ -39059,7 +39083,7 @@ async function ricvCaricaSaldoSU(){ try{ var r = await sbFetch('ceraldi_stato_co
 // i costi pagati in banca nel conto economico usano le stesse categorie della riconciliazione
 (function(){
   if(typeof _ceMovCat !== 'function') return;
-  var orig = _ceMovCat, mappa = { stipendio: 'stipendi', tributo: 'f24', mutuo: 'mutuo', commissione: 'spese', carta: 'nexi', paypal: 'paypal', giroconto: 'finsoci', finanziamento_soci: 'finsoci', incasso: 'numia', versamento: 'versamento' };
+  var orig = _ceMovCat, mappa = { stipendio: 'stipendi', tributo: 'f24', mutuo: 'mutuo', commissione: 'spese', carta: 'nexi', paypal: 'paypal', giroconto: 'finsoci', finanziamento_soci: 'finsoci', dividendi: 'dividendi', incasso: 'numia', versamento: 'versamento' };
   _ceMovCat = function(m){
     if(window._ricvSalta) return orig.apply(this, arguments); // apertura Riepilogo: il calcolo pesante arriva dopo, a schermo già disegnato
     try{ if(m && m.id != null && typeof ricvVistaAttiva === 'function'){ var C = ricvCalcola(), S = C.stati[ricMovKey(m.id)]; if(S && S.gruppo === 'non' && mappa[S.cat]) return mappa[S.cat]; if(S && S.docs && S.docs.length) return 'bonifico'; } }catch(e){}
