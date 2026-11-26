@@ -8738,19 +8738,29 @@ async function avviaRicalcoloIva(){
 // lettura vale per .xml e per .p7m (fattura firmata) e il testo del
 // documento resta disponibile per il salvataggio.
 async function analizzaXML(file){
-  let testo='';
-  try{ testo = await file.text(); }
-  catch(e){ toast('❌ File non leggibile: '+String(e.message||e).slice(0,60)); if(typeof _registraErrore==='function') _registraErrore('import','XML singolo non leggibile: '+file.name+' — '+(e.message||e)); return; }
-  return analizzaXmlTesto(testo, file.name);
+  let r;
+  try{ r = await fxLeggiFile(file); }
+  catch(e){ toast('❌ File non leggibile: se è su iCloud, scaricalo prima', {forza:true}); if(typeof _registraErrore==='function') _registraErrore('import','XML singolo non leggibile: '+file.name+' — '+(e.message||e)); return; }
+  if(r.tipo === 'pdf') return analizzaPDF(file);
+  // un XML scritto male resta allegabile a mano, come prima
+  if(r.tipo === 'fattura') return analizzaXmlTesto(r.xml, r.firmato ? fxNomeXml(file.name) : file.name);
+  if(r.tipo === 'illeggibile' && r.xml && r.xml.trim().charAt(0) === '<') return analizzaXmlTesto(r.xml, file.name);
+  const no = FX_FILE_NO[r.tipo] || FX_FILE_NO.illeggibile;
+  toast('❌ «' + file.name + '» ' + no.testo, {forza:true});
+  const fb=document.getElementById('fileBadge'); if(fb) fb.style.display='none';
+  if(!no.ignora && typeof _registraErrore==='function') _registraErrore('import','Documento non caricato: '+file.name+' — '+no.testo);
 }
-async function analizzaXmlP7m(file){
-  let testo=null;
-  try{ testo = await extractP7mBrowser(file); }catch(e){ testo=null; }
-  if(!testo){ toast('❌ Non riesco a estrarre l\'XML da questo file firmato'); if(typeof _registraErrore==='function') _registraErrore('import','p7m non estraibile: '+file.name); return; }
-  return analizzaXmlTesto(testo, file.name.replace(/\.p7m$/i,''));
-}
+async function analizzaXmlP7m(file){ return analizzaXML(file); }
 async function analizzaXmlTesto(xmlTesto, nomeFile){
   const lb=document.getElementById('lbar'), lt=document.getElementById('ltxt'), rb=document.getElementById('rBox');
+  try{
+    const _d = new DOMParser().parseFromString(xmlTesto,'text/xml');
+    const _altro = fxIntestataAdAltri(_d, await azPiva());
+    if(_altro && !(await fxChiediIntestatario(_altro, nomeFile || 'fattura.xml', _d))){
+      const _fb=document.getElementById('fileBadge'); if(_fb) _fb.style.display='none';
+      toast('Non registrata: è intestata a ' + _altro.nome, {forza:true}); return;
+    }
+  }catch(e){ console.warn('controllo intestatario', e); }
   lb.classList.add('on'); lt.classList.add('on'); lt.textContent='Lettura XML...'; rb.classList.remove('on');
   _aiLastScan={};
   {
@@ -8875,40 +8885,157 @@ async function analizzaXmlTesto(xmlTesto, nomeFile){
 // ── IMPORT MASSIVO XML ──
 // Legge più file XML FatturaPA contemporaneamente e li salva direttamente nel registro
 // senza passare per il form — deduplicazione automatica inclusa
-// ── ESTRAZIONE P7M LATO BROWSER ──────────────────────────────
-async function extractP7mBrowser(file){
-  const buffer = await file.arrayBuffer();
-  const data = new Uint8Array(buffer);
-  const dec = new TextDecoder('utf-8','replace');
-  const raw = dec.decode(data);
-  const XML_STARTS = ['<?xml','<p:FatturaElettronica','<FatturaElettronica','<ns2:FatturaElettronica','<b:FatturaElettronica'];
-  const XML_ENDS   = ['</p:FatturaElettronica>','</FatturaElettronica>','</ns2:FatturaElettronica>','</b:FatturaElettronica>'];
-  // Strategia 1: XML in chiaro con pulizia byte non validi
-  for(const start of XML_STARTS){
-    const si = raw.indexOf(start);
-    if(si === -1) continue;
-    let chunk = raw.slice(si);
-    for(const end of XML_ENDS){
-      const ei = chunk.lastIndexOf(end);
-      if(ei !== -1){
-        const candidate = chunk.slice(0, ei + end.length).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g,'');
-        const doc = new DOMParser().parseFromString(candidate,'text/xml');
-        if(!doc.querySelector('parsererror')){ console.log('[p7m] strategia 1 OK'); return candidate; }
-      }
+/* ══ LEGGERE UN FILE DI FATTURA (v10.54.0) ══
+   Un solo lettore per tutti gli import. Guarda il CONTENUTO, non il nome:
+   fattura XML, fattura firmata (.p7m, anche in base64), oppure un file che
+   non è una fattura — e in quel caso dice quale, in parole semplici. */
+var FX_FILE_NO = {
+  vuoto:     { testo: 'è vuoto: scaricalo di nuovo', ignora: false },
+  immagine:  { testo: 'è un\'immagine, non una fattura', ignora: true },
+  metadati:  { testo: 'è il file di servizio dell\'Agenzia delle Entrate che accompagna la fattura: serve solo il file della fattura', ignora: true },
+  ricevuta:  { testo: 'è una ricevuta di invio (Sistema di Interscambio), non la fattura', ignora: true },
+  pdf:       { testo: 'è un PDF: caricalo da «Documento», uno alla volta', ignora: false },
+  zip:       { testo: 'è un archivio ZIP: aprilo e scegli i file che contiene', ignora: false },
+  firmato:   { testo: 'è un file firmato che non riesco ad aprire: scaricalo di nuovo, oppure chiedi al fornitore il file XML', ignora: false },
+  illeggibile: { testo: 'non è una fattura elettronica leggibile', ignora: false }
+};
+var _FX_RICEVUTE = ['RicevutaConsegna','NotificaScarto','RicevutaScarto','NotificaMancataConsegna','RicevutaImpossibilitaRecapito','NotificaEsito','NotificaEsitoCommittente','NotificaDecorrenzaTermini','AttestazioneTrasmissioneFattura','ScartoEsitoCommittente','MetadatiInvioFile'];
+
+// Il documento dentro una busta firmata (PKCS#7): si segue la struttura della
+// firma e si prendono i byte esatti, anche se spezzati in più parti.
+function fxP7mContenuto(b){
+  var OID_DATI = [0x2A,0x86,0x48,0x86,0xF7,0x0D,0x01,0x07,0x01], trovato = null;
+  function leggi(p, fine, liv){
+    if(liv > 40 || p + 2 > fine) return null;
+    var tag = b[p++]; if((tag & 0x1f) === 0x1f) return null;
+    var l = b[p++], n = { tag: tag, figli: [] }, aperto = (l === 0x80), c;
+    if(!aperto && (l & 0x80)){ var k = l & 0x7f; if(k > 4 || p + k > fine) return null; l = 0; while(k--) l = l * 256 + b[p++]; }
+    if(aperto){
+      if(!(tag & 0x20)) return null;
+      while(p + 2 <= fine && !(b[p] === 0 && b[p+1] === 0)){ c = leggi(p, fine, liv + 1); if(!c) return null; n.figli.push(c); p = c.next; }
+      if(p + 2 > fine) return null;
+      n.next = p + 2;
+    } else {
+      if(p + l > fine) return null;
+      n.ini = p; n.fin = p + l; n.next = p + l;
+      if(tag & 0x20) while(p < n.fin){ c = leggi(p, n.fin, liv + 1); if(!c) return null; n.figli.push(c); p = c.next; }
     }
-    // Prova con pulizia aggressiva senza cercare la fine
-    const cleaned = raw.slice(si).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g,'');
-    for(const end of XML_ENDS){
-      const ei = cleaned.lastIndexOf(end);
-      if(ei !== -1){
-        const candidate = cleaned.slice(0, ei + end.length);
-        const doc = new DOMParser().parseFromString(candidate,'text/xml');
-        if(!doc.querySelector('parsererror')){ console.log('[p7m] strategia 1b OK'); return candidate; }
-      }
-    }
+    var o = n.figli[0];
+    if(!trovato && tag === 0x30 && o && o.tag === 0x06 && n.figli[1] && n.figli[1].tag === 0xA0 && o.fin - o.ini === OID_DATI.length
+       && OID_DATI.every(function(x, i){ return b[o.ini + i] === x; })) trovato = n.figli[1];
+    return n;
   }
-  console.warn('[p7m] impossibile estrarre XML');
-  return null;
+  if(!leggi(0, b.length, 0) || !trovato) return null;
+  var pezzi = [], tot = 0;
+  (function raccogli(n){
+    if(n.tag === 0x04){ var p = b.subarray(n.ini, n.fin); pezzi.push(p); tot += p.length; }
+    else n.figli.forEach(raccogli);
+  })(trovato);
+  if(!tot) return null;
+  var out = new Uint8Array(tot), q = 0; pezzi.forEach(function(p){ out.set(p, q); q += p.length; });
+  return out;
+}
+function fxTestoDaByte(b){
+  var capo = ''; for(var i = 0; i < Math.min(b.length, 200); i++) capo += String.fromCharCode(b[i]);
+  var m = capo.match(/encoding\s*=\s*["']([A-Za-z0-9_\-]+)["']/);
+  try{ return new TextDecoder(m ? m[1] : 'utf-8').decode(b); }catch(e){ return new TextDecoder('utf-8').decode(b); }
+}
+// bytes → { tipo:'fattura', xml, firmato } oppure { tipo: chiave di FX_FILE_NO }
+function fxLeggiByte(b, giro){
+  giro = giro || 0;
+  if(!b || !b.length) return { tipo: 'vuoto' };
+  var inizio = ''; for(var i = 0; i < Math.min(b.length, 12); i++) inizio += String.fromCharCode(b[i]);
+  if(/^(\x89PNG|\xFF\xD8\xFF|GIF8|RIFF[\s\S]{4}WEBP|[\s\S]{4}ftyp)/.test(inizio)) return { tipo: 'immagine' };
+  if(inizio.indexOf('%PDF') === 0) return { tipo: 'pdf' };
+  if(inizio.indexOf('PK\x03\x04') === 0) return { tipo: 'zip' };
+  var testo = fxTestoDaByte(b), t = testo.replace(/^﻿/, '').trim();
+  if(!t) return { tipo: 'vuoto' };
+  if(t.charAt(0) === '<'){
+    var doc = new DOMParser().parseFromString(t, 'text/xml');
+    if(doc.querySelector('parsererror')) return { tipo: /<svg[\s>]/i.test(t.slice(0, 3000)) ? 'immagine' : 'illeggibile', xml: testo };
+    var radice = String(doc.documentElement.localName || doc.documentElement.nodeName || '');
+    if(radice === 'svg') return { tipo: 'immagine' };
+    if(/^metadati/i.test(radice)) return { tipo: 'metadati' };
+    if(_FX_RICEVUTE.indexOf(radice) >= 0) return { tipo: 'ricevuta' };
+    return { tipo: 'fattura', xml: testo.replace(/^﻿/, ''), firmato: giro > 0 };
+  }
+  // busta firmata, binaria oppure in base64
+  var busta = b[0] === 0x30 ? b : null;
+  if(!busta){
+    var s64 = t.replace(/-----(BEGIN|END)[^-]*-----/g, '').replace(/\s+/g, '');
+    if(/^MI[A-Za-z0-9+\/]+=*$/.test(s64)){ try{ var bin = atob(s64); busta = new Uint8Array(bin.length); for(var j = 0; j < bin.length; j++) busta[j] = bin.charCodeAt(j); }catch(e){ busta = null; } }
+  }
+  if(busta && giro < 3){
+    var dentro = fxP7mContenuto(busta);
+    if(dentro){ var r = fxLeggiByte(dentro, giro + 1); if(r.tipo === 'fattura') r.firmato = true; return r; }
+  }
+  // riserva: XML in chiaro dentro al file, accettato solo se è integro
+  var m = testo.match(/(<\?xml[\s\S]*?)?<((?:[A-Za-z0-9]+:)?FatturaElettronica(?:Semplificata)?)[\s>][\s\S]*<\/\2>/);
+  if(m && !/[\x00-\x08\x0B\x0C\x0E-\x1F�]/.test(m[0]) && !new DOMParser().parseFromString(m[0], 'text/xml').querySelector('parsererror'))
+    return { tipo: 'fattura', xml: m[0], firmato: true };
+  return { tipo: (busta || m || /FatturaElettronica/.test(testo)) ? 'firmato' : 'illeggibile', xml: busta ? undefined : testo };
+}
+async function fxLeggiFile(file){
+  return fxLeggiByte(new Uint8Array(await file.arrayBuffer()));
+}
+// nome con cui allegare l'XML estratto da un file firmato
+function fxNomeXml(nome){
+  var n = String(nome || 'fattura.xml').replace(/\.p7m/ig, '');
+  return /\.xml$/i.test(n) ? n : n + '.xml';
+}
+async function extractP7mBrowser(file){
+  var r = await fxLeggiFile(file);
+  return r.tipo === 'fattura' ? r.xml : null;
+}
+
+/* ── La fattura è intestata alla società? (v10.54.0) ── */
+var AZ_KEY = 'azienda_fiscale', AZ_PIVA_PREDEF = '04523831214', _azPiva = null;
+function fxCodiceFiscaleNorm(v){ return String(v || '').toUpperCase().replace(/\s+/g, '').replace(/^IT(?=\d{11}$)/, ''); }
+async function azPiva(){
+  if(_azPiva) return _azPiva;
+  try{ var r = await sbFetch('ceraldi_stato_condiviso?id=eq.' + AZ_KEY + '&select=data'); _azPiva = fxCodiceFiscaleNorm(r && r[0] && r[0].data && r[0].data.piva) || AZ_PIVA_PREDEF; return _azPiva; }
+  catch(e){ return AZ_PIVA_PREDEF; }
+}
+async function azSalvaPiva(v){
+  var p = fxCodiceFiscaleNorm(v);
+  if(!/^(\d{11}|[A-Z0-9]{16})$/.test(p)) throw new Error('scrivi 11 cifre (P.IVA) oppure 16 caratteri (codice fiscale)');
+  await sbFetch('ceraldi_stato_condiviso?on_conflict=id', { method: 'POST', headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify({ id: AZ_KEY, data: { piva: p }, updated_at: new Date().toISOString() }) });
+  _azPiva = p; return p;
+}
+// null = intestata alla società, oppure non si capisce (non si blocca nulla)
+function fxIntestataAdAltri(doc, piva){
+  var dentro = function(nodo, tag){ var t = nodo.getElementsByTagName('*'), out = []; for(var i = 0; i < t.length; i++) if(t[i].localName === tag) out.push(t[i]); return out; };
+  var cc = dentro(doc, 'CessionarioCommittente')[0]; if(!cc) return null;
+  var primo = function(tag){ var e = dentro(cc, tag)[0]; return e ? String(e.textContent || '').trim() : ''; };
+  var codici = [primo('IdCodice'), primo('CodiceFiscale')].map(fxCodiceFiscaleNorm).filter(Boolean);
+  if(!codici.length || codici.indexOf(fxCodiceFiscaleNorm(piva)) >= 0) return null;
+  return { nome: primo('Denominazione') || (primo('Nome') + ' ' + primo('Cognome')).trim() || 'senza nome', codice: codici[codici.length - 1] };
+}
+// → true: registrala lo stesso · false: no
+function fxChiediIntestatario(altro, cosa, doc){
+  return new Promise(function(fine){
+    var fatto = false, rispondi = function(r){ if(fatto) return; fatto = true; pnChiudi('fxIntest'); fine(r); };
+    var mo = pnFoglio('fxIntest', { titolo: 'Non è intestata alla società', sotto: esc(cosa), z: 900 });
+    mo.querySelector('.pn-sh-bd').innerHTML =
+      '<div class="sk-riga"><div class="sk-riga-m"><b>Intestata a</b><small>' + esc(altro.nome + ' · ' + altro.codice) + '</small></div></div>' +
+      '<div class="sk-riga"><div class="sk-riga-m"><b>La società è</b><small>P.IVA ' + esc(_azPiva || AZ_PIVA_PREDEF) + '</small></div></div>' +
+      '<div class="sk-btns" style="flex-direction:column;align-items:stretch;margin-top:12px">' +
+      '<button class="sk-btn prim big" data-r="no">Non registrarla</button>' +
+      '<button class="sk-btn big" data-r="si">Registrala lo stesso</button></div>' +
+      '<details class="fn-det" style="margin-top:10px"><summary>La P.IVA della società non è questa</summary>' +
+      '<input type="text" id="fxPivaNuova" autocomplete="off" placeholder="P.IVA corretta" style="width:100%;padding:10px;margin-top:8px;border:1px solid var(--sep);border-radius:9px;background:var(--surface);color:var(--ink);font-size:16px">' +
+      '<button class="sk-btn big" data-r="salva" style="width:100%;margin-top:8px">Salva la P.IVA</button></details>';
+    Array.prototype.forEach.call(mo.querySelectorAll('[data-r]'), function(b){ b.addEventListener('click', async function(){
+      var r = b.getAttribute('data-r');
+      if(r !== 'salva') return rispondi(r === 'si');
+      try{ var p = await azSalvaPiva(mo.querySelector('#fxPivaNuova').value); toast('✓ P.IVA salvata', { forza: true });
+        var ancora = fxIntestataAdAltri(doc, p);
+        rispondi(ancora ? await fxChiediIntestatario(ancora, cosa, doc) : true);
+      }catch(e){ toast('⚠️ Non salvata: ' + String(e.message || e).slice(0, 80), { forza: true }); }
+    }); });
+    mo.querySelector('.pn-x').addEventListener('click', function(){ rispondi(false); });
+    mo.addEventListener('click', function(e){ if(e.target === mo) rispondi(false); });
+  });
 }
 
 
@@ -8999,7 +9126,17 @@ async function importaMassivoXml(input){
   const progMsg  = document.getElementById('bulkXmlMsg');
   const progBar  = document.getElementById('bulkXmlBar');
   const progSub  = document.getElementById('bulkXmlSub');
+  // v10.54.0: il riquadro va dove sta guardando chi importa (prima, importando
+  // da Fiscale → Importazioni, esito ed errori finivano nella scheda Scansiona)
+  const _card = (document.getElementById('inputBulkXml')||{}).parentNode;
+  const _daFisc = _card && _card.closest && _card.closest('.view.active');
+  const _badge = document.getElementById('fileBadge');
+  if(_daFisc) _card.parentNode.insertBefore(progBox, _card.nextSibling);
+  else if(_badge) _badge.parentNode.insertBefore(progBox, _badge);
+  while(progSub.nextSibling) progSub.parentNode.removeChild(progSub.nextSibling);   // esiti del giro prima
   progBox.style.display = 'block';
+  if(progBox.scrollIntoView) progBox.scrollIntoView({block:'nearest'});
+  const _piva = await azPiva();
 
   // 21/09 — Valerio: "la fattura Cilatte del 31/08 non è entrata con
   // l'import massivo e non me ne sono accorto". Prima i file che fallivano
@@ -9007,10 +9144,10 @@ async function importaMassivoXml(input){
   // sapeva quali fossero, quindi restavano fuori dal registro per sempre.
   // Ora ogni file che non entra viene elencato per nome con il motivo,
   // registrato nel log errori e si può riprovare con un tocco.
-  const risultati = { salvate:0, duplicate:0, aggiornate:0, errori:0, nomi:[], falliti:[], idNuovi:[] };
-  const _fallito = (file, motivo) => {
+  const risultati = { salvate:0, duplicate:0, aggiornate:0, errori:0, nomi:[], falliti:[], idNuovi:[], ignorati:[], altrui:[] };
+  const _fallito = (file, motivo, riprova) => {
     risultati.errori++;
-    risultati.falliti.push({nome:file.name, motivo:motivo, file:file});
+    risultati.falliti.push({nome:file.name, motivo:motivo, file:file, riprova:!!riprova});
     if(typeof _registraErrore==='function') _registraErrore('import','Import XML fallito: '+file.name+' — '+motivo);
   };
   const normS = s => String(s||'').trim().toLowerCase().replace(/[\s.]/g,'');
@@ -9022,20 +9159,22 @@ async function importaMassivoXml(input){
     progSub.textContent = `✅ ${risultati.salvate} salvate · 🔗 ${risultati.aggiornate} XML aggiornati · ⏭ ${risultati.duplicate} duplicate · ❌ ${risultati.errori} errori`;
 
     try{
-      let xmlTesto;
-      if(file.name.toLowerCase().endsWith('.p7m')){
-        xmlTesto = await extractP7mBrowser(file);
-        if(!xmlTesto){ _fallito(file,'file firmato .p7m: non sono riuscito a estrarre l\'XML'); continue; }
-      } else {
-        try{ xmlTesto = await file.text(); }
-        catch(e){ _fallito(file,'il telefono non è riuscito a leggere il file (se è su iCloud, scaricalo prima)'); continue; }
+      let letto;
+      try{ letto = await fxLeggiFile(file); }
+      catch(e){ _fallito(file,'il telefono non è riuscito a leggere il file (se è su iCloud, scaricalo prima)', true); continue; }
+      if(letto.tipo !== 'fattura'){
+        const no = FX_FILE_NO[letto.tipo] || FX_FILE_NO.illeggibile;
+        if(no.ignora) risultati.ignorati.push({nome:file.name, motivo:no.testo});
+        else _fallito(file, no.testo);
+        continue;
       }
-      if(!xmlTesto || !xmlTesto.trim()){ _fallito(file,'file vuoto'); continue; }
+      const xmlTesto = letto.xml;
+      const nomeAllegato = letto.firmato ? fxNomeXml(file.name) : file.name;
       const parser = new DOMParser();
       const doc = parser.parseFromString(xmlTesto, 'text/xml');
 
       // Controlla errori di parsing
-      if(doc.querySelector('parsererror')){ _fallito(file,'non è un XML valido'); continue; }
+      if(doc.querySelector('parsererror')){ _fallito(file, FX_FILE_NO.illeggibile.testo); continue; }
 
       const get = (tag, ctx) => {
         const root2=ctx||doc;
@@ -9117,7 +9256,7 @@ async function importaMassivoXml(input){
       const fattCollegataNum = tipoFatt==='nota_credito' ? getIn('DatiFattureCollegate','IdDocumento') : '';
       const fattCollegataData = tipoFatt==='nota_credito' ? getIn('DatiFattureCollegate','Data') : '';
 
-      if(!fornitore && !numero && !importo){ _fallito(file,'XML senza fornitore, numero e importo: non sembra una fattura'); continue; }
+      if(!fornitore && !numero && !importo){ _fallito(file,'è un XML senza fornitore, numero e importo: non sembra una fattura'); continue; }
 
       // Deduplicazione: stesso fornitore + numero già presente
       let dup = fatture.find(f =>
@@ -9196,7 +9335,7 @@ async function importaMassivoXml(input){
           if(idx>=0){
             if(!haXml){
               fatture[idx].fatturaAllegata = xmlTesto;
-              fatture[idx].fatturaAllegataName = file.name;
+              fatture[idx].fatturaAllegataName = nomeAllegato;
             }
             if(ivaInfo && !haIva){
               fatture[idx].ivaBreakdown = ivaInfo.breakdown;
@@ -9212,6 +9351,17 @@ async function importaMassivoXml(input){
         }
         risultati.duplicate++;
         continue;
+      }
+
+      // Intestata ad altri? Si chiede prima di registrarla
+      const _altro = fxIntestataAdAltri(doc, _azPiva || _piva);
+      if(_altro){
+        progMsg.textContent = 'Aspetto la tua risposta: ' + file.name;
+        const _cosa = (fornitore || file.name) + (numero ? ' · n° ' + numero : '') + ' · ' + fmt(importo);
+        if(!(await fxChiediIntestatario(_altro, _cosa, doc))){
+          risultati.altrui.push({nome:file.name, motivo:_cosa + ' — intestata a ' + _altro.nome});
+          continue;
+        }
       }
 
       // Ottieni pagamento default del fornitore se non specificato
@@ -9250,7 +9400,7 @@ async function importaMassivoXml(input){
         scadenza: scadRaw || (_regolaNuovaFattura(fornitore, numero, data)||{}).scadenza || '',
         foto: null, parzPagato: 0,
         fatturaAllegata: xmlTesto,
-        fatturaAllegataName: file.name,
+        fatturaAllegataName: nomeAllegato,
         xmlGithubPath: '',
         source: 'xml_import',
         pecId: '',
@@ -9274,7 +9424,7 @@ async function importaMassivoXml(input){
       }catch(e){
         const ix = fatture.findIndex(x=>x.id===nuova.id);
         if(ix>=0) fatture.splice(ix,1);
-        _fallito(file,'salvataggio sul Cloud non riuscito: '+String(e.message||e).slice(0,60));
+        _fallito(file,'salvataggio sul Cloud non riuscito: '+String(e.message||e).slice(0,60), true);
         continue;
       }
       // Prova ad agganciare automaticamente un movimento Prima Nota già
@@ -9312,7 +9462,7 @@ async function importaMassivoXml(input){
 
     }catch(e){
       console.warn('Errore import XML:', file.name, e);
-      _fallito(file, String(e && e.message || e).slice(0,80));
+      _fallito(file, 'errore durante l\'import: '+String(e && e.message || e).slice(0,80), true);
     }
   }
 
@@ -9347,9 +9497,11 @@ async function importaMassivoXml(input){
 
   // Fine import
   progBar.style.width = '100%';
-  const conti = risultati.salvate + risultati.duplicate + risultati.errori;
+  const conti = risultati.salvate + risultati.duplicate + risultati.errori + risultati.ignorati.length + risultati.altrui.length;
   progMsg.textContent = (risultati.errori || mancantiVerifica.length) ? '⚠️ Import finito con problemi' : '✅ Import completato';
   progSub.textContent = `${files.length} file letti → ${risultati.salvate} nuove · ${risultati.duplicate} già presenti · ${risultati.aggiornate} XML aggiunti · ${risultati.errori} non riusciti` +
+    (risultati.altrui.length ? ` · ${risultati.altrui.length} lasciate fuori da te` : '') +
+    (risultati.ignorati.length ? ` · ${risultati.ignorati.length} non erano fatture` : '') +
     (conti!==files.length ? ` (attenzione: ${files.length-conti} file non risultano da nessuna parte)` : '');
 
   // v10.27: registrate a mano con un importo diverso da quello dell'XML
@@ -9359,22 +9511,25 @@ async function importaMassivoXml(input){
     bx.textContent = 'Collegate alla fattura già registrata, ma l\'importo non coincide (non ho cambiato nulla, controlla):\n' + risultati.importiDiversi.map(t=>'• '+t).join('\n');
     progSub.parentNode.appendChild(bx);
   }
-  // Elenco per nome di ciò che NON è entrato, con possibilità di riprovare.
-  if(risultati.falliti.length || mancantiVerifica.length){
+  // Elenco per nome di ciò che NON è entrato, con il perché e cosa fare.
+  const _riquadro = (titolo, righe, colore) => {
     const box = document.createElement('div');
-    box.style.cssText = 'margin-top:8px;padding:10px;background:rgba(255,59,48,.10);border:1px solid rgba(255,59,48,.35);border-radius:10px;font-size:11.5px;color:var(--ink);white-space:pre-wrap;line-height:1.45';
-    box.textContent = 'NON entrate nel registro:\n' +
-      risultati.falliti.map(f=>'• '+f.nome+' → '+f.motivo).join('\n') +
-      (mancantiVerifica.length ? (risultati.falliti.length?'\n':'') + mancantiVerifica.map(m=>'• '+m).join('\n') : '');
+    box.style.cssText = 'margin-top:8px;padding:10px;background:'+(colore==='rosso'?'rgba(255,59,48,.10);border:1px solid rgba(255,59,48,.35)':'var(--surface2);border:1px solid var(--sep)')+';border-radius:10px;font-size:11.5px;color:var(--ink);white-space:pre-wrap;line-height:1.45;overflow-wrap:anywhere';
+    box.textContent = titolo + '\n' + righe.map(t=>'• '+t).join('\n');
     progSub.parentNode.appendChild(box);
-    if(risultati.falliti.length){
-      _xmlFalliti = risultati.falliti.map(f=>f.file);
-      const btn = document.createElement('button');
-      btn.textContent = '🔄 Riprova i '+risultati.falliti.length+' file non riusciti';
-      btn.style.cssText = 'margin-top:8px;width:100%;padding:9px;border:none;border-radius:9px;background:var(--blue);color:#fff;font-family:inherit;font-size:12.5px;font-weight:700';
-      btn.onclick = ()=> importaMassivoXml({files:_xmlFalliti, value:''});
-      progSub.parentNode.appendChild(btn);
-    }
+  };
+  if(risultati.falliti.length || mancantiVerifica.length){
+    _riquadro('Da controllare — non sono nel registro:', risultati.falliti.map(f=>f.nome+' → '+f.motivo).concat(mancantiVerifica), 'rosso');
+  }
+  if(risultati.altrui.length) _riquadro('Non registrate perché lo hai scelto tu:', risultati.altrui.map(f=>f.nome+' → '+f.motivo));
+  if(risultati.ignorati.length) _riquadro('Non erano fatture: non devi fare niente.', risultati.ignorati.map(f=>f.nome+' → '+f.motivo));
+  _xmlFalliti = risultati.falliti.filter(f=>f.riprova).map(f=>f.file);
+  if(_xmlFalliti.length){
+    const btn = document.createElement('button');
+    btn.textContent = '🔄 Riprova ' + (_xmlFalliti.length===1 ? 'il file non riuscito' : 'i '+_xmlFalliti.length+' file non riusciti');
+    btn.style.cssText = 'margin-top:8px;width:100%;padding:9px;border:none;border-radius:9px;background:var(--blue);color:#fff;font-family:inherit;font-size:12.5px;font-weight:700';
+    btn.onclick = ()=> importaMassivoXml({files:_xmlFalliti, value:''});
+    progSub.parentNode.appendChild(btn);
   }
 
   // Se ci sono duplicati, mostra QUALE fattura esistente ha causato il conflitto —
@@ -9401,8 +9556,10 @@ async function importaMassivoXml(input){
 
   // Se qualcosa non è entrato il riquadro RESTA a schermo finché non lo
   // chiude lui: un problema d'import non deve sparire da solo dopo 5 secondi.
-  if(!risultati.falliti.length && !mancantiVerifica.length){
-    setTimeout(()=>{ progBox.style.display='none'; }, dupInfo.length ? 20000 : 5000);
+  const _daLeggere = risultati.falliti.length || mancantiVerifica.length || risultati.ignorati.length || risultati.altrui.length;
+  clearTimeout(window._xmlNascondi);
+  if(!_daLeggere){
+    window._xmlNascondi = setTimeout(()=>{ progBox.style.display='none'; }, dupInfo.length ? 20000 : 5000);
   } else {
     const chiudi = document.createElement('button');
     chiudi.textContent = 'Ho capito, chiudi';
