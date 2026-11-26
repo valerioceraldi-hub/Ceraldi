@@ -12096,7 +12096,7 @@ function _generaPdfRegistrazione(f){
   if(Array.isArray(f.pagamentiManuali) && f.pagamentiManuali.length){
     sezione('Pagamenti registrati a mano');
     f.pagamentiManuali.forEach(function(p){
-      riga(_dIt(p.data||p.dataPagamento)||'—', [p.importo!==undefined?fmt(+p.importo||0):'', p.metodo||p.pagamento||'', p.rif||p.riferimento||''].filter(Boolean).join(' · '));
+      riga(_dIt(p.data||p.dataPagamento)||'—', [p.importo!==undefined?fmt(+p.importo||0):'', p.metodo||p.pagamento||'', p.rif||p.riferimento||'', p.mov?'è il movimento in banca':''].filter(Boolean).join(' · '));
     });
   }
   if(f.note){ sezione('Note'); riga('Note', f.note); }
@@ -35112,8 +35112,9 @@ async function pprpSalva(btn){
   var v = scR2(pprpImporto()), d = gv('ppData') || pnOggi(), m = gv('ppMetodo');
   var prima = { stato: f.stato, parzPagato: f.parzPagato, dataPagamento: f.dataPagamento, pagamento: f.pagamento, pagamentoOrigine: f.pagamentoOrigine, pagamentoImpostatoIl: f.pagamentoImpostatoIl };
   btn.disabled = true; btn.textContent = 'Salvo…';
+  ricInvalida(); var restava = scConti(f, fatture).residuo;
   f.parzPagato = scR2((f.parzPagato || 0) + v);
-  f.stato = 'parziale'; if(scConti(f, fatture).residuo < 0.01) f.stato = 'pagata';
+  f.stato = v >= restava - 0.009 ? 'pagata' : 'parziale';
   f.dataPagamento = d; if(!f.pagamento) f.pagamento = m; f.pagamentoOrigine = 'manuale'; f.pagamentoImpostatoIl = new Date().toISOString();
   var vRata = PRP.scelta >= 0 ? PRP.voci[PRP.scelta] : null;
   prima.pagamentiManuali = (f.pagamentiManuali || []).slice();
@@ -35611,6 +35612,112 @@ function ricContantiDi(fid){
   return (RIC.pn && RIC.pn[k]) || [];
 }
 
+/* ══ UN PAGAMENTO, CONTATO UNA VOLTA (26/11/2026, caso Distillerie Camel) ══
+   Un pagamento segnato a mano aspetta il movimento di banca o carta. Quando il
+   movimento arriva è LO STESSO pagamento: prende il posto della voce a mano e ne
+   completa i dati. Unica regola per riconciliazione, registro, avvisi e selettori.
+   'si'     = stesso importo al centesimo e stessi estremi (o estremi mancanti)
+   'chiedi' = potrebbe esserlo (avevi segnato contanti, altro metodo, date lontane): decidi tu
+   'no'     = importo o numero di assegno diversi: sono due pagamenti */
+function ricNumAssegno(testo){ var m = /(?:assegno[^0-9]{0,12}|num:\s*)(\d{6,12})/i.exec(String(testo || '')); return m ? m[1] : ''; }
+function ricMetodoNorm(m){ m = String(m || '').toLowerCase().trim(); return m === 'rid' ? 'sdd' : m; }
+function ricMetodoMovimento(mv){ return mv ? _metodoDelMovimento(mv.tipo === 'carta' || mv.fonte === 'carta' ? { id: mv.id, fonte: 'carta' } : mv) : null; }
+function ricStessoPagamento(f, p, mv, quota, dovuto){
+  if(!f || !p || !mv) return 'no';
+  var imp = Math.abs(+p.importo || 0), q = Math.abs(+quota || 0);
+  if(!imp || Math.abs(imp - q) > 0.005) return 'no';
+  var met = ricMetodoNorm(p.metodo), metMov = ricMetodoMovimento(mv), descr = String(mv.descrizione || '');
+  var soloLui = (f.pagamentiManuali || []).length === 1;
+  var nDich = String(p.assegno || (met === 'assegno' && soloLui ? f.assegno : '') || '').replace(/\D/g, '');
+  var nMov = (metMov === 'assegno' || /assegno/i.test(descr)) ? ricNumAssegno(descr) : '';
+  if(nDich.length >= 4 && nMov){ var n = Math.min(6, nDich.length, nMov.length); return nDich.slice(-n) === nMov.slice(-n) ? 'si' : 'no'; }
+  if(met === 'contanti') return 'chiedi';
+  if(met && met !== 'altro' && metMov && met !== metMov) return 'chiedi';
+  // riferimento del bonifico scritto a mano e diverso da quello della banca
+  var rifF = String(f.bonRif || '').replace(/\s/g, '').toUpperCase();
+  if(met === 'bonifico' && !f.riconciliazione && /^[A-Z0-9]{4,}\/\d{4,}$/.test(rifF)){
+    var rifM = String((typeof pnLeggiBanca === 'function' ? pnLeggiBanca(descr).rif : '') || '').replace(/\s/g, '').toUpperCase();
+    if(rifM && rifM.indexOf(rifF) < 0 && rifF.indexOf(rifM) < 0) return 'chiedi';
+  }
+  if(!p.data || !mv.data) return 'si';
+  var gg = ricvGiorni(p.data, mv.data), max = (met === 'assegno' || metMov === 'assegno') ? 180 : 15;
+  if(gg >= -7 && gg <= max) return 'si';
+  // date lontane: è lo stesso solo se i due pagamenti insieme supererebbero il dovuto
+  return (dovuto != null && imp + q > dovuto + 0.005) ? 'si' : 'chiedi';
+}
+// la voce com'era scritta a mano, prima di essere unita a un movimento
+function ricPagOriginale(p){ var q = Object.assign({}, p, p.dichiarato || {}); delete q.mov; delete q.visto; delete q.dichiarato; delete q.assegnoMesso; return q; }
+// le voci a mano di una fattura che aspettano ancora il loro movimento (ogni movimento ne assorbe al massimo una)
+function ricPagInAttesa(f, prove, mov, dovuto){
+  var L = Array.isArray(f.pagamentiManuali) ? f.pagamentiManuali : [];
+  if(!L.length) return [];
+  var banca = (prove || []).filter(function(x){ return (x.tipo === 'banca' || x.tipo === 'carta') && !x.entrata && x.movId != null; });
+  var usate = {}, fuori = [];
+  L.forEach(function(p){ if(p && p.mov){ var k = ricMovKey(p.mov); if(banca.some(function(x){ return ricMovKey(x.movId) === k; })) usate[k] = 1; } });
+  L.forEach(function(p, i){
+    if(!p || !+p.importo) return;
+    var v = p;
+    if(p.mov){ if(!p.dichiarato || usate[ricMovKey(p.mov)]) return; v = ricPagOriginale(p); }   // il collegamento è stato tolto: torna in attesa
+    var q = banca.find(function(x){ var k = ricMovKey(x.movId); return !usate[k] && ricStessoPagamento(f, v, mov[k] || { id: x.movId, data: x.data, descrizione: x.descr, banca: x.conto, tipo: x.tipo }, x.importo, dovuto) === 'si'; });
+    if(q){ usate[ricMovKey(q.movId)] = 1; return; }
+    fuori.push({ i: i, v: v });
+  });
+  return fuori;
+}
+// la voce in attesa che questo movimento potrebbe confermare, o null
+function ricDichiarazionePer(idx, f, mv, quota){
+  var att = f && idx.attesa && idx.attesa[String(f.id)];
+  if(!att || !mv) return null;
+  var dovuto = Math.max(0, ricR2(Math.abs(+f.importo || 0) - (idx.ncTot[String(f.id)] || 0)));
+  var L = att.map(function(d){ return { i: d.i, v: d.v, esito: ricStessoPagamento(f, d.v, mv, quota, dovuto) }; }).filter(function(d){ return d.esito !== 'no'; });
+  var dist = function(d){ return d.v.data && mv.data ? Math.abs(ricvGiorni(d.v.data, mv.data)) : 999; };
+  L.sort(function(a, b){ return (a.esito === 'si' ? 0 : 1) - (b.esito === 'si' ? 0 : 1) || dist(a) - dist(b); });
+  return L[0] || null;
+}
+function ricTestoDichiarato(v){ return ricEur(Math.abs(+v.importo || 0)) + (v.metodo ? ' · ' + (ricMetodoNorm(v.metodo) === 'sdd' ? 'addebito SDD' : v.metodo) : '') + (v.assegno ? ' n° ' + v.assegno : '') + (v.data ? ' · ' + ricGg(v.data) : ''); }
+// il movimento prende il posto della voce a mano: la voce resta (per la storia) con i dati veri della banca
+function ricvUnisciDichiarazione(f, i, mv){
+  var L = (f.pagamentiManuali || []).slice(); if(!L[i]) return;
+  var p = L[i].mov ? ricPagOriginale(L[i]) : Object.assign({}, L[i]);
+  var orig = { data: p.data || '', metodo: p.metodo || '', assegno: p.assegno || '' };
+  var met = ricMetodoMovimento(mv), num = met === 'assegno' ? ricNumAssegno(mv.descrizione) : '';
+  p.dichiarato = orig; p.mov = mv.fonte === 'carta' ? 'carta:' + mv.id : mv.id; p.visto = new Date().toISOString().slice(0, 10);
+  if(mv.data) p.data = String(mv.data).slice(0, 10);
+  if(met) p.metodo = met;
+  if(num && !p.assegno) p.assegno = num;
+  if(num && !f.assegno){ f.assegno = num; p.assegnoMesso = num; }
+  L[i] = p; f.pagamentiManuali = L;
+  if(orig.data && f.dataPagamento === orig.data && mv.data) f.dataPagamento = p.data;
+}
+// scollegando il movimento, la voce a mano torna in attesa com'era
+function ricvLiberaDichiarazioni(f, key){
+  if(!Array.isArray(f.pagamentiManuali)) return;
+  f.pagamentiManuali = f.pagamentiManuali.map(function(p){
+    if(!p || !p.mov || ricMovKey(p.mov) !== key) return p;
+    if(p.assegnoMesso && f.assegno === p.assegnoMesso) f.assegno = '';
+    return ricPagOriginale(p);
+  });
+}
+// La domanda, solo quando non è sicuro. Risponde 'si', 'no' oppure null (non collegare)
+function ricvChiediStesso(f, v, mv){
+  return new Promise(function(fine){
+    var fatto = false, rispondi = function(r){ if(fatto) return; fatto = true; pnChiudi('ricvStesso'); fine(r); };
+    var mo = pnFoglio('ricvStesso', { titolo: 'È lo stesso pagamento?', sotto: esc(f.fornitore || '') + ' · n° ' + esc(f.numero || '—'), z: 360 });
+    var met = ricMetodoMovimento(mv), nome = ({ bonifico: 'bonifico', assegno: 'assegno', sdd: 'addebito SDD', carta: 'pagamento con carta' })[met] || 'pagamento in banca';
+    mo.querySelector('.pn-sh-bd').innerHTML =
+      '<div class="sk-riga"><div class="sk-riga-m"><b>Avevi segnato a mano</b><small>' + esc(ricTestoDichiarato(v)) + '</small></div></div>' +
+      '<div class="sk-riga"><div class="sk-riga-m"><b>In banca c\'è</b><small>' + esc(nome + ' di ' + ricEur(Math.abs(+mv.importo || 0)) + ' · ' + ricGg(mv.data) + (mv.conto || mv.banca ? ' · ' + (mv.conto || mv.banca) : '')) + '</small></div></div>' +
+      '<div class="sk-btns" style="flex-direction:column;align-items:stretch;margin-top:12px">' +
+      '<button class="sk-btn prim big" data-r="si">Sì, è lo stesso: contalo una volta</button>' +
+      '<button class="sk-btn big" data-r="no">No, sono due pagamenti</button>' +
+      '<button class="sk-btn big" data-r="">Annulla, non collegare</button></div>' +
+      '<div class="sk-nota">Con «Sì» la fattura prende data e metodo della banca. Si può annullare.</div>';
+    Array.prototype.forEach.call(mo.querySelectorAll('[data-r]'), function(b){ b.addEventListener('click', function(){ rispondi(b.getAttribute('data-r') || null); }); });
+    mo.querySelector('.pn-x').addEventListener('click', function(){ rispondi(null); });
+    mo.addEventListener('click', function(e){ if(e.target === mo) rispondi(null); });
+  });
+}
+
 /* ── Indice di tutti i collegamenti (costruito una volta per disegno) ── */
 function ricIndice(){
   var F = (typeof fatture !== 'undefined' && fatture) || [];
@@ -35622,7 +35729,7 @@ function ricIndice(){
   if(c && c.F === F && c.nF === F.length && c.B === B && c.nB === B.length && c.K === K && c.nK === K.length && c.ver === RIC.ver && c.pn === RIC.pn && c.firma === _firma) return c;
   if(!RIC.pn) ricCaricaContanti();
   c = { F: F, nF: F.length, B: B, nB: B.length, K: K, nK: K.length, ver: RIC.ver, pn: RIC.pn, firma: _firma,
-        doc: {}, mov: {}, link: {}, prove: {}, legacy: {}, arrot: {}, ncSu: {}, ncTot: {}, rimb: {}, versoNc: {}, quoteMov: {}, conti: {} };
+        doc: {}, mov: {}, link: {}, prove: {}, legacy: {}, arrot: {}, ncSu: {}, ncTot: {}, rimb: {}, versoNc: {}, quoteMov: {}, conti: {}, attesa: {} };
   F.forEach(function(f){ if(ricDoc(f)) c.doc[String(f.id)] = f; });
   B.forEach(function(m){ if(m && m.id != null) c.mov[ricMovKey(m.id)] = { id: m.id, data: m.data, importo: +m.importo || 0, descrizione: m.descrizione || '', banca: m.banca || 'BPM', sottotipo: m.sottotipo || '', fatturaId: m.fatturaId, tipo: 'banca', ignorata: !!m.ignorata, abbinata: !!m.abbinata }; });   // 20/10: con il sottotipo, se no un pagamento con carta SumUp sembrava un bonifico
   K.forEach(function(m){ if(m && m.id != null) c.mov[ricMovKey(m.id)] = { id: m.id, data: m.data, importo: -Math.abs(+m.importo || 0), descrizione: m.descrizione || '', banca: 'Carta' + (m.cartaUltime4 ? ' ••' + m.cartaUltime4 : ''), fatturaId: m.fatturaId, tipo: 'carta' }; });
@@ -35825,8 +35932,10 @@ function ricIndice(){
     var f = c.doc[fid];
     if(f.tipo === 'nota_credito' || f.tipo === 'ddt') return;
     ricContantiDi(fid).forEach(function(p){ (c.prove[fid] = c.prove[fid] || []).push({ tipo: 'contanti', movId: 'pn' + p.id, data: p.data, importo: ricR2(Math.abs(+p.importo || 0)), totale: null, conto: p.fonte === 'fondo' ? 'Fondo cassa' : 'Cassetto', descr: p.descrizione || '', condiviso: false }); });
-    (Array.isArray(f.pagamentiManuali) ? f.pagamentiManuali : []).forEach(function(p){
-      if(p && !p.mov && +p.importo) (c.prove[fid] = c.prove[fid] || []).push({ tipo: 'manuale', movId: null, data: p.data, importo: ricR2(Math.abs(+p.importo || 0)), totale: null, conto: (typeof pnMetodo === 'function' ? pnMetodo(p.metodo) : p.metodo), descr: p.assegno ? 'assegno n° ' + p.assegno : '', metodo: p.metodo, condiviso: false });
+    var attesa = ricPagInAttesa(f, c.prove[fid], c.mov, netto(fid));
+    if(attesa.length) c.attesa[fid] = attesa;
+    attesa.forEach(function(d){ var p = d.v;
+      (c.prove[fid] = c.prove[fid] || []).push({ tipo: 'manuale', movId: null, data: p.data, importo: ricR2(Math.abs(+p.importo || 0)), totale: null, conto: (typeof pnMetodo === 'function' ? pnMetodo(p.metodo) : p.metodo), descr: p.assegno ? 'assegno n° ' + p.assegno : '', metodo: p.metodo, condiviso: false });
     });
   });
 
@@ -36537,6 +36646,12 @@ function _ricDocDelFornitore(idx, forn){
   }
   return idx._docPerChiave[ricChiaveNome(forn)] || [];
 }
+// il movimento corrisponde a un pagamento di questa fattura segnato a mano (e non l'hai scartato)
+function ricGiaSegnato(idx, f, m){
+  var d = ricDichiarazionePer(idx, f, m, Math.abs(m.importo));
+  if(!d || (typeof RICV !== 'undefined' && RICV.ctx && RICV.ctx.rif[String(m.id) + '|' + f.id])) return null;
+  return { liv: 'warn', cod: 'gia_segnato', f: f, t: 'La n° ' + (f.numero || '—') + ' l\'avevi già segnata a mano: è lo stesso pagamento?', s: 'Segnato: ' + ricTestoDichiarato(d.v) + '. Collegalo: lo conto una volta sola.' };
+}
 function ricPagamentiSenzaFattura(){
   var idx = ricIndice(), F = ricFornitoriIndice(idx), out = [];
   var oggi = new Date(), limite = new Date(oggi.getTime() - 400 * 86400000).toISOString().slice(0, 10);
@@ -36565,8 +36680,9 @@ function ricPagamentiSenzaFattura(){
         return true;
       }
       if(doc){
-        var C = ricConti(doc);
-        if(C.residuo <= RIC.ARROT && C.fonte === 'prove'){
+        var C = ricConti(doc), gs = ricGiaSegnato(idx, doc, m);
+        if(gs) esito = gs;
+        else if(C.residuo <= RIC.ARROT && C.fonte === 'prove'){
           var altro = C.prove.filter(function(p){ return p.tipo !== 'manuale'; }).map(function(p){ return ricGg(p.data) + ' (' + ricEur(p.totale != null ? p.totale : p.importo) + ')'; }).join(', ');
           esito = { liv: 'ko', cod: 'pagamento_doppio', f: doc, t: 'Possibile pagamento doppio della fattura n° ' + doc.numero, s: 'La causale cita la fattura n° ' + doc.numero + ', che risulta già pagata' + (altro ? ' il ' + altro : '') + '. Se è un doppio, chiedi il rimborso al fornitore; altrimenti collegalo alla fattura giusta.' };
         } else {
@@ -36577,6 +36693,7 @@ function ricPagamentiSenzaFattura(){
       esito = { liv: 'warn', cod: 'fattura_mancante', t: 'Manca la fattura n° ' + c.num + ' di ' + forn, s: 'Il pagamento c\'è, il documento no: cercalo nel cassetto fiscale o chiedilo al fornitore.' };
       return true;
     });
+    if(!esito) Object.keys(idx.attesa).some(function(fid){ var f = idx.doc[fid]; if(f && stesso(f)) esito = ricGiaSegnato(idx, f, m); return !!esito; });
     if(!esito){
       // nessuna citazione: c'è una fattura aperta dello stesso fornitore con lo stesso importo?
       var aperta = Object.keys(idx.doc).map(function(fid){ return idx.doc[fid]; }).filter(function(f){ return stesso(f) && f.tipo !== 'nota_credito' && f.tipo !== 'ddt' && Math.abs(ricConti(f).residuo - Math.abs(m.importo)) <= RIC.ARROT; })[0];
@@ -36959,12 +37076,13 @@ function ricvChi(M, idx){
 /* ── documenti aperti (quello che manca davvero, dalle prove), indicizzati per importo ── */
 function ricvAperti(idx){
   if(idx.ricvAp) return idx.ricvAp;
-  var A = RIC.ARROT, ap = { bis: {}, nc: {}, perEuro: {}, rate: {} };
+  var A = RIC.ARROT, ap = { bis: {}, nc: {}, perEuro: {}, rate: {}, dich: {} };
   var metti = function(v, f){ var e = Math.round(v); for(var d = -1; d <= 1; d++){ var L = ap.perEuro[e + d] = ap.perEuro[e + d] || []; if(L[L.length - 1] !== f) L.push(f); } };
   Object.keys(idx.doc).forEach(function(fid){
     var f = idx.doc[fid]; if(f.tipo === 'ddt' || scStato(f) === 'annullata') return;
     var C = ricConti(f); if(!C) return;
     if(f.tipo === 'nota_credito'){ if(C.residuo > A) ap.nc[fid] = ricR2(C.residuo); return; }
+    if(idx.attesa && idx.attesa[fid]){ ap.dich[fid] = idx.attesa[fid]; idx.attesa[fid].forEach(function(d){ metti(Math.abs(+d.v.importo || 0), f); }); }
     var b = ricR2(Math.max(0, C.dovuto - Math.max(0, C.denaro))); if(b <= A) return;
     ap.bis[fid] = b; metti(b, f); metti(Math.abs(+f.importo || 0), f);
     try{ var R = scScadenze(f, fatture).filter(function(r){ return !r.pagata && r.tot > 1; }); if(R.length){ ap.rate[fid] = R; R.forEach(function(r){ metti(r.residuo, f); }); } }catch(e){}
@@ -36991,15 +37109,15 @@ function ricvProposte(M, idx, ctx){
   var ass = (d.match(/(?:assegno[^0-9]{0,12}|num:\s*)(\d{6,12})/i) || [])[1] || '';
   // candidati: fornitori riconosciuti, documenti citati, importo uguale (solo documenti ancora aperti)
   var cand = {};
-  chi.forEach(function(c){ (I.perFk[c.fk] || []).forEach(function(f){ if(ap.bis[String(f.id)]) cand[String(f.id)] = f; }); });
-  Object.keys(citati).forEach(function(k){ if(ap.bis[k]) cand[k] = citati[k]; });
+  chi.forEach(function(c){ (I.perFk[c.fk] || []).forEach(function(f){ if(ap.bis[String(f.id)] || ap.dich[String(f.id)]) cand[String(f.id)] = f; }); });
+  Object.keys(citati).forEach(function(k){ if(ap.bis[k] || ap.dich[k]) cand[k] = citati[k]; });
   (ap.perEuro[Math.round(imp)] || []).forEach(function(f){ cand[String(f.id)] = f; });
   var oggetti = [];
-  var unici = (ap.perEuro[Math.round(imp)] || []).filter(function(f){ var b0 = ap.bis[String(f.id)]; return b0 && Math.abs(b0 - imp) <= 0.01 && String(f.data || '') <= ricvPiuGiorni(M.data, 30); }).length;
+  var unici = (ap.perEuro[Math.round(imp)] || []).filter(function(f){ var b0 = ap.bis[String(f.id)]; return ((b0 && Math.abs(b0 - imp) <= 0.01) || !!ricDichiarazionePer(idx, f, M, imp)) && String(f.data || '') <= ricvPiuGiorni(M.data, 30); }).length;
   Object.keys(cand).forEach(function(fid){
-    var f = cand[fid], bis = ap.bis[fid];
-    if(!bis || rifiutata(fid)) return;
-    var fk = ricvFk(f), motivi = [], punti = 0, identita = 0, quota = Math.min(imp, bis), _conflitto = false;
+    var f = cand[fid], bis = ap.bis[fid] || 0, dm = ap.dich[fid] ? ricDichiarazionePer(idx, f, M, imp) : null;
+    if((!bis && !dm) || rifiutata(fid)) return;
+    var fk = ricvFk(f), motivi = [], punti = 0, identita = 0, quota = dm ? imp : Math.min(imp, bis), _conflitto = false;
     var cit = !!citati[fid];
     if(cit){ var lungo = String(f.numero || '').replace(/\W/g, '').length >= 5; if(chiFk[fk] || lungo){ punti += 50; identita++; motivi.push('La causale cita la fattura n° ' + f.numero); } else { punti += 15; motivi.push('Nella causale c\'è il numero ' + f.numero); } }
     if(ricBeneficiarioCoerente({ descrizione: d }, f) === false && !cit) return;   // il beneficiario scritto dalla banca è un altro
@@ -37008,7 +37126,15 @@ function ricvProposte(M, idx, ctx){
     // importo
     var dImp = Math.abs(bis - imp), dTot = Math.abs(Math.abs(+f.importo || 0) - imp), parziale = false, esatto = true;
     var rata = (ap.rate[fid] || []).find(function(r){ return Math.abs(r.residuo - imp) <= 0.005; });
-    if(dImp <= 0.005){ punti += 35; motivi.push('Importo identico (' + ricEur(imp) + ')'); if(unici === 1){ punti += 15; motivi.push('È l\'unica fattura da pagare con questo importo esatto'); } }
+    if(dm){
+      punti += 35; if(unici === 1) punti += 15;
+      motivi.push('L\'avevi già segnata a mano (' + ricTestoDichiarato(dm.v) + '): è lo stesso pagamento, lo conto una volta');
+      if(dm.v.data && Math.abs(ricvGiorni(dm.v.data, M.data)) <= 6) punti += 15;
+      // un assegno non ha il beneficiario: se è l'unico di questo importo segnato a mano, basta per riconoscerlo
+      if(dm.esito === 'si' && tipo === 'assegno' && ricMetodoNorm(dm.v.metodo) === 'assegno' && unici === 1){ punti += 45; identita++; motivi.push('È l\'unico assegno di questo importo segnato a mano'); }
+      if(dm.esito === 'chiedi'){ _conflitto = true; motivi.push('⚠️ ' + (ricMetodoNorm(dm.v.metodo) === 'contanti' ? 'Avevi segnato contanti' : 'Metodo o date non coincidono') + ': quando colleghi ti chiedo se è lo stesso pagamento'); }
+    }
+    else if(dImp <= 0.005){ punti += 35; motivi.push('Importo identico (' + ricEur(imp) + ')'); if(unici === 1){ punti += 15; motivi.push('È l\'unica fattura da pagare con questo importo esatto'); } }
     else if(rata){ punti += 30; parziale = true; quota = imp; motivi.push('È la ' + (rata.saldo ? 'rata di saldo' : 'rata n° ' + rata.n + ' di ' + rata.tot) + ' (scadenza ' + ricGg(rata.data) + ')'); }
     else if(dTot <= 0.005 && identita){ punti += 15; esatto = false; motivi.push('Importo uguale al totale della fattura, ma ne restavano da pagare ' + ricEur(bis) + ': decidi tu'); }
     else if(dImp <= Math.max(0.02, Math.min(5, bis * 0.01)) && identita){ punti += 15; esatto = false; motivi.push('Non torna al centesimo: differenza di ' + ricEur(dImp) + ' (spese, sconto o arrotondamento?) — decidi tu'); }
@@ -37017,8 +37143,8 @@ function ricvProposte(M, idx, ctx){
     // metodo
     var met = String(f.pagamento || '').toLowerCase();
     if(met && (met === tipo || (met === 'rid' && tipo === 'sdd'))){ punti += 10; motivi.push('Pagamento previsto con ' + RICV_TIPO_NOME[tipo]); }
-    else if(met === 'contanti' && scStato(f) === 'pagata'){ punti -= 10; motivi.push('⚠️ Nel registro risulta già pagata in contanti: se la colleghi diventa pagata con ' + (RICV_TIPO_NOME[tipo] || 'banca') + ' e non conta più come uscita di cassa'); var _conflitto = true; }
-    else if(met && scStato(f) === 'pagata' && /^(bonifico|assegno|sdd|rid|carta)$/.test(met) && /^(bonifico|assegno|sdd|carta)$/.test(tipo) && !(met === 'rid' && tipo === 'sdd')){ motivi.push('⚠️ Nel registro è pagata con ' + (RICV_TIPO_NOME[met === 'rid' ? 'sdd' : met] || met) + ', in banca è un ' + (RICV_TIPO_NOME[tipo] || tipo) + ': controlla prima di confermare'); var _conflitto = true; }
+    else if(!dm && met === 'contanti' && scStato(f) === 'pagata'){ punti -= 10; motivi.push('⚠️ Nel registro risulta già pagata in contanti: se la colleghi diventa pagata con ' + (RICV_TIPO_NOME[tipo] || 'banca') + ' e non conta più come uscita di cassa'); var _conflitto = true; }
+    else if(!dm && met && scStato(f) === 'pagata' && /^(bonifico|assegno|sdd|rid|carta)$/.test(met) && /^(bonifico|assegno|sdd|carta)$/.test(tipo) && !(met === 'rid' && tipo === 'sdd')){ motivi.push('⚠️ Nel registro è pagata con ' + (RICV_TIPO_NOME[met === 'rid' ? 'sdd' : met] || met) + ', in banca è un ' + (RICV_TIPO_NOME[tipo] || tipo) + ': controlla prima di confermare'); var _conflitto = true; }
     if(tipo === 'carta' && met === 'carta' && f.contoPagamento && String(f.contoPagamento).toLowerCase() === String(M.conto).toLowerCase()){ punti += 10; motivi.push('Segnata «carta ' + f.contoPagamento + '»'); }
     // tempi
     var rif = (rata && rata.data) || f.scadenza || f.data, gg = rif ? ricvGiorni(rif, M.data) : 0, ggDoc = f.data ? ricvGiorni(f.data, M.data) : 0;
@@ -37050,10 +37176,10 @@ function ricvProposte(M, idx, ctx){
   Object.keys(gruppi).forEach(function(fk){
     var L = (I.perFk[fk] || []).filter(function(f){
       var fid = String(f.id), nc = f.tipo === 'nota_credito';
-      if(nc ? !(ap.nc[fid] && citati[fid]) : !ap.bis[fid]) return false;       // note di credito solo se citate
+      if(nc ? !(ap.nc[fid] && citati[fid]) : !(ap.bis[fid] || (ap.dich[fid] && ap.dich[fid].length === 1))) return false;       // note di credito solo se citate
       if(rifiutata(fid)) return false;
       var dd = String(f.data || '').slice(0, 10); return citati[fid] || (dd && dd <= dMax && dd >= dMin);
-    }).map(function(f){ var fid = String(f.id); return { f: f, v: f.tipo === 'nota_credito' ? -ap.nc[fid] : ap.bis[fid], cit: !!citati[fid] }; })
+    }).map(function(f){ var fid = String(f.id), solo = f.tipo !== 'nota_credito' && !ap.bis[fid]; return { f: f, v: f.tipo === 'nota_credito' ? -ap.nc[fid] : (solo ? ricR2(Math.abs(+ap.dich[fid][0].v.importo)) : ap.bis[fid]), dich: solo, cit: !!citati[fid] }; })
       .sort(function(a, b){ return (b.cit ? 1 : 0) - (a.cit ? 1 : 0) || String(a.f.data).localeCompare(String(b.f.data)); })
       .slice(0, 14);
     if(L.length < 2) return;
@@ -37086,7 +37212,9 @@ function ricvProposte(M, idx, ctx){
     if(migliore.span > 120 && !nc){ punti -= 10; motivi.push('Fatture lontane tra loro (' + migliore.span + ' giorni)'); }
     var esattoG = Math.abs(sel.reduce(function(s, x){ return s + x.v; }, 0) - imp) <= 0.005;
     if(!esattoG) motivi.push('Non torna al centesimo: differenza di ' + ricEur(Math.abs(sel.reduce(function(s, x){ return s + x.v; }, 0) - imp)) + ' — decidi tu');
-    oggetti.push({ docs: sel.map(function(x){ return { f: x.f, quota: x.v }; }), punti: punti, identita: 1 + (nc ? 1 : 0), motivi: motivi, gruppo: true, esatto: esattoG, tuttiCitati: nc === sel.length, data: String(sel[0].f.data || ''), scarto: 999 });
+    var daChiedere = false;
+    sel.forEach(function(x){ if(!x.dich) return; var d1 = ricDichiarazionePer(idx, x.f, M, x.v); motivi.push('La n° ' + x.f.numero + ' l\'avevi già segnata a mano: la conto una volta'); if(!d1 || d1.esito !== 'si') daChiedere = true; });
+    oggetti.push({ conflitto: daChiedere, docs: sel.map(function(x){ return { f: x.f, quota: x.v }; }), punti: punti, identita: 1 + (nc ? 1 : 0), motivi: motivi, gruppo: true, esatto: esattoG, tuttiCitati: nc === sel.length, data: String(sel[0].f.data || ''), scarto: 999 });
   });
   oggetti.sort(function(a, b){ return b.punti - a.punti || a.scarto - b.scarto; });
   // livelli: "certo" solo con un'identità e un distacco netto dal secondo
@@ -37128,7 +37256,7 @@ function ricvClassifica(M, idx, ctx, extra){
         if(!S.completa){
           // il resto corrisponde a una fattura citata nella causale ma già pagata con un altro movimento: pagata due volte
           var I2 = ricvImpara(idx), doppia = null;
-          (M.descrizione.match(/[A-Za-z0-9][A-Za-z0-9\/_-]*\d[A-Za-z0-9\/_-]*/g) || []).forEach(function(tok){ ricvNormNum(tok).forEach(function(kk){ (I2.numeri[kk] || []).forEach(function(f){ if(!doppia && !gia[String(f.id)] && Math.abs(Math.abs(+f.importo || 0) - q.libero) <= A && !ricvAperti(idx).bis[String(f.id)]) doppia = f; }); }); });
+          (M.descrizione.match(/[A-Za-z0-9][A-Za-z0-9\/_-]*\d[A-Za-z0-9\/_-]*/g) || []).forEach(function(tok){ ricvNormNum(tok).forEach(function(kk){ (I2.numeri[kk] || []).forEach(function(f){ if(!doppia && !gia[String(f.id)] && Math.abs(Math.abs(+f.importo || 0) - q.libero) <= A && !ricvAperti(idx).bis[String(f.id)] && !ricDichiarazionePer(idx, f, M, q.libero)) doppia = f; }); }); });
           // numeri citati nella causale che non sono a registro: la fattura mancante
           if(!doppia && /fatt|\bft\.?\s|\bfatture\b|\bsaldo\b/i.test(M.descrizione)){
             var tuttiNum = Object.keys(I2.numeri);
@@ -37436,12 +37564,12 @@ function ricvTrovaRaw(key){
   var c = (_cartaMovimenti || []).find(function(x){ return ricMovKey(x.id) === key; });
   return c ? { m: c, fonte: 'carta' } : null;
 }
-function ricvFotoDoc(f){ return { id: f.id, ric: f.riconciliazione ? JSON.parse(JSON.stringify(f.riconciliazione)) : null, sto: JSON.parse(JSON.stringify(f.riconciliazioneStorico || [])), riconciliata: !!f.riconciliata, stato: f.stato, parz: f.parzPagato, dp: f.dataPagamento, pag: f.pagamento, po: f.pagamentoOrigine }; }
+function ricvFotoDoc(f){ return { pm: f.pagamentiManuali ? JSON.parse(JSON.stringify(f.pagamentiManuali)) : [], cp: f.contoPagamento || '', ass: f.assegno || '', id: f.id, ric: f.riconciliazione ? JSON.parse(JSON.stringify(f.riconciliazione)) : null, sto: JSON.parse(JSON.stringify(f.riconciliazioneStorico || [])), riconciliata: !!f.riconciliata, stato: f.stato, parz: f.parzPagato, dp: f.dataPagamento, pag: f.pagamento, po: f.pagamentoOrigine }; }
 function ricvFotoMov(R){ return { fonte: R.fonte, id: R.m.id, abbinata: !!R.m.abbinata, fatturaId: R.m.fatturaId == null ? null : R.m.fatturaId, fatturaLabel: R.m.fatturaLabel || '', ignorata: !!R.m.ignorata }; }
 async function ricvRipristina(fotoDocs, fotoMov){
   for(var i = 0; i < fotoDocs.length; i++){
     var o = fotoDocs[i], f = pnF(o.id); if(!f) continue;
-    f.riconciliazione = o.ric; f.riconciliazioneStorico = o.sto; f.riconciliata = o.riconciliata; f.stato = o.stato; f.parzPagato = o.parz; f.dataPagamento = o.dp; f.pagamento = o.pag; f.pagamentoOrigine = o.po;
+    f.riconciliazione = o.ric; f.riconciliazioneStorico = o.sto; f.riconciliata = o.riconciliata; f.stato = o.stato; f.parzPagato = o.parz; f.dataPagamento = o.dp; f.pagamento = o.pag; f.pagamentoOrigine = o.po; f.pagamentiManuali = o.pm; f.contoPagamento = o.cp; f.assegno = o.ass;
     await dbUpdate(f);
   }
   if(fotoMov){
@@ -37503,6 +37631,14 @@ async function ricvCollega(key, docs, opz){
   var m = R.m, fd = docs.map(function(x){ return ricvFotoDoc(x.f); }), fm = ricvFotoMov(R);
   var movPerDoc = R.fonte === 'carta' ? { id: 'carta:' + m.id, data: m.data, importo: -Math.abs(m.importo), descrizione: 'Carta di credito: ' + (m.descrizione || ''), banca: 'Nexi' } : m;
   var tipo = ricvTipo(ricvMov(m, R.fonte));
+  // pagamenti segnati a mano che questo movimento conferma (la domanda, se serve, prima di toccare i dati)
+  var mvU = { id: m.id, data: m.data, importo: m.importo, descrizione: m.descrizione || '', sottotipo: m.sottotipo || '', banca: R.fonte === 'carta' ? 'Nexi' : (m.banca || 'BPM'), fonte: R.fonte }, unisci = [];
+  for(var u = 0; u < docs.length; u++){
+    var fu = docs[u].f; if(fu.tipo === 'nota_credito') continue;
+    var dm = ricDichiarazionePer(ricIndice(), fu, mvU, docs[u].quota); if(!dm) continue;
+    if(dm.esito === 'chiedi'){ if(opz.auto) return false; var risp = await ricvChiediStesso(fu, dm.v, mvU); if(!risp) return false; if(risp === 'no') continue; }
+    unisci[u] = dm.i;
+  }
   try{
     for(var i = 0; i < docs.length; i++){
       var f = docs[i].f, quota = ricR2(Math.abs(docs[i].quota));
@@ -37510,6 +37646,7 @@ async function ricvCollega(key, docs, opz){
       // v10.46.0 (tornare indietro sempre): com'era la fattura prima di questo collegamento.
       // Resta salvato nel collegamento: scollegando, anche dopo giorni, torna esattamente così.
       var _prima = { stato: f.stato || '', parzPagato: +f.parzPagato || 0, dataPagamento: f.dataPagamento || '', pagamento: f.pagamento || '', pagamentoOrigine: f.pagamentoOrigine || '', contoPagamento: f.contoPagamento || '', riconciliata: !!f.riconciliata };
+      if(unisci[i] != null) ricvUnisciDichiarazione(f, unisci[i], mvU);
       _impostaDatiRiconciliazione(f, movPerDoc, parziale, quota);
       f.riconciliazione.prima = _prima; f.riconciliazione.quando = new Date().toISOString(); f.riconciliazione.come = opz.auto ? 'automatico' : 'a mano';
       if(f.riconciliazioneStorico && f.riconciliazioneStorico.length){ var _ult = f.riconciliazioneStorico[f.riconciliazioneStorico.length - 1]; if(_ult && String(_ult.movId) === String(f.riconciliazione.movId)){ _ult.prima = _prima; _ult.quando = f.riconciliazione.quando; _ult.come = f.riconciliazione.come; } }
@@ -37556,6 +37693,13 @@ async function ricvCollegaAcconto(key, fid){
   var S = ricvCalcola().stati[key], f = pnF(fid); if(!S || !f) return;
   var bis = ricvBisogno(f), imp = Math.abs(S.M.importo), q = ricR2(Math.min(imp, bis || imp));
   if(!confirm('Collego ' + ricEur(q) + ' a ' + (f.fornitore || '') + ' n° ' + (f.numero || '') + (bis > imp + RIC.ARROT ? '?\n\nResteranno da pagare ' + ricEur(ricR2(bis - imp)) + '.' : '?') + '\n\nSi può annullare.')) return;
+  var ok = await ricvCollega(key, [{ f: f, quota: q }]);
+  if(ok){ pnChiudi('ricvMov'); ricvRidisegna(); }
+}
+async function ricvCollegaSegnato(key, fid){
+  var S = ricvCalcola().stati[key], f = pnF(fid); if(!S || !f) return;
+  var q = Math.abs(S.M.importo), d = ricDichiarazionePer(ricIndice(), f, S.M, q); if(!d) return;
+  if(d.esito === 'si' && !confirm('Collego ' + ricEur(q) + ' a ' + (f.fornitore || '') + ' n° ' + (f.numero || '') + '?\n\nÈ il pagamento che avevi segnato a mano: lo conto una volta. Si può annullare.')) return;
   var ok = await ricvCollega(key, [{ f: f, quota: q }]);
   if(ok){ pnChiudi('ricvMov'); ricvRidisegna(); }
 }
@@ -37632,6 +37776,7 @@ async function ricvStacca(key, fid){
         else if(!f.riconciliazione){ f.riconciliata = false; if(f.pagamentoOrigine === 'riconciliazione' || f.pagamentoOrigine === 'banca' || /^(bonifico|assegno|sdd|rid|carta)$/.test(f.pagamento || '')){ f.stato = 'da_pagare'; f.parzPagato = 0; f.dataPagamento = ''; } }
         else { f.stato = r.stato; f.parzPagato = r.pagato; }
       } else f.riconciliata = !!(f.riconciliazione && f.riconciliazione.movId);
+      ricvLiberaDichiarazioni(f, key);
       await dbUpdate(f);
     }
     var altri = (fatture || []).filter(function(f){ if(docs.indexOf(f) >= 0) return false; return f.riconciliazione && (String(f.riconciliazione.movId) === mid || ricMovKey(f.riconciliazione.movId) === key); });
@@ -37994,6 +38139,7 @@ function ricvApri(key){
     h += '<div class="rc-esito ' + (a.liv === 'ko' ? 'ko' : 'warn') + '"><div class="rc-esito-ico">!</div><div><b>' + esc(a.t) + '</b><small>' + esc(a.s) + '</small>' + b + '</div></div>';
   });
   if(S.senza) h += '<div class="rc-esito ' + (S.senza.liv === 'ko' ? 'ko' : (S.senza.liv === 'info' ? 'info' : 'warn')) + '"><div class="rc-esito-ico">' + (S.senza.liv === 'info' ? 'i' : '!') + '</div><div><b>' + esc(S.senza.t) + '</b><small>' + esc(S.senza.s) + (S.senza.come ? ' (riconosciuto: ' + esc(S.senza.come) + ')' : '') + '</small></div></div>';
+  if(S.senza && S.senza.cod === 'gia_segnato') h += '<div class="sk-btns"><button class="sk-btn prim big" onclick="ricvCollegaSegnato(' + k + ',' + pnIdJs(S.senza.f.id) + ')">Collegalo alla n° ' + esc(S.senza.f.numero || '—') + '</button></div>';
   if(S.completa){
     var Pk = S.completa;
     h += pnSez('Per completare il movimento', '<div class="ric-prop ' + Pk.livello + '"><div class="ric-prop-h"><div><b>' + esc(Pk.docs.map(function(x){ return 'n° ' + (x.f.numero || '—'); }).join(' + ')) + '</b><small>' + Pk.docs.map(function(x){ return esc(ricvBello(x.f.fornitore || '').slice(0, 24)) + ' ' + fmt(Math.abs(x.quota)); }).join(' · ') + '</small></div>' + ricvChip(Pk.livello) + '</div><ul class="ric-motivi">' + Pk.motivi.map(function(t){ return '<li>' + esc(t) + '</li>'; }).join('') + '</ul><div class="sk-btns"><button class="sk-btn prim sm" onclick="ricvCompleta(' + k + ')">Aggiungi al movimento</button></div></div>');
@@ -38049,6 +38195,8 @@ function ricvSeConfermi(P, M){
     var tipo = RICV_TIPO_NOME[ricvTipo(M)] || 'pagamento', righe = P.docs.map(function(x){
       var f = x.f, q = Math.abs(+x.quota || 0), bis = ricvBisogno(f), n = 'n° ' + esc(f.numero || '—');
       if(f.tipo === 'nota_credito') return n + ': il credito risulta rimborsato con questo movimento (' + fmt(q) + ').';
+      var dm = ricDichiarazionePer(ricIndice(), x.f, M, q);
+      if(dm) return n + ': l\'avevi segnata a mano (' + esc(ricTestoDichiarato(dm.v)) + '). ' + (dm.esito === 'si' ? 'La conto una volta: pagata con ' + esc(tipo) + ' il ' + ricGg(M.data) + '.' : 'Ti chiedo se è lo stesso pagamento.');
       if(!(bis > RIC.ARROT)) return n + ': risultava già coperta; il movimento si aggiunge come prova (' + fmt(q) + ').';
       if(q >= bis - RIC.ARROT) return n + (scStato(f) === 'pagata' ? ': resta pagata, ora con la prova in banca' : ': risulterà pagata') + ' con ' + esc(tipo) + ' il ' + ricGg(M.data) + '.';
       return n + ': pagati ' + fmt(q) + ' con questo movimento, resteranno ' + fmt(ricR2(bis - q)) + '.';
@@ -38177,6 +38325,8 @@ function ricvScegliCandidati(){
     if(entra) bis = scNcCredito(f);
     else if(scStato(f) !== 'pagata'){ bis = scConti(f, fatture).residuo; tipoB = 'aperta'; }
     else if(pnInBanca(f) === 'attesa'){ bis = ap.bis[String(f.id)] || 0; tipoB = 'attesa'; }
+    var att = !entra && idx.attesa[String(f.id)], dich = null;
+    if(att){ var dm = ricDichiarazionePer(idx, f, M, lib); dich = dm ? dm.v : (bis > A ? null : att[0].v); if(dich){ bis = ricR2(Math.abs(+dich.importo)); tipoB = 'dich'; } }
     if(!RSC.tutte && !(bis > A)) return;
     if(cerca && !((f.fornitore || '').toLowerCase().indexOf(cerca) >= 0 || String(f.numero || '').toLowerCase().indexOf(cerca) >= 0 || (!isNaN(num) && Math.abs(Math.abs(+f.importo || 0) - num) < 1) || (!isNaN(num) && Math.abs(bis - num) < 1))) return;
     var base = bis > A ? bis : Math.abs(+f.importo || 0), punti = 0, perche = [];
@@ -38185,6 +38335,7 @@ function ricvScegliCandidati(){
     if(d <= A){ punti += 60; perche.push('importo uguale'); } else if(lib > 0 && d / lib < 0.15){ punti += 40 * (1 - d / lib / 0.15); perche.push('importo vicino'); }
     var gg = Math.round((new Date(String(M.data).slice(0, 10)) - new Date(String(f.data || M.data).slice(0, 10))) / 86400000);
     punti += gg >= 0 ? Math.max(0, 10 - gg / 30) : -5;
+    if(dich) perche.push('segnata a mano il ' + ricGg(dich.data));
     out.push({ f: f, bis: bis, base: base, punti: punti, perche: perche, tipoB: tipoB });
   });
   out.sort(function(a, b){ return b.punti - a.punti || String(b.f.data || '').localeCompare(String(a.f.data || '')); });
@@ -38213,7 +38364,7 @@ function ricvScegliDisegna(){
     '<label class="rsc-tutte"><input type="checkbox" ' + (RSC.tutte ? 'checked' : '') + ' onchange="RSC.tutte=this.checked;ricvScegliDisegna()"> Mostra anche ' + (entra ? 'note già usate' : 'quelle già pagate') + '</label></div>';
   h += '<div class="rsc-lista">' + (L.length ? L.slice(0, RSC.mostra).map(function(x){
     var on = !!sel[String(x.f.id)], prox = (!entra && typeof scProssima === 'function') ? scProssima(x.f, fatture) : null;
-    return '<button class="rsc-it' + (on ? ' on' : '') + '" onclick="ricvScegliTocca(' + pnIdJs(x.f.id) + ')"><span class="rsc-chk">' + (on ? '✓' : '') + '</span><span class="rsc-m"><b>' + esc(x.f.fornitore || '—') + '</b><small>n° ' + esc(x.f.numero || '—') + ' · ' + ricGg(x.f.data) + (prox ? ' · scade ' + ricGg(prox.data) : '') + '</small>' + (x.perche.length ? '<i>' + esc(x.perche.join(' · ')) + '</i>' : '') + '</span><span class="rsc-v"><b>' + fmt(x.bis > RIC.ARROT ? x.bis : x.base) + '</b><small>' + (x.bis > RIC.ARROT ? (entra ? 'credito libero' : x.tipoB === 'attesa' ? 'pagata, manca la banca' : (Math.abs(x.bis - Math.abs(+x.f.importo || 0)) > 0.01 ? 'resta da pagare' : 'da pagare')) : 'già coperta') + '</small></span></button>';
+    return '<button class="rsc-it' + (on ? ' on' : '') + '" onclick="ricvScegliTocca(' + pnIdJs(x.f.id) + ')"><span class="rsc-chk">' + (on ? '✓' : '') + '</span><span class="rsc-m"><b>' + esc(x.f.fornitore || '—') + '</b><small>n° ' + esc(x.f.numero || '—') + ' · ' + ricGg(x.f.data) + (prox ? ' · scade ' + ricGg(prox.data) : '') + '</small>' + (x.perche.length ? '<i>' + esc(x.perche.join(' · ')) + '</i>' : '') + '</span><span class="rsc-v"><b>' + fmt(x.bis > RIC.ARROT ? x.bis : x.base) + '</b><small>' + (x.bis > RIC.ARROT ? (entra ? 'credito libero' : x.tipoB === 'dich' ? 'segnata a mano, manca la banca' : x.tipoB === 'attesa' ? 'pagata, manca la banca' : (Math.abs(x.bis - Math.abs(+x.f.importo || 0)) > 0.01 ? 'resta da pagare' : 'da pagare')) : 'già coperta') + '</small></span></button>';
   }).join('') + (L.length > RSC.mostra ? '<button class="sk-btn big" onclick="RSC.mostra+=40;ricvScegliDisegna()">Mostra altre ' + Math.min(40, L.length - RSC.mostra) + '</button>' : '') : '<div class="rv-vuoto">' + (RSC.cerca ? 'Niente con «' + esc(RSC.cerca) + '».' : 'Nessuna fattura aperta.') + ' Prova «Mostra anche ' + (entra ? 'note già usate' : 'quelle già pagate') + '».</div>') + '</div>';
   h += '<div class="rsc-piede"><div class="rsc-st ' + st.cl + '">' + st.t + '</div><button class="sk-btn prim big"' + (RSC.sel.length ? '' : ' disabled') + ' onclick="ricvScegliSalva(this)">Collega' + (RSC.sel.length > 1 ? ' le ' + RSC.sel.length : '') + '</button></div>';
   mo.querySelector('.pn-sh-bd').innerHTML = h;
@@ -38246,7 +38397,10 @@ function ricvDaFatturaDisegna(){
   var mo = document.getElementById('ricvDaFatt'); if(!mo || !RSC) return;
   var f = pnF(RSC.fid); if(!f) return;
   var nc = f.tipo === 'nota_credito', stati = ricvCalcola().stati, idx = ricIndice(), A = RIC.ARROT;
-  var bis = nc ? scNcCredito(f) : ricvBisogno(f), base = bis > A ? bis : Math.abs(+f.importo || 0), fk = ricvFk(f);
+  var att = (!nc && idx.attesa[String(f.id)]) || [];
+  var bis = nc ? scNcCredito(f) : ricvBisogno(f), soloAttesa = att.length && !(bis > A);
+  if(soloAttesa) bis = ricR2(Math.abs(+att[0].v.importo));
+  var base = bis > A ? bis : Math.abs(+f.importo || 0), fk = ricvFk(f);
   var cerca = String(RSC.cerca || '').trim().toLowerCase(), num = parseFloat(cerca.replace(/\./g, '').replace(',', '.'));
   var L = [];
   Object.keys(stati).forEach(function(k){
@@ -38257,20 +38411,22 @@ function ricvDaFatturaDisegna(){
     var punti = 0, perche = [], prop = (S.proposte || []).find(function(P){ return (P.docs || []).some(function(x){ return String(x.f.id) === String(f.id); }); });
     if(prop){ punti += 200 + (({ certo: 50, probabile: 30 })[prop.livello] || 0); }   // l'affidabilità la dice già l'etichetta
     var chi = (ricvChi(M, idx)[0] || {}).fk || ''; if(chi && chi === fk){ punti += 80; perche.push('stesso fornitore'); }
-    var d = Math.abs(lib - base); if(d <= A){ punti += 60; perche.push('importo uguale'); } else if(d / base < 0.15){ punti += 40 * (1 - d / base / 0.15); perche.push('importo vicino'); }
+    var dm = att.length ? ricDichiarazionePer(idx, f, M, lib) : null, bm = dm ? lib : base;
+    if(dm){ punti += 40; perche.push('l\'avevi segnata a mano il ' + ricGg(dm.v.data)); }
+    var d = Math.abs(lib - bm); if(d <= A){ punti += 60; perche.push('importo uguale'); } else if(d / base < 0.15){ punti += 40 * (1 - d / base / 0.15); perche.push('importo vicino'); }
     var gg = Math.round((new Date(String(M.data).slice(0, 10)) - new Date(String(f.data || M.data).slice(0, 10))) / 86400000);
     punti += gg >= 0 ? Math.max(0, 10 - gg / 30) : -15;
     if(!cerca && punti < 20) return;
-    L.push({ S: S, lib: lib, punti: punti, perche: perche, prop: prop });
+    L.push({ S: S, lib: lib, bm: bm, punti: punti, perche: perche, prop: prop });
   });
   L.sort(function(a, b){ return b.punti - a.punti || String(b.S.M.data).localeCompare(String(a.S.M.data)); });
-  var h = '<div class="sk-nota">' + (bis > A ? (nc ? 'Credito da incassare: ' : 'Da coprire con un pagamento: ') + '<b>' + fmt(bis) + '</b>.' : 'Questa fattura risulta già coperta: puoi comunque collegare un movimento come prova.') + ' Sopra i più probabili.</div>' +
+  var h = '<div class="sk-nota">' + (soloAttesa ? 'L\'avevi segnata a mano: <b>' + esc(ricTestoDichiarato(att[0].v)) + '</b>. Collega il movimento: lo conto una volta.' : bis > A ? (nc ? 'Credito da incassare: ' : 'Da coprire con un pagamento: ') + '<b>' + fmt(bis) + '</b>.' : 'Questa fattura risulta già coperta: puoi comunque collegare un movimento come prova.') + ' Sopra i più probabili.</div>' +
     '<input class="rsc-cerca" type="search" placeholder="Cerca nome, causale o importo" value="' + esc(RSC.cerca) + '" oninput="RSC.cerca=this.value;ricvDaFatturaDisegna();var i=document.querySelector(\'#ricvDaFatt .rsc-cerca\');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length);}">';
   h += L.length ? L.slice(0, RSC.mostra).map(function(x){
-    var M = x.S.M, k = ricvJs(M.key), q = ricR2(Math.min(x.lib, base));
+    var M = x.S.M, k = ricvJs(M.key), q = ricR2(Math.min(x.lib, x.bm));
     return '<div class="rv-riga"><button class="rv-riga-m" onclick="pnChiudi(\'ricvDaFatt\');ricvApri(' + k + ')"><span class="rv-r1"><b>' + esc(x.S.titolo || '—') + '</b><em>' + fmt(-Math.abs(M.importo)).replace('-', '−') + '</em></span><small>' + ricGg(M.data) + ' · ' + esc(M.conto) + (Math.abs(x.lib - Math.abs(M.importo)) > 0.01 ? ' · liberi ' + fmt(x.lib) : '') + '</small></button>' +
       (x.perche.length || x.prop ? '<div class="rv-perche">' + (x.prop ? ricvChip(x.prop.livello) + ' ' : '') + esc(x.perche.join(' · ')) + '</div>' : '') +
-      '<div class="rv-az"><button class="sk-btn prim" onclick="ricvDaFatturaCollega(' + k + ',' + q + ')">Collega ' + fmt(q) + (q < base - A ? ' (acconto)' : '') + '</button></div></div>';
+      '<div class="rv-az"><button class="sk-btn prim" onclick="ricvDaFatturaCollega(' + k + ',' + q + ')">Collega ' + fmt(q) + (q < x.bm - A ? ' (acconto)' : '') + '</button></div></div>';
   }).join('') : '<div class="rv-vuoto">Nessun movimento libero ' + (RSC.cerca ? 'con «' + esc(RSC.cerca) + '»' : 'che somigli a questa fattura') + '. Cerca per nome o importo.</div>';
   if(L.length > RSC.mostra) h += '<button class="sk-btn big" onclick="RSC.mostra+=30;ricvDaFatturaDisegna()">Mostra altri</button>';
   mo.querySelector('.pn-sh-bd').innerHTML = h;
@@ -38369,7 +38525,9 @@ function ricvAutoSicuro(S){
   for(var i = 0; i < P.docs.length; i++){
     var x = P.docs[i], f = x.f, q = Math.abs(+x.quota || 0); somma += q;
     if(!f || f.tipo === 'nota_credito' || f.deletedAt || !f.data) return null;
-    if(Math.abs(q - ricvBisogno(f)) > 0.01) return null;
+    var dm = ricDichiarazionePer(ricIndice(), f, S.M, q);
+    if(dm && dm.esito !== 'si') return null;
+    if(Math.abs(q - ricvBisogno(f)) > 0.01 && !dm) return null;
     if(_pagPrimaDellaFattura(S.M.data, f.data)) return null;
     if(ricvGiorni(f.data, S.M.data) > 400) return null;
   }
