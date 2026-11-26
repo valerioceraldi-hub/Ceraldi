@@ -590,7 +590,7 @@ function avvisoCreditoIA(){
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.54.0</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.54.1</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -2063,7 +2063,7 @@ html[data-theme="dark"] .reg-import-link{border-color:rgba(255,255,255,.08)}
     </div>
     <div style="background:var(--surface);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);margin-bottom:12px">
       <div style="font-size:16px;font-weight:700;margin-bottom:2px">🧾 Fatture fornitori</div>
-      <div style="font-size:12px;color:var(--ink3);margin-bottom:12px">Più file XML/P7M insieme — le fatture arrivate via email da Aruba si importano già da sole, questo serve per importarne più di una a mano</div>
+      <div style="font-size:12px;color:var(--ink3);margin-bottom:12px">Scegli uno o più file XML o P7M. Le fatture di Aruba non entrano da sole: scaricale e importale da qui</div>
       <input type="file" id="inputBulkXml" accept=".xml,.p7m,text/xml,application/xml" multiple style="display:none" onchange="importaMassivoXml(this)">
       <button onclick="document.getElementById('inputBulkXml').click()" class="btn btn-s" style="width:100%;padding:12px">📥 Importa più fatture XML</button>
     </div>
@@ -3167,7 +3167,7 @@ async function _aiCicloConStrumenti(systemPrompt, bollaRisposta){
 // il dato era sempre stato corretto e completo (verificato: 58,71+167,99=226,70,
 // esatto) — mancava solo qui nella select. Aggiungendo la colonna, il fix vale
 // per TUTTE le fatture pagate con più di un bonifico/movimento, non solo questa.
-const SLIM_COLS_FATTURE = 'id,tipo,fornitore,numero,fatt_num,num_ddt,data,importo,pagamento,pagamento_origine,pagamento_impostato_il,assegno,ass_int,ass_banca,bon_iban,bon_caus,bon_data,bon_rif,riconciliata,riconciliazione,riconciliazione_storico,piva,denominazione_xml,note,stato,scadenza,fattura_allegata_name,xml_github_path,source,rate,ts,parz_pagato,data_pagamento,pec_verificata,pec_verificata_at,pec_id,iva,iva_breakdown,totale_imponibile,totale_imposta,incompleta,deleted_at,avviso_giorni,pagamenti_manuali,conferme_fornitore';
+const SLIM_COLS_FATTURE = 'id,tipo,fornitore,numero,fatt_num,num_ddt,data,importo,pagamento,pagamento_origine,pagamento_impostato_il,assegno,ass_int,ass_banca,conto_pagamento,bon_iban,bon_caus,bon_data,bon_rif,riconciliata,riconciliazione,riconciliazione_storico,piva,denominazione_xml,note,stato,scadenza,fattura_allegata_name,xml_github_path,source,rate,ts,parz_pagato,data_pagamento,pec_verificata,pec_verificata_at,pec_id,iva,iva_breakdown,totale_imponibile,totale_imposta,incompleta,deleted_at,avviso_giorni,pagamenti_manuali,conferme_fornitore';
 
 // Accesso (20/09): nessuna lettura/scrittura parte prima che la persona abbia fatto l'accesso
 var _authApertoP = new Promise(function(r){ window._authApri = r; });
@@ -3235,6 +3235,8 @@ async function sbFetchAll(path, opts={}){
 // Se uguale alla cache → usiamo localStorage. Se diverso → scarichiamo tutto e aggiorniamo.
 const FATTURE_CACHE_KEY = 'cf_fatture_cache';
 const FATTURE_TS_KEY    = 'cf_fatture_maxts';
+// v10.54.1: con quali campi è stata fatta la copia sul telefono. Se l'elenco cambia, la copia vecchia non si usa.
+const FATTURE_CAMPI_KEY = 'cf_fatture_campi';
 
 function _saveCache(rows){
   if(!rows || rows.length === 0){ console.warn('_saveCache: tentativo di salvare cache vuota — ignorato'); return; }
@@ -3265,6 +3267,7 @@ function _saveCache(rows){
     // sync incrementale penserebbe che manchino modifiche già viste.
     const maxTs = rows.reduce((m,r)=>Math.max(m, r.ts||0), 0);
     localStorage.setItem(FATTURE_TS_KEY, String(maxTs));
+    localStorage.setItem(FATTURE_CAMPI_KEY, SLIM_COLS_FATTURE);
     // Verifica che sia stato scritto davvero (silenzioso: niente toast su ogni sync)
     const verify = localStorage.getItem(FATTURE_CACHE_KEY);
     if(!verify){
@@ -3302,6 +3305,8 @@ function _loadCache(){
   try{
     const v = localStorage.getItem(FATTURE_CACHE_KEY);
     if(!v) return null;
+    // copia senza qualche campo (versione precedente): salvandola si svuoterebbe quel dato → si riscarica
+    if(localStorage.getItem(FATTURE_CAMPI_KEY) !== SLIM_COLS_FATTURE) return null;
     // Gli XML non sono più in localStorage — vengono scaricati on-demand
     return JSON.parse(v);
   }catch(e){ return null; }
@@ -3321,12 +3326,8 @@ function _slimPerCache(r){
   // bug di SLIM_COLS_FATTURE sopra (vedi il commento lì). Senza, una fattura
   // pagata con più bonifici perdeva lo storico non appena letta dalla cache
   // locale invece che da una query fresca a Supabase.
-  var keep = ['id','tipo','fornitore','numero','fatt_num','num_ddt','data','importo','piva','denominazione_xml',
-    'pagamento','assegno','ass_int','ass_banca','bon_iban','bon_caus','bon_data','bon_rif',
-    'riconciliata','riconciliazione','riconciliazione_storico','note','stato','scadenza','rate','ts','parz_pagato','data_pagamento',
-    'fattura_allegata_name','xml_github_path','source','pec_id','pec_verificata',
-    'updated_at','incompleta','totale_imponibile','totale_imposta','iva_breakdown','iva',
-    'has_foto','has_allegata'];
+  // un solo elenco: ciò che si scarica è ciò che si tiene (prima erano due e se ne perdevano alcuni)
+  var keep = SLIM_COLS_FATTURE.split(',').concat(['updated_at','iva','has_foto','has_allegata']).filter(function(k,i,a){ return a.indexOf(k) === i; });
   keep.forEach(function(k){ if(r[k] !== undefined && r[k] !== null && r[k] !== '') o[k] = r[k]; });
   return o;
 }
@@ -3722,6 +3723,9 @@ async function dbInsert(f){
             patch[k] = v;
           }
         });
+        // v10.54.1: un'importazione non sostituisce un XML già allegato (e il PDF della posta non sostituisce nulla)
+        const _docC = String(esistente.fattura_allegata||'');
+        if(_docC.length > 10 && (payload.source === 'gmail' || (payload.source === 'xml_import' && _docC.indexOf('data:') !== 0))){ delete patch.fattura_allegata; delete patch.fattura_allegata_name; }
         patch.ts = Date.now();
         // Se la riga trovata era stata cancellata (soft-delete) e la si sta
         // re-inserendo, il salvataggio va reso visibile — altrimenti sembra
@@ -5582,8 +5586,26 @@ function _docHaFile(f){
   var inline=String(f.fatturaAllegata||'');
   return (inline.length>10 && inline!=='__github__') || inline==='__github__' || String(f.xmlGithubPath||'').length>0;
 }
+// v10.54.1: la fattura ha già un documento? La lista in memoria NON contiene il file: si chiede al Cloud
+// (solo l'id, il file non si scarica). soloXml = conta solo l'XML: un PDF o una foto possono essere
+// sostituiti dall'XML ufficiale. true / false / null = non si è potuto controllare.
+async function fxHaDocumento(f, soloXml){
+  if(!f) return null;
+  if(String(f.xmlGithubPath||'').length > 0) return true;
+  var inline = String(f.fatturaAllegata||'');
+  if(inline.length > 10 && inline !== '__github__' && !(soloXml && inline.indexOf('data:') === 0)) return true;
+  if(!soloXml && f.hasAllegata) return true;
+  try{
+    var r = await sbFetch('fatture?id=eq.'+encodeURIComponent(f.id)+'&select=id&fattura_allegata=not.is.null&fattura_allegata=neq.'+(soloXml?'&fattura_allegata=not.like.data:*':'')+'&limit=1');
+    return Array.isArray(r) ? r.length > 0 : null;
+  }catch(e){ return null; }
+}
 async function _allegaDocAEsistente(id){
   var idx=fatture.findIndex(function(x){ return String(x.id)===String(id); });
+  if(idx<0 || !_docCorrente){ toast('Documento non più disponibile'); return; }
+  var gia = await fxHaDocumento(fatture[idx]);
+  if(gia !== false){ toast(gia ? 'Questa fattura ha già il suo documento: non l\'ho sostituito' : '⚠️ Non ho potuto controllare il documento: riprova', { forza: true }); return; }
+  idx=fatture.findIndex(function(x){ return String(x.id)===String(id); });
   if(idx<0 || !_docCorrente){ toast('Documento non più disponibile'); return; }
   var prima={a:fatture[idx].fatturaAllegata, n:fatture[idx].fatturaAllegataName};
   fatture[idx].fatturaAllegata = _docCorrente.kind==='xml' ? _docCorrente.testo : _docCorrente.dataUrl;
@@ -8677,7 +8699,7 @@ async function avviaRicalcoloIva(){
 
   if(candidate.length === 0){
     if(mancaXml > 0){
-      alert(`Nessuna delle tue ${mancaXml} fatture ha un XML associato.\n\nL'IVA ufficiale si può calcolare solo da fatture elettroniche XML (quelle importate automaticamente da Aruba).\n\nPer ora nel Registro hai solo fatture scansionate da foto o inserite manualmente — il calcolo IVA non è possibile.\n\nDalle prossime fatture Aruba in poi, l'IVA verrà letta automaticamente dall'XML.`);
+      alert(`Nessuna delle tue ${mancaXml} fatture ha un XML associato.\n\nL'IVA ufficiale si può calcolare solo da fatture elettroniche XML.\n\nPer ora nel Registro hai solo fatture scansionate da foto o inserite manualmente — il calcolo IVA non è possibile.\n\nImporta i file XML da «Importazioni»: l'IVA verrà letta in automatico.`);
     } else {
       toast('Nessuna fattura nel Registro');
     }
@@ -9144,7 +9166,7 @@ async function importaMassivoXml(input){
   // sapeva quali fossero, quindi restavano fuori dal registro per sempre.
   // Ora ogni file che non entra viene elencato per nome con il motivo,
   // registrato nel log errori e si può riprovare con un tocco.
-  const risultati = { salvate:0, duplicate:0, aggiornate:0, errori:0, nomi:[], falliti:[], idNuovi:[], ignorati:[], altrui:[] };
+  const risultati = { salvate:0, duplicate:0, aggiornate:0, errori:0, nomi:[], falliti:[], idNuovi:[], ignorati:[], altrui:[], nonControllati:[] };
   const _fallito = (file, motivo, riprova) => {
     risultati.errori++;
     risultati.falliti.push({nome:file.name, motivo:motivo, file:file, riprova:!!riprova});
@@ -9318,8 +9340,13 @@ async function importaMassivoXml(input){
           esistenteId: dup.id, esistenteNumero: dup.numero, esistenteData: dup.data
         });
         // Aggiorna con XML se: non ha XML, oppure ha solo fatturaAllegata vuota/placeholder
-        const haXml = (dup.xmlGithubPath && dup.xmlGithubPath.length > 0) ||
-                      (dup.fatturaAllegata && dup.fatturaAllegata.length > 10 && dup.fatturaAllegata !== '__github__');
+        const _doc = await fxHaDocumento(dup, true);
+        if(_doc === null){   // senza risposta non si tocca niente: meglio riprovare che sostituire
+          risultati.nonControllati.push({nome:file.name, file:file});
+          risultati.duplicate++;
+          continue;
+        }
+        const haXml = _doc;
         const haIva = dup.ivaBreakdown && Object.keys(dup.ivaBreakdown||{}).length > 0;
         // v10.27: registrata a mano con un importo diverso dall'XML → non correggo da solo, avviso
         if(!haXml && importo > 0 && Math.abs(Math.abs(+dup.importo||0) - importo) >= 0.02){
@@ -9343,8 +9370,8 @@ async function importaMassivoXml(input){
               fatture[idx].totaleImposta = ivaInfo.totaleImposta;
             }
             if(typeof _updateCacheRow==='function') _updateCacheRow(appToDB(fatture[idx]));
-            await dbUpdate(fatture[idx]);
-            risultati.aggiornate++;
+            const _salvato = await dbUpdate(fatture[idx]);
+            if(!haXml && _salvato && _salvato[0]) risultati.aggiornate++;   // conta solo i documenti davvero aggiunti
             // XML arrivato ora: righe a Ceraldi Ordini (se il fornitore è collegato)
             if(!haXml) autoEstraiPrezzi(xmlTesto, fatture[idx], {silenzioso:true, stato:(fatture[idx].data && fatture[idx].data >= new Date(Date.now()-30*86400000).toISOString().slice(0,10)) ? 'pending' : 'storico'}).catch(()=>{});
           }
@@ -9498,7 +9525,7 @@ async function importaMassivoXml(input){
   // Fine import
   progBar.style.width = '100%';
   const conti = risultati.salvate + risultati.duplicate + risultati.errori + risultati.ignorati.length + risultati.altrui.length;
-  progMsg.textContent = (risultati.errori || mancantiVerifica.length) ? '⚠️ Import finito con problemi' : '✅ Import completato';
+  progMsg.textContent = (risultati.errori || mancantiVerifica.length || risultati.nonControllati.length) ? '⚠️ Import finito con problemi' : '✅ Import completato';
   progSub.textContent = `${files.length} file letti → ${risultati.salvate} nuove · ${risultati.duplicate} già presenti · ${risultati.aggiornate} XML aggiunti · ${risultati.errori} non riusciti` +
     (risultati.altrui.length ? ` · ${risultati.altrui.length} lasciate fuori da te` : '') +
     (risultati.ignorati.length ? ` · ${risultati.ignorati.length} non erano fatture` : '') +
@@ -9521,9 +9548,10 @@ async function importaMassivoXml(input){
   if(risultati.falliti.length || mancantiVerifica.length){
     _riquadro('Da controllare — non sono nel registro:', risultati.falliti.map(f=>f.nome+' → '+f.motivo).concat(mancantiVerifica), 'rosso');
   }
+  if(risultati.nonControllati.length) _riquadro('Già nel registro, ma non ho potuto controllare il documento (non ho cambiato niente):', risultati.nonControllati.map(f=>f.nome), 'rosso');
   if(risultati.altrui.length) _riquadro('Non registrate perché lo hai scelto tu:', risultati.altrui.map(f=>f.nome+' → '+f.motivo));
   if(risultati.ignorati.length) _riquadro('Non erano fatture: non devi fare niente.', risultati.ignorati.map(f=>f.nome+' → '+f.motivo));
-  _xmlFalliti = risultati.falliti.filter(f=>f.riprova).map(f=>f.file);
+  _xmlFalliti = risultati.falliti.filter(f=>f.riprova).concat(risultati.nonControllati).map(f=>f.file);
   if(_xmlFalliti.length){
     const btn = document.createElement('button');
     btn.textContent = '🔄 Riprova ' + (_xmlFalliti.length===1 ? 'il file non riuscito' : 'i '+_xmlFalliti.length+' file non riusciti');
