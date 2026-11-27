@@ -3426,7 +3426,7 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
     <button class="hdr-btn" id="tb-back" style="display:none" aria-label="Indietro"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
     <div class="tb-titles">
       <h1 id="tb-title">Presenze</h1>
-      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v78</span></p>
+      <p><span id="tb-sub">Presenze</span><span class="app-ver" id="app-version">v79</span></p>
     </div>
     <span class="topbar-badge" id="role-badge"></span>
     <div class="hdr-actions">
@@ -5214,10 +5214,11 @@ Dopo ogni ispezione, riferisci al responsabile tutto ciò che è stato detto o c
         <div style="font-size:44px;margin-bottom:10px">📄</div>
         <div style="font-size:16px;font-weight:800" id="ad-titolo"></div>
         <div style="font-size:12px;color:var(--muted);margin-top:4px" id="ad-file"></div>
+        <div style="font-size:12px;color:var(--text);margin-top:8px;line-height:1.5" id="ad-impronta"></div>
       </div>
       <div style="background:rgba(43,74,203,.04);border:1px solid rgba(43,74,203,.18);border-radius:12px;padding:14px">
         <div style="font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">Prima di aprire</div>
-        <p style="font-size:12px;color:var(--text);line-height:1.65;margin:0">Aprendo confermi la presa visione. Hai comunque <b>7 giorni</b> per segnalare qualsiasi errore.</p>
+        <p style="font-size:12px;color:var(--text);line-height:1.65;margin:0">Aprendo confermi la presa visione di <b>questo</b> documento, identificato dal codice qui sopra: se il file venisse cambiato anche di una virgola, il codice non corrisponderebbe più. Hai comunque <b>7 giorni</b> per segnalare qualsiasi errore.</p>
       </div>
       <div class="msg" id="ad-msg"></div>
     </div>
@@ -7718,8 +7719,9 @@ async function renderRicevuteDip() {
     <button class="btn-secondary" style="margin-top:10px" onclick="scaricaMioRegistro()">⬇ Scarica la mia copia (PDF)</button></div>`;
 }
 async function scaricaMioRegistro() {
-  const { data, error } = await sb.rpc('registro_esporta', { p_dal: '2000-01-01T00:00:00Z', p_al: new Date(Date.now() + 86400000).toISOString(), p_dipendente: ME.id });
-  if (error) { toast('Download non riuscito: ' + error.message); return; }
+  let data;
+  try { data = await _registroEsportaTutto('2000-01-01T00:00:00Z', new Date(Date.now() + 86400000).toISOString(), ME.id); }
+  catch (error) { toast('Download non riuscito: ' + (error.message || error)); return; }
   // 2.3: PDF leggibile (i dati tecnici completi sono allegati dentro al PDF)
   const intest = ME.nome + ' ' + (ME.cognome || '');
   const blob = await registroPDF({ titolo: 'Il mio registro', intestatario: intest, periodo: 'dall\'inizio a oggi', eventi: data || [],
@@ -7815,8 +7817,70 @@ async function registroStato() {
       <div class="kpi"><div class="kpi-l">Ultimo sigillo</div><div class="kpi-v" style="font-size:17px">${s ? new Date(s.giorno + 'T12:00').toLocaleDateString('it-IT', { day: 'numeric', month: 'short' }) : '—'}</div><div class="kpi-s">${s ? esc(s.esito || '') : 'nessuno ancora'}</div></div>
     </div>
     ${marche ? '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">' + marche + '</div>' : ''}
+    <div id="reg-controllo" style="margin-bottom:10px"></div>
     <div style="display:flex;gap:8px;margin-bottom:6px"><button class="btn-sm" style="flex:1" onclick="registroVerifica()">🔍 Verifica integrità</button><button class="btn-sm" style="flex:1" onclick="registroSigillaOra()">🔏 Sigilla ora</button></div>
     <button class="btn-primary" style="margin-bottom:6px" onclick="openSheet('sh-fascicolo')">📁 Fascicolo per un contenzioso</button>`;
+  registroControlloBox();
+}
+
+/* ── v79: CONTROLLO QUOTIDIANO DEI SIGILLI ─────────────────────────
+   Ogni mattina il server (funzione registro-controllo) ricontrolla il sigillo della
+   notte come farebbe un perito: manifesto, numerazione, catena, firme di FreeTSA e
+   DigiCert sui certificati ufficiali, prova Bitcoin completata e confrontata con
+   archivi pubblici. Avvisa (Telegram/push) SOLO se qualcosa non va. Qui si vede
+   l'esito; se qualcosa non va, il pulsante per riprovare è sulla stessa schermata. */
+const _REG_ORE_SENZA_CONTROLLO = 30;
+async function registroControlloBox() {
+  const box = $('reg-controllo'); if (!box) return;
+  const { data, error } = await sb.from('registro_controlli').select('giorno,eseguito_il,esito,dettagli,origine').order('eseguito_il', { ascending: false }).limit(60);
+  if (error) { box.innerHTML = ''; return; }
+  const righe = data || [];
+  const fmtG = (g) => g.split('-').reverse().join('/');
+  const fmtOra = (s) => new Date(s).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  const perGiorno = {}; righe.forEach(r => { if (!perGiorno[r.giorno]) perGiorno[r.giorno] = r; });
+  const ultimi = Object.values(perGiorno).sort((a, b) => (a.giorno < b.giorno ? 1 : -1));
+  const anomalie = ultimi.filter(r => r.esito === 'anomalia');
+  const attesa = ultimi.filter(r => r.esito === 'in_attesa');
+  const ultimoAuto = righe.find(r => r.origine === 'sistema');
+  const fermo = !ultimoAuto || (Date.now() - new Date(ultimoAuto.eseguito_il).getTime()) > _REG_ORE_SENZA_CONTROLLO * 3600000;
+  const bottone = (testo, giorni) => `<button class="btn-sm" style="margin-top:8px" onclick='registroControllaOra(${JSON.stringify(giorni || null)})'>${testo}</button>`;
+  if (anomalie.length) {
+    box.innerHTML = `<div style="border:1px solid rgba(255,59,48,.35);background:rgba(255,59,48,.06);border-radius:12px;padding:12px">
+      <div style="font-weight:800;color:#FF3B30">⚠ Il controllo dei sigilli ha trovato un problema</div>
+      ${anomalie.map(r => `<div style="font-size:12px;margin-top:6px"><b>${fmtG(r.giorno)}</b>: ${esc(((r.dettagli && r.dettagli.controlli) || []).filter(c => c.ok === false).map(c => c.voce + ' — ' + (c.nota || '')).join('; ') || 'vedi dettagli')}</div>`).join('')}
+      <div style="font-size:11px;color:var(--muted);margin-top:6px">Spesso è un ente esterno momentaneamente non raggiungibile. «Riprova ora» rifà il controllo e, se manca una marca, ne chiede una di recupero.</div>
+      ${bottone('🔄 Riprova ora', anomalie.map(r => r.giorno))}</div>`;
+    return;
+  }
+  if (!righe.length) {
+    box.innerHTML = `<div style="border:1px solid var(--border,#ddd);border-radius:12px;padding:12px;font-size:12px">Controllo automatico dei sigilli: il primo partirà domani mattina. Puoi eseguirlo anche adesso.${bottone('🔎 Controlla ora')}</div>`;
+    return;
+  }
+  if (fermo) {
+    box.innerHTML = `<div style="border:1px solid rgba(255,149,0,.4);background:rgba(255,149,0,.07);border-radius:12px;padding:12px">
+      <div style="font-weight:800;color:#C77700">⚠ Il controllo automatico non è partito</div>
+      <div style="font-size:12px;margin-top:4px">${ultimoAuto ? 'L\'ultimo controllo automatico è del ' + fmtOra(ultimoAuto.eseguito_il) + '.' : 'Nessun controllo automatico registrato.'} Eseguilo adesso: se il problema si ripete, il pianificatore notturno va ricontrollato.</div>
+      ${bottone('🔎 Controlla ora')}</div>`;
+    return;
+  }
+  const u = ultimi[0], det = u.dettagli || {}, btc = det.bitcoin || {};
+  box.innerHTML = `<div style="border:1px solid rgba(48,209,88,.35);background:rgba(48,209,88,.06);border-radius:12px;padding:12px">
+    <div style="font-weight:800;color:#1E9E46">✓ Controllo automatico dei sigilli: tutto a posto</div>
+    <div style="font-size:12px;margin-top:4px">Ultimo controllo: ${fmtOra(ultimoAuto.eseguito_il)} · sigillo del ${fmtG(u.giorno)}: marche ${(det.marche || []).filter(m => m.ok).map(m => m.ente).join(' e ') || '—'} valide${btc.stato === 'ok' ? ', Bitcoin blocco n. ' + Number(btc.blocco).toLocaleString('it-IT') : ''}.</div>
+    ${attesa.length ? `<div style="font-size:11px;color:var(--muted);margin-top:4px">Verifica da completare per ${attesa.map(r => fmtG(r.giorno) + ' (' + esc(((r.dettagli && r.dettagli.controlli) || []).filter(c => c.ok === null).map(c => c.voce.toLowerCase()).join(', ') || 'in corso') + ')').join(', ')}: si completa da sola nei controlli dei giorni successivi. Se non si completa entro 3 giorni ricevi un avviso.</div>` : ''}
+    <div style="font-size:11px;color:var(--muted);margin-top:4px">Ricevi un avviso solo se qualcosa non va.</div></div>`;
+}
+async function registroControllaOra(giorni) {
+  const box = $('reg-controllo'); if (box) box.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:8px 2px">Controllo in corso… (può richiedere un minuto)</div>';
+  try {
+    // prima si creano eventuali sigilli mancanti, poi si controlla
+    await sb.functions.invoke('registro-sigillo', { body: {} });
+    const { data, error } = await sb.functions.invoke('registro-controllo', { body: giorni && giorni.length ? { giorni } : {} });
+    if (error) throw error;
+    if (data && data.errore) throw new Error(data.errore);
+    toast(data && data.esito === 'anomalia' ? '⚠ Il controllo ha trovato ancora un problema: vedi il dettaglio' : '✓ Controllo completato');
+  } catch (e) { toast('Controllo non riuscito: ' + (e.message || e)); }
+  registroStato();
 }
 let _regUltimaVerifica = '';
 async function registroVerifica() {
@@ -7848,89 +7912,494 @@ async function _caricaJSZip() {
   await new Promise((ok, ko) => { const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js'; s.onload = ok; s.onerror = ko; document.head.appendChild(s); });
   return window.JSZip;
 }
+/* v79 (28/11/2026): lettura del registro A PAGINE. Il server restituisce al massimo
+   1.000 righe per richiesta: senza pagine un fascicolo o una copia personale con più
+   eventi sarebbe uscito incompleto senza avvisare. Si legge finché arriva una pagina
+   vuota (funziona con qualunque limite del server) e si controlla che la numerazione
+   sia sempre crescente. Nella demo rpc non è paginabile: si legge tutto in una volta. */
+async function _registroEsportaTutto(dal, al, dip) {
+  const PAG = 1000; const tutti = [];
+  for (let da = 0; ; ) {
+    let q = sb.rpc('registro_esporta', { p_dal: dal, p_al: al, p_dipendente: dip });
+    const paginabile = !!q && typeof q.range === 'function';
+    if (paginabile) q = q.order('anello', { ascending: true }).range(da, da + PAG - 1);
+    const { data, error } = await q;
+    if (error) throw error;
+    const pag = data || [];
+    for (const r of pag) {
+      if (tutti.length && r.anello <= tutti[tutti.length - 1].anello) throw new Error('lettura del registro non in ordine: riprova');
+      tutti.push(r);
+    }
+    if (!paginabile || !pag.length) break;
+    da += pag.length;
+  }
+  return tutti;
+}
+
+/* Certificati radice ufficiali delle autorità di marca temporale (gli stessi fissati nel
+   controllo quotidiano). Vanno nel fascicolo così il perito può verificare anche senza
+   internet; le impronte SHA-256 permettono di confrontarli con quelli pubblicati dagli enti. */
+const _CERT_UFFICIALI = {
+  freetsa_cacert: { file: 'freetsa_cacert.pem', fonte: 'https://freetsa.org/files/cacert.pem', impronta: 'A6:37:9E:7C:EC:C0:5F:AA:3C:BF:07:60:13:D7:45:E3:27:BB:BA:A3:8C:0B:9A:F2:24:69:D4:70:1D:18:AA:BC', pem: `-----BEGIN CERTIFICATE-----
+MIIH/zCCBeegAwIBAgIJAMHphhYNqOmAMA0GCSqGSIb3DQEBDQUAMIGVMREwDwYD
+VQQKEwhGcmVlIFRTQTEQMA4GA1UECxMHUm9vdCBDQTEYMBYGA1UEAxMPd3d3LmZy
+ZWV0c2Eub3JnMSIwIAYJKoZIhvcNAQkBFhNidXNpbGV6YXNAZ21haWwuY29tMRIw
+EAYDVQQHEwlXdWVyemJ1cmcxDzANBgNVBAgTBkJheWVybjELMAkGA1UEBhMCREUw
+HhcNMTYwMzEzMDE1MjEzWhcNNDEwMzA3MDE1MjEzWjCBlTERMA8GA1UEChMIRnJl
+ZSBUU0ExEDAOBgNVBAsTB1Jvb3QgQ0ExGDAWBgNVBAMTD3d3dy5mcmVldHNhLm9y
+ZzEiMCAGCSqGSIb3DQEJARYTYnVzaWxlemFzQGdtYWlsLmNvbTESMBAGA1UEBxMJ
+V3VlcnpidXJnMQ8wDQYDVQQIEwZCYXllcm4xCzAJBgNVBAYTAkRFMIICIjANBgkq
+hkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAtgKODjAy8REQ2WTNqUudAnjhlCrpE6ql
+mQfNppeTmVvZrH4zutn+NwTaHAGpjSGv4/WRpZ1wZ3BRZ5mPUBZyLgq0YrIfQ5Fx
+0s/MRZPzc1r3lKWrMR9sAQx4mN4z11xFEO529L0dFJjPF9MD8Gpd2feWzGyptlel
+b+PqT+++fOa2oY0+NaMM7l/xcNHPOaMz0/2olk0i22hbKeVhvokPCqhFhzsuhKsm
+q4Of/o+t6dI7sx5h0nPMm4gGSRhfq+z6BTRgCrqQG2FOLoVFgt6iIm/BnNffUr7V
+DYd3zZmIwFOj/H3DKHoGik/xK3E82YA2ZulVOFRW/zj4ApjPa5OFbpIkd0pmzxzd
+EcL479hSA9dFiyVmSxPtY5ze1P+BE9bMU1PScpRzw8MHFXxyKqW13Qv7LWw4sbk3
+SciB7GACbQiVGzgkvXG6y85HOuvWNvC5GLSiyP9GlPB0V68tbxz4JVTRdw/Xn/XT
+FNzRBM3cq8lBOAVt/PAX5+uFcv1S9wFE8YjaBfWCP1jdBil+c4e+0tdywT2oJmYB
+BF/kEt1wmGwMmHunNEuQNzh1FtJY54hbUfiWi38mASE7xMtMhfj/C4SvapiDN837
+gYaPfs8x3KZxbX7C3YAsFnJinlwAUss1fdKar8Q/YVs7H/nU4c4Ixxxz4f67fcVq
+M2ITKentbCMCAwEAAaOCAk4wggJKMAwGA1UdEwQFMAMBAf8wDgYDVR0PAQH/BAQD
+AgHGMB0GA1UdDgQWBBT6VQ2MNGZRQ0z357OnbJWveuaklzCBygYDVR0jBIHCMIG/
+gBT6VQ2MNGZRQ0z357OnbJWveuakl6GBm6SBmDCBlTERMA8GA1UEChMIRnJlZSBU
+U0ExEDAOBgNVBAsTB1Jvb3QgQ0ExGDAWBgNVBAMTD3d3dy5mcmVldHNhLm9yZzEi
+MCAGCSqGSIb3DQEJARYTYnVzaWxlemFzQGdtYWlsLmNvbTESMBAGA1UEBxMJV3Vl
+cnpidXJnMQ8wDQYDVQQIEwZCYXllcm4xCzAJBgNVBAYTAkRFggkAwemGFg2o6YAw
+MwYDVR0fBCwwKjAooCagJIYiaHR0cDovL3d3dy5mcmVldHNhLm9yZy9yb290X2Nh
+LmNybDCBzwYDVR0gBIHHMIHEMIHBBgorBgEEAYHyJAEBMIGyMDMGCCsGAQUFBwIB
+FidodHRwOi8vd3d3LmZyZWV0c2Eub3JnL2ZyZWV0c2FfY3BzLmh0bWwwMgYIKwYB
+BQUHAgEWJmh0dHA6Ly93d3cuZnJlZXRzYS5vcmcvZnJlZXRzYV9jcHMucGRmMEcG
+CCsGAQUFBwICMDsaOUZyZWVUU0EgdHJ1c3RlZCB0aW1lc3RhbXBpbmcgU29mdHdh
+cmUgYXMgYSBTZXJ2aWNlIChTYWFTKTA3BggrBgEFBQcBAQQrMCkwJwYIKwYBBQUH
+MAGGG2h0dHA6Ly93d3cuZnJlZXRzYS5vcmc6MjU2MDANBgkqhkiG9w0BAQ0FAAOC
+AgEAaK9+v5OFYu9M6ztYC+L69sw1omdyli89lZAfpWMMh9CRmJhM6KBqM/ipwoLt
+nxyxGsbCPhcQjuTvzm+ylN6VwTMmIlVyVSLKYZcdSjt/eCUN+41K7sD7GVmxZBAF
+ILnBDmTGJmLkrU0KuuIpj8lI/E6Z6NnmuP2+RAQSHsfBQi6sssnXMo4HOW5gtPO7
+gDrUpVXID++1P4XndkoKn7Svw5n0zS9fv1hxBcYIHPPQUze2u30bAQt0n0iIyRLz
+aWuhtpAtd7ffwEbASgzB7E+NGF4tpV37e8KiA2xiGSRqT5ndu28fgpOY87gD3ArZ
+DctZvvTCfHdAS5kEO3gnGGeZEVLDmfEsv8TGJa3AljVa5E40IQDsUXpQLi8G+UC4
+1DWZu8EVT4rnYaCw1VX7ShOR1PNCCvjb8S8tfdudd9zhU3gEB0rxdeTy1tVbNLXW
+99y90xcwr1ZIDUwM/xQ/noO8FRhm0LoPC73Ef+J4ZBdrvWwauF3zJe33d4ibxEcb
+8/pz5WzFkeixYM2nsHhqHsBKw7JPouKNXRnl5IAE1eFmqDyC7G/VT7OF669xM6hb
+Ut5G21JE4cNK6NNucS+fzg1JPX0+3VhsYZjj7D5uljRvQXrJ8iHgr/M6j2oLHvTA
+I2MLdq2qjZFDOCXsxBxJpbmLGBx9ow6ZerlUxzws2AWv2pk=
+-----END CERTIFICATE-----
+` },
+  freetsa_tsa: { file: 'freetsa_tsa.crt', fonte: 'https://freetsa.org/files/tsa.crt', impronta: '', pem: `-----BEGIN CERTIFICATE-----
+MIIGYDCCBEigAwIBAgIJAMLphhYNqOnNMA0GCSqGSIb3DQEBDQUAMIGVMREwDwYD
+VQQKEwhGcmVlIFRTQTEQMA4GA1UECxMHUm9vdCBDQTEYMBYGA1UEAxMPd3d3LmZy
+ZWV0c2Eub3JnMSIwIAYJKoZIhvcNAQkBFhNidXNpbGV6YXNAZ21haWwuY29tMRIw
+EAYDVQQHEwlXdWVyemJ1cmcxDzANBgNVBAgTBkJheWVybjELMAkGA1UEBhMCREUw
+HhcNMjYwMjE1MTk0NDIyWhcNNDAwMjAyMTk0NDIyWjCCAQsxETAPBgNVBAoMCEZy
+ZWUgVFNBMQwwCgYDVQQLDANUU0ExdjB0BgNVBA0MbVRoaXMgY2VydGlmaWNhdGUg
+ZGlnaXRhbGx5IHNpZ25zIGRvY3VtZW50cyBhbmQgdGltZSBzdGFtcCByZXF1ZXN0
+cyBtYWRlIHVzaW5nIHRoZSBmcmVldHNhLm9yZyBvbmxpbmUgc2VydmljZXMxGDAW
+BgNVBAMMD3d3dy5mcmVldHNhLm9yZzEkMCIGCSqGSIb3DQEJARYVYnVzaWxlemFz
+QG1haWxib3gub3JnMRIwEAYDVQQHDAlXdWVyemJ1cmcxCzAJBgNVBAYTAkRFMQ8w
+DQYDVQQIDAZCYXllcm4wdjAQBgcqhkjOPQIBBgUrgQQAIgNiAASiFeGhstbLhxix
+0o4UAumNSwHUUlOe3DBvs8fYs580wADW59oqGSCx15bp61TSmXkwLm1JW48XnbLL
+izP6ZtjcvshV3H9uz2bS53sgDXhg1wLbIhAtraC+fHCytHeuVaujggHmMIIB4jAJ
+BgNVHRMEAjAAMB0GA1UdDgQWBBQVwL0m69RdgtFdkyYxL+9wsotGXjAfBgNVHSME
+GDAWgBT6VQ2MNGZRQ0z357OnbJWveuaklzALBgNVHQ8EBAMCBsAwFgYDVR0lAQH/
+BAwwCgYIKwYBBQUHAwgwbAYIKwYBBQUHAQEEYDBeMDMGCCsGAQUFBzAChidodHRw
+Oi8vd3d3LmZyZWV0c2Eub3JnL2ZpbGVzL2NhY2VydC5wZW0wJwYIKwYBBQUHMAGG
+G2h0dHA6Ly93d3cuZnJlZXRzYS5vcmc6MjU2MDA3BgNVHR8EMDAuMCygKqAohiZo
+dHRwOi8vd3d3LmZyZWV0c2Eub3JnL2NybC9yb290X2NhLmNybDCByAYDVR0gBIHA
+MIG9MIG6BgMrBQgwgbIwMwYIKwYBBQUHAgEWJ2h0dHA6Ly93d3cuZnJlZXRzYS5v
+cmcvZnJlZXRzYV9jcHMuaHRtbDAyBggrBgEFBQcCARYmaHR0cDovL3d3dy5mcmVl
+dHNhLm9yZy9mcmVldHNhX2Nwcy5wZGYwRwYIKwYBBQUHAgIwOxo5RnJlZVRTQSB0
+cnVzdGVkIHRpbWVzdGFtcGluZyBTb2Z0d2FyZSBhcyBhIFNlcnZpY2UgKFNhYVMp
+MA0GCSqGSIb3DQEBDQUAA4ICAQBrMVS/YfnfMr0ziZnesBUOrDNRrNNgt3IgMNDw
+Nhwl6oKWHVIhlYnM/5boljfbpZTAbqvxHI3ztT0/swxQOqTat5qBJRAY/VH1n/T4
+M9uDjSuu3qfh0ZH5PL9ENqoVW44i5NT/znQev2MGXOAHwz9kZwwzz9MFX6hbGhBq
+Wa+nlAqb7Y72KFzj33m1OVHxV2Wl4YD9f91bZTFpUEGW4Ktbkmxpf/iGIPaf4WHp
+oBW/O6EzofMKYlz4yXyEBh0wRRVyXltLrj+MFHqhe+PsMBllq/dCaO4W/F+AuHEl
+u7aUYWMASelphWAJiUsNMr5HAoeCSSgilqf1CSoWC+k6e4334Fym+Iy4csMex+PG
+4rSdqXJVQ+AWEdRajSPKh7yDfpNkdnO6yqQJ/tSd11XQ5cL0M9jWuCD1zHlgA+u+
+R2cry3yo23jD7qTGLhZqUvXCyWigH30/Q/RXjjDwrc4DJiQ+gRY0FhdTYqlvgMBP
+r4LcJKnNksivdj+kbz7bVSbrBAzRiazK9l841/5XMtP9BvD0hKCpQFvP9PSgCC8E
+QnKqgSe26FSJBaAQcA5TnK8NF4jkbElBxf/zyh7P3IjHso35jtgUWD1/itg9BJWb
+YUwJ4tfILpB2F0wbk1GcZDCDZoyW3Xf3trApz/Zd93gF3joc9Hh9RFveKRzWQ7dd
+Ut3egQ==
+-----END CERTIFICATE-----
+` },
+  digicert_g4: { file: 'digicert_trusted_root_g4.pem', fonte: 'https://cacerts.digicert.com/DigiCertTrustedRootG4.crt', impronta: '55:2F:7B:DC:F1:A7:AF:9E:6C:E6:72:01:7F:4F:12:AB:F7:72:40:C7:8E:76:1A:C2:03:D1:D9:D2:0A:C8:99:88', pem: `-----BEGIN CERTIFICATE-----
+MIIFkDCCA3igAwIBAgIQBZsbV56OITLiOQe9p3d1XDANBgkqhkiG9w0BAQwFADBi
+MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3
+d3cuZGlnaWNlcnQuY29tMSEwHwYDVQQDExhEaWdpQ2VydCBUcnVzdGVkIFJvb3Qg
+RzQwHhcNMTMwODAxMTIwMDAwWhcNMzgwMTE1MTIwMDAwWjBiMQswCQYDVQQGEwJV
+UzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3d3cuZGlnaWNlcnQu
+Y29tMSEwHwYDVQQDExhEaWdpQ2VydCBUcnVzdGVkIFJvb3QgRzQwggIiMA0GCSqG
+SIb3DQEBAQUAA4ICDwAwggIKAoICAQC/5pBzaN675F1KPDAiMGkz7MKnJS7JIT3y
+ithZwuEppz1Yq3aaza57G4QNxDAf8xukOBbrVsaXbR2rsnnyyhHS5F/WBTxSD1If
+xp4VpX6+n6lXFllVcq9ok3DCsrp1mWpzMpTREEQQLt+C8weE5nQ7bXHiLQwb7iDV
+ySAdYyktzuxeTsiT+CFhmzTrBcZe7FsavOvJz82sNEBfsXpm7nfISKhmV1efVFiO
+DCu3T6cw2Vbuyntd463JT17lNecxy9qTXtyOj4DatpGYQJB5w3jHtrHEtWoYOAMQ
+jdjUN6QuBX2I9YI+EJFwq1WCQTLX2wRzKm6RAXwhTNS8rhsDdV14Ztk6MUSaM0C/
+CNdaSaTC5qmgZ92kJ7yhTzm1EVgX9yRcRo9k98FpiHaYdj1ZXUJ2h4mXaXpI8OCi
+EhtmmnTK3kse5w5jrubU75KSOp493ADkRSWJtppEGSt+wJS00mFt6zPZxd9LBADM
+fRyVw4/3IbKyEbe7f/LVjHAsQWCqsWMYRJUadmJ+9oCw++hkpjPRiQfhvbfmQ6QY
+uKZ3AeEPlAwhHbJUKSWJbOUOUlFHdL4mrLZBdd56rF+NP8m800ERElvlEFDrMcXK
+chYiCd98THU/Y+whX8QgUWtvsauGi0/C1kVfnSD8oR7FwI+isX4KJpn15GkvmB0t
+9dmpsh3lGwIDAQABo0IwQDAPBgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIB
+hjAdBgNVHQ4EFgQU7NfjgtJxXWRM3y5nP+e6mK4cD08wDQYJKoZIhvcNAQEMBQAD
+ggIBALth2X2pbL4XxJEbw6GiAI3jZGgPVs93rnD5/ZpKmbnJeFwMDF/k5hQpVgs2
+SV1EY+CtnJYYZhsjDT156W1r1lT40jzBQ0CuHVD1UvyQO7uYmWlrx8GnqGikJ9yd
++SeuMIW59mdNOj6PWTkiU0TryF0Dyu1Qen1iIQqAyHNm0aAFYF/opbSnr6j3bTWc
+fFqK1qI4mfN4i/RN0iAL3gTujJtHgXINwBQy7zBZLq7gcfJW5GqXb5JQbZaNaHqa
+sjYUegbyJLkJEVDXCLG4iXqEI2FCKeWjzaIgQdfRnGTZ6iahixTXTBmyUEFxPT9N
+cCOGDErcgdLMMpSEDQgJlxxPwO5rIHQw0uA5NBCFIRUBCOhVMt5xSdkoF1BN5r5N
+0XWs0Mr7QbhDparTwwVETyw2m+L64kW4I1NsBm9nVX9GtUw/bihaeSbSpKhil9Ie
+4u1Ki7wb/UdKDd9nZn6yW0HQO+T0O/QEY+nvwlQAUaCKKsnOeMzV6ocEGLPOr0mI
+r/OSmbaz5mEP0oUA51Aa5BuVnRmhuZyxm7EAHu/QD09CbMkKvO5D+jpxpchNJqU1
+/YldvIViHTLSoCtU7ZpXwdv6EM8Zt4tKG48BtieVU+i2iW1bvGjUI+iLUaJW+fCm
+gKDWHrO8Dw9TdSmq6hN35N6MgSGtBxBHEa2HPQfRdbzP82Z+
+-----END CERTIFICATE-----
+` },
+};
+
+/* ── FASCICOLO PER UN CONTENZIOSO (v79) ─────────────────────────────
+   Contiene, per la persona e il periodo scelti:
+   - eventi.jsonl: gli eventi della persona (ognuno con il testo da cui nasce l'impronta);
+   - sigilli/: per OGNI giorno del periodo (anche senza eventi della persona, così la
+     numerazione si può seguire senza buchi) il manifesto con le impronte di tutti gli
+     eventi del giorno (solo impronte: nessun dato dei colleghi), le marche FreeTSA e
+     DigiCert e la prova Bitcoin completa (definitiva) quando disponibile;
+   - documenti/: i PDF della persona citati negli eventi (buste paga, CU...);
+   - certificati/: i certificati radice ufficiali delle autorità di marca;
+   - LEGGIMI.html: spiegazione per chi non è tecnico e verifica automatica;
+   - verifica_marche.txt e verifica.sh: i comandi per il perito. */
 async function generaFascicolo() {
   const dip = $('fas-dip').value, dalG = $('fas-dal').value, alG = $('fas-al').value;
   if (!dip || !dalG || !alG) { showMsg('fas-msg', 'Scegli persona e periodo', 'err'); return; }
+  if (alG < dalG) { showMsg('fas-msg', 'La data finale è precedente a quella iniziale', 'err'); return; }
   const btn = $('fas-btn'); btn.disabled = true; btn.textContent = 'Preparo il fascicolo…'; hideMsg('fas-msg');
   try {
     const dal = new Date(dalG + 'T00:00:00').toISOString(), al = new Date(new Date(alG + 'T00:00:00').getTime() + 86400000).toISOString();
-    const [{ data: eventi, error }, { data: prof }] = await Promise.all([
-      sb.rpc('registro_esporta', { p_dal: dal, p_al: al, p_dipendente: dip }),
+    const [eventi, { data: prof }] = await Promise.all([
+      _registroEsportaTutto(dal, al, dip),
       sb.from('presenze_profili').select('nome,cognome,codice_fiscale,email,telefono,email_verificata_il,telefono_verificato_il,telefono_verifica_metodo').eq('id', dip).maybeSingle(),
     ]);
-    if (error) throw error;
-    if (!eventi || !eventi.length) { showMsg('fas-msg', 'Nessun evento registrato per questa persona nel periodo', 'err'); return; }
-    // 2.2: le chiavi pubbliche della firma dal telefono (registrate magari
-    // prima del periodo) servono per verificare le firme: si aggiungono.
-    const { data: tutti } = await sb.rpc('registro_esporta', { p_dal: '2000-01-01T00:00:00Z', p_al: al, p_dipendente: dip });
+    if (!eventi.length) { showMsg('fas-msg', 'Nessun evento registrato per questa persona nel periodo', 'err'); return; }
+    // le chiavi pubbliche della firma dal telefono (registrate magari prima del periodo)
+    // servono per verificare le firme: si aggiungono.
+    const tutti = await _registroEsportaTutto('2000-01-01T00:00:00Z', al, dip);
     const presenti = new Set(eventi.map(e => e.anello));
-    (tutti || []).filter(e => /^firma_dispositivo_/.test(e.azione) && !presenti.has(e.anello)).forEach(e => eventi.push(e));
+    tutti.filter(e => /^firma_dispositivo_/.test(e.azione) && !presenti.has(e.anello)).forEach(e => eventi.push(e));
     eventi.sort((a, b) => a.anello - b.anello);
+    const giornoRoma = s => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Rome' }).format(new Date(s));
+    const piu = (g, n) => { const d = new Date(g + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+    // giorni: tutto il periodo, il giorno prima (per il collegamento del primo evento)
+    // e, per gli eventi fuori periodo (attivazione del telefono), il loro giorno e quello prima
+    const gSet = new Set();
+    for (let g = piu(dalG, -1); g <= alG; g = piu(g, 1)) gSet.add(g);
+    eventi.forEach(e => { const g = giornoRoma(e.creato_il); if (g < dalG || g > alG) { gSet.add(g); gSet.add(piu(g, -1)); } });
+    const giorni = [...gSet].sort();
+    let sigilli = [], controlliRighe = [];
+    for (let i = 0; i < giorni.length; i += 100) {
+      const blocco = giorni.slice(i, i + 100);
+      const [{ data: s, error: e1 }, { data: c }] = await Promise.all([
+        sb.from('registro_sigilli').select('*').in('giorno', blocco),
+        sb.from('registro_controlli').select('giorno,eseguito_il,esito,dettagli').in('giorno', blocco).order('eseguito_il', { ascending: false }),
+      ]);
+      if (e1) throw e1;
+      sigilli = sigilli.concat(s || []); controlliRighe = controlliRighe.concat(c || []);
+    }
+    sigilli.sort((a, b) => (a.giorno < b.giorno ? -1 : 1));
+    const controlli = {}; controlliRighe.forEach(c => { if (!controlli[c.giorno]) controlli[c.giorno] = c; });
+
     const JSZip = await _caricaJSZip();
     const zip = new JSZip();
-    const giornoRoma = s => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Rome' }).format(new Date(s));
-    const giorni = [...new Set(eventi.map(e => giornoRoma(e.creato_il)))].sort();
-    const { data: sigilli } = await sb.from('registro_sigilli').select('*').in('giorno', giorni);
-    const manifesti = {};
-    for (const s of (sigilli || [])) {
-      for (const [suff, tipo] of [['.manifesto.json', 'text'], ['.freetsa.tsr', 'bin'], ['.digicert.tsr', 'bin'], ['.ots', 'bin']]) {
-        const { data: f } = await sb.storage.from('registro-legale').download(s.percorso + suff);
-        if (!f) continue;
-        const nome = 'sigilli/' + s.giorno + suff;
-        if (tipo === 'text') { const t = await f.text(); manifesti[s.giorno] = t; zip.file(nome, t); } else zip.file(nome, f);
+    const b64 = async (blob) => { const b = new Uint8Array(await blob.arrayBuffer()); let s = ''; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(s); };
+    const prendi = async (p) => { try { const { data: f } = await sb.storage.from('registro-legale').download(p); return f || null; } catch (e) { return null; } };
+    const manifesti = {}, marche = {}, ots = {}, mancanti = [];
+    for (let i = 0; i < sigilli.length; i++) {
+      const s = sigilli[i];
+      btn.textContent = 'Preparo il fascicolo… ' + (i + 1) + '/' + sigilli.length;
+      const det = (controlli[s.giorno] && controlli[s.giorno].dettagli) || {};
+      const m = await prendi(s.percorso + '.manifesto.json');
+      if (!m) { mancanti.push(s.giorno); continue; }
+      const t = await m.text(); manifesti[s.giorno] = t; zip.file('sigilli/' + s.giorno + '.manifesto.json', t);
+      marche[s.giorno] = {};
+      for (const ente of ['freetsa', 'digicert']) {
+        const f = await prendi(s.percorso + '.' + ente + '.tsr');
+        if (f) { zip.file('sigilli/' + s.giorno + '.' + ente + '.tsr', f); marche[s.giorno][ente] = await b64(f); }
+        if ((det.marche || []).some(x => x.ente && x.ente.toLowerCase() === ente && x.tipo === 'recupero')) {
+          const fr = await prendi(s.percorso + '.' + ente + '.recupero.tsr');
+          if (fr) { zip.file('sigilli/' + s.giorno + '.' + ente + '.recupero.tsr', fr); marche[s.giorno][ente + '_recupero'] = await b64(fr); }
+        }
+      }
+      let o = await prendi(s.percorso + '.completo.ots'); const completa = !!o;
+      if (!o) o = await prendi(s.percorso + '.ots');
+      if (!o && det.bitcoin && det.bitcoin.recupero) o = await prendi(s.percorso + '.recupero.ots');
+      if (o) { zip.file('sigilli/' + s.giorno + '.ots', o); ots[s.giorno] = { b64: await b64(o), completa }; }
+    }
+    // documenti della persona citati negli eventi (solo i suoi)
+    btn.textContent = 'Preparo il fascicolo… documenti';
+    const idDoc = [...new Set(eventi.filter(e => e.tabella === 'presenze_documenti' && e.riferimento_id).map(e => e.riferimento_id))];
+    const documenti = [];
+    for (let i = 0; i < idDoc.length; i += 100) {
+      const { data: docs } = await sb.from('presenze_documenti').select('id,dipendente_id,url,nome_file,categoria,anno,mese').in('id', idDoc.slice(i, i + 100));
+      for (const d of (docs || [])) {
+        if (d.dipendente_id !== dip || !d.url || /^https?:/.test(d.url)) continue;
+        let f = null; try { f = (await sb.storage.from('presenze-allegati').download(d.url)).data; } catch (e) { f = null; }
+        if (!f) { documenti.push({ id: d.id, nome: d.nome_file, mancante: true }); continue; }
+        const buf = new Uint8Array(await f.arrayBuffer());
+        const nomeZip = 'documenti/' + (d.anno ? d.anno + (d.mese ? '-' + String(d.mese).padStart(2, '0') : '') + '_' : '') + String(d.nome_file || d.id).replace(/[^\w.\-]+/g, '_');
+        zip.file(nomeZip, buf);
+        documenti.push({ id: d.id, nome: d.nome_file, file: nomeZip, sha256: _hexBuf(await _sha256Buf(buf)), byte: buf.length, categoria: d.categoria, anno: d.anno, mese: d.mese });
       }
     }
+    Object.values(_CERT_UFFICIALI).forEach(c => zip.file('certificati/' + c.file, c.pem));
     const nome = prof ? (prof.nome + ' ' + (prof.cognome || '')).trim() : 'Dipendente';
     zip.file('eventi.jsonl', eventi.map(e => JSON.stringify(e)).join('\n') + '\n');
-    zip.file('LEGGIMI.html', _fascicoloHtml({ nome, prof, dalG, alG, eventi, sigilli: sigilli || [], manifesti, giorni }));
-    zip.file('verifica_marche.txt', _fascicoloComandi(sigilli || []));
+    const x = { nome, prof, dalG, alG, eventi, sigilli, manifesti, marche, ots, documenti, controlli, mancanti,
+      generatoDa: ME ? (ME.nome + ' ' + (ME.cognome || '')).trim() : '' };
+    zip.file('LEGGIMI.html', _fascicoloHtml(x));
+    zip.file('verifica_marche.txt', _fascicoloComandi(x));
+    zip.file('verifica.sh', _fascicoloScript(x));
     try { zip.file('Registro_leggibile.pdf', await registroPDF({ titolo: 'Fascicolo del registro legale', intestatario: nome + (prof && prof.codice_fiscale ? ' · CF ' + prof.codice_fiscale : ''), periodo: 'dal ' + dalG.split('-').reverse().join('/') + ' al ' + alG.split('-').reverse().join('/'), eventi, allegato: null })); } catch (e) { console.warn('PDF fascicolo', e); }
+    btn.textContent = 'Preparo il fascicolo… compressione';
     const blob = await zip.generateAsync({ type: 'blob' });
     _scaricaFile('fascicolo_' + nome.toLowerCase().replace(/[^a-z0-9]+/g, '_') + '_' + dalG + '_' + alG + '.zip', blob);
-    certifica('visione', 'fascicolo_generato', { dipendente: dip, silenzioso: true, dati: { dal: dalG, al: alG, eventi: eventi.length } });
-    showMsg('fas-msg', '✓ Fascicolo scaricato: ' + eventi.length + ' eventi, ' + (sigilli || []).length + ' giorni sigillati', 'ok');
+    certifica('visione', 'fascicolo_generato', { dipendente: dip, silenzioso: true, dati: { dal: dalG, al: alG, eventi: eventi.length, giorni_sigillati: sigilli.length, documenti: documenti.length } });
+    showMsg('fas-msg', '✓ Fascicolo scaricato: ' + eventi.length + ' eventi, ' + sigilli.length + ' giorni sigillati, ' + documenti.filter(d => !d.mancante).length + ' documenti'
+      + (mancanti.length ? '. ⚠ Manifesto non scaricato per: ' + mancanti.join(', ') + ' — riprova' : ''), mancanti.length ? 'err' : 'ok');
   } catch (e) {
     showMsg('fas-msg', 'Errore: ' + (e.message || e), 'err');
   } finally { btn.disabled = false; btn.textContent = 'Genera il fascicolo (.zip)'; }
 }
-function _fascicoloComandi(sigilli) {
-  return ['VERIFICA DELLE MARCHE TEMPORALI (RFC 3161) CON OPENSSL', '',
-    'FreeTSA — scarica prima il certificato: https://freetsa.org/files/cacert.pem', ...sigilli.map(s => `openssl ts -verify -data sigilli/${s.giorno}.manifesto.json -in sigilli/${s.giorno}.freetsa.tsr -CAfile cacert.pem`), '',
-    'DigiCert — usa i certificati di sistema:', ...sigilli.map(s => `openssl ts -verify -data sigilli/${s.giorno}.manifesto.json -in sigilli/${s.giorno}.digicert.tsr -CAfile /etc/ssl/certs/ca-certificates.crt -untrusted <(openssl ts -reply -in sigilli/${s.giorno}.digicert.tsr -token_out | openssl pkcs7 -inform DER -print_certs)`), '',
-    'OPENTIMESTAMPS (ancoraggio su Bitcoin): vai su https://opentimestamps.org, trascina il file .ots e poi il file .manifesto.json dello stesso giorno.', '',
-    'Esito atteso: "Verification: OK". Significa che il manifesto di quel giorno — che contiene le impronte di tutti gli eventi del giorno — esisteva già all\'ora indicata dalla marca e non è stato modificato dopo.'].join('\n');
+
+function _fascicoloGiorniConFile(x) { return x.sigilli.filter(s => x.manifesti[s.giorno]); }
+function _fascicoloComandi(x) {
+  const gg = _fascicoloGiorniConFile(x);
+  const C = _CERT_UFFICIALI;
+  const righe = [
+    'VERIFICA INDIPENDENTE DEL FASCICOLO — istruzioni per il perito',
+    '',
+    'Il file verifica.sh esegue da solo tutti i controlli qui sotto (Linux o macOS: apri il Terminale nella cartella del fascicolo e scrivi: sh verifica.sh).',
+    '',
+    '1) CERTIFICATI DELLE AUTORITÀ (cartella certificati/)',
+    '   Prima di usarli, confronta la loro impronta SHA-256 con quella pubblicata dagli enti:',
+    '   openssl x509 -in certificati/' + C.freetsa_cacert.file + ' -noout -fingerprint -sha256   → atteso ' + C.freetsa_cacert.impronta + '  (fonte: ' + C.freetsa_cacert.fonte + ')',
+    '   openssl x509 -in certificati/' + C.digicert_g4.file + ' -noout -fingerprint -sha256   → atteso ' + C.digicert_g4.impronta + '  (fonte: ' + C.digicert_g4.fonte + ')',
+    '',
+    '2) MARCHE TEMPORALI RFC 3161 (esito atteso per ogni riga: "Verification: OK")',
+    '   FreeTSA:',
+    ...gg.filter(s => x.marche[s.giorno] && x.marche[s.giorno].freetsa).map(s => `   openssl ts -verify -data sigilli/${s.giorno}.manifesto.json -in sigilli/${s.giorno}.freetsa.tsr -CAfile certificati/${C.freetsa_cacert.file} -untrusted certificati/${C.freetsa_tsa.file}`),
+    '   DigiCert:',
+    ...gg.filter(s => x.marche[s.giorno] && x.marche[s.giorno].digicert).map(s => `   openssl ts -reply -in sigilli/${s.giorno}.digicert.tsr -token_out | openssl pkcs7 -inform DER -print_certs > /tmp/catena_digicert.pem && openssl ts -verify -data sigilli/${s.giorno}.manifesto.json -in sigilli/${s.giorno}.digicert.tsr -CAfile certificati/${C.digicert_g4.file} -untrusted /tmp/catena_digicert.pem`),
+    '   Per vedere data e ora certificate dalla marca: openssl ts -reply -in sigilli/GIORNO.freetsa.tsr -text',
+    '',
+    '3) PROVA SU BITCOIN (OpenTimestamps)',
+    '   Vai su https://opentimestamps.org, trascina il file sigilli/GIORNO.ots e poi il file sigilli/GIORNO.manifesto.json dello stesso giorno.',
+    '   In alternativa: pip install opentimestamps-client e poi  ots verify -f sigilli/GIORNO.manifesto.json sigilli/GIORNO.ots  (richiede un nodo Bitcoin)',
+    '   oppure  ots info sigilli/GIORNO.ots  per leggere il numero del blocco, da confrontare su qualunque esploratore pubblico (es. mempool.space).',
+    '',
+    '4) DOCUMENTI (cartella documenti/): l\'impronta di ogni PDF deve coincidere con quella indicata nel LEGGIMI',
+    '   sha256sum documenti/*      (su Windows: certutil -hashfile NOMEFILE SHA256)',
+    ...x.documenti.filter(d => !d.mancante).map(d => '   atteso ' + d.sha256 + '  ' + d.file),
+    '',
+    '5) EVENTI: l\'impronta di ogni evento è SHA-256 del campo "testo_canonico" in eventi.jsonl; il testo inizia con',
+    '   l\'impronta dell\'evento precedente e il numero progressivo; l\'impronta di ogni evento compare nel manifesto del suo giorno.',
+    '   La pagina LEGGIMI.html ripete questi controlli da sola, anche senza internet.',
+  ];
+  return righe.join('\n') + '\n';
 }
+function _fascicoloScript(x) {
+  const gg = _fascicoloGiorniConFile(x), C = _CERT_UFFICIALI;
+  const L = ['#!/bin/sh', '# Verifica indipendente del fascicolo (richiede openssl e sha256sum). Uso: sh verifica.sh', 'cd "$(dirname "$0")"', 'OK=0; KO=0',
+    'esito() { if [ "$1" = 0 ]; then OK=$((OK+1)); echo "OK   $2"; else KO=$((KO+1)); echo "NO   $2"; fi; }',
+    'echo "Impronte dei certificati (confrontale con quelle ufficiali):"',
+    `openssl x509 -in certificati/${C.freetsa_cacert.file} -noout -fingerprint -sha256; echo "atteso ${C.freetsa_cacert.impronta}"`,
+    `openssl x509 -in certificati/${C.digicert_g4.file} -noout -fingerprint -sha256; echo "atteso ${C.digicert_g4.impronta}"`, 'echo'];
+  gg.forEach(s => {
+    if (x.marche[s.giorno] && x.marche[s.giorno].freetsa) L.push(`openssl ts -verify -data sigilli/${s.giorno}.manifesto.json -in sigilli/${s.giorno}.freetsa.tsr -CAfile certificati/${C.freetsa_cacert.file} -untrusted certificati/${C.freetsa_tsa.file} >/dev/null 2>&1; esito $? "marca FreeTSA del ${s.giorno}"`);
+    if (x.marche[s.giorno] && x.marche[s.giorno].digicert) L.push(`openssl ts -reply -in sigilli/${s.giorno}.digicert.tsr -token_out 2>/dev/null | openssl pkcs7 -inform DER -print_certs > /tmp/catena_digicert.pem 2>/dev/null; openssl ts -verify -data sigilli/${s.giorno}.manifesto.json -in sigilli/${s.giorno}.digicert.tsr -CAfile certificati/${C.digicert_g4.file} -untrusted /tmp/catena_digicert.pem >/dev/null 2>&1; esito $? "marca DigiCert del ${s.giorno}"`);
+  });
+  x.documenti.filter(d => !d.mancante).forEach(d => L.push(`[ "$(sha256sum '${d.file.replace(/'/g, '')}' | cut -d' ' -f1)" = "${d.sha256}" ]; esito $? "impronta di ${d.file.replace(/'/g, '')}"`));
+  L.push('echo; echo "Controlli superati: $OK   non superati: $KO"');
+  return L.join('\n') + '\n';
+}
+
 function _fascicoloHtml(x) {
-  const righe = x.eventi.map(e => `<tr><td>${esc(new Date(e.creato_il).toLocaleString('it-IT', { timeZone: 'Europe/Rome' }))}</td><td><b>${esc(descriviEvento(e))}</b><div class="d">${esc(dettaglioEvento(e))}</div></td><td>${esc(e.attore_ruolo)}</td><td class="m">${esc(e.ip || '—')}<div class="d">${esc((e.dispositivo || '').slice(0, 60))}</div></td><td class="m">#${e.anello}<div class="d">${esc(e.hash.slice(0, 16))}…</div></td></tr>`).join('');
-  const sig = x.sigilli.map(s => `<tr><td>${esc(s.giorno)}</td><td>${(s.marche || []).map(m => (m.ok ? '✓ ' : '✕ ') + esc(m.tsa) + (m.ora ? ' <span class="d">' + esc(m.ora) + '</span>' : '')).join('<br>')}${s.ots ? '<br>✓ OpenTimestamps' : ''}</td><td class="m">${esc(s.sigillo_sha256 || '')}</td></tr>`).join('') || '<tr><td colspan="3">Nessun giorno ancora sigillato nel periodo (i sigilli si creano ogni notte).</td></tr>';
-  const pNome = esc(x.nome), p = x.prof || {};
-  const dati = JSON.stringify({ eventi: x.eventi.map(e => ({ anello: e.anello, creato_il: e.creato_il, testo: e.testo_canonico, hash: e.hash, hash_prec: e.hash_prec })), manifesti: x.manifesti }).replace(/</g, '\\u003c');
+  const fmt = (s) => s ? new Date(s).toLocaleString('it-IT', { timeZone: 'Europe/Rome', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+  const fmtG = (g) => g ? g.split('-').reverse().join('/') : '—';
+  const n = (v) => Number(v).toLocaleString('it-IT');
+  const giornoRoma = s => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Rome' }).format(new Date(s));
+  const p = x.prof || {}, pNome = esc(x.nome);
+  const perAnello = {}; x.eventi.forEach(e => { perAnello[e.anello] = e; });
+  const attivazioni = {}; x.eventi.filter(e => e.azione === 'firma_dispositivo_attivata' && e.dati && e.dati.credential_id).forEach(e => { attivazioni[e.dati.credential_id] = e; });
+  const docPerId = {}; x.documenti.forEach(d => { docPerId[d.id] = d; });
+  const sigPerGiorno = {}; x.sigilli.forEach(s => { sigPerGiorno[s.giorno] = s; });
+  // firme
+  const firmati = x.eventi.filter(e => e.dati && e.dati.firma);
+  const schedeFirme = firmati.map(e => {
+    const f = e.dati.firma, att = attivazioni[f.credential_id];
+    const testo = String(e.dati.testo_mostrato || '');
+    const impFirmata = (testo.match(/\b[0-9a-f]{64}\b/) || [])[0] || null;
+    const doc = e.tabella === 'presenze_documenti' ? docPerId[e.riferimento_id] : null;
+    let docRiga = '';
+    if (e.tabella === 'presenze_documenti') {
+      docRiga = '<div class="riga"><span class="et">Documento</span><span>' + (doc && !doc.mancante ? esc(doc.nome || '') + ' — allegato: <span class="m">' + esc(doc.file) + '</span><br>impronta del PDF allegato: <span class="m">' + esc(doc.sha256) + '</span>' : 'non allegato') + '<br>'
+        + (impFirmata ? 'impronta scritta nel testo firmato: <span class="m">' + esc(impFirmata) + '</span> <span class="badge" id="doc-' + e.anello + '">…</span>'
+          : 'il testo firmato indica il nome del file; l\'impronta del file è registrata nell\'evento: <span class="m">' + esc(e.dati.file_sha256 || '—') + '</span> <span class="badge" id="doc-' + e.anello + '">…</span>') + '</span></div>';
+    }
+    return '<div class="scheda"><div class="sch-t"><b>' + esc(descriviEvento(e)) + '</b><span class="d">' + esc(fmt(e.creato_il)) + ' · evento n. ' + n(e.anello) + '</span></div>'
+      + '<div class="riga"><span class="et">Testo firmato</span><span class="cit">' + esc(testo || '(nessun testo)') + '</span></div>'
+      + '<div class="riga"><span class="et">Telefono</span><span>' + (att ? esc(att.dati.dispositivo || 'dispositivo') + ', firma attivata il ' + esc(fmt(att.creato_il)) + ' (evento n. ' + n(att.anello) + ')' : 'chiave non trovata nel fascicolo') + '</span></div>'
+      + '<div class="riga"><span class="et">Verifica</span><span class="badge" id="fb-' + e.anello + '">…</span></div>' + docRiga + '</div>';
+  }).join('') || '<p class="d">Nessuna conferma firmata con il telefono nel periodo.</p>';
+  // eventi
+  const righe = x.eventi.map(e => {
+    const prec = e.anello - 1, gp = perAnello[prec];
+    const legame = gp ? 'n. ' + n(prec) + ' (in questo fascicolo)' : 'n. ' + n(prec) + ' (evento di altre persone o di sistema: nel fascicolo c\'è solo la sua impronta, nel sigillo del giorno)';
+    return '<tr><td>' + esc(fmt(e.creato_il)) + '</td><td><b>' + esc(descriviEvento(e)) + '</b><div class="d">' + esc(dettaglioEvento(e)) + '</div></td><td>' + esc(e.attore_ruolo || '') + '</td><td class="m">' + esc(e.ip || '—') + '<div class="d">' + esc((e.dispositivo || '').slice(0, 60)) + '</div></td>'
+      + '<td><b>n. ' + n(e.anello) + '</b> <span class="badge" id="ev-' + e.anello + '">…</span><div class="d">precedente: ' + legame + ' <span class="badge" id="lp-' + e.anello + '">…</span></div></td></tr>';
+  }).join('');
+  // sigilli
+  const sig = x.sigilli.map(s => {
+    const c = x.controlli[s.giorno];
+    const ctr = c ? (c.esito === 'ok' ? '✓ tutto verificato' : c.esito === 'in_attesa' ? 'in attesa (Bitcoin)' : '✕ anomalia') + '<div class="d">' + esc(fmt(c.eseguito_il)) + '</div>' : '<span class="d">non ancora eseguito</span>';
+    return '<tr><td><b>' + esc(fmtG(s.giorno)) + '</b><div class="d">' + n(s.n_eventi) + ' eventi' + (s.n_eventi ? ', dal n. ' + n(s.primo_anello) + ' al n. ' + n(s.ultimo_anello) : '') + '</div></td>'
+      + '<td><span class="badge" id="sg-' + s.giorno + '">…</span><div class="m d">' + esc((s.sigillo_sha256 || '').slice(0, 32)) + '…</div></td>'
+      + '<td><span class="badge" id="mf-' + s.giorno + '">…</span></td><td><span class="badge" id="md-' + s.giorno + '">…</span></td><td><span class="badge" id="mb-' + s.giorno + '">…</span></td><td>' + ctr + '</td></tr>';
+  }).join('') || '<tr><td colspan="6">Nessun giorno ancora sigillato nel periodo (i sigilli si creano ogni notte).</td></tr>';
+  const docs = x.documenti.length ? x.documenti.map(d => '<tr><td>' + esc(d.nome || '') + '</td><td class="m">' + esc(d.file || 'non allegato') + '</td><td class="m">' + esc(d.sha256 || '—') + '</td><td>' + (d.byte ? n(d.byte) + ' byte' : '') + '</td></tr>').join('') : '<tr><td colspan="4">Nessun documento collegato agli eventi del periodo.</td></tr>';
+  const C = _CERT_UFFICIALI;
+  const dati = JSON.stringify({
+    eventi: x.eventi.map(e => ({ anello: e.anello, creato_il: e.creato_il, testo: e.testo_canonico, hash: e.hash, hash_prec: e.hash_prec })),
+    manifesti: x.manifesti, marche: x.marche, ots: x.ots,
+    documenti: x.documenti.filter(d => !d.mancante).map(d => ({ id: d.id, file: d.file, sha256: d.sha256 })),
+    sigilli: x.sigilli.map(s => ({ giorno: s.giorno, sigillo: s.sigillo_sha256, n: s.n_eventi, primo: s.primo_anello, ultimo: s.ultimo_anello })),
+    dal: x.dalG, al: x.alG,
+  }).replace(/</g, '\\u003c');
   return `<!DOCTYPE html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fascicolo — ${pNome}</title>
-<style>body{font-family:-apple-system,Segoe UI,Arial,sans-serif;color:#111;max-width:1000px;margin:30px auto;padding:0 18px;line-height:1.5}h1{font-size:22px;margin:0}h2{font-size:16px;margin-top:28px;border-bottom:2px solid #5E5CE6;padding-bottom:4px}table{width:100%;border-collapse:collapse;font-size:12.5px}td,th{border-bottom:1px solid #ddd;padding:6px;text-align:left;vertical-align:top}th{background:#f3f3f8}.d{color:#666;font-size:11px}.m{font-family:ui-monospace,Menlo,monospace;font-size:11px;word-break:break-all}.box{background:#f5f5fb;border:1px solid #d9d9ef;border-radius:10px;padding:12px 14px}button{background:#5E5CE6;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-weight:700;cursor:pointer}#esito{margin-top:10px;font-weight:700}@media print{button{display:none}}</style></head><body>
+<style>body{font-family:-apple-system,Segoe UI,Arial,sans-serif;color:#111;max-width:1040px;margin:30px auto;padding:0 18px;line-height:1.55}h1{font-size:23px;margin:0 0 4px}h2{font-size:17px;margin-top:34px;border-bottom:2px solid #5E5CE6;padding-bottom:4px}h3{font-size:14.5px;margin:18px 0 6px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}td,th{border-bottom:1px solid #ddd;padding:6px;text-align:left;vertical-align:top}th{background:#f3f3f8}.d{color:#666;font-size:11px}.m{font-family:ui-monospace,Menlo,monospace;font-size:11px;word-break:break-all}
+.box{background:#f5f5fb;border:1px solid #d9d9ef;border-radius:10px;padding:12px 14px;margin:10px 0}.ok{background:#eefaf1;border-color:#bfe8ca}.ko{background:#fdeeee;border-color:#f2c2c2}
+.badge{display:inline-block;font-size:11px;font-weight:700;border-radius:6px;padding:1px 6px;background:#eee;color:#555}.badge.v{background:#e3f6e8;color:#1a7f37}.badge.x{background:#fde2e2;color:#b42318}.badge.a{background:#fff4d6;color:#8a6100}
+.scheda{border:1px solid #e2e2ee;border-radius:10px;padding:10px 12px;margin:10px 0}.sch-t{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:6px}.riga{display:flex;gap:10px;font-size:13px;margin:4px 0}.et{min-width:110px;color:#666;font-size:12px}.cit{background:#f6f6f6;border-radius:6px;padding:4px 8px;white-space:pre-wrap}
+ul.es{margin:6px 0;padding-left:20px}ul.es li{margin:3px 0}button{background:#5E5CE6;color:#fff;border:none;border-radius:8px;padding:9px 14px;font-weight:700;cursor:pointer}@media print{button,input{display:none}}</style></head><body>
 <h1>Fascicolo del registro legale</h1>
-<p><b>${esc(APP_CONFIG.azienda)}</b> — ${esc(APP_CONFIG.prodotto)}<br>Persona: <b>${pNome}</b>${p.codice_fiscale ? ' · CF ' + esc(p.codice_fiscale) : ''}<br>
-Email: ${esc(p.email || '—')} ${p.email_verificata_il ? '(verificata con codice il ' + esc(new Date(p.email_verificata_il).toLocaleDateString('it-IT')) + ')' : '(non verificata)'} · Telefono: ${esc(p.telefono || '—')} ${p.telefono_verificato_il ? '(verificato con Telegram il ' + esc(new Date(p.telefono_verificato_il).toLocaleDateString('it-IT')) + ')' : '(dichiarato)'}<br>
-Periodo: dal ${esc(x.dalG)} al ${esc(x.alG)} · Eventi: ${x.eventi.length} · Generato il ${esc(new Date().toLocaleString('it-IT'))}</p>
-<div class="box"><b>Come nasce questo registro.</b> Ogni azione compiuta nell'app — dall'azienda o dalla persona — viene scritta dal database in un registro a catena: ogni riga contiene l'impronta SHA-256 della riga precedente, quindi modificare anche una sola riga passata renderebbe incoerenti tutte le successive. Il registro non si può modificare né cancellare dall'app, nemmeno dagli amministratori. Ogni notte le impronte di tutti gli eventi del giorno vengono raccolte in un "manifesto", marcato temporalmente da due autorità indipendenti (FreeTSA e DigiCert, protocollo RFC 3161) e ancorato alla blockchain Bitcoin tramite OpenTimestamps. Data e ora di ogni evento sono quelle del server, non del telefono; indirizzo IP e dispositivo sono letti dal server. Gli accessi avvengono con credenziali personali ed email verificata con codice (firma elettronica semplice, art. 20 c. 1-bis CAD e art. 25 Reg. UE 910/2014).</div>
-<h2>Verifica automatica</h2><p>Il pulsante ricalcola in questo browser l'impronta di ogni evento dal suo testo canonico e controlla che compaia nel manifesto sigillato del suo giorno. Per le conferme firmate col telefono (Face ID, impronta o PIN) verifica anche la firma crittografica con la chiave pubblica registrata all'attivazione: se il testo confermato fosse cambiato anche di una virgola, la firma risulterebbe non valida. Funziona anche senza internet.</p>
-<button onclick="verifica()">Verifica ora</button><div id="esito"></div>
-<h2>Eventi</h2><table><tr><th>Data e ora (Italia)</th><th>Evento</th><th>Autore</th><th>IP / dispositivo</th><th>Registro</th></tr>${righe}</table>
-<h2>Sigilli giornalieri</h2><table><tr><th>Giorno</th><th>Marche temporali</th><th>Impronta del manifesto</th></tr>${sig}</table>
-<h2>Verifica indipendente delle marche</h2><p>I comandi sono nel file <i>verifica_marche.txt</i>. Le marche RFC 3161 si verificano con OpenSSL; la prova OpenTimestamps su opentimestamps.org caricando il file .ots e il manifesto dello stesso giorno. Formula dell'impronta: <span class="m">SHA-256(testo canonico)</span>, dove il testo canonico (campo <i>testo_canonico</i> in eventi.jsonl) inizia con l'impronta dell'evento precedente e il numero progressivo.</p>
+<p><b>${esc(APP_CONFIG.azienda)}</b> — ${esc(APP_CONFIG.prodotto)}<br>
+Persona: <b>${pNome}</b>${p.codice_fiscale ? ' · CF ' + esc(p.codice_fiscale) : ''}<br>
+Email: ${esc(p.email || '—')} ${p.email_verificata_il ? '(verificata con codice il ' + esc(fmtG(String(p.email_verificata_il).slice(0, 10))) + ')' : '(non verificata)'} · Telefono: ${esc(p.telefono || '—')} ${p.telefono_verificato_il ? '(verificato con Telegram il ' + esc(fmtG(String(p.telefono_verificato_il).slice(0, 10))) + ')' : '(dichiarato)'}<br>
+Periodo: dal <b>${esc(fmtG(x.dalG))}</b> al <b>${esc(fmtG(x.alG))}</b> · Eventi della persona: ${n(x.eventi.length)} · Giorni sigillati inclusi: ${n(x.sigilli.length)} · Documenti allegati: ${n(x.documenti.filter(d => !d.mancante).length)}<br>
+Generato il ${esc(fmt(new Date().toISOString()))}${x.generatoDa ? ' da ' + esc(x.generatoDa) : ''}</p>
+
+<h2>1. Esito della verifica</h2>
+<p class="d">Questa pagina ricontrolla da sola, nel tuo browser, ogni impronta e ogni firma contenute nel fascicolo. Non si fida di nessun "ok" scritto dall'azienda: ricalcola tutto. Funziona anche senza internet; con internet confronta anche le prove Bitcoin con due archivi pubblici.</p>
+<div class="box" id="esito-box"><b id="esito-t">Verifica in corso…</b><ul class="es" id="esito"></ul></div>
+<button onclick="verifica()">Ripeti la verifica</button>
+${x.mancanti.length ? '<div class="box ko"><b>Attenzione:</b> per questi giorni il manifesto non è stato scaricato al momento della creazione del fascicolo: ' + esc(x.mancanti.map(fmtG).join(', ')) + '. Generare di nuovo il fascicolo.</div>' : ''}
+
+<h2>2. Cosa dimostra e cosa non dimostra</h2>
+<div class="box"><b>Dimostra</b><ul class="es">
+<li>che ogni evento riportato è registrato così com'è e non è stato modificato dopo: ogni evento ha un'<i>impronta</i> (SHA-256) che cambierebbe completamente anche per una sola virgola diversa;</li>
+<li>che nessun evento è stato tolto o inserito dopo: ogni evento contiene l'impronta di quello precedente (catena) e la numerazione è continua;</li>
+<li>che gli eventi di ogni giorno esistevano già la notte successiva: le impronte di tutti gli eventi del giorno sono raccolte in un <i>manifesto</i> marcato da due autorità indipendenti (FreeTSA, Germania, e DigiCert, USA) e registrato sulla blockchain Bitcoin;</li>
+<li>per le conferme firmate con il telefono: che la firma è stata fatta con la chiave custodita nel telefono indicato, attivata dalla persona con le proprie credenziali, dopo lo sblocco con Face ID, impronta o codice del telefono, e che riguarda esattamente il testo riportato.</li></ul>
+<b>Non dimostra</b><ul class="es">
+<li>chi aveva materialmente in mano il telefono: la firma prova l'uso del telefono e del suo sblocco, non un dato biometrico (il volto o l'impronta non lasciano mai il telefono);</li>
+<li>l'identità della persona al momento dell'attivazione con un documento esaminato da un ente esterno: non è una firma elettronica qualificata (art. 20 CAD); il valore probatorio è liberamente valutabile.</li></ul></div>
+
+<h2>3. Come leggere i numeri</h2>
+<p>Ogni azione registrata dall'app — di qualunque persona — riceve un numero progressivo unico (<b>n.</b>). In questo fascicolo compaiono solo gli eventi di ${pNome}: i numeri che mancano tra un evento e l'altro appartengono a eventi di altre persone o di sistema. Per tutela della riservatezza di quelle persone il loro contenuto non è incluso, ma la loro <b>impronta</b> è presente nel manifesto del giorno: per questo si può comunque verificare che ogni evento di ${pNome} sia attaccato al precedente e che la numerazione non abbia buchi. Il fascicolo contiene i sigilli di <b>tutti</b> i giorni del periodo, anche di quelli senza eventi della persona.</p>
+
+<h2>4. Conferme firmate con il telefono</h2>
+${schedeFirme}
+
+<h2>5. Documenti</h2>
+<p class="d">I PDF sono nella cartella <i>documenti</i>. Per controllare che un PDF sia proprio quello indicato, sceglilo qui: la pagina ne calcola l'impronta e la confronta (il file non esce dal tuo computer).</p>
+<input type="file" id="pdf-in" accept=".pdf,application/pdf" onchange="controllaPdf(this)"> <span id="pdf-esito"></span>
+<table><tr><th>Documento</th><th>File nel fascicolo</th><th>Impronta SHA-256</th><th>Dimensione</th></tr>${docs}</table>
+
+<h2>6. Tutti gli eventi della persona</h2>
+<table><tr><th>Data e ora (Italia)</th><th>Evento</th><th>Autore</th><th>IP / dispositivo</th><th>Numero e collegamento</th></tr>${righe}</table>
+
+<h2>7. Sigilli giornalieri</h2>
+<p class="d">Per ogni giorno: il manifesto (impronte di tutti gli eventi del giorno), le marche temporali delle due autorità con data e ora certificate, la prova su Bitcoin e l'esito del controllo automatico eseguito dal sistema ogni mattina.</p>
+<table><tr><th>Giorno</th><th>Manifesto</th><th>FreeTSA</th><th>DigiCert</th><th>Bitcoin</th><th>Controllo automatico</th></tr>${sig}</table>
+
+<h2>8. Verifica indipendente (per il perito)</h2>
+<ol>
+<li><b>Certificati delle autorità</b> (cartella <i>certificati</i>). Confrontare l'impronta SHA-256 con quella pubblicata dall'ente:<br>
+FreeTSA Root CA: <span class="m">${C.freetsa_cacert.impronta}</span> (${C.freetsa_cacert.fonte})<br>
+DigiCert Trusted Root G4: <span class="m">${C.digicert_g4.impronta}</span> (${C.digicert_g4.fonte})</li>
+<li><b>Marche temporali</b>: con OpenSSL, i comandi pronti sono nel file <i>verifica_marche.txt</i>; il file <i>verifica.sh</i> li esegue tutti (Linux/macOS: <span class="m">sh verifica.sh</span>). Esito atteso: "Verification: OK".</li>
+<li><b>Bitcoin</b>: su <span class="m">https://opentimestamps.org</span> trascinare il file <i>sigilli/GIORNO.ots</i> e poi <i>sigilli/GIORNO.manifesto.json</i>.</li>
+<li><b>Eventi</b>: l'impronta di ogni evento è <span class="m">SHA-256(testo_canonico)</span> (file <i>eventi.jsonl</i>); il testo canonico inizia con l'impronta dell'evento precedente e il numero progressivo.</li>
+<li><b>Documenti</b>: <span class="m">sha256sum documenti/*</span> (Windows: <span class="m">certutil -hashfile FILE SHA256</span>).</li></ol>
+
+<h2>9. Glossario</h2>
+<ul class="es"><li><b>Impronta (SHA-256)</b>: un codice di 64 caratteri calcolato dal contenuto; cambia completamente se il contenuto cambia anche di un solo carattere. Non si può ricostruire il contenuto dall'impronta.</li>
+<li><b>Catena</b>: ogni evento contiene l'impronta del precedente, quindi non si può togliere, aggiungere o cambiare un evento passato senza rompere tutti i successivi.</li>
+<li><b>Manifesto</b>: l'elenco delle impronte di tutti gli eventi di un giorno.</li>
+<li><b>Marca temporale (RFC 3161)</b>: ricevuta firmata da un'autorità indipendente che certifica che un'impronta esisteva in un certo istante.</li>
+<li><b>OpenTimestamps / Bitcoin</b>: l'impronta del manifesto è inserita in un blocco della blockchain Bitcoin, registro pubblico che nessuno può modificare a posteriori.</li>
+<li><b>Firma con il telefono</b>: firma crittografica (standard WebAuthn) fatta con una chiave che resta nel telefono e si usa solo dopo lo sblocco della persona.</li></ul>
+
 <script>const D=${dati};
-async function h(t){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(t));return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('');}
+async function hb(b){return new Uint8Array(await crypto.subtle.digest('SHA-256',b));}
+async function h(t){return hex(await hb(new TextEncoder().encode(t)));}
+function hex(b){return Array.from(b).map(function(x){return x.toString(16).padStart(2,'0');}).join('');}
 function g(s){return new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Rome'}).format(new Date(s));}
+function b64d(s){var r=atob(s),o=new Uint8Array(r.length);for(var i=0;i<r.length;i++)o[i]=r.charCodeAt(i);return o;}
+function cerca(a,n){outer:for(var i=0;i<=a.length-n.length;i++){for(var j=0;j<n.length;j++)if(a[i+j]!==n[j])continue outer;return i;}return -1;}
+function fmt(d){return d.toLocaleString('it-IT',{timeZone:'Europe/Rome',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});}
+function oraTsr(b,da){for(var k=da;k<b.length-17;k++){if(b[k]===0x18&&b[k+1]>=15&&b[k+1]<=24){var s=new TextDecoder().decode(b.slice(k+2,k+2+b[k+1]));if(/^\\d{14}(\\.\\d+)?Z$/.test(s))return new Date(s.slice(0,4)+'-'+s.slice(4,6)+'-'+s.slice(6,8)+'T'+s.slice(8,10)+':'+s.slice(10,12)+':'+s.slice(12));}}return null;}
+function badge(id,stato,testo){var el=document.getElementById(id);if(!el)return;el.className='badge '+(stato===true?'v':stato===false?'x':'a');el.textContent=testo;}
 ${verificaFirmaEvento.toString()}
-// I dati si leggono dal testo canonico stesso (quello coperto dall'impronta), non da campi a parte
-function leggi(t){const p=t.split('|');const coda=p.slice(11);const fine=coda.slice(-3);const dati=coda.slice(0,-3).join('|');let d={};try{d=dati?JSON.parse(dati):{};}catch(e){}return{creato_il:p[2],categoria:p[4],azione:p[5],riferimento_id:p[7]||null,dipendente_id:p[8]||null,attore_id:p[9]||null,dati:d};}
-async function verifica(){const out=document.getElementById('esito');let ok=0,ko=[],sig=0,nonsig=0,fOk=0,fKo=[];const man={},chiavi={};
-for(const k in D.manifesti){try{const m=JSON.parse(D.manifesti[k]);man[k]=new Set((m.hash_eventi||[]).map(x=>x.hash||x));}catch(e){}}
-const integri=[];
-for(const e of D.eventi){const c=await h(e.testo);if(c!==e.hash||!e.testo.startsWith(e.hash_prec+'|'+e.anello+'|')){ko.push(e.anello);continue;}ok++;integri.push(e);const gg=g(e.creato_il);if(man[gg]){if(man[gg].has(e.hash))sig++;else ko.push(e.anello+' (assente dal sigillo)');}else nonsig++;}
-for(const e of integri){const x=leggi(e.testo);if(x.azione==='firma_dispositivo_attivata'&&x.dati.credential_id)chiavi[x.dati.credential_id]={public_key:x.dati.public_key,alg:x.dati.alg};}
-for(const e of integri){const x=leggi(e.testo);if(!x.dati.firma)continue;const r=await verificaFirmaEvento(x,chiavi);if(r.ok)fOk++;else fKo.push(e.anello+' ('+r.motivo+')');}
-out.innerHTML=(ko.length?'<span style="color:#c00">✕ '+ko.length+' eventi NON coerenti: '+ko.join(', ')+'</span>':'<span style="color:#1a7f37">✓ '+ok+' eventi integri · '+sig+' presenti nei sigilli giornalieri'+(nonsig?' · '+nonsig+' non ancora sigillati':'')+'</span>')
- +'<br>'+(fKo.length?'<span style="color:#c00">✕ '+fKo.length+' firme dal telefono NON valide: '+fKo.join(', ')+'</span>':'<span style="color:#1a7f37">✓ '+fOk+' conferme firmate col telefono: firme valide</span>');}
+function leggi(t){var p=t.split('|');var coda=p.slice(11);var dati=coda.slice(0,-3).join('|');var d={};try{d=dati?JSON.parse(dati):{};}catch(e){}return{creato_il:p[2],categoria:p[4],azione:p[5],tabella:p[6]||null,riferimento_id:p[7]||null,dipendente_id:p[8]||null,attore_id:p[9]||null,dati:d};}
+/* lettore OpenTimestamps (formato ufficiale): ricalcola il percorso fino alla radice di Merkle */
+async function otsLeggi(b){var i=0;function by(){if(i>=b.length)throw new Error('ots troncato');return b[i++];}function bs(n){var o=b.slice(i,i+n);i+=n;return o;}function vu(){var v=0,s=0,x;do{x=by();v+=(x&127)*Math.pow(2,s);s+=7;}while(x&128);return v;}function vb(){return bs(vu());}
+ i=31;if(vu()!==1||by()!==8)throw new Error('formato .ots non previsto');var dg=bs(32);var out=[];
+ async function nodo(msg){async function uno(t){if(t===0){var tag=hex(bs(8)),pl=vb();if(tag==='0588960d73d71901'){var j=0,v=0,s=0,x;do{x=pl[j++];v+=(x&127)*Math.pow(2,s);s+=7;}while(x&128);out.push({btc:v,msg:msg});}else if(tag==='83dfe30d2ef90c8e'){out.push({attesa:true});}}
+   else{var arg=(t===0xf0||t===0xf1)?vb():null,m2;if(t===0xf0){m2=new Uint8Array(msg.length+arg.length);m2.set(msg);m2.set(arg,msg.length);}else if(t===0xf1){m2=new Uint8Array(msg.length+arg.length);m2.set(arg);m2.set(msg,arg.length);}else if(t===8){m2=await hb(msg);}else if(t===0xf2){m2=msg.slice().reverse();}else throw new Error('operazione non prevista');await nodo(m2);}}
+  var t=by();while(t===0xff){await uno(by());t=by();}await uno(t);}
+ await nodo(dg);return{digest:dg,att:out};}
+async function bloccoOnline(alt){var r=[];var A=[['mempool.space','https://mempool.space/api'],['blockstream.info','https://blockstream.info/api']];
+ for(var k=0;k<A.length;k++){try{var hh=(await (await fetch(A[k][1]+'/block-height/'+alt)).text()).trim();var bl=await (await fetch(A[k][1]+'/block/'+hh)).json();r.push({a:A[k][0],m:bl.merkle_root,t:bl.timestamp});}catch(e){}}return r;}
+async function controllaPdf(inp){var f=inp.files&&inp.files[0];if(!f)return;var s=hex(await hb(new Uint8Array(await f.arrayBuffer())));var d=D.documenti.find(function(x){return x.sha256===s;});
+ document.getElementById('pdf-esito').innerHTML=d?'<span class="badge v">✓ corrisponde a '+d.file+'</span>':'<span class="badge x">✕ nessun documento del fascicolo ha questa impronta</span> <span class="m">'+s+'</span>';}
+async function verifica(){var L=[],ok=true;function voce(stato,t){if(stato===false)ok=false;L.push('<li>'+(stato===true?'✓ ':stato===false?'✕ ':'… ')+t+'</li>');}
+ var man={},hashAnello={};for(var k in D.manifesti){try{var m=JSON.parse(D.manifesti[k]);man[k]=m;(m.hash_eventi||[]).forEach(function(x){hashAnello[x.anello]=x.hash;});}catch(e){}}
+ // 1. sigilli: impronta del manifesto, continuità tra i giorni, marche, Bitcoin
+ var sOk=0,sKo=[],mfOk=0,mdOk=0,mKo=[],cont=0,contKo=[],btcOk=0,btcAtt=0,btcKo=[],prev=null;
+ for(var i=0;i<D.sigilli.length;i++){var s=D.sigilli[i];var t=D.manifesti[s.giorno];if(!t){badge('sg-'+s.giorno,false,'manifesto mancante');sKo.push(s.giorno);continue;}
+  var bm=new TextEncoder().encode(t),im=await hb(bm);var okS=hex(im)===s.sigillo;badge('sg-'+s.giorno,okS,okS?'✓ impronta corretta':'✕ impronta diversa');if(okS)sOk++;else sKo.push(s.giorno);
+  var mm=man[s.giorno];if(prev&&mm){var c=mm.eventi_del_giorno===0?mm.ultimo_anello===prev.ultimo_anello:mm.primo_anello===prev.ultimo_anello+1;var ieri=new Date(s.giorno+'T12:00:00Z');ieri.setUTCDate(ieri.getUTCDate()-1);if(prev.giorno===ieri.toISOString().slice(0,10)){if(c)cont++;else contKo.push(s.giorno);}}
+  if(mm)prev={giorno:s.giorno,ultimo_anello:mm.ultimo_anello};
+  var mk=D.marche[s.giorno]||{};[['freetsa','mf','FreeTSA'],['digicert','md','DigiCert']].forEach(function(e){var b=mk[e[0]]||mk[e[0]+'_recupero'];if(!b){badge(e[1]+'-'+s.giorno,false,'assente');mKo.push(e[2]+' '+s.giorno);return;}var tb=b64d(b);var pos=cerca(tb,im);if(pos<0){badge(e[1]+'-'+s.giorno,false,'✕ non riguarda il manifesto');mKo.push(e[2]+' '+s.giorno);return;}var o=oraTsr(tb,pos);badge(e[1]+'-'+s.giorno,true,'✓ '+(o?fmt(o):'')+(mk[e[0]]?'':' (recupero)'));if(e[0]==='freetsa')mfOk++;else mdOk++;});
+  var ot=D.ots[s.giorno];if(!ot){badge('mb-'+s.giorno,null,'assente');btcAtt++;}else{try{var p=await otsLeggi(b64d(ot.b64));if(hex(p.digest)!==hex(im))throw new Error('riguarda altra impronta');var bt=p.att.filter(function(a){return a.btc;});
+   if(!bt.length){badge('mb-'+s.giorno,null,'in attesa di registrazione');btcAtt++;}else{var radice=hex(bt[0].msg.slice().reverse());var on=navigator.onLine?await bloccoOnline(bt[0].btc):[];
+    if(on.length&&on.some(function(r){return r.m!==radice;})){badge('mb-'+s.giorno,false,'✕ non corrisponde al blocco '+bt[0].btc);btcKo.push(s.giorno);}
+    else if(on.length){badge('mb-'+s.giorno,true,'✓ blocco '+bt[0].btc+' ('+on.map(function(r){return r.a;}).join(', ')+')');btcOk++;}
+    else{badge('mb-'+s.giorno,null,'blocco '+bt[0].btc+': confrontare online');btcAtt++;}}}catch(e){badge('mb-'+s.giorno,false,'✕ '+e.message);btcKo.push(s.giorno);}}}
+ // 2. eventi: impronta, presenza nel sigillo, collegamento al precedente
+ var eOk=0,eKo=[],nonSig=0,lOk=0,lKo=[],chiavi={},integri=[];
+ for(var j=0;j<D.eventi.length;j++){var e=D.eventi[j];var c2=await h(e.testo);var okE=c2===e.hash&&e.testo.indexOf(e.hash_prec+'|'+e.anello+'|')===0;
+  var gg=g(e.creato_il);var nelSig=man[gg]?(man[gg].hash_eventi||[]).some(function(x){return x.anello===e.anello&&x.hash===e.hash;}):null;
+  if(!okE){badge('ev-'+e.anello,false,'✕ alterato');eKo.push(e.anello);}else if(nelSig===false){badge('ev-'+e.anello,false,'✕ assente dal sigillo');eKo.push(e.anello);}else{badge('ev-'+e.anello,nelSig?true:null,nelSig?'✓ integro e sigillato':'integro, non ancora sigillato');eOk++;if(!nelSig)nonSig++;integri.push(e);}
+  var hp=hashAnello[e.anello-1];if(hp===undefined){badge('lp-'+e.anello,null,'non verificabile qui');}else if(hp===e.hash_prec){badge('lp-'+e.anello,true,'✓ collegato');lOk++;}else{badge('lp-'+e.anello,false,'✕ collegamento rotto');lKo.push(e.anello);}}
+ // 3. firme dal telefono
+ integri.forEach(function(e){var x=leggi(e.testo);if(x.azione==='firma_dispositivo_attivata'&&x.dati.credential_id)chiavi[x.dati.credential_id]={public_key:x.dati.public_key,alg:x.dati.alg};});
+ var fOk=0,fKo=[],dOk=0,dKo=[];
+ for(var q=0;q<integri.length;q++){var ev=integri[q];var x2=leggi(ev.testo);if(!x2.dati.firma)continue;var r=await verificaFirmaEvento(x2,chiavi);badge('fb-'+ev.anello,r.ok,r.ok?'✓ firma valida'+(r.uv?' · persona verificata con lo sblocco del telefono':''):'✕ '+r.motivo);if(r.ok)fOk++;else fKo.push(ev.anello);
+  if(x2.tabella==='presenze_documenti'){var tm=String(x2.dati.testo_mostrato||'');var imp=(tm.match(/\\b[0-9a-f]{64}\\b/)||[])[0]||x2.dati.file_sha256||null;var doc=D.documenti.find(function(d){return d.id===x2.riferimento_id;});
+   if(!doc||!imp)badge('doc-'+ev.anello,null,doc?'impronta non registrata':'documento non allegato');else if(doc.sha256===imp){badge('doc-'+ev.anello,true,'✓ il PDF allegato è esattamente questo');dOk++;}else{badge('doc-'+ev.anello,false,'✕ il PDF allegato è diverso');dKo.push(ev.anello);}}}
+ voce(eKo.length?false:true,eOk+' eventi integri su '+D.eventi.length+(nonSig?' ('+nonSig+' di oggi, non ancora sigillati: il sigillo si crea la notte)':'')+(eKo.length?' — NON integri: n. '+eKo.join(', '):''));
+ voce(lKo.length?false:true,lOk+' collegamenti con l\\'evento precedente verificati'+(lKo.length?' — rotti: n. '+lKo.join(', '):''));
+ voce(sKo.length?false:true,sOk+' manifesti giornalieri su '+D.sigilli.length+' con l\\'impronta sigillata'+(sKo.length?' — problemi: '+sKo.join(', '):''));
+ voce(contKo.length?false:true,cont+' passaggi tra giorni consecutivi senza buchi di numerazione'+(contKo.length?' — salti: '+contKo.join(', '):''));
+ voce(mKo.length?false:true,'Marche temporali che riguardano il manifesto: FreeTSA '+mfOk+', DigiCert '+mdOk+' (data e ora nella tabella; firma degli enti da verificare con OpenSSL, sezione 8)'+(mKo.length?' — problemi: '+mKo.join(', '):''));
+ voce(btcKo.length?false:(btcAtt?null:true),'Prove Bitcoin confermate: '+btcOk+(btcAtt?' · da confermare/in attesa: '+btcAtt+(navigator.onLine?'':' (senza internet il blocco si confronta a mano)'):'')+(btcKo.length?' — NON corrispondenti: '+btcKo.join(', '):''));
+ voce(fKo.length?false:true,fOk+' conferme firmate con il telefono: firme valide'+(fKo.length?' — non valide: n. '+fKo.join(', '):''));
+ if(dOk||dKo.length)voce(dKo.length?false:true,dOk+' documenti firmati: il PDF allegato coincide con quello firmato'+(dKo.length?' — diversi: n. '+dKo.join(', '):''));
+ document.getElementById('esito').innerHTML=L.join('');var t2=document.getElementById('esito-t');t2.textContent=ok?'✓ Nessuna alterazione trovata':'✕ Attenzione: ci sono elementi che non tornano (vedi sotto)';document.getElementById('esito-box').className='box '+(ok?'ok':'ko');}
+window.addEventListener('load',verifica);
 <\/script></body></html>`;
 }
 
@@ -11941,10 +12410,10 @@ if (typeof tpRenderGiorno === 'function') { const _d0 = tpRenderGiorno; tpRender
 window.addEventListener('hashchange', () => {
   if (!ME) return;
   const h = location.hash;
-  const mappa = ME.ruolo === 'admin' ? { '#recensioni': 'pg-recensioni', '#turni': 'pg-turni-resp', '#attestati': 'pg-attestati', '#previsione': 'pg-previsione' } : { '#profilo': 'pg-profilo-dip', '#turni': 'pg-turni-dip' };
+  const mappa = ME.ruolo === 'admin' ? { '#recensioni': 'pg-recensioni', '#turni': 'pg-turni-resp', '#attestati': 'pg-attestati', '#previsione': 'pg-previsione', '#registro': 'pg-registro' } : { '#profilo': 'pg-profilo-dip', '#turni': 'pg-turni-dip' };
   if (mappa[h]) { location.hash = ''; switchPage(mappa[h]); }
 });
-function deepLink24(h, admin) { return (admin ? { '#recensioni': 'pg-recensioni', '#turni': 'pg-turni-resp', '#attestati': 'pg-attestati', '#previsione': 'pg-previsione' } : { '#profilo': 'pg-profilo-dip', '#turni': 'pg-turni-dip' })[h] || null; }
+function deepLink24(h, admin) { return (admin ? { '#recensioni': 'pg-recensioni', '#turni': 'pg-turni-resp', '#attestati': 'pg-attestati', '#previsione': 'pg-previsione', '#registro': 'pg-registro' } : { '#profilo': 'pg-profilo-dip', '#turni': 'pg-turni-dip' })[h] || null; }
 
 
 /* ══════════════════════════════════════════════════════════════════
@@ -26978,7 +27447,7 @@ function renderDocCard(d, isAdmin) {
 // Punto di ingresso unico per l'apertura documenti dalle card.
 // Dipendente + busta/CU non ancora letta → sheet di accettazione (art. 1335 c.c.);
 // tutti gli altri casi → apertura diretta.
-let _docApri = null;
+let _docApri = null, _docImpronta = null;
 async function clickDocumento(docId, isAdmin) {
   const { data: d, error } = await sb.from('presenze_documenti').select('*').eq('id', docId).single();
   if (error || !d) { toast('Documento non trovato'); return; }
@@ -26988,11 +27457,18 @@ async function clickDocumento(docId, isAdmin) {
   // per sempre, ripresentandosi ad ogni apertura dell'app.
   const richiedeAccettazione = !isAdmin && !d.letto_il;
   if (richiedeAccettazione) {
-    _docApri = d;
+    // v79: l'impronta del file si calcola PRIMA di mostrare la frase da firmare e
+    // si scrive nella frase stessa: così la firma del dipendente copre il contenuto
+    // esatto del PDF, non solo il suo nome.
+    const imp = await improntaFileDocumento(d.url);
+    if (!imp) { toast('Non riesco a leggere il documento. Controlla la connessione e riprova.'); return; }
+    _docApri = d; _docImpronta = { id: d.id, sha256: imp.sha256, byte: imp.byte };
     const catLbl = etichettaCategoriaDoc(d.categoria);
     const periodo = d.mese ? new Date(d.anno,(d.mese||1)-1,1).toLocaleDateString('it-IT',{month:'long',year:'numeric'}) : (d.anno||'');
     $('ad-titolo').textContent = catLbl + (periodo?' — '+periodo:'');
-    $('ad-file').textContent = d.nome_file || '';
+    $('ad-file').textContent = (d.nome_file || '') + ' (' + imp.byte.toLocaleString('it-IT') + ' byte)';
+    $('ad-impronta').innerHTML = 'Codice del documento: <b>' + imp.sha256.slice(0, 12).toUpperCase().match(/.{4}/g).join('-') + '</b>'
+      + '<br><span style="font-family:ui-monospace,Menlo,monospace;font-size:10px;color:var(--muted);word-break:break-all">Impronta SHA-256 del file: ' + imp.sha256 + '</span>';
     hideMsg('ad-msg');
     openSheet('sh-accettaDoc');
     return;
@@ -27039,23 +27515,25 @@ function gestisciDeepLinkDoc(hash) {
 async function confermaAperturaDoc() {
   if (!_docApri) return;
   const d = _docApri;
+  // v79: l'impronta mostrata (e quindi firmata) è quella calcolata all'apertura del pannello
+  const _impAD = _docImpronta && _docImpronta.id === d.id ? _docImpronta : null;
+  if (!_impAD) { showMsg('ad-msg', 'Riapri il documento: l\'impronta del file non è stata calcolata', 'err'); return; }
   const _testoAD = testoSheet('sh-accettaDoc');
+  if (_testoAD.indexOf(_impAD.sha256) < 0) { showMsg('ad-msg', 'Riapri il documento: il testo da firmare non contiene l\'impronta del file', 'err'); return; }
   const _firmaAD = await firmaPrima('presa_visione_documento', { tabella: 'presenze_documenti', rif: d.id, testo: _testoAD });
   if (_firmaAD === false) return;
-  // 2.2: impronta del file effettivamente aperto: prova QUALE file è stato accettato
-  const _impAD = await improntaFileDocumento(d.url);
   const { error } = await sb.from('presenze_documenti').update({
     letto_dip: true, letto_il: new Date().toISOString()
   }).eq('id', d.id);
   if (error) { showMsg('ad-msg', error.message, 'err'); return; }
-  certifica('dichiarazione', 'presa_visione_documento', { tabella: 'presenze_documenti', rif: d.id, testo: _testoAD, firma: _firmaAD, dati: { categoria: d.categoria, anno: d.anno, mese: d.mese, file: d.nome_file, file_sha256: _impAD && _impAD.sha256, file_byte: _impAD && _impAD.byte, file_identico_al_caricato: d.file_sha256 && _impAD ? d.file_sha256 === _impAD.sha256 : null } });
+  certifica('dichiarazione', 'presa_visione_documento', { tabella: 'presenze_documenti', rif: d.id, testo: _testoAD, firma: _firmaAD, dati: { categoria: d.categoria, anno: d.anno, mese: d.mese, file: d.nome_file, file_sha256: _impAD.sha256, file_byte: _impAD.byte, impronta_nel_testo_firmato: true, file_identico_al_caricato: d.file_sha256 ? d.file_sha256 === _impAD.sha256 : null } });
   // Conferma di lettura all'admin — così il "Sollecita" sparisce dalle attività
   const nomeDip = ME ? (ME.nome+(ME.cognome?' '+ME.cognome:'')) : 'Dipendente';
   const catLbl  = etichettaCategoriaDoc(d.categoria);
   const periodo = d.mese ? new Date(d.anno,(d.mese||1)-1,1).toLocaleDateString('it-IT',{month:'long',year:'numeric'}) : (d.anno||'');
   const oraFmt  = new Date().toLocaleString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
   inviaNotificaTelegram('📖 <b>Ceraldi Presenze \u2014 Documento letto</b>\n'+escTG(nomeDip)+' ha aperto e accettato '+(d.categoria==='busta_paga'||d.categoria==='cu'?'la ':'il ')+catLbl.toLowerCase()+(periodo?' di <b>'+periodo+'</b>':'')+' \u2014 '+oraFmt+'. Contestazioni possibili entro 7 giorni.');
-  _docApri = null;
+  _docApri = null; _docImpronta = null;
   closeSheet('sh-accettaDoc');
   await apriDocumento(d.url, d.nome_file);
   setTimeout(() => { caricaDocumentiDip && caricaDocumentiDip(); mostraProssimaAzioneInSospesa(); }, 500);
