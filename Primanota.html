@@ -590,7 +590,7 @@ function avvisoCreditoIA(){
     </span>
     <div style="min-width:0">
       <h1>Fatture</h1>
-      <p>Caffetteria Ceraldi <span class="app-ver">v10.54.1</span></p>
+      <p>Caffetteria Ceraldi <span class="app-ver">v10.54.2</span></p>
     </div>
   </div>
   <div class="hdr-actions">
@@ -20219,6 +20219,29 @@ function _regolaNuovaFattura(fornitore, numero, dataFattura){
 
 // v10.45.0 (audit P1.8): date gg/mm/aaaa anche nella riconciliazione classica
 function _ricGgC(d){ d = String(d || ''); return /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(8, 10) + '/' + d.slice(5, 7) + '/' + d.slice(0, 4) : d; }
+// v10.54.2 — Quali versamenti dell'estratto proporre come "da registrare".
+// Due regole (segnalato da Valerio 28/11: 20 versamenti proposti, di cui 16 del 2025):
+// 1) un versamento precedente alla prima chiusura di cassa in app non si propone:
+//    quei contanti non sono mai entrati nella cassa dell'app, registrarli
+//    toglierebbe soldi mai contati;
+// 2) ogni versamento registrato copre UN solo movimento di banca: due versamenti
+//    uguali nello stesso giorno (es. 23/03/2026, 2 × 5.000) ne richiedono due.
+function _versamentiDaProporre(banca, registrati, inizioCassa){
+  var usati = {};
+  var nuovi = [], esclusi = [];
+  (banca || []).forEach(function(v){
+    var imp = v.importo;
+    var idx = -1;
+    (registrati || []).some(function(p, i){
+      if(!usati[i] && p.data === v.data && Math.abs((p.importo || 0) - imp) < 0.50){ idx = i; return true; }
+      return false;
+    });
+    if(idx >= 0){ usati[idx] = true; return; }          // già registrato
+    if(inizioCassa && (v.data || '') < inizioCassa) esclusi.push(v); // prima della cassa in app
+    else nuovi.push(v);
+  });
+  return { nuovi: nuovi, esclusi: esclusi };
+}
 function renderRiconciliazione(){
   // v10.46.0: la vista unica usa le verifiche di cassa di questa funzione
   // (POS, versamenti, chiusure dimenticate) senza riscriverle: in «solo verifiche»
@@ -21755,10 +21778,13 @@ function renderRiconciliazione(){
   // ═══ SEZIONE 1: Versamenti contanti da confermare ═══
   if(versamentiBanca.length){
     var giaPresenti = (typeof versamenti!=='undefined'?versamenti:[]).filter(function(v){return mese?v.data.indexOf(mese)===0:true;});
-    var nuoviVers = versamentiBanca.filter(function(v){
-      var imp = v.importo;
-      return !giaPresenti.find(function(p){return p.data===v.data && Math.abs((p.importo||0)-imp)<0.50;});
-    });
+    // Inizio della cassa in app = prima chiusura giornaliera registrata.
+    var _inizioCassa = (typeof chiusure!=='undefined'?chiusure:[]).reduce(function(min,c){ var d=c&&c.data||''; return d && (!min || d<min) ? d : min; }, '');
+    var _versProp = _versamentiDaProporre(versamentiBanca, giaPresenti, _inizioCassa);
+    var nuoviVers = _versProp.nuovi;
+    if(_versProp.esclusi.length){
+      htmlVerifiche += '<div style="font-size:11px;color:var(--ink3);margin:0 2px 10px">ℹ️ '+_versProp.esclusi.length+' versament'+(_versProp.esclusi.length===1?'o':'i')+' in banca precedent'+(_versProp.esclusi.length===1?'e':'i')+' al '+_ricGgC(_inizioCassa)+' (prima chiusura di cassa in app): non si registrano, quei contanti non sono mai entrati nella cassa dell\'app.</div>';
+    }
     if(nuoviVers.length){
       htmlVerifiche += '<div style="background:var(--surface);border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow);border-left:3px solid var(--blue)">';
       htmlVerifiche += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">';
