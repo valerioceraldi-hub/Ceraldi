@@ -461,7 +461,7 @@ function avvisoCreditoIA(){
 </nav>
 
 <script>
-var APP_VERSION='8.17.2';
+var APP_VERSION='8.17.3';
 var BUILD_VERSION=APP_VERSION, BUILD_NUM=APP_VERSION;
 var APP={key:'ordini',nome:'Ordini',versione:APP_VERSION,authKey:'or_auth_v2',oldAuthKey:'ceraldi_ordini_auth_session',
   markBg:'linear-gradient(145deg,#FFC04D 0%,#FF9F0A 50%,#C2410C 100%)',
@@ -6497,23 +6497,79 @@ function apriEsporta(){
     '<button class="row" onclick="esportaOrdiniCSV()"><div class="row-ico ic-o">🧾</div><div class="row-main"><div class="row-t">Ordini in CSV</div><div class="row-s">Periodo scelto in Analisi</div></div></button>' +
     '<button class="row" onclick="esportaBackup()"><div class="row-ico ic-p">💾</div><div class="row-main"><div class="row-t">Backup completo</div><div class="row-s">Catalogo, fornitori, ordini e impostazioni in un file</div></div></button></div>');
 }
-/* Catalogo in Excel. Senza argomenti: tutto il catalogo e tutti i fornitori.
-   lista = prodotti da esportare, fornSel = solo i prezzi di questi fornitori (vuoto = tutti), suffisso = per il nome del file */
-async function esportaCatalogo(lista, fornSel, suffisso){
+/* Catalogo in Excel, da leggere e da mandare: solo prodotto, confezione e prezzi (IVA inclusa).
+   lista = prodotti, settSel = settori scelti (vuoto = tutti), fornSel = fornitori scelti (vuoto = quelli dei settori) */
+var CONF_ESTESA = { bt: 'Bottiglia', b4: 'Bottiglia', bottiglia: 'Bottiglia', ct: 'Cartone', c5: 'Cartone', pz: 'Pezzo', pezzo: 'Pezzo', cf: 'Confezione', tan: 'Tanica', fu: 'Fusto' };
+function fornDeiSettori(settSel){ return FORN.filter(function(f){ return !settSel.length || settSel.some(function(s){ return (f.settori || []).indexOf(s) >= 0; }); }).map(function(f){ return f.nome; }); }
+// Nel file entrano solo i fornitori con almeno un prezzo: niente colonne vuote
+function fornExport(lista, settSel, fornSel){
+  return (fornSel && fornSel.length ? fornSel : fornDeiSettori(settSel || [])).filter(function(f){ return lista.some(function(p){ return prezzoDi(p, f) != null; }); });
+}
+async function esportaCatalogo(lista, settSel, fornSel, suffisso){
   try{
-    var X = await libXLSX(), filtroF = !!(fornSel && fornSel.length), nomi = filtroF ? fornSel : fornNomi();
-    var righe = (lista || CAT).slice().sort(function(a, b){ return settoreDi(a).localeCompare(settoreDi(b)) || catDi(a).localeCompare(catDi(b)) || a.name.localeCompare(b.name); }).map(function(p){
-      var r = { ID: p.id, Prodotto: p.name, Confezione: p.conf || '', Categoria: catDi(p), Reparto: repartiDi(p).join(' + '), IVA: p.iva || '' };
-      nomi.forEach(function(f){ var v = prezzoDi(p, f); r[f] = v == null ? '' : v; });
-      var m = migliore(p);
-      if(filtroF){ m = { forn: '', prezzo: null }; nomi.forEach(function(f){ var v = prezzoDi(p, f); if(v != null && (m.prezzo == null || v < m.prezzo)) m = { forn: f, prezzo: v }; }); }   // il più conveniente solo tra i fornitori scelti
-      r['Più conveniente'] = m.forn; r['Prezzo migliore'] = m.forn ? m.prezzo : ''; r.Giacenza = p.giacenza == null ? '' : p.giacenza; r['Scorta minima'] = p.scorta_min == null ? '' : p.scorta_min; r['Codice a barre'] = p.barcode || '';
-      return r;
+    var Z = await libZIP(), sett = settSel || [], nomi = fornExport(lista, sett, fornSel), unSettore = sett.length === 1;
+    var sezione = function(p){ return (unSettore ? catDi(p) : settoreDi(p) + ' — ' + catDi(p)).toUpperCase(); };
+    var prodotti = lista.filter(function(p){ return nomi.some(function(f){ return prezzoDi(p, f) != null; }); })
+      .sort(function(a, b){ return sezione(a).localeCompare(sezione(b)) || a.name.localeCompare(b.name); });
+    if(!prodotti.length){ toast('Nessun prodotto con un prezzo per queste scelte'); return; }
+    var bytes = await xlsxCatalogo(Z, {
+      titolo: ((conf().azienda || {}).nome || 'Caffetteria Ceraldi') + ' — Catalogo ' + (sett.join(', ') || 'completo'),
+      avviso: 'TUTTI I PREZZI SONO IVA INCLUSA (in euro)',
+      nota: 'Aggiornato al ' + oggiISO().split('-').reverse().join('/') + ' · Casella vuota = prodotto non a listino',
+      fornitori: nomi,
+      righe: prodotti.map(function(p){ var c = String(p.conf || '').trim(); return { sezione: sezione(p), nome: p.name, conf: CONF_ESTESA[c.toLowerCase()] || c, prezzi: nomi.map(function(f){ return prezzoDi(p, f); }), id: p.id }; })
     });
-    var wb = X.utils.book_new(), ws = X.utils.json_to_sheet(righe); ws['!cols'] = [{ wch: 7 }, { wch: 46 }, { wch: 10 }, { wch: 18 }, { wch: 12 }, { wch: 5 }].concat(nomi.map(function(){ return { wch: 11 }; }));
-    X.utils.book_append_sheet(wb, ws, 'Catalogo');
-    X.writeFile(wb, 'Catalogo_Ceraldi' + (suffisso || '') + '_' + oggiISO() + '.xlsx');
+    scaricaFile('Catalogo' + (suffisso || '') + '_prezzi_IVA_inclusa_' + oggiISO() + '.xlsx', new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
   }catch(e){ toast('⚠️ ' + e.message); }
+}
+/* Compone il file Excel con colori, intestazioni fisse e stampa in orizzontale (SheetJS gratuito non lo sa fare).
+   L'ultima colonna «ID» è nascosta: serve solo a ritrovare i prodotti se il file viene reimportato. */
+async function xlsxCatalogo(Z, d){
+  var testi = [], posT = {}, righe = [], unite = [];
+  var X = function(s){ return String(s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); };
+  var col = function(i){ var s = ''; for(i++; i; i = Math.floor((i - 1) / 26)) s = String.fromCharCode(65 + (i - 1) % 26) + s; return s; };
+  var testa = ['Prodotto', 'Confezione'].concat(d.fornitori, ['ID']), nVis = testa.length - 1, ultima = col(nVis - 1);
+  // celle: [valore, stile]
+  function riga(celle, alta){
+    var n = righe.length + 1;
+    righe.push('<row r="' + n + '"' + (alta ? ' ht="' + alta + '" customHeight="1"' : '') + '>' + celle.map(function(c, i){
+      var v = c[0], a = '<c r="' + col(i) + n + '" s="' + c[1] + '"';
+      if(v == null || v === '') return a + '/>';
+      if(typeof v === 'number') return a + '><v>' + v + '</v></c>';
+      if(!(('=' + v) in posT)){ posT['=' + v] = testi.length; testi.push(v); }
+      return a + ' t="s"><v>' + posT['=' + v] + '</v></c>';
+    }).join('') + '</row>');
+    return n;
+  }
+  function fascia(testo, stile, alta){ var c = []; for(var i = 0; i < nVis; i++) c.push([i ? '' : testo, stile]); var n = riga(c, alta); if(nVis > 1) unite.push('A' + n + ':' + ultima + n); }
+  fascia(d.titolo, 1, 28); fascia(d.avviso, 2, 26); fascia(d.nota, 3, 18);
+  riga(testa.map(function(t, i){ return [t, i ? 5 : 4]; }), 32);
+  var sez = null, k = 0;
+  d.righe.forEach(function(r){
+    if(r.sezione !== sez){ sez = r.sezione; k = 0; fascia(sez, 6, 20); }
+    var z = k++ % 2 ? 3 : 0;
+    riga([[r.nome, 7 + z], [r.conf, 8 + z]].concat(r.prezzi.map(function(v){ return [v, 9 + z]; }), [[r.id, 0]]));
+  });
+  var testaXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>', ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"', rel = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships', tipo = 'application/vnd.openxmlformats-officedocument.spreadsheetml.';
+  var font = function(sz, extra){ return '<font>' + (extra || '') + '<sz val="' + sz + '"/><name val="Arial"/></font>'; };
+  var pieno = function(c){ return '<fill><patternFill patternType="solid"><fgColor rgb="FF' + c + '"/></patternFill></fill>'; };
+  var xf = function(f, fill, b, al, fmt){ return '<xf numFmtId="' + (fmt || 0) + '" fontId="' + f + '" fillId="' + fill + '" borderId="' + b + '" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" ' + al + '/></xf>'; };
+  var sx = '<left style="thin"><color rgb="FFBFBFBF"/></left><right style="thin"><color rgb="FFBFBFBF"/></right><top style="thin"><color rgb="FFBFBFBF"/></top><bottom style="thin"><color rgb="FFBFBFBF"/></bottom><diagonal/>';
+  var stili = [xf(0, 0, 0, ''), xf(1, 0, 0, 'indent="1"'), xf(2, 2, 0, 'indent="1"'), xf(3, 0, 0, 'indent="1"'), xf(4, 3, 1, 'horizontal="left" wrapText="1"'), xf(4, 3, 1, 'horizontal="center" wrapText="1"'), xf(5, 4, 0, 'indent="1"')];
+  [0, 5].forEach(function(fill){ stili.push(xf(0, fill, 1, 'wrapText="1"'), xf(0, fill, 1, 'horizontal="center"'), xf(0, fill, 1, 'horizontal="right"', 164)); });
+  var zip = new Z();
+  zip.file('[Content_Types].xml', testaXml + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="' + tipo + 'sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="' + tipo + 'worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="' + tipo + 'styles+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="' + tipo + 'sharedStrings+xml"/></Types>');
+  zip.file('_rels/.rels', testaXml + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="' + rel + '/officeDocument" Target="xl/workbook.xml"/></Relationships>');
+  zip.file('xl/_rels/workbook.xml.rels', testaXml + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="' + rel + '/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="' + rel + '/styles" Target="styles.xml"/><Relationship Id="rId3" Type="' + rel + '/sharedStrings" Target="sharedStrings.xml"/></Relationships>');
+  zip.file('xl/workbook.xml', testaXml + '<workbook ' + ns + ' xmlns:r="' + rel + '"><sheets><sheet name="Catalogo" sheetId="1" r:id="rId1"/></sheets><definedNames><definedName name="_xlnm.Print_Area" localSheetId="0">Catalogo!$A$1:$' + ultima + '$' + righe.length + '</definedName><definedName name="_xlnm.Print_Titles" localSheetId="0">Catalogo!$1:$4</definedName></definedNames></workbook>');
+  zip.file('xl/styles.xml', testaXml + '<styleSheet ' + ns + '><numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0.00 &quot;€&quot;"/></numFmts><fonts count="6">' + font(11) + font(16, '<b/>') + font(14, '<b/>') + font(10, '<color rgb="FF595959"/>') + font(11, '<b/><color rgb="FFFFFFFF"/>') + font(12, '<b/>') + '</fonts><fills count="6"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>' + pieno('FFE699') + pieno('1F3864') + pieno('D9E1F2') + pieno('F2F2F2') + '</fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border>' + sx + '</border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="' + stili.length + '">' + stili.join('') + '</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>');
+  zip.file('xl/sharedStrings.xml', testaXml + '<sst ' + ns + ' count="' + testi.length + '" uniqueCount="' + testi.length + '">' + testi.map(function(t){ return '<si><t xml:space="preserve">' + X(t) + '</t></si>'; }).join('') + '</sst>');
+  var largh = function(da, a, w, extra){ return '<col min="' + da + '" max="' + a + '" width="' + w + '" customWidth="1"' + (extra || '') + '/>'; };
+  zip.file('xl/worksheets/sheet1.xml', testaXml + '<worksheet ' + ns + '><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><sheetViews><sheetView workbookViewId="0"><pane xSplit="1" ySplit="4" topLeftCell="B5" activePane="bottomRight" state="frozen"/><selection pane="bottomRight" activeCell="B5" sqref="B5"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/><cols>' +
+    largh(1, 1, 62) + largh(2, 2, 13) + (d.fornitori.length ? largh(3, nVis, 14) : '') + largh(nVis + 1, nVis + 1, 8, ' hidden="1"') + '</cols><sheetData>' + righe.join('') + '</sheetData>' +
+    (unite.length ? '<mergeCells count="' + unite.length + '">' + unite.map(function(u){ return '<mergeCell ref="' + u + '"/>'; }).join('') + '</mergeCells>' : '') +
+    '<pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/><headerFooter><oddFooter>&amp;LPrezzi IVA inclusa&amp;RPagina &amp;P di &amp;N</oddFooter></headerFooter></worksheet>');
+  return await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
 }
 /* Scelte per l'export del catalogo: settore, fornitori, con o senza prezzi.
    «Senza prezzi» = elenco dei prodotti senza fornitori né prezzi, da mandare a un fornitore NUOVO: lui scrive solo «Nuovo prezzo»,
@@ -6525,25 +6581,28 @@ function apriEsportaCatalogo(){
   disegnaEC();
 }
 function selEC(g){ return Object.keys(EXC[g]).filter(function(k){ return EXC[g][k]; }); }
+// Fornitori scelti che appartengono ancora ai settori scelti
+function fornSceltiEC(){ var ok = fornDeiSettori(selEC('sett')); return selEC('forn').filter(function(f){ return ok.indexOf(f) >= 0; }); }
+function prodottiSettEC(){ var ss = selEC('sett'); return CAT.filter(function(p){ return !ss.length || ss.some(function(s){ return inReparto(p, s); }); }); }
 function listaEC(){
-  var ss = selEC('sett'), ff = EXC.senza ? [] : selEC('forn');
-  return CAT.filter(function(p){
-    if(ss.length && !ss.some(function(s){ return inReparto(p, s); })) return false;
-    if(ff.length && !ff.some(function(f){ return prezzoDi(p, f) != null; })) return false;
-    return true;
-  });
+  var l = prodottiSettEC(); if(EXC.senza) return l;
+  var ff = fornExport(l, selEC('sett'), fornSceltiEC());
+  return l.filter(function(p){ return ff.some(function(f){ return prezzoDi(p, f) != null; }); });
 }
 function disegnaEC(){
   var el = document.getElementById('ecBody'); if(!el) return;
   var wrap = 'display:flex;flex-wrap:wrap;gap:6px;overflow:visible';
   function chip(g, v){ return '<button class="chip' + (EXC[g][v] ? ' active' : '') + '" data-v="' + esc(v) + '" onclick="EXC.' + g + '[this.dataset.v]=!EXC.' + g + '[this.dataset.v];disegnaEC()">' + esc(v) + '</button>'; }
+  var ss = selEC('sett'), prod = prodottiSettEC(), nelFile = fornExport(prod, ss, fornSceltiEC());
+  var senzaReparto = ss.length ? FORN.filter(function(f){ return !(f.settori || []).length && prod.some(function(p){ return prezzoDi(p, f.nome) != null; }); }) : [];
   el.innerHTML =
     '<div class="field"><label>Prezzi</label><div class="seg"><button class="seg-b' + (EXC.senza ? '' : ' active') + '" onclick="EXC.senza=false;disegnaEC()">Con i prezzi</button><button class="seg-b' + (EXC.senza ? ' active' : '') + '" onclick="EXC.senza=true;disegnaEC()">Senza prezzi</button></div>' +
     (EXC.senza
       ? '<div class="banner b" style="margin:8px 0 0"><span>🔒</span><div style="flex:1"><strong>Sicuro da mandare a un fornitore nuovo</strong><br>Il file ha solo i prodotti: nessun fornitore e nessun prezzo. Lui scrive i suoi prezzi nella colonna «Nuovo prezzo» (le altre sono bloccate). Poi lo carichi da Impostazioni → Importa listino scegliendo «+ Nuovo fornitore…».</div></div>'
-      : '<div class="hint">Per uso tuo: contiene i prezzi dei fornitori scelti. Non mandarlo ai fornitori.</div>') + '</div>' +
+      : '<div class="hint">Prezzi IVA inclusa, con i nomi dei fornitori. Se lo mandi a un fornitore, vede anche i prezzi degli altri.</div>') + '</div>' +
     '<div class="field"><label>Settore · nessuno = tutti</label><div class="chips" style="' + wrap + '">' + settoriPresenti().map(function(s){ return chip('sett', s); }).join('') + '</div></div>' +
-    (EXC.senza ? '' : '<div class="field"><label>Fornitori · nessuno = tutti</label><div class="chips" style="' + wrap + '">' + fornNomi().map(function(f){ return chip('forn', f); }).join('') + '</div><div class="hint">Se ne scegli, nel file ci sono solo i loro prezzi e solo i prodotti che hanno a listino.</div></div>');
+    (EXC.senza ? '' : '<div class="field"><label>Fornitori · nessuno = tutti' + (ss.length ? ' quelli del settore' : '') + '</label><div class="chips" style="' + wrap + '">' + fornDeiSettori(ss).map(function(f){ return chip('forn', f); }).join('') + '</div><div class="hint">Nel file: ' + (nelFile.length ? esc(nelFile.join(', ')) : 'nessun fornitore con prezzi') + '.</div></div>' +
+      senzaReparto.map(function(f){ return '<div class="banner o"><span>⚠️</span><div style="flex:1">' + esc(f.nome) + ' non ha un reparto: non entra nel file.<br><button class="lnk-btn" onclick="chiudiSheet(\'shEC\');apriFornitore(' + f.id + ')">Assegna il reparto</button></div></div>'; }).join(''));
   var n = listaEC().length, b = document.getElementById('ecGo');
   if(b){ b.textContent = 'Scarica Excel · ' + n + ' prodott' + (n === 1 ? 'o' : 'i'); b.disabled = !n; }
 }
@@ -6553,7 +6612,7 @@ async function scaricaEC(){
   if(EXC.senza){
     l = l.slice().sort(function(a, b){ return catDi(a).localeCompare(catDi(b)) || a.name.localeCompare(b.name); });
     await faiModello('', l, 'Catalogo_senza_prezzi' + suf + '_' + oggiISO() + '.xlsx');
-  } else await esportaCatalogo(l, selEC('forn'), suf);
+  } else await esportaCatalogo(l, ss, fornSceltiEC(), suf);
 }
 function apriModelloFornitore(){
   apriSheet('shMF', { titolo: 'Modello per il fornitore', indietro: 'Esporta', onIndietro: apriEsporta, corpo:
@@ -6571,8 +6630,8 @@ async function faiModello(f, l, nomeFile){
   if(!l.length){ toast('Nessun prodotto da mettere nel modello'); return; }
   try{
     var X = await libXLSX(), Z = await libZIP();
-    var aoa = [['ID', 'Prodotto', 'Confezione', 'Categoria', 'Prezzo attuale', 'Nuovo prezzo']].concat(l.map(function(p){ var v = f ? prezzoDi(p, f) : null; return [p.id, p.name, p.conf || '', catDi(p), v == null ? '' : v, '']; }));
-    var ws = X.utils.aoa_to_sheet(aoa); ws['!cols'] = [{ wch: 7 }, { wch: 48 }, { wch: 11 }, { wch: 18 }, { wch: 13 }, { wch: 13 }];
+    var aoa = [['ID', 'Prodotto', 'Confezione', 'Categoria', 'Prezzo attuale (IVA inclusa)', 'Nuovo prezzo (IVA inclusa)']].concat(l.map(function(p){ var v = f ? prezzoDi(p, f) : null; return [p.id, p.name, p.conf || '', catDi(p), v == null ? '' : v, '']; }));
+    var ws = X.utils.aoa_to_sheet(aoa); ws['!cols'] = [{ wch: 7 }, { wch: 48 }, { wch: 11 }, { wch: 18 }, { wch: 28 }, { wch: 28 }];
     for(var r = 2; r <= aoa.length; r++) ws['F' + r] = { t: 's', v: '' };
     var wb = X.utils.book_new(); X.utils.book_append_sheet(wb, ws, 'Prezzi');
     var bytes = X.write(wb, { type: 'array', bookType: 'xlsx' });
